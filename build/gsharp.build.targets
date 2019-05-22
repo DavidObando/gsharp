@@ -1,0 +1,4 @@
+<Project>
+   <!-- Disable test targets for non-test projects -->
+  <Import Project="$(MSBuildThisFileDirecctory)notest.targets" Condition="'$(IsTestProject)' != 'true'" />
+</Project>

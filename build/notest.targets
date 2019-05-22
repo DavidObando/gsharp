@@ -1,0 +1,4 @@
+<Project>
+  <!-- Disable the VSTest target for non-test projects-->
+  <Target Name="VSTest" />
+</Project>

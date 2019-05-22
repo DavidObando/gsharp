@@ -1,0 +1,3 @@
+<Project>
+  <Import Project="$(ThisFileDirectory)build/gsharp.build.props" />
+</Project>

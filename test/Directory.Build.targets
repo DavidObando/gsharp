@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.targets" />
+
+  <ItemGroup>
+    <PackageReference Include="@(FluentAssertionsPackageReference)" />
+    <PackageReference Include="@(MicrosoftAspNetCoreTestHostPackageReference)" />
+    <PackageReference Include="@(MicrosoftNetTestSdkPackageReference)" />
+    <PackageReference Include="@(MoqPackageReference)" />
+    <PackageReference Include="@(XunitPackageReference)" />
+    <PackageReference Include="@(XunitRunnerVisualStudioPackageReference)" />
+    <PackageReference Include="@(XunitStaFactPackageReference)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="$(MSBuildThisFileDirectory)xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  
+</Project>

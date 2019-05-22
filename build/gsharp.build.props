@@ -1,0 +1,102 @@
+<Project>
+
+  <Import Project="$(MSBuildThisFileDirectory)gsharp.props" />
+
+  <!-- Product Properties -->
+  <PropertyGroup>
+    <Authors>David Obando</Authors>
+    <Copyright>Copyright (c) GSharp Authors.</Copyright>
+    <Description>GSharp Programming Language.</Description>
+    <Owners>David Obando</Owners>
+    <Product>Gsharp</Product>
+    <RepositoryType>Git</RepositoryType>
+    <RepositoryUrl>https://github.com/DavidObando/gsharp</RepositoryUrl>
+    <Tags>gsharp;gsharp-core;gsc</Tags>
+    <Title>GSharp Programming Language.</Title>
+  </PropertyGroup>
+
+  <!-- Frameworks Versions -->
+  <PropertyGroup>
+    <NetCoreAppTargetFramework>netcoreapp2.2</NetCoreAppTargetFramework>
+    <NetStandardTargetFramework>netstandard2.0</NetStandardTargetFramework>
+  </PropertyGroup>
+
+  <!-- Package Reference Definitions -->
+  <ItemGroup>
+    <!-- Runtime packages-->
+    <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="15.3.58" />
+    <NewtonsoftJsonPackageReference Include="Newtonsoft.Json" Version="12.0.1" />
+    <!-- Design-time packages -->
+    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="2.3.138" PrivateAssets="All" />
+    <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.1.0-beta009">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </StyleCopAnalyzersPackageReference>
+    <!-- Test packages -->
+    <FluentAssertionsPackageReference Include="FluentAssertions" Version="5.4.1" />
+    <MicrosoftAspNetCoreTestHostPackageReference Include="Microsoft.AspNetCore.TestHost" Version="2.2.0" />
+    <MicrosoftNetTestSdkPackageReference Include="Microsoft.NET.Test.Sdk" Version="15.8.0" />
+    <MoqPackageReference Include="Moq" Version="4.9.0" />
+    <XunitPackageReference Include="xunit" Version="2.4.0" />
+    <XunitRunnerVisualStudioPackageReference Include="xunit.runner.visualstudio" Version="2.4.0" />
+    <XunitStaFactPackageReference Include="Xunit.StaFact" Version="0.3.2" />
+  </ItemGroup>
+
+  <!-- Common Runtime Package References -->
+  <ItemGroup>
+     <PackageReference Include="@(MicrosoftVisualStudioValidationPackageReference)" />
+  </ItemGroup>
+
+  <!-- Build Outputs -->
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)..</RepoRoot>
+    <SourceRoot>$(RepoRoot)/src</SourceRoot>
+    <OutRoot>$(RepoRoot)/out</OutRoot>
+    <Configuration Condition="'$(Configuration)'==''">Debug</Configuration>
+    <BaseOutputPath>$(OutRoot)/bin/$(Configuration)</BaseOutputPath>
+    <OutputPath>$(BaseOutputPath)/$(MSBuildProjectName)</OutputPath>
+    <BaseIntermediateOutputPath>$(OutRoot)/obj/$(MSBuildProjectName)</BaseIntermediateOutputPath>
+    <!-- <IntermediateOutputPath>$(BaseIntermediateOutputPath)/$(MSBuildProjectName)</IntermediateOutputPath> -->
+    <PackageOutputPath>$(BaseOutputPath)/nupkgs</PackageOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AssemblyName>$(MSBuildProjectName)</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Compiler Options -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <HighEntropyVA>true</HighEntropyVA>
+    <Deterministic>true</Deterministic>
+    <DocumentationFile Condition="'$(IsTestProject)' != 'true'">$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+  </PropertyGroup>
+
+  <!-- Versioning Support -->
+  <ItemGroup>
+    <PackageReference Include="@(NerdBankGitVersioningPackageReference)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- All projects need to be rebuilt if the version changes. -->
+    <Content Include="$(MSBuildThisFileDirectory)..\version.json" Link="version.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible><!-- Hide from VS solution explorer -->
+      <Pack>false</Pack> <!--Exclude from NuGet Packages -->
+    </Content>
+  </ItemGroup>
+
+  <!-- Code Analysis -->
+  <Choose>
+    <When Condition="'$(IsTestProject)' != 'true'">
+      <PropertyGroup>
+        <CodeAnalysisRuleSet>$(MSBuildThisFileDirectory)gsharp.build.ruleset</CodeAnalysisRuleSet>
+      </PropertyGroup>
+      <ItemGroup>
+        <AdditionalFiles Include="$(MSBuildThisFileDirectory).stylecop.json" Link=".stylecop.json" />
+      </ItemGroup>
+      <ItemGroup >
+        <PackageReference Include="@(StyleCopAnalyzersPackageReference)" />
+      </ItemGroup>
+    </When>
+  </Choose>
+
+</Project>

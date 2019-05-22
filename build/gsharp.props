@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project InitialTargets="InitGsharpProps">
+
+  <PropertyGroup>
+    <GsharpRepoRoot Condition="'$(GsharpRepoRoot)' == ''">$(MSBuildThisFileDirectory)..</GsharpRepoRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core -->
+    <GsharpCompiler Include="$(GsharpRepoRoot)\src\gsc\gsc.csproj" />
+
+    <!-- All -->
+    <GsharpAll Include="@(GsharpCompiler)" />
+  </ItemGroup>
+
+  <Target Name="InitGsharpProps">
+    <Message Text="GsharpAll: %(GsharpAll.FullPath)" Importance="low" />
+    <Warning Text="Gsharp project does not exist: '%(GsharpAll.FullPath)'" Condition="!Exists('%(GsharpAll.FullPath)')" />
+  </Target>
+
+</Project>

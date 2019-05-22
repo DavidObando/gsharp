@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <TestResultsDirectory Condition=" '$(TestResultsDirectory)' == '' ">$(BaseOutputPath)/TestResults</TestResultsDirectory>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+{
+    "$schema": "https://raw.githubusercontent.com/DotNetAnalyzers/StyleCopAnalyzers/master/StyleCop.Analyzers/StyleCop.Analyzers/Settings/stylecop.schema.json",
+    "settings": {
+      "documentationRules": {
+        "copyrightText": "Copyright (C) GSharp Authors. All rights reserved.",
+        "companyName": "David Obando"
+      }
+    }
+  }
+  
