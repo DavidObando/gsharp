@@ -1,6 +1,6 @@
 # GSharp
 GSharp Programming Language.
-A modern programming language for .NET.
+A modern, simple, and accessible programming language for .NET.
 
 ## Motivation 1: Accessibility
 I want to enable other developers to benefit from the .NET framework without necessarily having to learn C#. In particular, I want to ensure new developers and developers who find C#'s learning curve a bit steep to be able to use .NET. I want VB.NET developers and Python developers to find a language that speaks to them as well. I want non-English speakers to have access to powerful libraries and technologies in .NET. In short, I want simplicity and productivity at the hand of everyone.
