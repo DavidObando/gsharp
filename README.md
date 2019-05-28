@@ -2,7 +2,10 @@
 GSharp Programming Language.
 A modern programming language for .NET.
 
-## Motivation 1
+## Motivation 1: Accessibility
+I want to enable other developers to benefit from the .NET framework without necessarily having to learn C#. In particular, I want to ensure new developers and developers who find C#'s learning curve a bit steep to be able to use .NET. I want VB.NET developers and Python developers to find a language that speaks to them as well. I want non-English speakers to have access to powerful libraries and technologies in .NET. In short, I want simplicity and productivity at the hand of everyone.
+
+## Motivation 2: Simplicity
 I want a simple, concise, productive programming language targetting .NET based on the good lessons learned from Go, Kotlin, as well as other programming languages. Modern languages such as Go give the user a simple approach to programming while also providing powerful foundations to deliver applications in all forms and factors.
 
 Here's a few relevant links to bring this point home:
@@ -16,9 +19,7 @@ Kotlin, on the other hand, is gaining popularity as a language targetting the JV
 
 GSharp is born with a similar mindset to Kotlin and with a similar philosophy to Go. GSharp is intended to start small, slowly lighting up application development features such as consuming libraries written in C#, while keeping the language simple.
 
-## Motivation 2
-I want to enable other developers to benefit from the .NET framework without necessarily having to learn C#. In particular, I want to ensure new developers and developers who find C#'s learning curve a bit steep to be able to use .NET. I want VB.NET developers and Python developers to find a language that speaks to them as well. In short, I want simplicity and productivity to drive developers to .NET.
-
+# Go developers?
 Note that I'm not thinking about attracting current Go developers necessarily. I am a Go developer myself and I will continue using Go where it's appropriate. GSharp doesn't intend to take developers away from Go, although Go skills should be transferable to GSharp development.
 
 ## Contributing
