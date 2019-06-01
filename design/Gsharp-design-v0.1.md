@@ -1,9 +1,9 @@
 # Ideas for GSharp version 0.1
-The goal of GSharp 0.1 is to be able to produce a "hello world" style console application, ideally targeting .NET Core 3.0. As a stretch goal, it will also support `if` (conditional) and `for` (infinite loop) statements.
+The goal of GSharp 0.1 is to be able to produce a "hello world" style console application, ideally targeting .NET Core 3.0. As a stretch goal, it will also support declaration, assignment and evaluation of `int` and `bool` variables, as well as `if` (conditional) and `for` (loop) statements.
 
 The language grammar will be initially derived from Go's grammar, plus additions where it makes sense in order to support using .NET Core libraries. Note that GSharp may not necessarily support generics anytime soon.
 
-## Prototype program
+## Prototype program: Hello World
 Here's an example "hello world" written in GSharp:
 ```go
 // file: HelloWorld.gs
@@ -28,6 +28,51 @@ class HelloWorld
     static void Main(string[] args)
     {
         Console.WriteLine("Hello, World!");
+    }
+}
+```
+## Prototype program: if and loop
+This program receives tries to parse the first command line argument as an integer, and then does that many loops printing values all the way to 1.
+```go
+// file: Loop.gs
+
+module GSharp.Example.Loop
+
+import System
+
+func Main(args: string[]) {
+  count := 0
+  if args.Length == 1 {
+    Int.TryParse(args[0], *count)
+  }
+  for ; count > 0; count-- {
+    Console.WriteLine("Count value: {count}")
+  }
+}
+```
+Compare to the C# equivalent:
+```csharp
+// file: Loop.cs
+
+namespace GSharp.Example
+{
+    using System;
+
+    class Loop
+    {
+        static void Main(string[] args)
+        {
+            var count = 0;
+            if (args.Length == 1)
+            {
+                Int.TryParse(args[0], out count);
+            }
+            
+            for (; count > 0; count--)
+            {
+                Console.WriteLine($"Count value: {count}");
+            }
+        }
     }
 }
 ```
