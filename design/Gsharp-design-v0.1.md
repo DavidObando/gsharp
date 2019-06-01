@@ -1,17 +1,18 @@
 # Ideas for GSharp version 0.1
-The goal of GSharp 0.1 is to be able to produce a hello-world style console application, ideally targeting .NET Core 3.0. As a stretch goal, it will also support `if` (conditional) and `for` (infinite loop) statements.
+The goal of GSharp 0.1 is to be able to produce a "hello world" style console application, ideally targeting .NET Core 3.0. As a stretch goal, it will also support `if` (conditional) and `for` (infinite loop) statements.
 
 The language grammar will be initially derived from Go's grammar, plus additions where it makes sense in order to support using .NET Core libraries. Note that GSharp may not necessarily support generics anytime soon.
 
 ## Prototype program
 Here's an example "hello world" written in GSharp:
-```gsharp
-// file: hello-world.gs
+```go
+// file: HelloWorld.gs
+
 module HelloWorld
 
 import System
 
-func main() {
+func Main() {
   Console.WriteLine("Hello, world!")
 }
 ```
@@ -22,9 +23,9 @@ Compare to the C# equivalent:
 
 using System;
 
-public class HelloWorld
+class HelloWorld
 {
-    public static void main(string[] args)
+    static void Main(string[] args)
     {
         Console.WriteLine("Hello, World!");
     }
