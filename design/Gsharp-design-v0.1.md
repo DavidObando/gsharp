@@ -8,7 +8,7 @@ Here's an example "hello world" written in GSharp:
 ```go
 // file: HelloWorld.gs
 
-module HelloWorld
+package HelloWorld
 
 import System
 
@@ -36,7 +36,7 @@ This program receives tries to parse the first command line argument as an integ
 ```go
 // file: Loop.gs
 
-module GSharp.Example.Loop
+package GSharp.Example.Loop
 
 import System
 
@@ -45,8 +45,9 @@ func Main(args: string[]) {
   if args.Length == 1 {
     Int.TryParse(args[0], *count)
   }
-  for ; count > 0; count-- {
-    Console.WriteLine("Count value: {count}")
+  
+  for i := count; i > 0; i-- {
+    Console.WriteLine("Count value: {i}")
   }
 }
 ```
@@ -68,9 +69,9 @@ namespace GSharp.Example
                 Int.TryParse(args[0], out count);
             }
             
-            for (; count > 0; count--)
+            for (var i = count; i > 0; i--)
             {
-                Console.WriteLine($"Count value: {count}");
+                Console.WriteLine($"Count value: {i}");
             }
         }
     }
