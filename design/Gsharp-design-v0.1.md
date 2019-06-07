@@ -77,3 +77,7 @@ namespace GSharp.Example
     }
 }
 ```
+
+## Notes
+I found an interesting project that attempts to convert Go code to C# code. It has interesting ideas in it:
+  - https://github.com/GridProtectionAlliance/go2cs
