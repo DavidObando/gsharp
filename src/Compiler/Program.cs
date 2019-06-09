@@ -1,8 +1,8 @@
-﻿// <copyright file="Program.cs" company="David Obando">
+﻿// <copyright file="Program.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace Gsc
+namespace GSharp.Compiler
 {
     using System;
 

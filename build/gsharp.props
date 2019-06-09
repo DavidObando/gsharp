@@ -7,9 +7,11 @@
 
   <ItemGroup>
     <!-- Core -->
-    <GsharpCompiler Include="$(GsharpRepoRoot)\src\gsc\gsc.csproj" />
+    <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
+    <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
 
     <!-- All -->
+    <GsharpAll Include="@(GsharpCore)" />
     <GsharpAll Include="@(GsharpCompiler)" />
   </ItemGroup>
 
