@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis
     using System.Collections;
     using System.Collections.Generic;
     using GSharp.Core.CodeAnalysis.Symbols;
+    using GSharp.Core.CodeAnalysis.Syntax;
     using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
@@ -63,6 +64,18 @@ namespace GSharp.Core.CodeAnalysis
         public void ReportInvalidNumber(TextSpan span, string text, TypeSymbol type)
         {
             var message = $"The number {text} isn't valid {type}.";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports an unexpected token while parsing.
+        /// </summary>
+        /// <param name="span">The text span where the token was found.</param>
+        /// <param name="actualKind">The kind of syntax encountered.</param>
+        /// <param name="expectedKind">The kind of syntax expected.</param>
+        public void ReportUnexpectedToken(TextSpan span, SyntaxKind actualKind, SyntaxKind expectedKind)
+        {
+            var message = $"Unexpected token <{actualKind}>, expected <{expectedKind}>.";
             Report(span, message);
         }
 

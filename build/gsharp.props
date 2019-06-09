@@ -9,6 +9,7 @@
     <!-- Core -->
     <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
     <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
+    <GsharpInterpreter Include="$(GsharpRepoRoot)\src\Interpreter\Interpreter.csproj" />
 
     <!-- All -->
     <GsharpAll Include="@(GsharpCore)" />

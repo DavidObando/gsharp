@@ -4,10 +4,12 @@
 
 namespace GSharp.Core.CodeAnalysis.Syntax
 {
+    using GSharp.Core.CodeAnalysis.Text;
+
     /// <summary>
     /// Represents a syntax token in the language.
     /// </summary>
-    public class SyntaxToken
+    public class SyntaxToken : SyntaxNode
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="SyntaxToken"/> class.
@@ -27,7 +29,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Gets the kind of this syntax token.
         /// </summary>
-        public SyntaxKind Kind { get; }
+        public override SyntaxKind Kind { get; }
 
         /// <summary>
         /// Gets the position of this syntax token.
@@ -43,5 +45,15 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// Gets the value of this syntax token, if any.
         /// </summary>
         public object Value { get; }
+
+        /// <summary>
+        /// Gets the text span associated to the token.
+        /// </summary>
+        public override TextSpan Span => new TextSpan(Position, Text?.Length ?? 0);
+
+        /// <summary>
+        /// Gets a value indicating whether the token was inserted by the parser and doesn't appear in source.
+        /// </summary>
+        public bool IsMissing => Text == null;
     }
 }
