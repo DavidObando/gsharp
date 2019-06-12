@@ -20,7 +20,7 @@ Kotlin, on the other hand, is gaining popularity as a language targetting the JV
 GSharp is born with a similar mindset to Kotlin and with a similar philosophy to Go. GSharp is intended to start small, slowly lighting up application development features such as consuming libraries written in C#, while keeping the language simple.
 
 # Go developers?
-Note that I'm not thinking about attracting current Go developers necessarily. I am a Go developer myself and I will continue using Go where it's appropriate. GSharp doesn't intend to take developers away from Go, although Go skills should be transferable to GSharp development.
+Note that I'm not thinking about attracting current Go developers necessarily. I am a Go developer myself and I will continue using Go where it's appropriate. GSharp doesn't intend to take developers away from Go, although Go skills should be transferable to GSharp development: grammar, channels, goroutines, etc.
 
 ## Contributing
 Contributions to this project are welcome. Before you submit a pull request, open an issue to discuss your idea, the problem it solves, the desired implementation and after that a PR can be considered. This should expedite the PR acceptance process.
