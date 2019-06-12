@@ -67,7 +67,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         ShiftRightToken,
         ShiftRightEqualsToken,
 
-        // Built-in types tokens
+        // Built-in type tokens
         StringToken,
         NumberToken,
 
@@ -102,6 +102,19 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         TrueKeyword,
         TypeKeyword,
         VarKeyword,
+
+        // parsing
+        GlobalStatement,
+        ExpressionStatement,
+        AssignmentExpression,
+        UnaryExpression,
+        BinaryExpression,
+        ParenthesizedExpression,
+        LiteralExpression,
+        NameExpression,
+
+        // compilation
+        CompilationUnit,
     }
 }
 
