@@ -81,3 +81,6 @@ namespace GSharp.Example
 ## Notes
 I found an interesting project that attempts to convert Go code to C# code. It has interesting ideas in it:
   - https://github.com/GridProtectionAlliance/go2cs
+
+Here's an ANTLR 4 grammar for Go, usable to understand what are expressions that we could/should support:
+  - https://github.com/antlr/grammars-v4/blob/master/golang/Golang.g4
