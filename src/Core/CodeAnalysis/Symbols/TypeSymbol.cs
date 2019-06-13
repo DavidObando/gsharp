@@ -10,6 +10,16 @@ namespace GSharp.Core.CodeAnalysis.Symbols
     public sealed class TypeSymbol : Symbol
     {
         /// <summary>
+        /// The type error symbol.
+        /// </summary>
+        public static readonly TypeSymbol Error = new TypeSymbol("?");
+
+        /// <summary>
+        /// The `bool` symbol.
+        /// </summary>
+        public static readonly TypeSymbol Bool = new TypeSymbol("bool");
+
+        /// <summary>
         /// The `int` symbol.
         /// </summary>
         public static readonly TypeSymbol Int = new TypeSymbol("int");
@@ -18,6 +28,11 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// The `string` symbol.
         /// </summary>
         public static readonly TypeSymbol String = new TypeSymbol("string");
+
+        /// <summary>
+        /// The void type symbol.
+        /// </summary>
+        public static readonly TypeSymbol Void = new TypeSymbol("void");
 
         private TypeSymbol(string name)
             : base(name)

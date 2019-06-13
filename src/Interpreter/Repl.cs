@@ -12,7 +12,7 @@ namespace GSharp.Interpreter
     /// <summary>
     /// A generic read–eval–print loop.
     /// </summary>
-    internal abstract class Repl
+    public abstract class Repl
     {
         private readonly List<string> submissionHistory = new List<string>();
         private int submissionHistoryIndex;

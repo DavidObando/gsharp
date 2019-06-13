@@ -120,12 +120,12 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     position++;
                     if (Current == '=')
                     {
-                        kind = SyntaxKind.ModuloEqualsToken;
+                        kind = SyntaxKind.PercentEqualsToken;
                         position++;
                     }
                     else
                     {
-                        kind = SyntaxKind.ModuloToken;
+                        kind = SyntaxKind.PercentToken;
                     }
 
                     break;

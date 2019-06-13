@@ -29,8 +29,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         StarEqualsToken,
         SlashToken,
         SlashEqualsToken,
-        ModuloToken,
-        ModuloEqualsToken,
+        PercentToken,
+        PercentEqualsToken,
         OpenParenthesisToken,
         CloseParenthesisToken,
         OpenSquareBracketToken,
@@ -103,7 +103,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         TypeKeyword,
         VarKeyword,
 
-        // parsing
+        // compilation
+        CompilationUnit,
         GlobalStatement,
         ExpressionStatement,
         AssignmentExpression,
@@ -112,9 +113,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         ParenthesizedExpression,
         LiteralExpression,
         NameExpression,
-
-        // compilation
-        CompilationUnit,
+        CallExpression,
+        FunctionDeclaration,
+        Parameter,
+        TypeClause,
+        BlockStatement,
+        VariableDeclaration,
+        IfStatement,
+        ElseClause,
+        ForStatement,
+        BreakStatement,
+        ContinueStatement,
+        ReturnStatement,
     }
 }
 
