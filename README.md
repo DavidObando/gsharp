@@ -9,6 +9,7 @@ I want to enable other developers to benefit from the .NET framework without nec
 I want a simple, concise, productive programming language targetting .NET based on the good lessons learned from Go, Kotlin, as well as other programming languages. Modern languages such as Go give the user a simple approach to programming while also providing powerful foundations to deliver applications in all forms and factors.
 
 Here's a few relevant links to bring this point home:
+  - Classes versus Data Structures http://blog.cleancoder.com/uncle-bob/2019/06/16/ObjectsAndDataStructures.html
   - Why OO sucks http://www.cs.otago.ac.nz/staffpriv/ok/Joe-Hates-OO.htm
   - Why I prefer go over Java or Python https://yourbasic.org/golang/advantages-over-java-python/
   - Go is in a trajectory to become the next enterprise language https://hackernoon.com/go-is-on-a-trajectory-to-become-the-next-enterprise-programming-language-3b75d70544e
