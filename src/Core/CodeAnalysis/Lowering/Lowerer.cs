@@ -109,7 +109,8 @@ namespace GSharp.Core.CodeAnalysis.Lowering
             var variableDeclaration = new BoundVariableDeclaration(node.Variable, node.LowerBound);
             var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int);
             var upperBoundDeclaration = new BoundVariableDeclaration(upperBoundSymbol, node.UpperBound);
-            var gotoContinue = new BoundGotoStatement(node.ContinueLabel);
+            var startLabel = GenerateLabel();
+            var gotoStart = new BoundGotoStatement(startLabel);
             var bodyLabel = GenerateLabel();
             var bodyLabelStatement = new BoundLabelStatement(bodyLabel);
             var continueLabelStatement = new BoundLabelStatement(node.ContinueLabel);
@@ -121,19 +122,18 @@ namespace GSharp.Core.CodeAnalysis.Lowering
                         variableExpression,
                         BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
                         new BoundLiteralExpression(1))));
-            var startLabel = GenerateLabel();
             var startLabelStatement = new BoundLabelStatement(startLabel);
             var condition = new BoundBinaryExpression(
                 variableExpression,
                 BoundBinaryOperator.Bind(SyntaxKind.LessOrEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
                 new BoundVariableExpression(upperBoundSymbol));
-            var gotoTrue = new BoundConditionalGotoStatement(bodyLabel, condition);
+            var gotoTrue = new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true);
             var breakLabelStatement = new BoundLabelStatement(node.BreakLabel);
 
             var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
                 variableDeclaration,
                 upperBoundDeclaration,
-                gotoContinue,
+                gotoStart,
                 bodyLabelStatement,
                 node.Body,
                 continueLabelStatement,
