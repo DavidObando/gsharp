@@ -175,15 +175,15 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     position++;
                     break;
                 case '.':
-                    position++;
                     if (Peek(1) == '.' && Peek(2) == '.')
                     {
                         kind = SyntaxKind.EllipsisToken;
-                        position += 2;
+                        position += 3;
                     }
                     else
                     {
                         kind = SyntaxKind.DotToken;
+                        position++;
                     }
 
                     break;
