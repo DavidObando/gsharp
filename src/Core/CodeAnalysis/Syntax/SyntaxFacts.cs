@@ -19,20 +19,22 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <returns>A number indicating the presendence.</returns>
         public static int GetUnaryOperatorPrecedence(this SyntaxKind kind)
         {
+#pragma warning disable SA1025 // Code should not contain multiple whitespace in a row
             switch (kind)
             {
-                case SyntaxKind.PlusToken:
-                case SyntaxKind.MinusToken:
-                case SyntaxKind.BangToken:
-                case SyntaxKind.HatToken:
-                case SyntaxKind.StarToken:
-                case SyntaxKind.AmpersandToken:
-                case SyntaxKind.LeftArrowToken:
+                case SyntaxKind.PlusToken:         // identity
+                case SyntaxKind.MinusToken:        // negation
+                case SyntaxKind.BangToken:         // logical negation
+                case SyntaxKind.HatToken:          // one's complement
+                case SyntaxKind.StarToken:         // dereference
+                case SyntaxKind.AmpersandToken:    // reference of
+                case SyntaxKind.LeftArrowToken:    // channel
                     return 6;
 
                 default:
                     return 0;
             }
+#pragma warning restore SA1025 // Code should not contain multiple whitespace in a row
         }
 
         /// <summary>
@@ -42,40 +44,42 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <returns>A number indicating the presendence.</returns>
         public static int GetBinaryOperatorPrecedence(this SyntaxKind kind)
         {
+#pragma warning disable SA1025 // Code should not contain multiple whitespace in a row
             switch (kind)
             {
-                case SyntaxKind.StarToken:
-                case SyntaxKind.SlashToken:
-                case SyntaxKind.ModuloToken:
-                case SyntaxKind.ShiftLeftToken:
-                case SyntaxKind.ShiftRightToken:
-                case SyntaxKind.AmpersandToken:
-                case SyntaxKind.AmpersandHatToken:
+                case SyntaxKind.StarToken:                   // product
+                case SyntaxKind.SlashToken:                  // quotient
+                case SyntaxKind.PercentToken:                // remainder
+                case SyntaxKind.ShiftLeftToken:              // shift left
+                case SyntaxKind.ShiftRightToken:             // shift right
+                case SyntaxKind.AmpersandToken:              // bitwise and
+                case SyntaxKind.AmpersandHatToken:           // bit clear (and not)
                     return 5;
 
-                case SyntaxKind.PlusToken:
-                case SyntaxKind.MinusToken:
-                case SyntaxKind.PipeToken:
-                case SyntaxKind.HatToken:
+                case SyntaxKind.PlusToken:                   // sum
+                case SyntaxKind.MinusToken:                  // difference
+                case SyntaxKind.PipeToken:                   // bitwise or
+                case SyntaxKind.HatToken:                    // bitwise xor
                     return 4;
 
-                case SyntaxKind.EqualsEqualsToken:
-                case SyntaxKind.BangEqualsToken:
-                case SyntaxKind.LessToken:
-                case SyntaxKind.LessOrEqualsToken:
-                case SyntaxKind.GreaterToken:
-                case SyntaxKind.GreaterOrEqualsToken:
+                case SyntaxKind.EqualsEqualsToken:           // equals
+                case SyntaxKind.BangEqualsToken:             // not equals
+                case SyntaxKind.LessToken:                   // less than
+                case SyntaxKind.LessOrEqualsToken:           // less or equals to
+                case SyntaxKind.GreaterToken:                // greater than
+                case SyntaxKind.GreaterOrEqualsToken:        // greater or equals to
                     return 3;
 
-                case SyntaxKind.AmpersandAmpersandToken:
+                case SyntaxKind.AmpersandAmpersandToken:     // logical and
                     return 2;
 
-                case SyntaxKind.PipePipeToken:
+                case SyntaxKind.PipePipeToken:               // logical or
                     return 1;
 
                 default:
                     return 0;
             }
+#pragma warning restore SA1025 // Code should not contain multiple whitespace in a row
         }
 
         /// <summary>
@@ -208,9 +212,9 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     return "/";
                 case SyntaxKind.SlashEqualsToken:
                     return "/=";
-                case SyntaxKind.ModuloToken:
+                case SyntaxKind.PercentToken:
                     return "%";
-                case SyntaxKind.ModuloEqualsToken:
+                case SyntaxKind.PercentEqualsToken:
                     return "%=";
                 case SyntaxKind.OpenParenthesisToken:
                     return "(";

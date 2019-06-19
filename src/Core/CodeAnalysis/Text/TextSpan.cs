@@ -4,6 +4,8 @@
 
 namespace GSharp.Core.CodeAnalysis.Text
 {
+    using System.Collections.Generic;
+
     /// <summary>
     /// An abstract representation of a span with a start and an end index.
     /// </summary>
@@ -52,5 +54,28 @@ namespace GSharp.Core.CodeAnalysis.Text
         /// </summary>
         /// <returns>A string containing the start and end index of the span.</returns>
         public override string ToString() => $"{Start}..{End}";
+
+        /// <summary>
+        /// Provides an <see cref="IComparer{TextSpan}"/> for <see cref="TextSpan"/>.
+        /// </summary>
+        public class TextSpanComparer : IComparer<TextSpan>
+        {
+            /// <summary>
+            /// Compares two text spans, useful for sorting sets of text spans.
+            /// </summary>
+            /// <param name="a">First text span.</param>
+            /// <param name="b">Second text span.</param>
+            /// <returns>A value indicating the relation of the first text span to the second one.</returns>
+            public int Compare(TextSpan a, TextSpan b)
+            {
+                int cmp = a.Start - b.Start;
+                if (cmp == 0)
+                {
+                    cmp = a.Length - b.Length;
+                }
+
+                return cmp;
+            }
+        }
     }
 }

@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Compiler
+namespace GSharp.Interpreter
 {
     using System;
 
@@ -17,7 +17,8 @@ namespace GSharp.Compiler
         /// <param name="args">Command line arguments.</param>
         public static void Main(string[] args)
         {
-            Console.WriteLine("Hello World!");
+            var repl = new GSharpRepl();
+            repl.Run();
         }
     }
 }
