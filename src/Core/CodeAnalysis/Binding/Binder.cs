@@ -286,7 +286,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             scope = new BoundScope(scope);
 
-            var variable = BindVariable(syntax.Identifier, isReadOnly: true, TypeSymbol.Int);
+            var variable = BindVariable(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int);
             var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
 
             scope = scope.Parent;
