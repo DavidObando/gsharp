@@ -28,3 +28,6 @@ Contributions to this project are welcome. Before you submit a pull request, ope
 
 ## Name
 The GSharp language takes its name from [CSharp](https://github.com/dotnet/csharplang) and [Go](https://go.googlesource.com/go), reflecting its roots and target (.NET). If there are any trademark issues with calling it that way I'm happy to also call it [AFlat](https://www.uberchord.com/blog/g-sharp-or-a-flat-on-guitar-chord-shapes-major-scale-songs-in-the-key-of-g-sharp-a-flat/).
+
+#### Other interesting links
+  - [An Exhausting List of Differences Between VB.NET & C#](https://anthonydgreen.net/2019/02/12/exhausting-list-of-differences-between-vb-net-c/)
