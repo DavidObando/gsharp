@@ -31,3 +31,4 @@ The GSharp language takes its name from [CSharp](https://github.com/dotnet/cshar
 
 #### Other interesting links
   - [An Exhausting List of Differences Between VB.NET & C#](https://anthonydgreen.net/2019/02/12/exhausting-list-of-differences-between-vb-net-c/)
+  - [“Go programmer claims he doesn’t need generics”](https://classicprogrammerpaintings.com/post/144854447139/go-programmer-claims-he-doesnt-need-generics)
