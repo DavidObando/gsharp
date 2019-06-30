@@ -51,8 +51,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 case BoundNodeKind.IfStatement:
                     WriteIfStatement((BoundIfStatement)node, writer);
                     break;
-                case BoundNodeKind.ForStatement:
-                    WriteForStatement((BoundForStatement)node, writer);
+                case BoundNodeKind.ForEllipsisStatement:
+                    WriteForEllipsisStatement((BoundForEllipsisStatement)node, writer);
                     break;
                 case BoundNodeKind.LabelStatement:
                     WriteLabelStatement((BoundLabelStatement)node, writer);
@@ -196,7 +196,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
         }
 
-        private static void WriteForStatement(BoundForStatement node, IndentedTextWriter writer)
+        private static void WriteForEllipsisStatement(BoundForEllipsisStatement node, IndentedTextWriter writer)
         {
             writer.WriteKeyword(SyntaxKind.ForKeyword);
             writer.WriteSpace();

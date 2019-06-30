@@ -87,7 +87,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering
         }
 
         /// <inheritdoc/>
-        protected override BoundStatement RewriteForStatement(BoundForStatement node)
+        protected override BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
         {
             // for <var> := <lower> ... <upper>
             //      <body>
@@ -97,42 +97,91 @@ namespace GSharp.Core.CodeAnalysis.Lowering
             // {
             //     var <var> = <lower>
             //     const upperBound = <upper>
+            //     var step = 1
+            //     if <var> greaterthan upperBound {
+            //          step = -1
+            //     }
             //     goto start
             //     body:
             //     <body>
             //     continue:
-            //     <var> = <var> + 1
+            //     <var> = <var> + step
             //     start:
-            //     gotoTrue <condition> body
+            //     gotoTrue ((step > 0 && lower < upper) || (step < 0 && lower > upper)) body
             //     break:
             // }
             var variableDeclaration = new BoundVariableDeclaration(node.Variable, node.LowerBound);
             var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int);
             var upperBoundDeclaration = new BoundVariableDeclaration(upperBoundSymbol, node.UpperBound);
+            var stepBoundSymbol = new LocalVariableSymbol("step", isReadOnly: false, type: TypeSymbol.Int);
+            var stepBoundDeclaration = new BoundVariableDeclaration(
+                variable: stepBoundSymbol,
+                initializer: new BoundLiteralExpression(1));
+            var variableExpression = new BoundVariableExpression(node.Variable);
+            var upperBoundExpression = new BoundVariableExpression(upperBoundSymbol);
+            var stepBoundExpression = new BoundVariableExpression(stepBoundSymbol);
+            var ifLowerIsGreaterThanUpperExpression = new BoundBinaryExpression(
+                left: variableExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+                right: upperBoundExpression);
+            var stepBoundAssingment = new BoundExpressionStatement(
+                expression: new BoundAssignmentExpression(
+                    variable: stepBoundSymbol,
+                    expression: new BoundLiteralExpression(-1)));
+            var ifLowerIsGreaterThanUpperIfStatement = new BoundIfStatement(
+                condition: ifLowerIsGreaterThanUpperExpression,
+                thenStatement: stepBoundAssingment,
+                elseStatement: null);
             var startLabel = GenerateLabel();
             var gotoStart = new BoundGotoStatement(startLabel);
             var bodyLabel = GenerateLabel();
             var bodyLabelStatement = new BoundLabelStatement(bodyLabel);
             var continueLabelStatement = new BoundLabelStatement(node.ContinueLabel);
-            var variableExpression = new BoundVariableExpression(node.Variable);
             var increment = new BoundExpressionStatement(
-                new BoundAssignmentExpression(
-                    node.Variable,
-                    new BoundBinaryExpression(
-                        variableExpression,
-                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
-                        new BoundLiteralExpression(1))));
+                expression: new BoundAssignmentExpression(
+                    variable: node.Variable,
+                    expression: new BoundBinaryExpression(
+                        left: variableExpression,
+                        op: BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                        right: stepBoundExpression)));
             var startLabelStatement = new BoundLabelStatement(startLabel);
+            var zeroLiteralExpression = new BoundLiteralExpression(0);
+            var stepGreaterThanZeroExpression = new BoundBinaryExpression(
+                left: stepBoundExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+                right: zeroLiteralExpression);
+            var lowerLessThanUpperExpression = new BoundBinaryExpression(
+                left: variableExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+                right: upperBoundExpression);
+            var positiveStepAndLowerLessThanUpper = new BoundBinaryExpression(
+                left: stepGreaterThanZeroExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                right: lowerLessThanUpperExpression);
+            var stepLessThanZeroExpression = new BoundBinaryExpression(
+                left: stepBoundExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+                right: zeroLiteralExpression);
+            var lowerGreaterThanUpperExpression = new BoundBinaryExpression(
+                left: variableExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+                right: upperBoundExpression);
+            var negativeStepAndLowerGreaterThanUpper = new BoundBinaryExpression(
+                left: stepLessThanZeroExpression,
+                op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                right: lowerGreaterThanUpperExpression);
             var condition = new BoundBinaryExpression(
-                variableExpression,
-                BoundBinaryOperator.Bind(SyntaxKind.LessOrEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                new BoundVariableExpression(upperBoundSymbol));
+                positiveStepAndLowerLessThanUpper,
+                BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                negativeStepAndLowerGreaterThanUpper);
             var gotoTrue = new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true);
             var breakLabelStatement = new BoundLabelStatement(node.BreakLabel);
 
             var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
                 variableDeclaration,
                 upperBoundDeclaration,
+                stepBoundDeclaration,
+                ifLowerIsGreaterThanUpperIfStatement,
                 gotoStart,
                 bodyLabelStatement,
                 node.Body,

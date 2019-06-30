@@ -27,8 +27,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return RewriteVariableDeclaration((BoundVariableDeclaration)node);
                 case BoundNodeKind.IfStatement:
                     return RewriteIfStatement((BoundIfStatement)node);
-                case BoundNodeKind.ForStatement:
-                    return RewriteForStatement((BoundForStatement)node);
+                case BoundNodeKind.ForEllipsisStatement:
+                    return RewriteForEllipsisStatement((BoundForEllipsisStatement)node);
                 case BoundNodeKind.LabelStatement:
                     return RewriteLabelStatement((BoundLabelStatement)node);
                 case BoundNodeKind.GotoStatement:
@@ -119,11 +119,11 @@ namespace GSharp.Core.CodeAnalysis.Binding
         }
 
         /// <summary>
-        /// Rewrites a for statement.
+        /// Rewrites a for ellipsis statement.
         /// </summary>
         /// <param name="node">The for statement to rewrite.</param>
         /// <returns>The rewritten for statement.</returns>
-        protected virtual BoundStatement RewriteForStatement(BoundForStatement node)
+        protected virtual BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
         {
             var lowerBound = RewriteExpression(node.LowerBound);
             var upperBound = RewriteExpression(node.UpperBound);
@@ -133,7 +133,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 return node;
             }
 
-            return new BoundForStatement(node.Variable, lowerBound, upperBound, body, node.BreakLabel, node.ContinueLabel);
+            return new BoundForEllipsisStatement(node.Variable, lowerBound, upperBound, body, node.BreakLabel, node.ContinueLabel);
         }
 
         /// <summary>

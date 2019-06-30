@@ -212,8 +212,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return BindVariableDeclaration((VariableDeclarationSyntax)syntax);
                 case SyntaxKind.IfStatement:
                     return BindIfStatement((IfStatementSyntax)syntax);
-                case SyntaxKind.ForStatement:
-                    return BindForStatement((ForStatementSyntax)syntax);
+                case SyntaxKind.ForEllipsisStatement:
+                    return BindForEllipsisStatement((ForEllipsisStatementSyntax)syntax);
                 case SyntaxKind.BreakStatement:
                     return BindBreakStatement((BreakStatementSyntax)syntax);
                 case SyntaxKind.ContinueStatement:
@@ -279,7 +279,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             return new BoundIfStatement(condition, thenStatement, elseStatement);
         }
 
-        private BoundStatement BindForStatement(ForStatementSyntax syntax)
+        private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
         {
             var lowerBound = BindExpression(syntax.LowerBound, TypeSymbol.Int);
             var upperBound = BindExpression(syntax.UpperBound, TypeSymbol.Int);
@@ -291,7 +291,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             scope = scope.Parent;
 
-            return new BoundForStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
+            return new BoundForEllipsisStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
         }
 
         private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)

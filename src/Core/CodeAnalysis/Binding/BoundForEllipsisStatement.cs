@@ -1,4 +1,4 @@
-﻿// <copyright file="BoundForStatement.cs" company="GSharp">
+﻿// <copyright file="BoundForEllipsisStatement.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -7,12 +7,12 @@ namespace GSharp.Core.CodeAnalysis.Binding
     using GSharp.Core.CodeAnalysis.Symbols;
 
     /// <summary>
-    /// Bound for statement.
+    /// Bound for ellipsis statement.
     /// </summary>
-    internal sealed class BoundForStatement : BoundLoopStatement
+    internal sealed class BoundForEllipsisStatement : BoundLoopStatement
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="BoundForStatement"/> class.
+        /// Initializes a new instance of the <see cref="BoundForEllipsisStatement"/> class.
         /// </summary>
         /// <param name="variable">The variable.</param>
         /// <param name="lowerBound">The lower bound expression.</param>
@@ -20,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         /// <param name="body">The body.</param>
         /// <param name="breakLabel">The break label.</param>
         /// <param name="continueLabel">The continue label.</param>
-        public BoundForStatement(
+        public BoundForEllipsisStatement(
             VariableSymbol variable,
             BoundExpression lowerBound,
             BoundExpression upperBound,
@@ -36,7 +36,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         }
 
         /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.ForStatement;
+        public override BoundNodeKind Kind => BoundNodeKind.ForEllipsisStatement;
 
         /// <summary>
         /// Gets the variable.

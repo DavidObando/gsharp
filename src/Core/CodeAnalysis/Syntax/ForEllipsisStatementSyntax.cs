@@ -1,16 +1,16 @@
-﻿// <copyright file="ForStatementSyntax.cs" company="GSharp">
+﻿// <copyright file="ForEllipsisStatementSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
 namespace GSharp.Core.CodeAnalysis.Syntax
 {
     /// <summary>
-    /// Represents a for statement syntax in the language.
+    /// Represents a for ellipsis statement syntax in the language.
     /// </summary>
-    public sealed class ForStatementSyntax : StatementSyntax
+    public sealed class ForEllipsisStatementSyntax : StatementSyntax
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="ForStatementSyntax"/> class.
+        /// Initializes a new instance of the <see cref="ForEllipsisStatementSyntax"/> class.
         /// </summary>
         /// <param name="keyword">The for keyword.</param>
         /// <param name="identifier">The variable identifier.</param>
@@ -19,7 +19,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <param name="ellipsisToken">The ellipsis token.</param>
         /// <param name="upperBound">The upper bound expression.</param>
         /// <param name="body">The body statement.</param>
-        public ForStatementSyntax(
+        public ForEllipsisStatementSyntax(
             SyntaxToken keyword,
             SyntaxToken identifier,
             SyntaxToken colonEqualsToken,
@@ -38,7 +38,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         }
 
         /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.ForStatement;
+        public override SyntaxKind Kind => SyntaxKind.ForEllipsisStatement;
 
         /// <summary>
         /// Gets the for keyword.
