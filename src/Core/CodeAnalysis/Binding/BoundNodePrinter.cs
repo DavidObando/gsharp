@@ -174,7 +174,15 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             writer.WriteIdentifier(node.Variable.Name);
             writer.WriteSpace();
-            writer.WritePunctuation(SyntaxKind.ColonEqualsToken);
+            if (node.Variable.IsReadOnly)
+            {
+                writer.WritePunctuation(SyntaxKind.EqualsToken);
+            }
+            else
+            {
+                writer.WritePunctuation(SyntaxKind.ColonEqualsToken);
+            }
+
             writer.WriteSpace();
             node.Initializer.WriteTo(writer);
             writer.WriteLine();

@@ -206,8 +206,27 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 case SyntaxKind.ReturnKeyword:
                     return ParseReturnStatement();
                 default:
+                    if (Current.Kind == SyntaxKind.IdentifierToken &&
+                        Peek(1).Kind == SyntaxKind.ColonEqualsToken)
+                    {
+                        return ParseSingleShortVariableDeclaration();
+                    }
+
                     return ParseExpressionStatement();
             }
+        }
+
+        private StatementSyntax ParseSingleShortVariableDeclaration()
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+            var initializer = ParseExpression();
+            return new VariableDeclarationSyntax(
+                keyword: null,
+                identifier: identifier,
+                typeClause: null,
+                equalsToken: colonEquals,
+                initializer: initializer);
         }
 
         private StatementSyntax ParseVariableDeclaration()
