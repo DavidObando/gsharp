@@ -40,7 +40,7 @@ package GSharp.Example.Loop
 
 import System
 
-func Main(args: string[]) {
+func Main(args string[]) {
   count := 0
   if args.Length == 1 {
     Int.TryParse(args[0], *count)
