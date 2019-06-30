@@ -245,7 +245,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
         private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
         {
-            var isReadOnly = syntax.Keyword.Kind == SyntaxKind.ConstKeyword;
+            var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword;
             var type = BindTypeClause(syntax.TypeClause);
             var initializer = BindExpression(syntax.Initializer);
             var variableType = type ?? initializer.Type;
