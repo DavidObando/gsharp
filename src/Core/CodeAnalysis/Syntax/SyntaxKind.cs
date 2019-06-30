@@ -121,7 +121,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         VariableDeclaration,
         IfStatement,
         ElseClause,
-        ForStatement,
+        ForEllipsisStatement,
         BreakStatement,
         ContinueStatement,
         ReturnStatement,

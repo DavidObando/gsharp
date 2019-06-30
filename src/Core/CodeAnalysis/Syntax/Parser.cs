@@ -198,7 +198,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 case SyntaxKind.IfKeyword:
                     return ParseIfStatement();
                 case SyntaxKind.ForKeyword:
-                    return ParseForStatement();
+                    return ParseForEllipsisStatement();
                 case SyntaxKind.BreakKeyword:
                     return ParseBreakStatement();
                 case SyntaxKind.ContinueKeyword:
@@ -242,7 +242,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             return new ElseClauseSyntax(keyword, statement);
         }
 
-        private StatementSyntax ParseForStatement()
+        private StatementSyntax ParseForEllipsisStatement()
         {
             var keyword = MatchToken(SyntaxKind.ForKeyword);
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -251,7 +251,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var toKeyword = MatchToken(SyntaxKind.EllipsisToken);
             var upperBound = ParseExpression();
             var body = ParseStatement();
-            return new ForStatementSyntax(keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
+            return new ForEllipsisStatementSyntax(keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
         }
 
         private StatementSyntax ParseBreakStatement()
