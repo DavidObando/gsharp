@@ -87,6 +87,32 @@ namespace GSharp.Core.CodeAnalysis.Lowering
         }
 
         /// <inheritdoc/>
+        protected override BoundStatement RewriteForInfiniteStatement(BoundForInfiniteStatement node)
+        {
+            // for
+            //     <body>
+            //
+            // ---->
+            //
+            // {
+            //     continue:
+            //     <body>
+            //     goto continue
+            //     break:
+            // }
+            var continueLabelStatement = new BoundLabelStatement(node.ContinueLabel);
+            var gotoContinue = new BoundGotoStatement(node.ContinueLabel);
+            var breakLabelStatement = new BoundLabelStatement(node.BreakLabel);
+
+            var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                continueLabelStatement,
+                node.Body,
+                gotoContinue,
+                breakLabelStatement));
+            return RewriteStatement(result);
+        }
+
+        /// <inheritdoc/>
         protected override BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
         {
             // for <var> := <lower> ... <upper>

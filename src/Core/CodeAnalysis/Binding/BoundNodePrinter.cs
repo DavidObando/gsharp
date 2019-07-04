@@ -51,6 +51,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 case BoundNodeKind.IfStatement:
                     WriteIfStatement((BoundIfStatement)node, writer);
                     break;
+                case BoundNodeKind.ForInfiniteStatement:
+                    WriteForInfiniteStatement((BoundForInfiniteStatement)node, writer);
+                    break;
                 case BoundNodeKind.ForEllipsisStatement:
                     WriteForEllipsisStatement((BoundForEllipsisStatement)node, writer);
                     break;
@@ -204,6 +207,13 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
         }
 
+        private static void WriteForInfiniteStatement(BoundForInfiniteStatement node, IndentedTextWriter writer)
+        {
+            writer.WriteKeyword(SyntaxKind.ForKeyword);
+            writer.WriteSpace();
+            writer.WriteNestedStatement(node.Body);
+        }
+
         private static void WriteForEllipsisStatement(BoundForEllipsisStatement node, IndentedTextWriter writer)
         {
             writer.WriteKeyword(SyntaxKind.ForKeyword);
@@ -217,7 +227,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             writer.WriteKeyword(SyntaxKind.EllipsisToken);
             writer.WriteSpace();
             node.UpperBound.WriteTo(writer);
-            writer.WriteLine();
+            writer.WriteSpace();
             writer.WriteNestedStatement(node.Body);
         }
 

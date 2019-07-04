@@ -212,6 +212,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return BindVariableDeclaration((VariableDeclarationSyntax)syntax);
                 case SyntaxKind.IfStatement:
                     return BindIfStatement((IfStatementSyntax)syntax);
+                case SyntaxKind.ForInfiniteStatement:
+                    return BindForInfiniteStatement((ForInfiniteStatementSyntax)syntax);
                 case SyntaxKind.ForEllipsisStatement:
                     return BindForEllipsisStatement((ForEllipsisStatementSyntax)syntax);
                 case SyntaxKind.BreakStatement:
@@ -277,6 +279,17 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var thenStatement = BindStatement(syntax.ThenStatement);
             var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
             return new BoundIfStatement(condition, thenStatement, elseStatement);
+        }
+
+        private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
+        {
+            scope = new BoundScope(scope);
+
+            var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+            scope = scope.Parent;
+
+            return new BoundForInfiniteStatement(body, breakLabel, continueLabel);
         }
 
         private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
