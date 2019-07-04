@@ -24,9 +24,17 @@ namespace GSharp.Interpreter
         private bool showTree;
         private bool showProgram;
 
+        private List<int> linesWithOpenMultilineComments = new List<int>();
+
         /// <inheritdoc/>
-        protected override void RenderLine(string line)
+        protected override void RenderLine(string line, int lineNumber)
         {
+            if (linesWithOpenMultilineComments.Contains(lineNumber))
+            {
+                linesWithOpenMultilineComments.Remove(lineNumber);
+            }
+
+            var isMultilineComment = linesWithOpenMultilineComments.Contains(lineNumber - 1);
             var tokens = SyntaxTree.ParseTokens(line);
             foreach (var token in tokens)
             {
@@ -34,6 +42,7 @@ namespace GSharp.Interpreter
                 var isIdentifier = token.Kind == SyntaxKind.IdentifierToken;
                 var isNumber = token.Kind == SyntaxKind.NumberToken;
                 var isString = token.Kind == SyntaxKind.StringToken;
+                var isComment = token.Kind == SyntaxKind.CommentToken;
 
                 if (isKeyword)
                 {
@@ -51,9 +60,43 @@ namespace GSharp.Interpreter
                 {
                     Console.ForegroundColor = ConsoleColor.Magenta;
                 }
+                else if (isComment)
+                {
+                    if (!linesWithOpenMultilineComments.Contains(lineNumber))
+                    {
+                        var openMultilineCommentIndex = line.IndexOf("/*");
+                        var closeMultilineCommentIndex = line.IndexOf("*/");
+                        if (openMultilineCommentIndex != -1 &&
+                            (closeMultilineCommentIndex == -1 || closeMultilineCommentIndex < openMultilineCommentIndex))
+                        {
+                            linesWithOpenMultilineComments.Add(lineNumber);
+                        }
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.DarkGreen;
+                }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.DarkGray;
+                }
+
+                if (isMultilineComment)
+                {
+                    if (!linesWithOpenMultilineComments.Contains(lineNumber))
+                    {
+                        var lastOpenMultilineCommentIndex = line.LastIndexOf("/*");
+                        var lastCloseMultilineCommentIndex = line.LastIndexOf("*/");
+                        if (lastCloseMultilineCommentIndex == -1 || (lastOpenMultilineCommentIndex > lastCloseMultilineCommentIndex))
+                        {
+                            linesWithOpenMultilineComments.Add(lineNumber);
+                        }
+                    }
+
+                    var firstCloseMultilineCommentIndex = line.IndexOf("*/");
+                    if (firstCloseMultilineCommentIndex == -1 || token.Position <= (firstCloseMultilineCommentIndex + 1))
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkGreen;
+                    }
                 }
 
                 Console.Write(token.Text);
@@ -109,7 +152,8 @@ namespace GSharp.Interpreter
             var syntaxTree = SyntaxTree.Parse(text);
 
             // Use Members because we need to exclude the EndOfFileToken.
-            if (syntaxTree.Root.Members.Last().GetLastToken().IsMissing)
+            if (syntaxTree.Root.Members.Length == 0 ||
+                syntaxTree.Root.Members.Last().GetLastToken().IsMissing)
             {
                 return false;
             }
@@ -120,6 +164,8 @@ namespace GSharp.Interpreter
         /// <inheritdoc/>
         protected override void EvaluateSubmission(string text)
         {
+            linesWithOpenMultilineComments.Clear();
+
             var syntaxTree = SyntaxTree.Parse(text);
 
             var compilation = previous == null

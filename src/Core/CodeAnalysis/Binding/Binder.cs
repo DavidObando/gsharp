@@ -206,6 +206,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
         {
             switch (syntax.Kind)
             {
+                case SyntaxKind.CommentToken:
+                    // comments don't need to be bound
+                    return null;
                 case SyntaxKind.BlockStatement:
                     return BindBlockStatement((BlockStatementSyntax)syntax);
                 case SyntaxKind.VariableDeclaration:

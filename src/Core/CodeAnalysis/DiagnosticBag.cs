@@ -47,6 +47,16 @@ namespace GSharp.Core.CodeAnalysis
         }
 
         /// <summary>
+        /// Reports an unterminated comment.
+        /// </summary>
+        /// <param name="span">Span where unterminated comment was found.</param>
+        public void ReportUnterminatedComment(TextSpan span)
+        {
+            var message = "Unterminated comment.";
+            Report(span, message);
+        }
+
+        /// <summary>
         /// Reports an unterminated string literal.
         /// </summary>
         /// <param name="span">Span where unterminated string was found.</param>

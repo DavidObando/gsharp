@@ -105,7 +105,15 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     break;
                 case '/':
                     position++;
-                    if (Current == '=')
+                    if (Current == '/')
+                    {
+                        ReadSingleLineComment();
+                    }
+                    else if (Current == '*')
+                    {
+                        ReadMultiLineComment();
+                    }
+                    else if (Current == '=')
                     {
                         kind = SyntaxKind.SlashEqualsToken;
                         position++;
@@ -391,6 +399,78 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             }
 
             return text[index];
+        }
+
+        private void ReadSingleLineComment()
+        {
+            // Skip the current slash character
+            position++;
+
+            var sb = new StringBuilder();
+            var done = false;
+
+            while (!done)
+            {
+                switch (Current)
+                {
+                    case '\0':
+                        done = true;
+                        break;
+                    case '\r':
+                    case '\n':
+                        position++;
+                        done = true;
+                        break;
+                    default:
+                        sb.Append(Current);
+                        position++;
+                        break;
+                }
+            }
+
+            kind = SyntaxKind.CommentToken;
+            value = sb.ToString();
+        }
+
+        private void ReadMultiLineComment()
+        {
+            // Skip the current star character
+            position++;
+
+            var sb = new StringBuilder();
+            var done = false;
+
+            while (!done)
+            {
+                switch (Current)
+                {
+                    case '\0':
+                        var span = new TextSpan(start, position - start);
+                        Diagnostics.ReportUnterminatedComment(span);
+                        done = true;
+                        break;
+                    case '*':
+                        if (Lookahead == '/')
+                        {
+                            position += 2;
+                            done = true;
+                        }
+                        else
+                        {
+                            sb.Append(Current);
+                            position++;
+                        }
+
+                        break;
+                    default:
+                        sb.Append(Current);
+                        position++;
+                        break;
+                }
+            }
+
+            kind = SyntaxKind.CommentToken;
+            value = sb.ToString();
         }
 
         private void ReadString()

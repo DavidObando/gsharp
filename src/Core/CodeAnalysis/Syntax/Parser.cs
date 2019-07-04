@@ -14,7 +14,6 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// </summary>
     public class Parser
     {
-        private readonly DiagnosticBag diagnostics = new DiagnosticBag();
         private readonly SourceText text;
         private readonly ImmutableArray<SyntaxToken> tokens;
         private int position;
@@ -34,6 +33,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 token = lexer.Lex();
 
                 if (token.Kind != SyntaxKind.WhitespaceToken &&
+                    token.Kind != SyntaxKind.CommentToken &&
                     token.Kind != SyntaxKind.BadToken)
                 {
                     tokens.Add(token);
@@ -43,13 +43,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 
             this.text = text;
             this.tokens = tokens.ToImmutableArray();
-            diagnostics.AddRange(lexer.Diagnostics);
+            Diagnostics.AddRange(lexer.Diagnostics);
         }
 
         /// <summary>
         /// Gets tiagnostic bag associated to this parser.
         /// </summary>
-        public DiagnosticBag Diagnostics => diagnostics;
+        public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
 
         private SyntaxToken Current => Peek(0);
 
@@ -495,7 +495,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 return NextToken();
             }
 
-            diagnostics.ReportUnexpectedToken(Current.Span, Current.Kind, kind);
+            Diagnostics.ReportUnexpectedToken(Current.Span, Current.Kind, kind);
             return new SyntaxToken(kind, Current.Position, null, null);
         }
     }
