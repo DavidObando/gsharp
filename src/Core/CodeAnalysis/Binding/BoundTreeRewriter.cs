@@ -27,6 +27,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return RewriteVariableDeclaration((BoundVariableDeclaration)node);
                 case BoundNodeKind.IfStatement:
                     return RewriteIfStatement((BoundIfStatement)node);
+                case BoundNodeKind.ForInfiniteStatement:
+                    return RewriteForInfiniteStatement((BoundForInfiniteStatement)node);
                 case BoundNodeKind.ForEllipsisStatement:
                     return RewriteForEllipsisStatement((BoundForEllipsisStatement)node);
                 case BoundNodeKind.LabelStatement:
@@ -119,10 +121,26 @@ namespace GSharp.Core.CodeAnalysis.Binding
         }
 
         /// <summary>
+        /// Rewrites a for infinite statement.
+        /// </summary>
+        /// <param name="node">The for infinite statement to rewrite.</param>
+        /// <returns>The rewritten for infinite statement.</returns>
+        protected virtual BoundStatement RewriteForInfiniteStatement(BoundForInfiniteStatement node)
+        {
+            var body = RewriteStatement(node.Body);
+            if (body == node.Body)
+            {
+                return node;
+            }
+
+            return new BoundForInfiniteStatement(body, node.BreakLabel, node.ContinueLabel);
+        }
+
+        /// <summary>
         /// Rewrites a for ellipsis statement.
         /// </summary>
-        /// <param name="node">The for statement to rewrite.</param>
-        /// <returns>The rewritten for statement.</returns>
+        /// <param name="node">The for ellipsis statement to rewrite.</param>
+        /// <returns>The rewritten for ellipsis statement.</returns>
         protected virtual BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
         {
             var lowerBound = RewriteExpression(node.LowerBound);

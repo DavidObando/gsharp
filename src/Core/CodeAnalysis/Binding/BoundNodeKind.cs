@@ -17,6 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         BlockStatement,
         VariableDeclaration,
         IfStatement,
+        ForInfiniteStatement,
         ForEllipsisStatement,
         LabelStatement,
         GotoStatement,
