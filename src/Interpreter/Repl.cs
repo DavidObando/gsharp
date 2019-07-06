@@ -58,7 +58,8 @@ namespace GSharp.Interpreter
         /// Renders a line in the console.
         /// </summary>
         /// <param name="line">The line to render.</param>
-        protected virtual void RenderLine(string line)
+        /// <param name="lineNumber">The line number.</param>
+        protected virtual void RenderLine(string line, int lineNumber)
         {
             Console.Write(line);
         }
@@ -362,14 +363,14 @@ namespace GSharp.Interpreter
 
         private sealed class SubmissionView
         {
-            private readonly Action<string> lineRenderer;
+            private readonly Action<string, int> lineRenderer;
             private readonly ObservableCollection<string> submissionDocument;
             private readonly int cursorTop;
             private int renderedLineCount;
             private int currentLine;
             private int currentCharacter;
 
-            public SubmissionView(Action<string> lineRenderer, ObservableCollection<string> submissionDocument)
+            public SubmissionView(Action<string, int> lineRenderer, ObservableCollection<string> submissionDocument)
             {
                 this.lineRenderer = lineRenderer;
                 this.submissionDocument = submissionDocument;
@@ -432,7 +433,7 @@ namespace GSharp.Interpreter
                     }
 
                     Console.ResetColor();
-                    lineRenderer(line);
+                    lineRenderer(line, lineCount);
                     Console.WriteLine(new string(' ', Console.WindowWidth - line.Length));
                     lineCount++;
                 }

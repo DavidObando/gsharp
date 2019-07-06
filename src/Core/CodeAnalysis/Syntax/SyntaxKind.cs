@@ -16,6 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         // Punctuation tokens
         BadToken,
         WhitespaceToken,
+        CommentToken,
         EndOfFileToken,
 
         // Language tokens
