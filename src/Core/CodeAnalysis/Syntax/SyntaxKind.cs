@@ -115,6 +115,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         LiteralExpression,
         NameExpression,
         CallExpression,
+        PackageDeclaration,
         FunctionDeclaration,
         Parameter,
         TypeClause,
