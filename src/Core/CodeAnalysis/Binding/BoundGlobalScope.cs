@@ -16,18 +16,21 @@ namespace GSharp.Core.CodeAnalysis.Binding
         /// Initializes a new instance of the <see cref="BoundGlobalScope"/> class.
         /// </summary>
         /// <param name="previous">Previous compilation global scope.</param>
+        /// <param name="package">The package for the current compilation.</param>
         /// <param name="diagnostics">Diagnostics for the current compilation.</param>
         /// <param name="functions">Functions in the current compilation.</param>
         /// <param name="variables">Variables in the current compilation.</param>
         /// <param name="statements">Statements in the current compilation.</param>
         public BoundGlobalScope(
             BoundGlobalScope previous,
+            PackageSymbol package,
             ImmutableArray<Diagnostic> diagnostics,
             ImmutableArray<FunctionSymbol> functions,
             ImmutableArray<VariableSymbol> variables,
             ImmutableArray<BoundStatement> statements)
         {
             Previous = previous;
+            Package = package;
             Diagnostics = diagnostics;
             Functions = functions;
             Variables = variables;
@@ -38,6 +41,11 @@ namespace GSharp.Core.CodeAnalysis.Binding
         /// Gets the previous compilation global scope.
         /// </summary>
         public BoundGlobalScope Previous { get; }
+
+        /// <summary>
+        /// Gets the package symbol for the current compilation.
+        /// </summary>
+        public PackageSymbol Package { get; }
 
         /// <summary>
         /// Gets the diagnostics for the current compilation.

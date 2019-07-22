@@ -7,7 +7,7 @@ namespace GSharp.Interpreter
     using System;
     using System.Collections.Generic;
     using System.Linq;
-    using GSharp.Core.CodeAnalysis;
+    using GSharp.Core.CodeAnalysis.Compilation;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
     using GSharp.Core.CodeAnalysis.Text;

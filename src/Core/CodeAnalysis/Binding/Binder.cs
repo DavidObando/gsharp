@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.Linq;
     using GSharp.Core.CodeAnalysis.Lowering;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
@@ -58,6 +59,17 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var parentScope = CreateParentScope(previous);
             var binder = new Binder(parentScope, function: null);
 
+            PackageSymbol packageSymbol;
+            var package = syntax.Members.OfType<PackageSyntax>().SingleOrDefault();
+            if (package == null)
+            {
+                packageSymbol = new PackageSymbol(name: "Default", declaration: null);
+            }
+            else
+            {
+                packageSymbol = new PackageSymbol(name: package.Identifier.Text, declaration: package);
+            }
+
             foreach (var function in syntax.Members.OfType<FunctionDeclarationSyntax>())
             {
                 binder.BindFunctionDeclaration(function);
@@ -80,7 +92,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
             }
 
-            return new BoundGlobalScope(previous, diagnostics, functions, variables, statements.ToImmutable());
+            return new BoundGlobalScope(previous, packageSymbol, diagnostics, functions, variables, statements.ToImmutable());
         }
 
         /// <summary>
@@ -120,7 +132,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             var statement = Lowerer.Lower(new BoundBlockStatement(globalScope.Statements));
 
-            return new BoundProgram(diagnostics.ToImmutable(), functionBodies.ToImmutable(), statement);
+            return new BoundProgram(globalScope.Package.Name, diagnostics.ToImmutable(), functionBodies.ToImmutable(), statement);
         }
 
         private static BoundScope CreateParentScope(BoundGlobalScope previous)
