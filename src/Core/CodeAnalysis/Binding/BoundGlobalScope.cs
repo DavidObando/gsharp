@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Global scope-level binding. Enables compilations to be chained.
     /// </summary>
-    internal sealed class BoundGlobalScope
+    public sealed class BoundGlobalScope
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundGlobalScope"/> class.
