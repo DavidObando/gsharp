@@ -47,6 +47,12 @@ namespace GSharp.Interpreter
         }
 
         /// <summary>
+        /// Evaluates a submission.
+        /// </summary>
+        /// <param name="text">The text containing the submission.</param>
+        public abstract void EvaluateSubmission(string text);
+
+        /// <summary>
         /// Clears the submission history.
         /// </summary>
         protected void ClearHistory()
@@ -81,12 +87,6 @@ namespace GSharp.Interpreter
         /// <param name="text">The input text.</param>
         /// <returns>Whether the input text is a complete submission.</returns>
         protected abstract bool IsCompleteSubmission(string text);
-
-        /// <summary>
-        /// Evaluates a submission.
-        /// </summary>
-        /// <param name="text">The text containing the submission.</param>
-        protected abstract void EvaluateSubmission(string text);
 
         private static void InsertLine(ObservableCollection<string> document, SubmissionView view)
         {

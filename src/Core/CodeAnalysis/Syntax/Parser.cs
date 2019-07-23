@@ -61,23 +61,28 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         public CompilationUnitSyntax ParseCompilationUnit()
         {
             var package = ParsePackage();
-
-            // var imports = ParseImports();
             var members = ParseMembers();
             var endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken);
             var junction = ImmutableArray.CreateBuilder<MemberSyntax>();
-            junction.Add(package);
+            if (package != null)
+            {
+                junction.Add(package);
+            }
 
-            // junction.Add(imports);
             junction.AddRange(members);
             return new CompilationUnitSyntax(junction.ToImmutable(), endOfFileToken);
         }
 
         private PackageSyntax ParsePackage()
         {
-            var packageKeyword = MatchToken(SyntaxKind.PackageKeyword);
-            var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            return new PackageSyntax(packageKeyword, identifier);
+            if (Current.Kind == SyntaxKind.PackageKeyword)
+            {
+                var packageKeyword = MatchToken(SyntaxKind.PackageKeyword);
+                var identifier = MatchToken(SyntaxKind.IdentifierToken);
+                return new PackageSyntax(packageKeyword, identifier);
+            }
+
+            return null;
         }
 
         private ImmutableArray<MemberSyntax> ParseMembers()
