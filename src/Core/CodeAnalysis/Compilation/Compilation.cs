@@ -150,21 +150,24 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// <returns>An emit result.</returns>
         public EmitResult Emit()
         {
-            var diagnostics = SyntaxTree.Diagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-            if (diagnostics.Any())
+            var syntaxDiagnostics = SyntaxTree.Diagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
+            if (syntaxDiagnostics.Any())
             {
-                return new EmitResult(success: false, diagnostics);
+                return new EmitResult(success: false, syntaxDiagnostics);
             }
 
             var program = Binder.BindProgram(GlobalScope);
-
             if (program.Diagnostics.Any())
             {
                 return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
             }
 
-            // TODO: emit program assembly here
             var emitDiagnostics = EmitAssembly(program);
+            if (emitDiagnostics.Any())
+            {
+                return new EmitResult(success: false, emitDiagnostics);
+            }
+
             return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
         }
 
@@ -175,13 +178,9 @@ namespace GSharp.Core.CodeAnalysis.Compilation
             var metadataRootBuilder = new MetadataRootBuilder(metadataBuilder);
             var blobBuilder = new BlobBuilder();
             var peBuilder = new ManagedPEBuilder(header, metadataRootBuilder, blobBuilder);
-
-            var encoder = new MethodBodyStreamEncoder(blobBuilder);
-            var instructionEncoder = default(InstructionEncoder);
-            encoder.AddMethodBody(instructionEncoder);
-
-            // encoder.AddMethodBody()
             peBuilder.Serialize(blobBuilder);
+
+            // TODO: Produce portable assembly contents here
             using (var stream = new StreamWriter(program.PackageName + ".dll"))
             {
                 blobBuilder.WriteContentTo(stream.BaseStream);
