@@ -283,7 +283,7 @@ namespace GSharp.Core.CodeAnalysis
         }
 
         /// <summary>
-        /// Rerpots that there's no implicit conversion from one type to the other.
+        /// Reports that there's no implicit conversion from one type to the other.
         /// </summary>
         /// <param name="span">The text span where the error was found.</param>
         /// <param name="fromType">From type.</param>
@@ -291,6 +291,39 @@ namespace GSharp.Core.CodeAnalysis
         public void ReportCannotConvertImplicitly(TextSpan span, TypeSymbol fromType, TypeSymbol toType)
         {
             var message = $"Cannot convert type '{fromType}' to '{toType}'. An explicit conversion exists (are you missing a cast?)";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports that we couldn't find the specified type.
+        /// </summary>
+        /// <param name="span">The text span where the error was found.</param>
+        /// <param name="text">The text associated to the type.</param>
+        public void ReportUnableToFindType(TextSpan span, string text)
+        {
+            var message = $"Cannot find type {text}. Are you missing an import?";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports that we couldn't find the specified member.
+        /// </summary>
+        /// <param name="span">The text span where the error was found.</param>
+        /// <param name="text">The text associated to the member.</param>
+        public void ReportUnableToFindMember(TextSpan span, string text)
+        {
+            var message = $"Cannot find member {text}.";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports that we couldn't find the specified function.
+        /// </summary>
+        /// <param name="span">The text span where the error was found.</param>
+        /// <param name="text">The text associated to the function.</param>
+        public void ReportUnableToFindFunction(TextSpan span, string text)
+        {
+            var message = $"Cannot find function {text}.";
             Report(span, message);
         }
 

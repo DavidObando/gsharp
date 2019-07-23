@@ -264,6 +264,9 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     if (Current.Kind == SyntaxKind.IdentifierToken &&
                         Peek(1).Kind == SyntaxKind.ColonEqualsToken)
                     {
+                        // We do this outside of "ParseExpressionStatement" because
+                        // short variable declarations aren't expressions but
+                        // statements.
                         return ParseSingleShortVariableDeclaration();
                     }
 
@@ -449,12 +452,24 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 
         private ExpressionSyntax ParseNameOrCallExpression()
         {
-            if (Peek(0).Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+            ExpressionSyntax current;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
             {
-                return ParseCallExpression();
+                current = ParseCallExpression();
+            }
+            else
+            {
+                current = ParseNameExpression();
             }
 
-            return ParseNameExpression();
+            if (Current.Kind == SyntaxKind.DotToken)
+            {
+                var dotToken = MatchToken(SyntaxKind.DotToken);
+                var rightSide = ParseNameOrCallExpression();
+                current = new AccessorExpressionSyntax(current, dotToken, rightSide);
+            }
+
+            return current;
         }
 
         private ExpressionSyntax ParseCallExpression()

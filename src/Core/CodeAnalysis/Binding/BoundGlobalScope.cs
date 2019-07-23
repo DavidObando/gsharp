@@ -56,7 +56,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         public ImmutableArray<Diagnostic> Diagnostics { get; }
 
         /// <summary>
-        /// Gets the imports in the current compilation.
+        /// Gets the imports for the current compilation.
         /// </summary>
         public ImmutableArray<ImportSymbol> Imports { get; }
 
