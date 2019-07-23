@@ -5,17 +5,17 @@ import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, T
 import { Trace } from 'vscode-jsonrpc';
 
 export function activate(context: ExtensionContext) {
-    let serverExe = 'dotnet';
-
-    let serverOptions: ServerOptions = {
-        run: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LSP/LSP.csproj', '--configuration', 'Release'] },
+    const serverExe = 'dotnet';
+    const serverOptions: ServerOptions = {
+        run: { command: serverExe, args: [context.extensionPath + '\\out\\GSharp.LSP.dll'] },
         debug: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LSP/LSP.csproj'] }
     }
 
-    let clientOptions: LanguageClientOptions = {
+    const clientOptions: LanguageClientOptions = {
         documentSelector: [
             {
                 pattern: '**/*.gs',
+                scheme: 'file'
             }
         ],
         synchronize: {
@@ -26,7 +26,7 @@ export function activate(context: ExtensionContext) {
 
     const client = new LanguageClient('gsharpLSPClient', 'GSharp Language Server', serverOptions, clientOptions);
     client.trace = Trace.Verbose;
-    let disposable = client.start();
+    const disposable = client.start();
 
     context.subscriptions.push(disposable);
 }

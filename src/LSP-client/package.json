@@ -1,13 +1,18 @@
 {
     "name": "gsharplsp",
-    "displayName": "GSharp Language Server",
-    "description": "GSharp Language Server",
+    "displayName": "G# Language Server",
+    "description": "G# Language Server",
     "license": "MIT",
     "repository": {
       "type": "git",
       "url": "https://github.com/DavidObando/gsharp"
     },
-    "author": "David Obando",
+    "bugs": {
+      "url": "https://github.com/DavidObando/gsharp/issues"
+    },
+    "homepage": "https://github.com/DavidObando/gsharp/blob/master/README.md",
+    "author": "gsharp",
+    "publisher": "gsharp",
     "version": "0.0.1",
     "engines": {
         "vscode": "^1.31.0"
@@ -15,13 +20,14 @@
     "categories": [
         "Programming Languages"
     ],
+    "preview": true,
     "keywords": [
       "go",
-      "gsharp",
+      "g#",
       "languages"
     ],
     "activationEvents": [
-        "onLanguage:plaintext"
+        "onLanguage:G#"
     ],
     "main": "./out/extension",
     "contributes": {
@@ -45,11 +51,13 @@
         "watch": "tsc -watch -p ./",
         "postinstall": "node ./node_modules/vscode/bin/install"
     },
+    "dependencies": {
+      "vscode-languageclient": "^5.2.1",
+      "vscode-jsonrpc": "^4.0.0"
+    },
     "devDependencies": {
-        "typescript": "^3.5.1",
-        "vscode": "^1.1.31",
-        "vscode-languageclient": "^5.2.1",
-        "vscode-jsonrpc": "^4.0.0",
-        "@types/node": "^8.10.25"
+      "vscode": "^1.1.31",
+      "typescript": "^3.5.1",
+      "@types/node": "^8.10.25"
     }
 }
