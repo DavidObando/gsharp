@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
     using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Reflection.Metadata;
@@ -14,6 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
     using System.Reflection.PortableExecutable;
     using System.Threading;
     using GSharp.Core.CodeAnalysis.Binding;
+    using GSharp.Core.CodeAnalysis.CodeGen;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
     using Binder = GSharp.Core.CodeAnalysis.Binding.Binder;
@@ -175,6 +177,8 @@ namespace GSharp.Core.CodeAnalysis.Compilation
             var peBuilder = new ManagedPEBuilder(header, metadataRootBuilder, blobBuilder);
 
             var encoder = new MethodBodyStreamEncoder(blobBuilder);
+            var instructionEncoder = default(InstructionEncoder);
+            encoder.AddMethodBody(instructionEncoder);
 
             // encoder.AddMethodBody()
             peBuilder.Serialize(blobBuilder);
