@@ -38,6 +38,12 @@ namespace GSharp.Core.CodeAnalysis.Symbols
                 case SymbolKind.Type:
                     WriteTypeTo((TypeSymbol)symbol, writer);
                     break;
+                case SymbolKind.Package:
+                    WritePackageTo((PackageSymbol)symbol, writer);
+                    break;
+                case SymbolKind.Import:
+                    WriteImportTo((ImportSymbol)symbol, writer);
+                    break;
                 default:
                     throw new Exception($"Unexpected symbol: {symbol.Kind}");
             }
@@ -106,6 +112,20 @@ namespace GSharp.Core.CodeAnalysis.Symbols
 
         private static void WriteTypeTo(TypeSymbol symbol, TextWriter writer)
         {
+            writer.WriteIdentifier(symbol.Name);
+        }
+
+        private static void WritePackageTo(PackageSymbol symbol, TextWriter writer)
+        {
+            writer.WriteKeyword(SyntaxKind.PackageKeyword);
+            writer.WriteSpace();
+            writer.WriteIdentifier(symbol.Name);
+        }
+
+        private static void WriteImportTo(ImportSymbol symbol, TextWriter writer)
+        {
+            writer.WriteKeyword(SyntaxKind.ImportKeyword);
+            writer.WriteSpace();
             writer.WriteIdentifier(symbol.Name);
         }
     }

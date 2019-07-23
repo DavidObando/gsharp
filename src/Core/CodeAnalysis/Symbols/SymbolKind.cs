@@ -38,5 +38,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// The symbol is a package.
         /// </summary>
         Package,
+
+        /// <summary>
+        /// The symbol is an import.
+        /// </summary>
+        Import,
     }
 }

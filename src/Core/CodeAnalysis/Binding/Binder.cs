@@ -67,7 +67,15 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
             else
             {
-                packageSymbol = new PackageSymbol(name: package.Identifier.Text, declaration: package);
+                string packageName = string.Join(string.Empty, package.IdentifiersWithDots);
+                packageSymbol = new PackageSymbol(name: packageName, declaration: package);
+            }
+
+            var imports = ImmutableArray.CreateBuilder<ImportSymbol>();
+            foreach (var import in syntax.Members.OfType<ImportSyntax>())
+            {
+                var importName = string.Join(string.Empty, import.IdentifiersWithDots);
+                imports.Add(new ImportSymbol(importName, import));
             }
 
             foreach (var function in syntax.Members.OfType<FunctionDeclarationSyntax>())
@@ -92,7 +100,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
             }
 
-            return new BoundGlobalScope(previous, packageSymbol, diagnostics, functions, variables, statements.ToImmutable());
+            return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports.ToImmutable(), functions, variables, statements.ToImmutable());
         }
 
         /// <summary>

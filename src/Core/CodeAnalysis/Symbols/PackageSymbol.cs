@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         public override SymbolKind Kind => SymbolKind.Package;
 
         /// <summary>
-        /// Gets the declaration of the function.
+        /// Gets the declaration of the package.
         /// </summary>
         public PackageSyntax Declaration { get; }
     }

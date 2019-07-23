@@ -2,7 +2,8 @@
 
 package HelloWorld
 
-//import System
+import System
+import System.IO
 
 func Main() {
   //Console.WriteLine("Hello, world!")

@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.Linq;
     using System.Text.RegularExpressions;
     using GSharp.Core.CodeAnalysis.Text;
 
@@ -61,12 +62,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         public CompilationUnitSyntax ParseCompilationUnit()
         {
             var package = ParsePackage();
+            var imports = ParseImports();
             var members = ParseMembers();
             var endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken);
             var junction = ImmutableArray.CreateBuilder<MemberSyntax>();
             if (package != null)
             {
                 junction.Add(package);
+            }
+
+            if (imports.Any())
+            {
+                junction.AddRange(imports);
             }
 
             junction.AddRange(members);
@@ -78,11 +85,38 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             if (Current.Kind == SyntaxKind.PackageKeyword)
             {
                 var packageKeyword = MatchToken(SyntaxKind.PackageKeyword);
-                var identifier = MatchToken(SyntaxKind.IdentifierToken);
-                return new PackageSyntax(packageKeyword, identifier);
+                var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+                identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
+                while (Current.Kind == SyntaxKind.DotToken)
+                {
+                    identifiers.Add(MatchToken(SyntaxKind.DotToken));
+                    identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
+                }
+
+                return new PackageSyntax(packageKeyword, identifiers.ToImmutableArray());
             }
 
             return null;
+        }
+
+        private ImmutableArray<MemberSyntax> ParseImports()
+        {
+            var importsBuilder = ImmutableArray.CreateBuilder<MemberSyntax>();
+            while (Current.Kind == SyntaxKind.ImportKeyword)
+            {
+                var importKeyword = MatchToken(SyntaxKind.ImportKeyword);
+                var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+                identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
+                while (Current.Kind == SyntaxKind.DotToken)
+                {
+                    identifiers.Add(MatchToken(SyntaxKind.DotToken));
+                    identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
+                }
+
+                importsBuilder.Add(new ImportSyntax(importKeyword, identifiers.ToImmutableArray()));
+            }
+
+            return importsBuilder.ToImmutable();
         }
 
         private ImmutableArray<MemberSyntax> ParseMembers()
