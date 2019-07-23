@@ -4,10 +4,14 @@
 
 namespace GSharp.Compiler
 {
+    using System;
     using System.Globalization;
     using System.IO;
+    using System.Linq;
     using GSharp.Core.CodeAnalysis.Compilation;
     using GSharp.Core.CodeAnalysis.Syntax;
+    using GSharp.Core.CodeAnalysis.Text;
+    using static GSharp.Core.CodeAnalysis.Text.TextSpan;
 
     /// <summary>
     /// Entry point to gsc.
@@ -18,7 +22,8 @@ namespace GSharp.Compiler
         /// Entry point to the GSharp compiler.
         /// </summary>
         /// <param name="args">Command line arguments.</param>
-        public static void Main(string[] args)
+        /// <returns>Exit code.</returns>
+        public static int Main(string[] args)
         {
             if (args?.Length > 0)
             {
@@ -27,12 +32,26 @@ namespace GSharp.Compiler
                     arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
                     File.Exists(args[0]))
                 {
-                    Compile(arg0);
+                    var success = Compile(arg0);
+                    if (success)
+                    {
+                        return 0;
+                    }
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Unable to find specified file {arg0}");
                 }
             }
+            else
+            {
+                Console.Error.WriteLine($"Must specify path to a file via arguments.");
+            }
+
+            return 1;
         }
 
-        private static void Compile(string filePath)
+        private static bool Compile(string filePath)
         {
             string text;
             using (var reader = new StreamReader(filePath))
@@ -45,8 +64,56 @@ namespace GSharp.Compiler
                 var syntaxTree = SyntaxTree.Parse(text);
                 var compilation = new Compilation(syntaxTree);
 
-                compilation.Emit();
+                var result = compilation.Emit();
+                if (result.Success)
+                {
+                    Console.WriteLine("Success.");
+                    return true;
+                }
+                else
+                {
+                    foreach (var diagnostic in result.Diagnostics.OrderBy(diag => diag.Span, new TextSpanComparer()))
+                    {
+                        var lineIndex = syntaxTree.Text.GetLineIndex(diagnostic.Span.Start);
+                        var line = syntaxTree.Text.Lines[lineIndex];
+                        var lineNumber = lineIndex + 1;
+                        var character = diagnostic.Span.Start - line.Start + 1;
+
+                        Console.WriteLine();
+
+                        Console.ForegroundColor = ConsoleColor.DarkRed;
+                        Console.Write($"({lineNumber}, {character}): ");
+                        Console.WriteLine(diagnostic);
+                        Console.ResetColor();
+
+                        var prefixSpan = TextSpan.FromBounds(line.Start, diagnostic.Span.Start);
+                        var suffixSpan = TextSpan.FromBounds(diagnostic.Span.End, line.End);
+
+                        var prefix = syntaxTree.Text.ToString(prefixSpan);
+                        var error = syntaxTree.Text.ToString(diagnostic.Span);
+                        var suffix = syntaxTree.Text.ToString(suffixSpan);
+
+                        Console.Write("    ");
+                        Console.Write(prefix);
+
+                        Console.ForegroundColor = ConsoleColor.DarkRed;
+                        Console.Write(error);
+                        Console.ResetColor();
+
+                        Console.Write(suffix);
+
+                        Console.WriteLine();
+                    }
+
+                    Console.WriteLine("Failed.");
+                }
             }
+            else
+            {
+                Console.WriteLine();
+            }
+
+            return false;
         }
     }
 }

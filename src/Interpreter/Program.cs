@@ -28,7 +28,11 @@ namespace GSharp.Interpreter
                     arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
                     File.Exists(args[0]))
                 {
-                    EvaluateFile(repl, arg0);
+                    var success = EvaluateFile(repl, arg0);
+                    if (!success)
+                    {
+                        return 1;
+                    }
                 }
                 else
                 {
@@ -44,7 +48,7 @@ namespace GSharp.Interpreter
             return 0;
         }
 
-        private static void EvaluateFile(GSharpRepl repl, string filePath)
+        private static bool EvaluateFile(GSharpRepl repl, string filePath)
         {
             string text;
             using (var reader = new StreamReader(filePath))
@@ -61,7 +65,14 @@ namespace GSharp.Interpreter
                 }
 
                 repl.EvaluateSubmission(text);
+                return true;
             }
+            else
+            {
+                Console.WriteLine("Invalid input: empty file.");
+            }
+
+            return false;
         }
     }
 }
