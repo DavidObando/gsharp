@@ -1,4 +1,4 @@
-﻿// <copyright file="PackageSyntax.cs" company="GSharp">
+﻿// <copyright file="ImportSyntax.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -8,39 +8,39 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     using System.Linq;
 
     /// <summary>
-    /// Represents a package declaration in the language.
+    /// Represents an import declaration in the language.
     /// </summary>
-    public sealed class PackageSyntax : MemberSyntax
+    public sealed class ImportSyntax : MemberSyntax
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="PackageSyntax"/> class.
+        /// Initializes a new instance of the <see cref="ImportSyntax"/> class.
         /// </summary>
-        /// <param name="packageKeyword">The package keyword.</param>
-        /// <param name="identifiers">The package identifiers.</param>
-        public PackageSyntax(
-            SyntaxToken packageKeyword,
+        /// <param name="importKeyword">The import keyword.</param>
+        /// <param name="identifiers">The identifiers.</param>
+        public ImportSyntax(
+            SyntaxToken importKeyword,
             ImmutableArray<SyntaxToken> identifiers)
         {
-            PackageKeyword = packageKeyword;
+            ImportKeyword = importKeyword;
             IdentifiersWithDots = identifiers;
             Identifiers = identifiers.Where(t => t.Kind == SyntaxKind.IdentifierToken).ToImmutableArray();
         }
 
         /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.PackageDeclaration;
+        public override SyntaxKind Kind => SyntaxKind.ImportDeclaration;
 
         /// <summary>
-        /// Gets the package keyword.
+        /// Gets the import keyword.
         /// </summary>
-        public SyntaxToken PackageKeyword { get; }
+        public SyntaxToken ImportKeyword { get; }
 
         /// <summary>
-        /// Gets the package identifiers, excluding dots.
+        /// Gets the import statement identifiers, excluding dots.
         /// </summary>
         public ImmutableArray<SyntaxToken> Identifiers { get; }
 
         /// <summary>
-        /// Gets the package identifiers, including dots.
+        /// Gets the import statement identifiers, including dots.
         /// </summary>
         public ImmutableArray<SyntaxToken> IdentifiersWithDots { get; }
     }
