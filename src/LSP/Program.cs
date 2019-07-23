@@ -29,9 +29,16 @@ namespace GSharp.LSP
                     .WithLoggerFactory(new LoggerFactory())
                     .AddDefaultLoggingProvider()
                     .WithMinimumLogLevel(LogLevel.Trace)
-                    .WithHandler<DocumentValidationHandler>());
+                    .WithServices(ConfigureServices)
+                    .WithHandler<DocumentSyncHandler>()
+                    .WithHandler<FoldingHandler>());
 
             await server.WaitForExit;
+        }
+
+        private static void ConfigureServices(IServiceCollection services)
+        {
+            services.AddSingleton<DocumentContentService>();
         }
     }
 }

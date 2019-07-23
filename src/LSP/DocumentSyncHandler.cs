@@ -1,4 +1,4 @@
-﻿// <copyright file="DocumentValidationHandler.cs" company="GSharp">
+﻿// <copyright file="DocumentSyncHandler.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -20,25 +20,21 @@ namespace GSharp.LSP
     /// <summary>
     /// GSharp validation handler.
     /// </summary>
-    internal class DocumentValidationHandler : ITextDocumentSyncHandler
+    internal class DocumentSyncHandler : ITextDocumentSyncHandler
     {
         private readonly ILanguageServer router;
-
-        private readonly DocumentSelector documentSelector = new DocumentSelector(
-            new DocumentFilter()
-            {
-                Pattern = "**/*.gs",
-            });
-
+        private readonly DocumentContentService documentContentService;
         private SynchronizationCapability capability;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="DocumentValidationHandler"/> class.
+        /// Initializes a new instance of the <see cref="DocumentSyncHandler"/> class.
         /// </summary>
         /// <param name="router"><see cref="ILanguageServer"/> for LSP.</param>
-        public DocumentValidationHandler(ILanguageServer router)
+        /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
+        public DocumentSyncHandler(ILanguageServer router, DocumentContentService documentContentService)
         {
             this.router = router;
+            this.documentContentService = documentContentService;
         }
 
         /// <summary>
@@ -51,7 +47,7 @@ namespace GSharp.LSP
         {
             return new TextDocumentChangeRegistrationOptions()
             {
-                DocumentSelector = documentSelector,
+                DocumentSelector = Constants.DocumentSelector,
                 SyncKind = Change,
             };
         }
@@ -98,6 +94,7 @@ namespace GSharp.LSP
         /// <inheritdoc/>
         public Task<Unit> Handle(DidCloseTextDocumentParams request, CancellationToken cancellationToken)
         {
+            this.documentContentService.TryRemove(request.TextDocument.Uri.ToString());
             return Unit.Task;
         }
 
@@ -118,7 +115,7 @@ namespace GSharp.LSP
         {
             return new TextDocumentRegistrationOptions()
             {
-                DocumentSelector = documentSelector,
+                DocumentSelector = Constants.DocumentSelector,
             };
         }
 
@@ -127,7 +124,7 @@ namespace GSharp.LSP
         {
             return new TextDocumentSaveRegistrationOptions()
             {
-                DocumentSelector = documentSelector,
+                DocumentSelector = Constants.DocumentSelector,
                 IncludeText = true,
             };
         }
@@ -145,6 +142,7 @@ namespace GSharp.LSP
             var diagnostics = new List<Diagnostic>();
 
             var syntaxTree = SyntaxTree.Parse(text);
+            this.documentContentService.AddOrUpdate(documentUri.ToString(), new DocumentContent(syntaxTree, newLines));
             foreach (var syntaxTreeDiagnostics in syntaxTree.Diagnostics)
             {
                 int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Span.Start);
