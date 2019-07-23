@@ -33,5 +33,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// The symbol is a type.
         /// </summary>
         Type,
+
+        /// <summary>
+        /// The symbol is a package.
+        /// </summary>
+        Package,
     }
 }

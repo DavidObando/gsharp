@@ -2,17 +2,23 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis
+namespace GSharp.Core.CodeAnalysis.Compilation
 {
     using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
+    using System.Reflection.Metadata;
+    using System.Reflection.Metadata.Ecma335;
+    using System.Reflection.PortableExecutable;
     using System.Threading;
     using GSharp.Core.CodeAnalysis.Binding;
+    using GSharp.Core.CodeAnalysis.CodeGen;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
+    using Binder = GSharp.Core.CodeAnalysis.Binding.Binder;
 
     /// <summary>
     /// Chained compilation facilities.
@@ -136,6 +142,51 @@ namespace GSharp.Core.CodeAnalysis
                     functionBody.Value.WriteTo(writer);
                 }
             }
+        }
+
+        /// <summary>
+        /// Compiles the current syntax tree into a compilation result.
+        /// </summary>
+        /// <returns>An emit result.</returns>
+        public EmitResult Emit()
+        {
+            var syntaxDiagnostics = SyntaxTree.Diagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
+            if (syntaxDiagnostics.Any())
+            {
+                return new EmitResult(success: false, syntaxDiagnostics);
+            }
+
+            var program = Binder.BindProgram(GlobalScope);
+            if (program.Diagnostics.Any())
+            {
+                return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
+            }
+
+            var emitDiagnostics = EmitAssembly(program);
+            if (emitDiagnostics.Any())
+            {
+                return new EmitResult(success: false, emitDiagnostics);
+            }
+
+            return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
+        }
+
+        private ImmutableArray<Diagnostic> EmitAssembly(BoundProgram program)
+        {
+            var header = new PEHeaderBuilder();
+            var metadataBuilder = new MetadataBuilder();
+            var metadataRootBuilder = new MetadataRootBuilder(metadataBuilder);
+            var blobBuilder = new BlobBuilder();
+            var peBuilder = new ManagedPEBuilder(header, metadataRootBuilder, blobBuilder);
+            peBuilder.Serialize(blobBuilder);
+
+            // TODO: Produce portable assembly contents here
+            using (var stream = new StreamWriter(program.PackageName + ".dll"))
+            {
+                blobBuilder.WriteContentTo(stream.BaseStream);
+            }
+
+            return ImmutableArray<Diagnostic>.Empty;
         }
     }
 }

@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.Text.RegularExpressions;
     using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
@@ -59,9 +60,29 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <returns>A compilation unit.</returns>
         public CompilationUnitSyntax ParseCompilationUnit()
         {
+            var package = ParsePackage();
             var members = ParseMembers();
             var endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken);
-            return new CompilationUnitSyntax(members, endOfFileToken);
+            var junction = ImmutableArray.CreateBuilder<MemberSyntax>();
+            if (package != null)
+            {
+                junction.Add(package);
+            }
+
+            junction.AddRange(members);
+            return new CompilationUnitSyntax(junction.ToImmutable(), endOfFileToken);
+        }
+
+        private PackageSyntax ParsePackage()
+        {
+            if (Current.Kind == SyntaxKind.PackageKeyword)
+            {
+                var packageKeyword = MatchToken(SyntaxKind.PackageKeyword);
+                var identifier = MatchToken(SyntaxKind.IdentifierToken);
+                return new PackageSyntax(packageKeyword, identifier);
+            }
+
+            return null;
         }
 
         private ImmutableArray<MemberSyntax> ParseMembers()
