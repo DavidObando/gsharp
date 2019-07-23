@@ -9,11 +9,9 @@ export function activate(context: ExtensionContext) {
     // The server is implemented in node
     let serverExe = 'dotnet';
 
-    // If the extension is launched in debug mode then the debug server options are used
-    // Otherwise the run options are used
     let serverOptions: ServerOptions = {
-        run: { command: serverExe, args: ['C:\\GIT\\gsharp\\out\\bin\\Debug\\LSP\\GSharp.LSP.dll'] },
-        debug: { command: serverExe, args: ['C:\\GIT\\gsharp\\out\\bin\\Debug\\LSP\\GSharp.LSP.dll'] }
+        run: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LSP/LSP.csproj', '--configuration', 'Release'] },
+        debug: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LSP/LSP.csproj'] }
     }
 
     // Options to control the language client
