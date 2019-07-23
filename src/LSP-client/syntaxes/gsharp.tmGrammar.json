@@ -1,0 +1,893 @@
+{
+    "name": "GSharp",
+    "scopeName": "source.gsharp",
+    "patterns": [
+        {
+            "include": "#comment"
+        },
+        {
+            "include": "#constant"
+        },
+        {
+            "include": "#entity"
+        },
+        {
+            "include": "#invalid"
+        },
+        {
+            "include": "#keyword"
+        },
+        {
+            "include": "#meta"
+        },
+        {
+            "include": "#operator"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#storage"
+        },
+        {
+            "include": "#string"
+        },
+        {
+            "include": "#support"
+        },
+        {
+            "include": "#type"
+        },
+        {
+            "include": "#variable"
+        }
+    ],
+    "repository": {
+        "string_escaped_char": {
+            "patterns": [
+                {
+                    "match": "\\\\([0-7]{3}|[abfnrtv\\\\'\"]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})",
+                    "name": "constant.character.escape.go"
+                },
+                {
+                    "match": "\\\\[^0-7xuUabfnrtv\\'\"]",
+                    "name": "invalid.illegal.unknown-escape.go"
+                }
+            ]
+        },
+        "string_placeholder": {
+            "patterns": [
+                {
+                    "match": "%(\\[\\d+\\])?([\\+#\\-0\\x20]{,2}((\\d+|\\*)?(\\.?(\\d+|\\*|(\\[\\d+\\])\\*?)?(\\[\\d+\\])?)?))?[vT%tbcdoqxXUbeEfFgGsp]",
+                    "name": "constant.other.placeholder.go"
+                }
+            ]
+        },
+        "imports": {
+            "patterns": [
+                {
+                    "match": "((?!\\s+\")[^\\s]*)?\\s*((\")([^\"]*)(\"))",
+                    "captures": {
+                        "1": {
+                            "name": "entity.alias.import.go"
+                        },
+                        "2": {
+                            "name": "string.quoted.double.go"
+                        },
+                        "3": {
+                            "name": "punctuation.definition.string.begin.go"
+                        },
+                        "4": {
+                            "name": "entity.name.import.go"
+                        },
+                        "5": {
+                            "name": "punctuation.definition.string.end.go"
+                        }
+                    }
+                },
+                {
+                    "begin": "\\(",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.imports.begin.bracket.round.go"
+                        }
+                    },
+                    "end": "\\)",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.imports.end.bracket.round.go"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "include": "#comment"
+                        },
+                        {
+                            "include": "#imports"
+                        }
+                    ]
+                }
+            ]
+        },
+        "comment": {
+            "patterns": [
+                {
+                    "begin": "/\\*",
+                    "end": "\\*/",
+                    "captures": {
+                        "0": {
+                            "name": "punctuation.definition.comment.go"
+                        }
+                    },
+                    "name": "comment.block.go"
+                },
+                {
+                    "begin": "//",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.comment.go"
+                        }
+                    },
+                    "end": "$",
+                    "name": "comment.line.double-slash.go"
+                }
+            ]
+        },
+        "constant": {
+            "patterns": [
+                {
+                    "comment": "Floating-point literals",
+                    "match": "(\\.\\d+([Ee][-+]\\d+)?i?)\\b|\\b\\d+\\.\\d*(([Ee][-+]\\d+)?i?\\b)?",
+                    "name": "constant.numeric.floating-point.go"
+                },
+                {
+                    "comment": "Integers",
+                    "match": "\\b((0x[0-9a-fA-F]+)|(0[0-7]+i?)|(\\d+([Ee]\\d+)?i?)|(\\d+[Ee][-+]\\d+i?))\\b",
+                    "name": "constant.numeric.integer.go"
+                },
+                {
+                    "comment": "Language constants",
+                    "match": "\\b(true|false|nil|iota)\\b",
+                    "name": "constant.language.go"
+                }
+            ]
+        },
+        "entity": {
+            "patterns": [
+                {
+                    "match": "^(\\bfunc\\b)\\s(\\w+)?\\(([a-z]+)\\s(\\*)?([a-zA-Z]+)\\)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.function.go"
+                        },
+                        "2": {
+                            "name": "entity.name.function.go"
+                        },
+                        "3": {
+                            "name": "variable.other.receiver.go"
+                        },
+                        "4": {
+                            "name": "keyword.operator.address.go"
+                        },
+                        "5": {
+                            "name": "entity.name.type.receiver.go"
+                        }
+                    }
+                },
+                {
+                    "match": "(\\*)\\w+(\\.)(\\w+)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.operator.address.go"
+                        },
+                        "2": {
+                            "name": "punctuation.other.period.go"
+                        },
+                        "3": {
+                            "name": "entity.name.type.go"
+                        }
+                    }
+                },
+                {
+                    "comment": "Function Definitions",
+                    "begin": "^(\\bfunc\\b)\\s(\\w+)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.function.go"
+                        },
+                        "2": {
+                            "name": "entity.name.function.go"
+                        }
+                    },
+                    "end": "\\{",
+                    "patterns": [
+                        {
+                            "match": "(\\*)\\w+(\\.)(\\w+)",
+                            "captures": {
+                                "1": {
+                                    "name": "keyword.operator.address.go"
+                                },
+                                "2": {
+                                    "name": "punctuation.other.period.go"
+                                },
+                                "3": {
+                                    "name": "entity.name.type.go"
+                                }
+                            }
+                        },
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                },
+                {
+                    "comment": "Function declarations",
+                    "match": "^(\\bfunc\\b)(?:\\s+(\\([^\\)]+\\)\\s+)?(\\w+)(?=\\())?",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.function.go"
+                        },
+                        "2": {
+                            "patterns": [
+                                {
+                                    "include": "#brackets"
+                                },
+                                {
+                                    "include": "#operators"
+                                },
+                                {
+                                    "include": "#variable"
+                                }
+                            ]
+                        },
+                        "3": {
+                            "patterns": [
+                                {
+                                    "match": "\\d\\w*",
+                                    "name": "invalid.illegal.identifier.go"
+                                },
+                                {
+                                    "match": "\\w+",
+                                    "name": "entity.name.function.go"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "comment": "Functions",
+                    "match": "(\\bfunc\\b)|(\\w+)(?=\\()",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.function.go"
+                        },
+                        "2": {
+                            "patterns": [
+                                {
+                                    "match": "\\d\\w*",
+                                    "name": "invalid.illegal.identifier.go"
+                                },
+                                {
+                                    "match": "\\w+",
+                                    "name": "support.function.go"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "begin": "\\b(package)\\s+",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.package.go"
+                        }
+                    },
+                    "end": "(?!\\G)",
+                    "patterns": [
+                        {
+                            "match": "\\d\\w*",
+                            "name": "invalid.illegal.identifier.go"
+                        },
+                        {
+                            "match": "\\w+",
+                            "name": "entity.name.package.go"
+                        }
+                    ]
+                },
+                {
+                    "begin": "\\b(type)\\s+",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.type.go"
+                        }
+                    },
+                    "end": "(?!\\G)",
+                    "patterns": [
+                        {
+                            "match": "\\d\\w*",
+                            "name": "invalid.illegal.identifier.go"
+                        },
+                        {
+                            "match": "\\w+",
+                            "name": "entity.name.type.go"
+                        }
+                    ]
+                },
+                {
+                    "match": "(?!interface|struct)(?>\\w+)(?=\\{)",
+                    "name": "entity.name.type.struct.go"
+                },
+                {
+                    "match": "(?<=\\[\\])(?>\\w+)",
+                    "name": "entity.name.type.go"
+                },
+                {
+                    "match": "(chan)\\s(\\*)(?>\\w+)",
+                    "name": "entity.name.type.go",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.channel.go"
+                        },
+                        "2": {
+                            "name": "keyword.operator.pointer.go"
+                        },
+                        "3": {
+                            "name": "entity.name.type.channel.go"
+                        }
+                    }
+                }
+            ]
+        },
+        "invalid": {
+            "patterns": []
+        },
+        "keyword": {
+            "patterns": [
+                {
+                    "comment": "Flow control keywords",
+                    "match": "\\b(break|case|continue|default|defer|else|fallthrough|for|go|goto|if|range|return|select|switch)\\b",
+                    "name": "keyword.control.go"
+                },
+                {
+                    "match": "\\bchan\\b",
+                    "name": "keyword.channel.go"
+                },
+                {
+                    "match": "\\bconst\\b",
+                    "name": "keyword.const.go"
+                },
+                {
+                    "match": "\\bfunc\\b",
+                    "name": "keyword.function.go"
+                },
+                {
+                    "match": "\\binterface\\b",
+                    "name": "keyword.interface.go"
+                },
+                {
+                    "match": "\\bmap\\b",
+                    "name": "keyword.map.go"
+                },
+                {
+                    "match": "\\bstruct\\b",
+                    "name": "keyword.struct.go"
+                },
+                {
+                    "begin": "\\b(import)\\s+",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.import.go"
+                        }
+                    },
+                    "end": "(?!\\G)",
+                    "patterns": [
+                        {
+                            "include": "#imports"
+                        }
+                    ]
+                }
+            ]
+        },
+        "meta": {
+            "patterns": [
+                {
+                    "name": "meta.section.struct.go",
+                    "begin": "\\s(struct)\\s(\\{)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.struct.go"
+                        },
+                        "2": {
+                            "name": "punctuation.definition.struct.go"
+                        }
+                    },
+                    "end": "\\}",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.struct.go"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "match": "^\\s+\\w+\\s+?(?=\\/|$)",
+                            "name": "entity.name.type.anonymous-field.go"
+                        },
+                        {
+                            "match": "(?:^\\s+)(\\w+)\\s+(\\w+)\\s+?(?=\\/|$)",
+                            "captures": {
+                                "1": {
+                                    "name": "variable.other.field.go"
+                                },
+                                "2": {
+                                    "name": "entity.name.type.go"
+                                }
+                            }
+                        },
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                },
+                {
+                    "begin": "\\[",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.begin.bracket.square.go"
+                        }
+                    },
+                    "end": "\\]",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.end.bracket.square.go"
+                        }
+                    },
+                    "name": "meta.section.range.go",
+                    "patterns": [
+                        {
+                            "name": "keyword.operator.slice.go",
+                            "match": "\\:"
+                        },
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                }
+            ]
+        },
+        "operator": {
+            "comment": "Note that the order here is very important!",
+            "patterns": [
+                {
+                    "match": "(&)(?=\\w)",
+                    "name": "keyword.operator.pointer.go"
+                },
+                {
+                    "match": "(?<=\\s|\\()(\\*)(?=\\w)",
+                    "name": "keyword.operator.pointer.go"
+                },
+                {
+                    "match": "<\\-",
+                    "name": "keyword.operator.channel.go"
+                },
+                {
+                    "match": "\\-\\-",
+                    "name": "keyword.operator.decrement.go"
+                },
+                {
+                    "match": "\\+\\+",
+                    "name": "keyword.operator.increment.go"
+                },
+                {
+                    "match": "(==|!=|<=|>=|<(?!<)|>(?!>))",
+                    "name": "keyword.operator.comparison.go"
+                },
+                {
+                    "match": "(&&|\\|\\||!)",
+                    "name": "keyword.operator.logical.go"
+                },
+                {
+                    "match": "(=|\\+=|\\-=|\\|=|\\^=|\\*=|/=|:=|%=|<<=|>>=|&\\^=|&=)",
+                    "name": "keyword.operator.assignment.go"
+                },
+                {
+                    "match": "(\\+|\\-|\\*|/|%)",
+                    "name": "keyword.operator.arithmetic.go"
+                },
+                {
+                    "match": "(\\||\\^|&\\^|<<|>>)",
+                    "name": "keyword.operator.arithmetic.bitwise.go"
+                },
+                {
+                    "match": "\\.\\.\\.",
+                    "name": "keyword.operator.ellipsis.go"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "match": ";",
+                    "name": "punctuation.terminator.go"
+                },
+                {
+                    "match": ",",
+                    "name": "punctuation.other.comma.go"
+                },
+                {
+                    "match": "\\.(?!\\.\\.)",
+                    "name": "punctuation.other.period.go"
+                },
+                {
+                    "match": ":(?!=)",
+                    "name": "punctuation.other.colon.go"
+                },
+                {
+                    "begin": "{",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.begin.bracket.curly.go"
+                        }
+                    },
+                    "end": "}",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.end.bracket.curly.go"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                }
+            ]
+        },
+        "storage": {
+            "patterns": [
+                {
+                    "match": "\\bbool\\b",
+                    "name": "storage.type.boolean.go"
+                },
+                {
+                    "match": "\\bbyte\\b",
+                    "name": "storage.type.byte.go"
+                },
+                {
+                    "match": "\\berror\\b",
+                    "name": "storage.type.error.go"
+                },
+                {
+                    "match": "\\b(complex(64|128)|float(32|64)|u?int(8|16|32|64)?)\\b",
+                    "name": "storage.type.numeric.go"
+                },
+                {
+                    "match": "\\brune\\b",
+                    "name": "storage.type.rune.go"
+                },
+                {
+                    "match": "\\bstring\\b",
+                    "name": "storage.type.string.go"
+                },
+                {
+                    "match": "\\buintptr\\b",
+                    "name": "storage.type.uintptr.go"
+                }
+            ]
+        },
+        "string": {
+            "patterns": [
+                {
+                    "comment": "Interpreted string literals",
+                    "begin": "\"",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.go"
+                        }
+                    },
+                    "end": "\"",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.go"
+                        }
+                    },
+                    "name": "string.quoted.double.go",
+                    "patterns": [
+                        {
+                            "include": "#string_escaped_char"
+                        },
+                        {
+                            "include": "#string_placeholder"
+                        },
+                        {
+                            "include": "source.gotemplate"
+                        }
+                    ]
+                },
+                {
+                    "comment": "Raw string literals",
+                    "begin": "`",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.go"
+                        }
+                    },
+                    "end": "`",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.go"
+                        }
+                    },
+                    "name": "string.quoted.raw.go",
+                    "patterns": [
+                        {
+                            "include": "#string_placeholder"
+                        },
+                        {
+                            "include": "source.gotemplate"
+                        }
+                    ]
+                },
+                {
+                    "begin": "'",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.go"
+                        }
+                    },
+                    "end": "'",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.go"
+                        }
+                    },
+                    "name": "string.quoted.rune.go",
+                    "patterns": [
+                        {
+                            "match": "\\G(\\\\([0-7]{3}|[abfnrtv\\\\'\"]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})|.)(?=')",
+                            "name": "constant.other.rune.go"
+                        },
+                        {
+                            "match": "[^']+",
+                            "name": "invalid.illegal.unknown-rune.go"
+                        }
+                    ]
+                }
+            ]
+        },
+        "support": {
+            "patterns": [
+                {
+                    "comment": "Built-in functions",
+                    "match": "\\b(append|cap|close|complex|copy|delete|imag|len|make|new|panic|print|println|real|recover)\\b(?=\\()",
+                    "name": "support.function.builtin.go"
+                }
+            ]
+        },
+        "type": {
+            "patterns": []
+        },
+        "variable": {
+            "patterns": [
+                {
+                    "match": "\\b(var)\\s+(\\w+)\\s+(?:\\[\\])?(?:\\w+(\\.))+?(\\w+)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.var.go"
+                        },
+                        "2": {
+                            "name": "variable.other.declaration.go"
+                        },
+                        "3": {
+                            "name": "punctuation.other.period.go"
+                        },
+                        "4": {
+                            "name": "entity.name.type.go"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b(var)\\s+(\\w+)\\s+(?:\\[\\])?(?!map)(\\w+)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.var.go"
+                        },
+                        "2": {
+                            "name": "variable.other.declaration.go"
+                        },
+                        "3": {
+                            "name": "entity.name.type.go"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b(var)\\s+(\\w+)\\s+(\\=)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.var.go"
+                        },
+                        "2": {
+                            "name": "variable.other.declaration.go"
+                        },
+                        "3": {
+                            "name": "keyword.operator.assignment.go"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b(?>[a-zA-Z](?:\\w+)?)\\b(?=\\[)",
+                    "name": "variable.other.accessor.go"
+                },
+                {
+                    "match": "\\b(var)\\b",
+                    "name": "keyword.var.go"
+                },
+                {
+                    "match": "_",
+                    "name": "variable.other.blank.go"
+                },
+                {
+                    "match": "\\w+(?=\\s\\:\\=)",
+                    "name": "variable.other.assignment.go"
+                },
+                {
+                    "match": "(?<=\\*)\\w+",
+                    "name": "variable.other.pointer.go"
+                },
+                {
+                    "match": "(?<=\\&)(?>\\w+)",
+                    "name": "variable.other.address.go"
+                },
+                {
+                    "match": "(?>\\w+)(?=\\s?<-)",
+                    "name": "variable.other.channel.go"
+                },
+                {
+                    "comment": "increment",
+                    "match": "(?>\\w+)(?=\\+\\+)",
+                    "name": "variable.other.go"
+                },
+                {
+                    "comment": "decrement",
+                    "match": "(?>\\w+)(?=\\-\\-)",
+                    "name": "variable.other.go"
+                },
+                {
+                    "match": "(\\w+)(,)\\s(\\w+)\\s(\\:\\=)",
+                    "captures": {
+                        "1": {
+                            "name": "variable.other.assignment.go"
+                        },
+                        "2": {
+                            "name": "punctuation.other.comma.go"
+                        },
+                        "3": {
+                            "name": "variable.other.assignment.go"
+                        },
+                        "4": {
+                            "name": "keyword.operator.assignment.go"
+                        }
+                    }
+                },
+                {
+                    "begin": "(?<=\\w)\\(",
+                    "end": "\\)|$",
+                    "patterns": [
+                        {
+                            "include": "$self"
+                        },
+                        {
+                            "match": "(?<!\\[)\\b(?>[a-zA-Z](?:\\w+)?)\\b(?!\\]|\\.)",
+                            "name": "variable.other.arg.go"
+                        }
+                    ]
+                },
+                {
+                    "match": "(?<!var)\\s*(\\w+(?:\\.\\w+)*(?>,\\s*\\w+(?:\\.\\w+)*)*)(?=\\s*=(?!=))",
+                    "captures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "match": "\\d\\w*",
+                                    "name": "invalid.illegal.identifier.go"
+                                },
+                                {
+                                    "match": "_",
+                                    "name": "variable.other.blank.go"
+                                },
+                                {
+                                    "match": "\\w+(?:\\.\\w+)*",
+                                    "name": "variable.other.assignment.go",
+                                    "captures": {
+                                        "0": {
+                                            "patterns": [
+                                                {
+                                                    "include": "#punctuation"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                                {
+                                    "include": "#punctuation"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "comment": "Struct fields",
+                    "match": "(\\w+(?:,\\s*\\w+)*)(\\s+\\*?\\w+(?:\\.\\w+)?\\s*)?(?=\\s*=)",
+                    "captures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "match": "\\d\\w*",
+                                    "name": "invalid.illegal.identifier.go"
+                                },
+                                {
+                                    "match": "\\w+",
+                                    "name": "variable.other.assignment.go"
+                                },
+                                {
+                                    "include": "#punctuation"
+                                }
+                            ]
+                        },
+                        "2": {
+                            "patterns": [
+                                {
+                                    "include": "$self"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "match": "(\\w+(?:,\\s*\\w+)*)(\\s+(\\[(\\d*|\\.\\.\\.)\\])*\\*?(<-)?\\w+(?:\\.\\w+)?\\s*[^=].*)",
+                    "captures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "match": "\\d\\w*",
+                                    "name": "invalid.illegal.identifier.go"
+                                },
+                                {
+                                    "match": "(?<=\\.)(\\w+)",
+                                    "name": "entity.name.type.go"
+                                },
+                                {
+                                    "match": "\\w+",
+                                    "name": "variable.other.declaration.go"
+                                },
+                                {
+                                    "include": "#punctuation"
+                                }
+                            ]
+                        },
+                        "2": {
+                            "patterns": [
+                                {
+                                    "include": "$self"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "begin": "\\b(var)\\s+",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.var.go"
+                        }
+                    },
+                    "end": "(?!\\G)",
+                    "patterns": [
+                        {
+                            "include": "$self"
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

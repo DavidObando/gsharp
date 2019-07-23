@@ -14,7 +14,21 @@
         "onLanguage:plaintext"
     ],
     "main": "./out/extension",
-    "contributes": {},
+    "contributes": {
+        "languages": [
+          {
+            "id": "gsharp",
+            "extensions": [".gs"]
+          }
+        ],
+        "grammars": [
+          {
+            "language": "gsharp",
+            "scopeName": "source.gsharp",
+            "path": "./syntaxes/gsharp.tmGrammar.json"
+          }
+        ]
+    },
     "scripts": {
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
