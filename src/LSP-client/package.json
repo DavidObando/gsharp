@@ -1,0 +1,45 @@
+{
+    "name": "gsharplsp",
+    "displayName": "GSharp LSP client",
+    "description": "GSharp LSP client",
+    "publisher": "dobando",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.31.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onLanguage:plaintext"
+    ],
+    "main": "./out/extension",
+    "contributes": {
+        "languages": [
+          {
+            "id": "gsharp",
+            "extensions": [".gs"]
+          }
+        ],
+        "grammars": [
+          {
+            "language": "gsharp",
+            "scopeName": "source.gsharp",
+            "path": "./syntaxes/gsharp.tmGrammar.json"
+          }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "postinstall": "node ./node_modules/vscode/bin/install"
+    },
+    "devDependencies": {
+        "typescript": "^2.6.1",
+        "vscode": "^1.1.29",
+        "vscode-languageclient": "^5.2.1",
+        "vscode-jsonrpc": "^4.0.0",
+        "@types/node": "^8.10.25"
+    }
+}

@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Statement binding.
     /// </summary>
-    internal abstract class BoundStatement : BoundNode
+    public abstract class BoundStatement : BoundNode
     {
     }
 }

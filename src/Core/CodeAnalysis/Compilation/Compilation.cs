@@ -55,7 +55,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// <summary>
         /// Gets the global scope.
         /// </summary>
-        internal BoundGlobalScope GlobalScope
+        public BoundGlobalScope GlobalScope
         {
             get
             {

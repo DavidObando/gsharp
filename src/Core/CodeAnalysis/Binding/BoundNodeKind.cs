@@ -11,7 +11,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Kind of binding for a node.
     /// </summary>
-    internal enum BoundNodeKind
+    public enum BoundNodeKind
     {
         // Statements
         BlockStatement,

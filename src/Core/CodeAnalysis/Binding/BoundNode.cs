@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Abstract base for a bound node.
     /// </summary>
-    internal abstract class BoundNode
+    public abstract class BoundNode
     {
         /// <summary>
         /// Gets the kind of bound node for this instance.
