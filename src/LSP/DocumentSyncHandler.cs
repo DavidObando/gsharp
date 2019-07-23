@@ -9,6 +9,7 @@ namespace GSharp.LSP
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using GSharp.Core.CodeAnalysis.Compilation;
     using GSharp.Core.CodeAnalysis.Syntax;
     using OmniSharp.Extensions.Embedded.MediatR;
     using OmniSharp.Extensions.LanguageServer.Protocol;
@@ -153,11 +154,11 @@ namespace GSharp.LSP
                     Message = syntaxTreeDiagnostics.Message,
                     Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
-                    Source = "gsharp",
+                    Source = Constants.LanguageIdentifier,
                 });
             }
 
-            var compilation = new Core.CodeAnalysis.Compilation(syntaxTree);
+            var compilation = new Compilation(syntaxTree);
             foreach (var syntaxTreeDiagnostics in compilation.GlobalScope.Diagnostics)
             {
                 int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Span.Start);
@@ -168,7 +169,7 @@ namespace GSharp.LSP
                     Message = syntaxTreeDiagnostics.Message,
                     Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
-                    Source = "gsharp",
+                    Source = Constants.LanguageIdentifier,
                 });
             }
 

@@ -9,8 +9,13 @@ namespace GSharp.LSP
     /// <summary>
     /// Constants used in GSharp LSP.
     /// </summary>
-    internal class Constants
+    internal static class Constants
     {
+        /// <summary>
+        /// Gets GSharp language identifier.
+        /// </summary>
+        public static string LanguageIdentifier { get; } = "G#";
+
         /// <summary>
         /// Gets the common <see cref="DocumentSelector"/> for all handlers.
         /// </summary>
