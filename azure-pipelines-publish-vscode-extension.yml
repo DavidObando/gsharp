@@ -1,7 +1,7 @@
 # Build and publish GSharp VSCode extension
 
 pool:
-  vmImage: 'Hosted'
+  vmImage: 'ubuntu-latest'
 
 variables:
   buildConfiguration: 'Release'
@@ -47,13 +47,10 @@ steps:
   inputs:
     SourceFolder: out/bin/Release/LSP/publish
     TargetFolder: 'src/LSP-client/out'
-#- script: 'npm install -g vsce'
-#  displayName: 'Install VSCode Extensions Publisher'
-#- script: 'vsce publish -p %VSCEPAT%'
-#  workingDirectory: 'src/LSP-client'
-#  displayName: 'VSCode Extension Publish'
-#  env:
-#    VSCEPAT: $(vsce-pat)
-steps:
-- task: PublishBuildArtifacts@1
-  displayName: 'Publish Artifact: drop'
+- script: 'npm install -g vsce'
+  displayName: 'Install VSCode Extensions Publisher'
+- script: 'vsce publish -p %VSCEPAT%'
+  workingDirectory: 'src/LSP-client'
+  displayName: 'VSCode Extension Publish'
+  env:
+    VSCEPAT: $(vsce-pat)
