@@ -8,6 +8,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     using System.Collections.Generic;
     using System.Collections.Immutable;
     using System.Linq;
+    using System.Text;
     using GSharp.Core.CodeAnalysis.Lowering;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
@@ -71,11 +72,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 packageSymbol = new PackageSymbol(name: packageName, declaration: package);
             }
 
-            var imports = ImmutableArray.CreateBuilder<ImportSymbol>();
             foreach (var import in syntax.Members.OfType<ImportSyntax>())
             {
-                var importName = string.Join(string.Empty, import.IdentifiersWithDots);
-                imports.Add(new ImportSymbol(importName, import));
+                binder.BindImport(import);
             }
 
             foreach (var function in syntax.Members.OfType<FunctionDeclarationSyntax>())
@@ -91,6 +90,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 statements.Add(statement);
             }
 
+            var imports = binder.scope.GetDeclaredImports();
             var functions = binder.scope.GetDeclaredFunctions();
             var variables = binder.scope.GetDeclaredVariables();
             var diagnostics = binder.Diagnostics.ToImmutableArray();
@@ -100,7 +100,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
             }
 
-            return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports.ToImmutable(), functions, variables, statements.ToImmutable());
+            return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports, functions, variables, statements.ToImmutable());
         }
 
         /// <summary>
@@ -159,6 +159,11 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 previous = stack.Pop();
                 var scope = new BoundScope(parent);
 
+                foreach (var i in previous.Imports)
+                {
+                    scope.TryImport(i);
+                }
+
                 foreach (var f in previous.Functions)
                 {
                     scope.TryDeclareFunction(f);
@@ -185,6 +190,19 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
 
             return result;
+        }
+
+        private void BindImport(ImportSyntax import)
+        {
+            var sb = new StringBuilder();
+            foreach (var i in import.IdentifiersWithDots)
+            {
+                sb.Append(i.Text);
+            }
+
+            var importName = sb.ToString();
+            var importSymbol = new ImportSymbol(importName, import);
+            scope.TryImport(importSymbol);
         }
 
         private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax)
@@ -441,6 +459,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return BindBinaryExpression((BinaryExpressionSyntax)syntax);
                 case SyntaxKind.CallExpression:
                     return BindCallExpression((CallExpressionSyntax)syntax);
+                case SyntaxKind.AccessorExpression:
+                    return BindAccessorExpression((AccessorExpressionSyntax)syntax);
                 default:
                     throw new Exception($"Unexpected syntax {syntax.Kind}");
             }
@@ -609,6 +629,53 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
 
             return new BoundCallExpression(function, boundArguments.ToImmutable());
+        }
+
+        private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
+        {
+            // Hack: for now this is only supported for imported types on the left
+            var leftPart = (NameExpressionSyntax)syntax.LeftPart;
+            var foundClass = scope.TryLookupImportedClass(leftPart.IdentifierToken.Text, syntax.LeftPart, out var importedClass);
+            if (!foundClass)
+            {
+                Diagnostics.ReportUnableToFindType(leftPart.Span, leftPart.IdentifierToken.Text);
+                return new BoundErrorExpression();
+            }
+
+            var rightPart = syntax.RightPart;
+            switch (rightPart)
+            {
+                case NameExpressionSyntax ne:
+                    var foundMember = importedClass.TryLookupMember(ne.IdentifierToken.Text, ne, out var member);
+                    if (!foundMember)
+                    {
+                        Diagnostics.ReportUnableToFindMember(ne.Span, ne.IdentifierToken.Text);
+                        return new BoundErrorExpression();
+                    }
+
+                    break;
+                case CallExpressionSyntax ce:
+                    var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+                    foreach (var argument in ce.Arguments)
+                    {
+                        var boundArgument = BindExpression(argument);
+                        boundArguments.Add(boundArgument);
+                    }
+
+                    var arguments = boundArguments.ToImmutable();
+                    var foundFunction = importedClass.TryLookupFunction(ce.Identifier.Text, ce, arguments, out var function);
+                    if (!foundFunction)
+                    {
+                        Diagnostics.ReportUnableToFindFunction(ce.Span, ce.Identifier.Text);
+                        return new BoundErrorExpression();
+                    }
+
+                    return new BoundImportedCallExpression(function, arguments);
+                default:
+                    return new BoundErrorExpression();
+            }
+
+            return new BoundErrorExpression();
         }
 
         private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)

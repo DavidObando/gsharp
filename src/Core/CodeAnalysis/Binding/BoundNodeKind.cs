@@ -34,6 +34,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         BinaryExpression,
         CallExpression,
         ConversionExpression,
+        ImportedCallExpression,
     }
 }
 

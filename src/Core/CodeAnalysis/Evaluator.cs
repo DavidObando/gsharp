@@ -132,6 +132,8 @@ namespace GSharp.Core.CodeAnalysis
                     return EvaluateCallExpression((BoundCallExpression)node);
                 case BoundNodeKind.ConversionExpression:
                     return EvaluateConversionExpression((BoundConversionExpression)node);
+                case BoundNodeKind.ImportedCallExpression:
+                    return EvaluateImportedCallExpression((BoundImportedCallExpression)node);
                 default:
                     throw new Exception($"Unexpected node {node.Kind}");
             }
@@ -327,6 +329,19 @@ namespace GSharp.Core.CodeAnalysis
             {
                 throw new Exception($"Unexpected type {node.Type}");
             }
+        }
+
+        private object EvaluateImportedCallExpression(BoundImportedCallExpression node)
+        {
+            // Hack: for now we only support static methods.
+            var locals = new List<object>();
+            for (int i = 0; i < node.Arguments.Length; i++)
+            {
+                var value = EvaluateExpression(node.Arguments[i]);
+                locals.Add(value);
+            }
+
+            return node.Function.Method.Invoke(null, locals.ToArray());
         }
 
         private void Assign(VariableSymbol variable, object value)

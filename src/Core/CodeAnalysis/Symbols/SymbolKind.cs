@@ -43,5 +43,15 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// The symbol is an import.
         /// </summary>
         Import,
+
+        /// <summary>
+        /// The symbol is an imported class.
+        /// </summary>
+        ImportedClass,
+
+        /// <summary>
+        /// The symbol is an imported function.
+        /// </summary>
+        ImportedFunction,
     }
 }

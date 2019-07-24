@@ -247,6 +247,8 @@ namespace GSharp.Core.CodeAnalysis.Binding
                     return RewriteCallExpression((BoundCallExpression)node);
                 case BoundNodeKind.ConversionExpression:
                     return RewriteConversionExpression((BoundConversionExpression)node);
+                case BoundNodeKind.ImportedCallExpression:
+                    return RewriteImportedCallExpression((BoundImportedCallExpression)node);
                 default:
                     throw new Exception($"Unexpected node: {node.Kind}");
             }
@@ -385,6 +387,46 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
 
             return new BoundConversionExpression(node.Type, expression);
+        }
+
+        /// <summary>
+        /// Rewrites an imported call expression.
+        /// </summary>
+        /// <param name="node">The imported call expression to rewrite.</param>
+        /// <returns>The rewritten imported call expression.</returns>
+        protected virtual BoundExpression RewriteImportedCallExpression(BoundImportedCallExpression node)
+        {
+            ImmutableArray<BoundExpression>.Builder builder = null;
+
+            for (var i = 0; i < node.Arguments.Length; i++)
+            {
+                var oldArgument = node.Arguments[i];
+                var newArgument = RewriteExpression(oldArgument);
+                if (newArgument != oldArgument)
+                {
+                    if (builder == null)
+                    {
+                        builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+
+                        for (var j = 0; j < i; j++)
+                        {
+                            builder.Add(node.Arguments[j]);
+                        }
+                    }
+                }
+
+                if (builder != null)
+                {
+                    builder.Add(newArgument);
+                }
+            }
+
+            if (builder == null)
+            {
+                return node;
+            }
+
+            return new BoundImportedCallExpression(node.Function, builder.MoveToImmutable());
         }
     }
 }

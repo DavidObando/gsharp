@@ -4,10 +4,13 @@
 
 namespace GSharp.Core.CodeAnalysis.Binding
 {
+    using System;
     using System.Collections.Generic;
     using System.Collections.Immutable;
     using System.Linq;
+    using System.Reflection;
     using GSharp.Core.CodeAnalysis.Symbols;
+    using GSharp.Core.CodeAnalysis.Syntax;
 
     /// <summary>
     /// Bound scope.
@@ -15,6 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     internal sealed class BoundScope
     {
         private Dictionary<string, Symbol> symbols;
+        private List<ImportSymbol> imports;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundScope"/> class.
@@ -23,12 +27,29 @@ namespace GSharp.Core.CodeAnalysis.Binding
         public BoundScope(BoundScope parent)
         {
             Parent = parent;
+            imports = parent?.imports;
         }
 
         /// <summary>
         /// Gets the parent scope.
         /// </summary>
         public BoundScope Parent { get; }
+
+        /// <summary>
+        /// Tries to add an import to this scope.
+        /// </summary>
+        /// <param name="import">The import.</param>
+        /// <returns>Whether the import was registered or not.</returns>
+        public bool TryImport(ImportSymbol import)
+        {
+            if (imports == null)
+            {
+                imports = new List<ImportSymbol>();
+            }
+
+            imports.Add(import);
+            return true;
+        }
 
         /// <summary>
         /// Tries to declare a variable in this scope.
@@ -65,6 +86,44 @@ namespace GSharp.Core.CodeAnalysis.Binding
             => TryLookupSymbol(name, out function);
 
         /// <summary>
+        /// Tries to lookup an imported class.
+        /// </summary>
+        /// <param name="name">The class name.</param>
+        /// <param name="declaration">The declaration.</param>
+        /// <param name="importedClass">The result, if found.</param>
+        /// <returns>Whether a class was found or not.</returns>
+        public bool TryLookupImportedClass(string name, ExpressionSyntax declaration, out ImportedClassSymbol importedClass)
+        {
+            importedClass = null;
+
+            if (imports != null)
+            {
+                string[] sources = new[]
+                {
+                    string.Empty,
+                    ", mscorlib",
+                    ", System.Runtime",
+                };
+                foreach (var source in sources)
+                {
+                    foreach (var import in imports)
+                    {
+                        Console.WriteLine();
+                        var typeName = import.Name + "." + name + source;
+                        var type = Type.GetType(typeName);
+                        if (type != null)
+                        {
+                            importedClass = new ImportedClassSymbol(type, declaration);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Gets an immutable array of all the declared variables.
         /// </summary>
         /// <returns>The declared variables.</returns>
@@ -77,6 +136,13 @@ namespace GSharp.Core.CodeAnalysis.Binding
         /// <returns>The declared functions.</returns>
         public ImmutableArray<FunctionSymbol> GetDeclaredFunctions()
             => GetDeclaredSymbols<FunctionSymbol>();
+
+        /// <summary>
+        /// Gets an immutable array of all the declared imports.
+        /// </summary>
+        /// <returns>The declared imports.</returns>
+        public ImmutableArray<ImportSymbol> GetDeclaredImports()
+            => imports.ToImmutableArray();
 
         private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
             where TSymbol : Symbol
