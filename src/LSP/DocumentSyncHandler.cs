@@ -173,14 +173,11 @@ namespace GSharp.LSP
                 });
             }
 
-            if (diagnostics.Count > 0)
+            this.router.Client.SendNotification(DocumentNames.PublishDiagnostics, new PublishDiagnosticsParams
             {
-                this.router.Client.SendNotification(DocumentNames.PublishDiagnostics, new PublishDiagnosticsParams
-                {
-                    Uri = documentUri,
-                    Diagnostics = diagnostics,
-                });
-            }
+                Uri = documentUri,
+                Diagnostics = diagnostics,
+            });
         }
     }
 }
