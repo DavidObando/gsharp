@@ -49,15 +49,21 @@ steps:
     workingDir: $(lspClientDirectory)
     verbose: false
 - task: CopyFiles@2
-  displayName: 'Copy GSharp LSP Client files to output directory'
-  inputs:
-    SourceFolder: src/LSP-client
-    TargetFolder: 'out/bin/Release/LSP-Client'
-- task: CopyFiles@2
-  displayName: 'Copy GSharp LSP Server files to LSP Client output directory'
+  displayName: 'Copy GSharp LSP Server files to LSP Client directory'
   inputs:
     SourceFolder: out/bin/Release/LSP/publish
-    TargetFolder: 'out/bin/Release/LSP-Client/out'
+    TargetFolder: 'src/LSP-client/out'
+- script: 'npm install -g vsce'
+  displayName: 'Install VSCode Extensions Publisher'
+- script: 'vsce package'
+  workingDirectory: 'src/LSP-client'
+  displayName: 'VSCode Extension Publish'
+- task: CopyFiles@2
+  displayName: 'Copy GSharp VSCode vsix to output directory'
+  inputs:
+    SourceFolder: 'src/LSP-client'
+    Contents: 'gsharplsp*.vsix'
+    TargetFolder: out/bin/Release/LSP-Client
 - task: PublishBuildArtifacts@1
   displayName: 'Publish Artifact: drop'
   inputs:

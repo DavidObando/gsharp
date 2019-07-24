@@ -1,64 +1,66 @@
 {
-    "name": "gsharplsp",
-    "displayName": "G# Language Server",
-    "description": "G# Language Server",
-    "license": "MIT",
-    "repository": {
-      "type": "git",
-      "url": "https://github.com/DavidObando/gsharp"
-    },
-    "bugs": {
-      "url": "https://github.com/DavidObando/gsharp/issues"
-    },
-    "homepage": "https://github.com/DavidObando/gsharp/blob/master/README.md",
-    "author": "gsharp",
-    "publisher": "gsharp",
-    "version": "0.0.3",
-    "engines": {
-        "vscode": "^1.31.0"
-    },
-    "categories": [
-        "Programming Languages"
-    ],
-    "preview": true,
-    "keywords": [
-      "go",
-      "g#",
-      "gsharp",
-      "languages"
-    ],
-    "activationEvents": [
-        "onLanguage:G#"
-    ],
-    "main": "./out/extension",
-    "contributes": {
-        "languages": [
-          {
-            "id": "G#",
-            "extensions": [".gs"]
-          }
-        ],
-        "grammars": [
-          {
-            "language": "G#",
-            "scopeName": "source.gsharp",
-            "path": "./syntaxes/gsharp.tmGrammar.json"
-          }
+  "name": "gsharplsp",
+  "displayName": "G# Language Server",
+  "description": "G# Language Server",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DavidObando/gsharp"
+  },
+  "bugs": {
+    "url": "https://github.com/DavidObando/gsharp/issues"
+  },
+  "homepage": "https://github.com/DavidObando/gsharp/blob/master/README.md",
+  "author": "gsharp",
+  "publisher": "gsharp",
+  "version": "0.0.3",
+  "engines": {
+    "vscode": "^1.31.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "preview": true,
+  "keywords": [
+    "go",
+    "g#",
+    "gsharp",
+    "languages"
+  ],
+  "activationEvents": [
+    "onLanguage:G#"
+  ],
+  "main": "./out/extension",
+  "contributes": {
+    "languages": [
+      {
+        "id": "G#",
+        "extensions": [
+          ".gs"
         ]
-    },
-    "scripts": {
-        "vscode:prepublish": "npm run compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
-        "postinstall": "node ./node_modules/vscode/bin/install"
-    },
-    "dependencies": {
-      "vscode-languageclient": "^5.2.1",
-      "vscode-jsonrpc": "^4.0.0"
-    },
-    "devDependencies": {
-      "vscode": "^1.1.31",
-      "typescript": "^3.5.1",
-      "@types/node": "^8.10.25"
-    }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "G#",
+        "scopeName": "source.gsharp",
+        "path": "./syntaxes/gsharp.tmGrammar.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "postinstall": "node ./node_modules/vscode/bin/install"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^5.2.1",
+    "vscode-jsonrpc": "^4.0.0"
+  },
+  "devDependencies": {
+    "vscode": "^1.1.31",
+    "typescript": "^3.5.1",
+    "@types/node": "^8.10.25"
+  }
 }
