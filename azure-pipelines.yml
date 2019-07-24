@@ -57,7 +57,7 @@ steps:
   displayName: 'Install VSCode Extensions Publisher'
 - script: 'vsce package'
   workingDirectory: 'src/LSP-client'
-  displayName: 'VSCode Extension Publish'
+  displayName: 'VSCode Extension Package'
 - task: CopyFiles@2
   displayName: 'Copy GSharp VSCode vsix to output directory'
   inputs:
