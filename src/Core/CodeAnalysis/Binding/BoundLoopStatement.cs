@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound loop statement.
     /// </summary>
-    internal abstract class BoundLoopStatement : BoundStatement
+    public abstract class BoundLoopStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundLoopStatement"/> class.

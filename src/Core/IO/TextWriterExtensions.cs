@@ -12,7 +12,7 @@ namespace GSharp.Core.IO
     /// <summary>
     /// Utility extensions to the <see cref="TextWriter"/> class.
     /// </summary>
-    internal static class TextWriterExtensions
+    public static class TextWriterExtensions
     {
         /// <summary>
         /// Writes a keyword.

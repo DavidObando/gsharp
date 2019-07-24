@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound goto statement.
     /// </summary>
-    internal sealed class BoundGotoStatement : BoundStatement
+    public sealed class BoundGotoStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundGotoStatement"/> class.

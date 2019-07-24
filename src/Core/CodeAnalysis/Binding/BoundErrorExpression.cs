@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound error expression.
     /// </summary>
-    internal sealed class BoundErrorExpression : BoundExpression
+    public sealed class BoundErrorExpression : BoundExpression
     {
         /// <inheritdoc/>
         public override BoundNodeKind Kind => BoundNodeKind.ErrorExpression;

@@ -9,7 +9,7 @@ namespace GSharp.LSP
     /// <summary>
     /// Constants used in GSharp LSP.
     /// </summary>
-    internal static class Constants
+    public static class Constants
     {
         /// <summary>
         /// Gets GSharp language identifier.

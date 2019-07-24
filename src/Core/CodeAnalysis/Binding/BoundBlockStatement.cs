@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound block statement.
     /// </summary>
-    internal sealed class BoundBlockStatement : BoundStatement
+    public sealed class BoundBlockStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundBlockStatement"/> class.

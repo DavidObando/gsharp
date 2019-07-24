@@ -11,7 +11,7 @@ namespace GSharp.Interpreter
     /// <summary>
     /// Entry point to the GSharp interpreter.
     /// </summary>
-    internal class Program
+    public class Program
     {
         /// <summary>
         /// Entry point to the GSharp interpreter.
@@ -36,7 +36,7 @@ namespace GSharp.Interpreter
                 }
                 else
                 {
-                    Console.Error.WriteLine($"Unable to find specified file {arg0}");
+                    Console.WriteLine($"Unable to find specified file {arg0}");
                     return 1;
                 }
             }

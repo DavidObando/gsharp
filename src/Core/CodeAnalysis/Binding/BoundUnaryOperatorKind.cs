@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound unary operator kind.
     /// </summary>
-    internal enum BoundUnaryOperatorKind
+    public enum BoundUnaryOperatorKind
     {
         /// <summary>
         /// Used when the PlusToken is used as a unary operator.

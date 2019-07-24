@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound call expression.
     /// </summary>
-    internal sealed class BoundImportedCallExpression : BoundExpression
+    public sealed class BoundImportedCallExpression : BoundExpression
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundImportedCallExpression"/> class.

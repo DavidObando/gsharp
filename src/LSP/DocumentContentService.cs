@@ -5,12 +5,11 @@
 namespace GSharp.LSP
 {
     using System.Collections.Concurrent;
-    using GSharp.Core.CodeAnalysis.Syntax;
 
     /// <summary>
     /// Service to maintain document content and share it across handlers.
     /// </summary>
-    internal class DocumentContentService
+    public class DocumentContentService
     {
         private readonly ConcurrentDictionary<string, DocumentContent> documentContents = new ConcurrentDictionary<string, DocumentContent>();
 

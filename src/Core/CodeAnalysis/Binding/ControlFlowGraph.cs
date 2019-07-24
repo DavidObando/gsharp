@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Control flow analyzer.
     /// </summary>
-    internal sealed class ControlFlowGraph
+    public sealed class ControlFlowGraph
     {
         private ControlFlowGraph(BasicBlock start, BasicBlock end, List<BasicBlock> blocks, List<BasicBlockBranch> branches)
         {

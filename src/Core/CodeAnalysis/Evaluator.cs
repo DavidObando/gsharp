@@ -12,7 +12,7 @@ namespace GSharp.Core.CodeAnalysis
     /// <summary>
     /// Program evaluator.
     /// </summary>
-    internal sealed class Evaluator
+    public sealed class Evaluator
     {
         private readonly BoundProgram program;
         private readonly Dictionary<VariableSymbol, object> globals;

@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.CodeGen
     /// <summary>
     /// Extensions for ILOpCode.
     /// </summary>
-    internal static partial class ILOpCodeExtensions
+    public static partial class ILOpCodeExtensions
     {
         /// <summary>
         /// Gets the byte size of the ILOpcode.

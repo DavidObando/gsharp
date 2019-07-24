@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis
     /// <summary>
     /// Built-in functions.
     /// </summary>
-    internal static class BuiltinFunctions
+    public static class BuiltinFunctions
     {
         /// <summary>
         /// Prints to the console.
@@ -43,7 +43,7 @@ namespace GSharp.Core.CodeAnalysis
         /// Returns the entire set of built-in functions.
         /// </summary>
         /// <returns>An <see cref="IEnumerable{FunctionSymbol}"/>.</returns>
-        internal static IEnumerable<FunctionSymbol> GetAll()
+        public static IEnumerable<FunctionSymbol> GetAll()
             => typeof(BuiltinFunctions).GetFields(BindingFlags.Public | BindingFlags.Static)
                                        .Where(f => f.FieldType == typeof(FunctionSymbol))
                                        .Select(f => (FunctionSymbol)f.GetValue(null));

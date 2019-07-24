@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// </summary>
         /// <param name="success">Success state.</param>
         /// <param name="diagnostics">Diagnostics bag.</param>
-        internal EmitResult(bool success, ImmutableArray<Diagnostic> diagnostics)
+        public EmitResult(bool success, ImmutableArray<Diagnostic> diagnostics)
         {
             Success = success;
             Diagnostics = diagnostics;

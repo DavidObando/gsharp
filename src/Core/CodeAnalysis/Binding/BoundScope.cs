@@ -8,14 +8,13 @@ namespace GSharp.Core.CodeAnalysis.Binding
     using System.Collections.Generic;
     using System.Collections.Immutable;
     using System.Linq;
-    using System.Reflection;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
 
     /// <summary>
     /// Bound scope.
     /// </summary>
-    internal sealed class BoundScope
+    public sealed class BoundScope
     {
         private Dictionary<string, Symbol> symbols;
         private List<ImportSymbol> imports;

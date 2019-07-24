@@ -10,7 +10,7 @@ namespace GSharp.LSP
     /// <summary>
     /// Used on <see cref="DocumentContentService"/>.
     /// </summary>
-    internal class DocumentContent
+    public class DocumentContent
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="DocumentContent"/> class.

@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering
     /// <summary>
     /// Bound tree lowerer. It simplifies the AST.
     /// </summary>
-    internal sealed class Lowerer : BoundTreeRewriter
+    public sealed class Lowerer : BoundTreeRewriter
     {
         private int labelCount;
 

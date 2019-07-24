@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound for ellipsis statement.
     /// </summary>
-    internal sealed class BoundForEllipsisStatement : BoundLoopStatement
+    public sealed class BoundForEllipsisStatement : BoundLoopStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundForEllipsisStatement"/> class.

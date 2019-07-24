@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound assignment expression.
     /// </summary>
-    internal sealed class BoundAssignmentExpression : BoundExpression
+    public sealed class BoundAssignmentExpression : BoundExpression
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundAssignmentExpression"/> class.

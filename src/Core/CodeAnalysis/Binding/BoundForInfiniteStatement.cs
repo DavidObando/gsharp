@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound for infinite statement.
     /// </summary>
-    internal sealed class BoundForInfiniteStatement : BoundLoopStatement
+    public sealed class BoundForInfiniteStatement : BoundLoopStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundForInfiniteStatement"/> class.

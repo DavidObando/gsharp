@@ -8,7 +8,6 @@ namespace GSharp.Core.CodeAnalysis.Symbols
     using System.Collections.Immutable;
     using System.Linq;
     using System.Reflection;
-    using System.Reflection.Metadata;
     using GSharp.Core.CodeAnalysis.Binding;
     using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -49,7 +48,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// <param name="ne">The name expression.</param>
         /// <param name="member">The resulting member, if one is found.</param>
         /// <returns>Whether we found a matching member or not.</returns>
-        internal bool TryLookupMember(string text, NameExpressionSyntax ne, out object member)
+        public bool TryLookupMember(string text, NameExpressionSyntax ne, out object member)
         {
             throw new NotImplementedException();
         }
@@ -62,7 +61,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// <param name="arguments">The bound arguments.</param>
         /// <param name="function">The resulting function, if one is found.</param>
         /// <returns>Whether we found a matching function or not.</returns>
-        internal bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
+        public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
         {
             function = null;
             var methods = ClassType.GetMethods(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
