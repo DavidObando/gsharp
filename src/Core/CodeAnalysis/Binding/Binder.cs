@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Binder.
     /// </summary>
-    internal sealed class Binder
+    public sealed class Binder
     {
         private readonly FunctionSymbol function;
 
@@ -431,7 +431,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
         private BoundExpression BindExpression(ExpressionSyntax syntax, bool canBeVoid = false)
         {
-            var result = BindExpressionInternal(syntax);
+            var result = BindExpressionpublic(syntax);
             if (!canBeVoid && result.Type == TypeSymbol.Void)
             {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Span);
@@ -441,7 +441,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             return result;
         }
 
-        private BoundExpression BindExpressionInternal(ExpressionSyntax syntax)
+        private BoundExpression BindExpressionpublic(ExpressionSyntax syntax)
         {
             switch (syntax.Kind)
             {

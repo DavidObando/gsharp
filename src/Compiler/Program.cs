@@ -16,7 +16,7 @@ namespace GSharp.Compiler
     /// <summary>
     /// Entry point to gsc.
     /// </summary>
-    internal class Program
+    public class Program
     {
         /// <summary>
         /// Entry point to the GSharp compiler.

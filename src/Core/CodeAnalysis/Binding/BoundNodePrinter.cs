@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Helps print bound nodes in an idiomatic way.
     /// </summary>
-    internal static class BoundNodePrinter
+    public static class BoundNodePrinter
     {
         /// <summary>
         /// Writes a bound node to the specified text writer.

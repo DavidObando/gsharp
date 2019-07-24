@@ -15,7 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         /// <param name="name">The variable name.</param>
         /// <param name="isReadOnly">Whether it's read-only or not.</param>
         /// <param name="type">The type of the variable.</param>
-        internal GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type)
+        public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type)
             : base(name, isReadOnly, type)
         {
         }

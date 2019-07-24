@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound program.
     /// </summary>
-    internal sealed class BoundProgram
+    public sealed class BoundProgram
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundProgram"/> class.

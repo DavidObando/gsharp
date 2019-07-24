@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound literal expression.
     /// </summary>
-    internal sealed class BoundLiteralExpression : BoundExpression
+    public sealed class BoundLiteralExpression : BoundExpression
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class.

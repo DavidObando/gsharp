@@ -9,6 +9,7 @@ namespace GSharp.LSP
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using GSharp.Core.CodeAnalysis.Binding;
     using GSharp.Core.CodeAnalysis.Compilation;
     using GSharp.Core.CodeAnalysis.Syntax;
     using OmniSharp.Extensions.Embedded.MediatR;
@@ -21,7 +22,7 @@ namespace GSharp.LSP
     /// <summary>
     /// GSharp validation handler.
     /// </summary>
-    internal class DocumentSyncHandler : ITextDocumentSyncHandler
+    public class DocumentSyncHandler : ITextDocumentSyncHandler
     {
         private readonly ILanguageServer router;
         private readonly DocumentContentService documentContentService;
@@ -130,7 +131,7 @@ namespace GSharp.LSP
             };
         }
 
-        private void DiagnoseText(Uri documentUri, string text)
+        private void DiagnoseText(Uri documentUri, string text, bool skipBinding = true)
         {
             var newLines = new List<int>();
             int nextNewLine = text.IndexOf(Environment.NewLine);
@@ -150,7 +151,7 @@ namespace GSharp.LSP
                 int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
                 diagnostics.Add(new Diagnostic()
                 {
-                    Code = new DiagnosticCode("syntax"),
+                    Code = new DiagnosticCode("Syntax"),
                     Message = syntaxTreeDiagnostics.Message,
                     Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
@@ -165,12 +166,30 @@ namespace GSharp.LSP
                 int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
                 diagnostics.Add(new Diagnostic()
                 {
-                    Code = new DiagnosticCode("compilation"),
+                    Code = new DiagnosticCode("Semantic"),
                     Message = syntaxTreeDiagnostics.Message,
                     Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
                     Source = Constants.LanguageIdentifier,
                 });
+            }
+
+            if (!skipBinding)
+            {
+                var program = Binder.BindProgram(compilation.GlobalScope);
+                foreach (var bindingDiagnostics in program.Diagnostics)
+                {
+                    int line = newLines.Count(charNumber => charNumber < bindingDiagnostics.Span.Start);
+                    int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
+                    diagnostics.Add(new Diagnostic()
+                    {
+                        Code = new DiagnosticCode("Binding"),
+                        Message = bindingDiagnostics.Message,
+                        Range = new Range(new Position(line, bindingDiagnostics.Span.Start - lineStart), new Position(line, bindingDiagnostics.Span.End - lineStart)),
+                        Severity = DiagnosticSeverity.Error,
+                        Source = Constants.LanguageIdentifier,
+                    });
+                }
             }
 
             this.router.Client.SendNotification(DocumentNames.PublishDiagnostics, new PublishDiagnosticsParams

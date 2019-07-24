@@ -4,7 +4,6 @@
 
 namespace GSharp.Core.CodeAnalysis
 {
-    using System;
     using System.Collections;
     using System.Collections.Generic;
     using GSharp.Core.CodeAnalysis.Symbols;

@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// <summary>
     /// Represents the continue statement in the language.
     /// </summary>
-    internal class ContinueStatementSyntax : StatementSyntax
+    public class ContinueStatementSyntax : StatementSyntax
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="ContinueStatementSyntax"/> class.

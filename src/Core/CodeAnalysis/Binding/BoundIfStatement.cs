@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound if statement.
     /// </summary>
-    internal sealed class BoundIfStatement : BoundStatement
+    public sealed class BoundIfStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundIfStatement"/> class.

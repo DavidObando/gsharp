@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound return statement.
     /// </summary>
-    internal sealed class BoundReturnStatement : BoundStatement
+    public sealed class BoundReturnStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundReturnStatement"/> class.

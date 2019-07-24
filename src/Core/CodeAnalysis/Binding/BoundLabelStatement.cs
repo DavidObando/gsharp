@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound label statement.
     /// </summary>
-    internal sealed class BoundLabelStatement : BoundStatement
+    public sealed class BoundLabelStatement : BoundStatement
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundLabelStatement"/> class.

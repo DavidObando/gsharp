@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Type conversion classifier.
     /// </summary>
-    internal sealed class Conversion
+    public sealed class Conversion
     {
         /// <summary>
         /// States that there's no conversion between the given types.

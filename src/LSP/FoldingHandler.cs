@@ -4,10 +4,8 @@
 
 namespace GSharp.LSP
 {
-    using System;
     using System.Collections.Generic;
     using System.Linq;
-    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
     using GSharp.Core.CodeAnalysis.Syntax;
@@ -18,7 +16,7 @@ namespace GSharp.LSP
     /// <summary>
     /// Folding handler for GSharp.
     /// </summary>
-    internal class FoldingHandler : IFoldingRangeHandler
+    public class FoldingHandler : IFoldingRangeHandler
     {
         private readonly ILanguageServer router;
         private readonly DocumentContentService documentContentService;

@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound binary operator.
     /// </summary>
-    internal sealed class BoundBinaryOperator
+    public sealed class BoundBinaryOperator
     {
         private static BoundBinaryOperator[] supportedOperators =
         {

@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound binary operator kind.
     /// </summary>
-    internal enum BoundBinaryOperatorKind
+    public enum BoundBinaryOperatorKind
     {
         /// <summary>
         /// Used when the StarToken is used as a binary operator.

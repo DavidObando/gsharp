@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound expression.
     /// </summary>
-    internal abstract class BoundExpression : BoundNode
+    public abstract class BoundExpression : BoundNode
     {
         /// <summary>
         /// Gets the bound expression type.

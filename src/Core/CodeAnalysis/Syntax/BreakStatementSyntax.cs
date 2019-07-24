@@ -7,7 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// <summary>
     /// Represents the break statement syntax in the language.
     /// </summary>
-    internal class BreakStatementSyntax : StatementSyntax
+    public class BreakStatementSyntax : StatementSyntax
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BreakStatementSyntax"/> class.

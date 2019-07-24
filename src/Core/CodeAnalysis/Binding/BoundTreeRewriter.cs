@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Abstract bound tree rewriter.
     /// </summary>
-    internal abstract class BoundTreeRewriter
+    public abstract class BoundTreeRewriter
     {
         /// <summary>
         /// Reweites bound statements.

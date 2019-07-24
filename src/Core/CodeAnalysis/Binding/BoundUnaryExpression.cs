@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
     /// <summary>
     /// Bound unary expression.
     /// </summary>
-    internal sealed class BoundUnaryExpression : BoundExpression
+    public sealed class BoundUnaryExpression : BoundExpression
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="BoundUnaryExpression"/> class.
