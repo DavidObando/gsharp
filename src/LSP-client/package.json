@@ -13,7 +13,7 @@
     "homepage": "https://github.com/DavidObando/gsharp/blob/master/README.md",
     "author": "gsharp",
     "publisher": "gsharp",
-    "version": "0.0.2",
+    "version": "0.0.3",
     "engines": {
         "vscode": "^1.31.0"
     },
@@ -24,6 +24,7 @@
     "keywords": [
       "go",
       "g#",
+      "gsharp",
       "languages"
     ],
     "activationEvents": [
