@@ -49,9 +49,16 @@ steps:
     workingDir: $(lspClientDirectory)
     verbose: false
 - task: CopyFiles@2
-  displayName: 'Copy GSharp LSP Server files to LSP Client directory'
+  displayName: 'Copy GSharp LSP Client files to output directory'
+  inputs:
+    SourceFolder: src/LSP-client
+    TargetFolder: 'out/bin/Release/LSP-Client'
+- task: CopyFiles@2
+  displayName: 'Copy GSharp LSP Server files to LSP Client output directory'
   inputs:
     SourceFolder: out/bin/Release/LSP/publish
-    TargetFolder: 'src/LSP-client/out'
+    TargetFolder: 'out/bin/Release/LSP-Client/out'
 - task: PublishBuildArtifacts@1
   displayName: 'Publish Artifact: drop'
+  inputs:
+    PathtoPublish: out/bin/Release
