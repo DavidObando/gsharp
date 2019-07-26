@@ -2,12 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.LSP
+namespace GSharp.LanguageServer
 {
     using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
     /// <summary>
-    /// Constants used in GSharp LSP.
+    /// Constants used in GSharp LanguageServer.
     /// </summary>
     public static class Constants
     {

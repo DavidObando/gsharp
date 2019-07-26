@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.LSP
+namespace GSharp.LanguageServer
 {
     using System.Collections.Generic;
     using GSharp.Core.CodeAnalysis.Syntax;

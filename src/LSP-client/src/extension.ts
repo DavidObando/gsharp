@@ -7,8 +7,8 @@ import { Trace } from 'vscode-jsonrpc';
 export function activate(context: ExtensionContext) {
     const serverExe = 'dotnet';
     const serverOptions: ServerOptions = {
-        run: { command: serverExe, args: [context.extensionPath + '\\out\\GSharp.LSP.dll'] },
-        debug: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LSP/LSP.csproj'] }
+        run: { command: serverExe, args: [context.extensionPath + '\\out\\GSharp.LanguageServer.dll'] },
+        debug: { command: serverExe, args: ['run', '--project', context.extensionPath + '../../LanguageServer/LanguageServer.csproj'] }
     }
 
     const clientOptions: LanguageClientOptions = {

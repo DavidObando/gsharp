@@ -3,16 +3,16 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>netcoreapp2.1</TargetFramework>
-    <RootNamespace>GSharp.LSP</RootNamespace>
+    <RootNamespace>GSharp.LanguageServer</RootNamespace>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.13.1" />
+    <ProjectReference Include="@(GsharpCore)" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Core\Core.csproj" />
+    <PackageReference Include="@(OmniSharpExtensionsLanguageServerPackageReference)" />
   </ItemGroup>
 
 </Project>

@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.LSP
+namespace GSharp.LanguageServer
 {
     using System;
     using System.Threading.Tasks;
@@ -16,7 +16,7 @@ namespace GSharp.LSP
     public class Program
     {
         /// <summary>
-        /// Entry point for GSharp LSP.
+        /// Entry point for GSharp LanguageServer.
         /// </summary>
         /// <param name="args">Command line arguments.</param>
         /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
