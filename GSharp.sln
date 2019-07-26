@@ -31,7 +31,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "GSharpInputFiles", "GSharpI
 		test\GSharpInputFiles\Loop.gs = test\GSharpInputFiles\Loop.gs
 	EndProjectSection
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LSP", "src\LSP\LSP.csproj", "{704E201F-254B-42B7-8EB1-A2AEAB240EFC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LanguageServer", "src\LanguageServer\LanguageServer.csproj", "{704E201F-254B-42B7-8EB1-A2AEAB240EFC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
