@@ -36,3 +36,4 @@ I also wouldn't mind calling it `Festivus` (a programming language for the resto
 #### Other interesting links
   - [An Exhausting List of Differences Between VB.NET & C#](https://anthonydgreen.net/2019/02/12/exhausting-list-of-differences-between-vb-net-c/)
   - [“Go programmer claims he doesn’t need generics”](https://classicprogrammerpaintings.com/post/144854447139/go-programmer-claims-he-doesnt-need-generics)
+  - [The value in Go's simplicity](https://benjamincongdon.me/blog/2019/11/11/The-Value-in-Gos-Simplicity/)
