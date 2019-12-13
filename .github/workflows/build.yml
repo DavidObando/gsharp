@@ -17,3 +17,9 @@ jobs:
 
     - name: Build with dotnet
       run: dotnet build --configuration Release
+
+    - name: Train Intellicode Model
+      uses: osobeso/intellicode-team-model@v1
+      with: 
+        pat-token: ${{ secrets.VSIC_PAT_TOKEN }}
+        directory: ${{ github.workspace }}
