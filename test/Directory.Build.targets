@@ -3,13 +3,10 @@
   <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.targets" />
 
   <ItemGroup>
-    <PackageReference Include="@(FluentAssertionsPackageReference)" />
-    <PackageReference Include="@(MicrosoftAspNetCoreTestHostPackageReference)" />
+    <PackageReference Include="@(CoverletCollectorPackageReference)" />
     <PackageReference Include="@(MicrosoftNetTestSdkPackageReference)" />
-    <PackageReference Include="@(MoqPackageReference)" />
     <PackageReference Include="@(XunitPackageReference)" />
     <PackageReference Include="@(XunitRunnerVisualStudioPackageReference)" />
-    <PackageReference Include="@(XunitStaFactPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>
