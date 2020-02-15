@@ -17,8 +17,8 @@
 
   <!-- Frameworks Versions -->
   <PropertyGroup>
-    <NetCoreAppTargetFramework>netcoreapp2.2</NetCoreAppTargetFramework>
-    <NetStandardTargetFramework>netstandard2.0</NetStandardTargetFramework>
+    <NetCoreAppTargetFramework>netcoreapp3.1</NetCoreAppTargetFramework>
+    <NetStandardTargetFramework>netstandard2.1</NetStandardTargetFramework>
   </PropertyGroup>
 
   <!-- Package Reference Definitions -->

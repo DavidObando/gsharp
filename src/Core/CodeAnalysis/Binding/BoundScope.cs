@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         public BoundScope(BoundScope parent)
         {
             Parent = parent;
-            imports = parent?.imports;
+            imports = parent?.imports ?? new List<ImportSymbol>();
         }
 
         /// <summary>

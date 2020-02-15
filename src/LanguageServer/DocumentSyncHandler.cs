@@ -18,6 +18,7 @@ namespace GSharp.LanguageServer
     using OmniSharp.Extensions.LanguageServer.Protocol.Models;
     using OmniSharp.Extensions.LanguageServer.Protocol.Server;
     using OmniSharp.Extensions.LanguageServer.Protocol.Server.Capabilities;
+    using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
 
     /// <summary>
     /// GSharp validation handler.
