@@ -67,22 +67,19 @@ namespace GSharp.Core.CodeAnalysis.Binding
             => TryDeclareSymbol(function);
 
         /// <summary>
-        /// Tries to lookup a variable in this scope.
+        /// Tries to look up a symbol by its name in this scope.
         /// </summary>
-        /// <param name="name">The name of the variable.</param>
-        /// <param name="variable">The variable result, if found.</param>
-        /// <returns>Whether a variable was found or not.</returns>
-        public bool TryLookupVariable(string name, out VariableSymbol variable)
-            => TryLookupSymbol(name, out variable);
+        /// <param name="name">The symbol name.</param>
+        /// <returns>The symbol.</returns>
+        public Symbol TryLookupSymbol(string name)
+        {
+            if (symbols != null && symbols.TryGetValue(name, out var symbol))
+            {
+                return symbol;
+            }
 
-        /// <summary>
-        /// Tries to lookup a function in this scope.
-        /// </summary>
-        /// <param name="name">The function name.</param>
-        /// <param name="function">The function result, if found.</param>
-        /// <returns>Whether a function was found or not.</returns>
-        public bool TryLookupFunction(string name, out FunctionSymbol function)
-            => TryLookupSymbol(name, out function);
+            return Parent?.TryLookupSymbol(name);
+        }
 
         /// <summary>
         /// Tries to lookup an imported class.
@@ -157,30 +154,6 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             symbols.Add(symbol.Name, symbol);
             return true;
-        }
-
-        private bool TryLookupSymbol<TSymbol>(string name, out TSymbol symbol)
-            where TSymbol : Symbol
-        {
-            symbol = null;
-
-            if (symbols != null && symbols.TryGetValue(name, out var declaredSymbol))
-            {
-                if (declaredSymbol is TSymbol matchingSymbol)
-                {
-                    symbol = matchingSymbol;
-                    return true;
-                }
-
-                return false;
-            }
-
-            if (Parent == null)
-            {
-                return false;
-            }
-
-            return Parent.TryLookupSymbol(name, out symbol);
         }
 
         private ImmutableArray<TSymbol> GetDeclaredSymbols<TSymbol>()

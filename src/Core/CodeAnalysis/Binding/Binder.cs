@@ -229,7 +229,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
 
             var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax);
-            if (!scope.TryDeclareFunction(function))
+            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Span, function.Name);
             }
@@ -292,7 +292,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var type = BindTypeClause(syntax.TypeClause);
             var initializer = BindExpression(syntax.Initializer);
             var variableType = type ?? initializer.Type;
-            var variable = BindVariable(syntax.Identifier, isReadOnly, variableType);
+            var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType);
             var convertedInitializer = BindConversion(syntax.Initializer.Span, initializer, variableType);
 
             return new BoundVariableDeclaration(variable, convertedInitializer);
@@ -340,7 +340,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
             scope = new BoundScope(scope);
 
-            var variable = BindVariable(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int);
+            var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int);
             var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
 
             scope = scope.Parent;
@@ -487,9 +487,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 return new BoundErrorExpression();
             }
 
-            if (!scope.TryLookupVariable(name, out var variable))
+            var variable = BindVariableReference(name, syntax.IdentifierToken.Span);
+            if (variable == null)
             {
-                Diagnostics.ReportUndefinedName(syntax.IdentifierToken.Span, name);
                 return new BoundErrorExpression();
             }
 
@@ -501,9 +501,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var name = syntax.IdentifierToken.Text;
             var boundExpression = BindExpression(syntax.Expression);
 
-            if (!scope.TryLookupVariable(name, out var variable))
+            var variable = BindVariableReference(name, syntax.IdentifierToken.Span);
+            if (variable == null)
             {
-                Diagnostics.ReportUndefinedName(syntax.IdentifierToken.Span, name);
                 return boundExpression;
             }
 
@@ -573,9 +573,17 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 boundArguments.Add(boundArgument);
             }
 
-            if (!scope.TryLookupFunction(syntax.Identifier.Text, out var function))
+            var symbol = scope.TryLookupSymbol(syntax.Identifier.Text);
+            if (symbol == null)
             {
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Span, syntax.Identifier.Text);
+                return new BoundErrorExpression();
+            }
+
+            var function = symbol as FunctionSymbol;
+            if (function == null)
+            {
+                Diagnostics.ReportNotAFunction(syntax.Identifier.Span, syntax.Identifier.Text);
                 return new BoundErrorExpression();
             }
 
@@ -711,7 +719,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             return new BoundConversionExpression(type, expression);
         }
 
-        private VariableSymbol BindVariable(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
+        private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
         {
             var name = identifier.Text ?? "?";
             var declare = !identifier.IsMissing;
@@ -725,6 +733,23 @@ namespace GSharp.Core.CodeAnalysis.Binding
             }
 
             return variable;
+        }
+
+        private VariableSymbol BindVariableReference(string name, TextSpan span)
+        {
+            switch (scope.TryLookupSymbol(name))
+            {
+                case VariableSymbol variable:
+                    return variable;
+
+                case null:
+                    Diagnostics.ReportUndefinedVariable(span, name);
+                    return null;
+
+                default:
+                    Diagnostics.ReportNotAVariable(span, name);
+                    return null;
+            }
         }
 
         private TypeSymbol LookupType(string name)

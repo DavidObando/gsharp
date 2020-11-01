@@ -5,6 +5,7 @@
 namespace GSharp.Core.CodeAnalysis.Binding
 {
     using System;
+    using System.CodeDom.Compiler;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
@@ -87,7 +88,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         {
             string Quote(string text)
             {
-                return "\"" + text.Replace("\"", "\\\"") + "\"";
+                return "\"" + text.TrimEnd().Replace("\"", "\\\"").Replace(Environment.NewLine, "\\l") + "\"";
             }
 
             writer.WriteLine("digraph G {");
@@ -103,7 +104,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
             foreach (var block in Blocks)
             {
                 var id = blockIds[block];
-                var label = Quote(block.ToString().Replace(Environment.NewLine, "\\l"));
+                var label = Quote(block.ToString());
                 writer.WriteLine($"    {id} [label = {label} shape = box]");
             }
 
@@ -180,12 +181,15 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
                 using (var writer = new StringWriter())
                 {
-                    foreach (var statement in Statements)
+                    using (var indentedWriter = new IndentedTextWriter(writer))
                     {
-                        statement.WriteTo(writer);
-                    }
+                        foreach (var statement in Statements)
+                        {
+                            statement.WriteTo(indentedWriter);
+                        }
 
-                    return writer.ToString();
+                        return writer.ToString();
+                    }
                 }
             }
         }

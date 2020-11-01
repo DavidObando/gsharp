@@ -171,7 +171,7 @@ namespace GSharp.Core.CodeAnalysis
         /// <param name="returnType">The expected type.</param>
         public void ReportMissingReturnExpression(TextSpan span, TypeSymbol returnType)
         {
-            var message = $"An expression of type '{returnType}' expected.";
+            var message = $"An expression of type '{returnType}' is expected.";
             Report(span, message);
         }
 
@@ -190,9 +190,20 @@ namespace GSharp.Core.CodeAnalysis
         /// </summary>
         /// <param name="span">The text span where the error was found.</param>
         /// <param name="name">The name of the variable.</param>
-        public void ReportUndefinedName(TextSpan span, string name)
+        public void ReportUndefinedVariable(TextSpan span, string name)
         {
             var message = $"Variable '{name}' doesn't exist.";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports that a name doesn't belong to a variable.
+        /// </summary>
+        /// <param name="span">The text span where the error was found.</param>
+        /// <param name="name">The name of the variable.</param>
+        public void ReportNotAVariable(TextSpan span, string name)
+        {
+            var message = $"'{name}' is not a variable.";
             Report(span, message);
         }
 
@@ -240,6 +251,17 @@ namespace GSharp.Core.CodeAnalysis
         public void ReportUndefinedFunction(TextSpan span, string name)
         {
             var message = $"Function '{name}' doesn't exist.";
+            Report(span, message);
+        }
+
+        /// <summary>
+        /// Reports that the name doesn't belong to a function.
+        /// </summary>
+        /// <param name="span">The text span where the error was found.</param>
+        /// <param name="name">The function name.</param>
+        public void ReportNotAFunction(TextSpan span, string name)
+        {
+            var message = $"'{name}' is not a function.";
             Report(span, message);
         }
 
