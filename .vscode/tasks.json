@@ -4,33 +4,104 @@
         {
             "label": "build",
             "command": "dotnet",
-            "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/src/Interpreter/Interpreter.csproj"
+                "${workspaceFolder}/GSharp.sln"
             ],
-            "problemMatcher": "$tsc"
+            "type": "process",
+            "group": "build",
+            "problemMatcher": "$msCompile",
         },
         {
-            "label": "publish",
+            "label": "gsi",
             "command": "dotnet",
-            "type": "process",
+            "type": "shell",
             "args": [
-                "publish",
-                "${workspaceFolder}/src/Interpreter/Interpreter.csproj"
-            ],
-            "problemMatcher": "$tsc"
-        },
-        {
-            "label": "watch",
-            "command": "dotnet",
-            "type": "process",
-            "args": [
-                "watch",
                 "run",
+                "--project",
                 "${workspaceFolder}/src/Interpreter/Interpreter.csproj"
             ],
-            "problemMatcher": "$tsc"
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "problemMatcher": {
+                "fileLocation": "absolute",
+                "pattern": [
+                    {
+                        "regexp": "^(.*)\\((\\d,\\d\\,\\d\\,\\d\\))\\: (.*)$",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ]
+            }
+        },
+        {
+            "label": "gsif",
+            "command": "dotnet",
+            "type": "shell",
+            "args": [
+                "run",
+                "--project",
+                "${workspaceFolder}/src/Interpreter/Interpreter.csproj",
+                "--",
+                "${file}"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "problemMatcher": {
+                "fileLocation": "absolute",
+                "pattern": [
+                    {
+                        "regexp": "^(.*)\\((\\d:\\d\\,\\d\\:\\d\\))\\: (.*)$",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ]
+            }
+        },
+        {
+            "label": "gsc",
+            "command": "dotnet",
+            "type": "shell",
+            "args": [
+                "run",
+                "--project",
+                "${workspaceFolder}/src/Compiler/Compiler.csproj",
+                "--",
+                "${file}"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "problemMatcher": {
+                "fileLocation": "absolute",
+                "pattern": [
+                    {
+                        "regexp": "^(.*)\\((\\d,\\d\\,\\d\\,\\d\\))\\: (.*)$",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ]
+            }
         }
     ]
 }

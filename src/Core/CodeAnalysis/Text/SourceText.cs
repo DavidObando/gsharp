@@ -13,9 +13,10 @@ namespace GSharp.Core.CodeAnalysis.Text
     {
         private readonly string text;
 
-        private SourceText(string text)
+        private SourceText(string text, string fileName)
         {
             this.text = text;
+            FileName = fileName;
             Lines = ParseLines(this, text);
         }
 
@@ -30,6 +31,11 @@ namespace GSharp.Core.CodeAnalysis.Text
         public int Length => text.Length;
 
         /// <summary>
+        /// Gets the file name.
+        /// </summary>
+        public string FileName { get; }
+
+        /// <summary>
         /// Gets the character at the specified document index.
         /// </summary>
         /// <param name="index">The document index.</param>
@@ -40,10 +46,11 @@ namespace GSharp.Core.CodeAnalysis.Text
         /// Creates a source text document from a string.
         /// </summary>
         /// <param name="text">The string to wrap with a source text.</param>
+        /// <param name="fileName">Optional. The file name associated to this source text.</param>
         /// <returns>A hydrated source text instance.</returns>
-        public static SourceText From(string text)
+        public static SourceText From(string text, string fileName = "")
         {
-            return new SourceText(text);
+            return new SourceText(text, fileName);
         }
 
         /// <summary>

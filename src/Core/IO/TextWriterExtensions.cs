@@ -6,8 +6,12 @@ namespace GSharp.Core.IO
 {
     using System;
     using System.CodeDom.Compiler;
+    using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
+    using GSharp.Core.CodeAnalysis;
     using GSharp.Core.CodeAnalysis.Syntax;
+    using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
     /// Utility extensions to the <see cref="TextWriter"/> class.
@@ -101,6 +105,49 @@ namespace GSharp.Core.IO
             writer.SetForeground(ConsoleColor.DarkGray);
             writer.Write(text);
             writer.ResetColor();
+        }
+
+        /// <summary>
+        /// Writes the diagnostics to this text writer.
+        /// </summary>
+        /// <param name="writer">The text writer.</param>
+        /// <param name="diagnostics">The diagnostics.</param>
+        /// <param name="syntaxTree">The syntax tree that produced the diagnostics.</param>
+        public static void WriteDiagnostics(this TextWriter writer, IEnumerable<Diagnostic> diagnostics, SyntaxTree syntaxTree)
+        {
+            foreach (var diagnostic in diagnostics.OrderBy(diag => diag.Span.Start).ThenBy(diag => diag.Span.Length))
+            {
+                var textLocation = new TextLocation(syntaxTree.Text, diagnostic.Span);
+
+                writer.WriteLine();
+
+                writer.SetForeground(ConsoleColor.DarkRed);
+                writer.Write($"{textLocation.Text.FileName}({textLocation.StartLine + 1},{textLocation.StartCharacter + 1},{textLocation.EndLine + 1},{textLocation.EndCharacter + 1}): ");
+                writer.WriteLine(diagnostic);
+                writer.ResetColor();
+
+                var lineStart = syntaxTree.Text.Lines[textLocation.StartLine];
+                var lineEnd = syntaxTree.Text.Lines[textLocation.EndLine];
+                var prefixSpan = TextSpan.FromBounds(lineStart.Start, diagnostic.Span.Start);
+                var suffixSpan = TextSpan.FromBounds(diagnostic.Span.End, lineStart.End);
+
+                var prefix = syntaxTree.Text.ToString(prefixSpan);
+                var error = syntaxTree.Text.ToString(diagnostic.Span);
+                var suffix = syntaxTree.Text.ToString(suffixSpan);
+
+                writer.Write("    ");
+                writer.Write(prefix);
+
+                writer.SetForeground(ConsoleColor.DarkRed);
+                writer.Write(error);
+                writer.ResetColor();
+
+                writer.Write(suffix);
+
+                writer.WriteLine();
+            }
+
+            writer.WriteLine();
         }
 
         private static bool IsConsoleOut(this TextWriter writer)
