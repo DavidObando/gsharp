@@ -25,13 +25,13 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Core.Tests", "test\Core.Tes
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Interpreter", "src\Interpreter\Interpreter.csproj", "{3B003A65-1C59-4C42-9A9D-70FB365C962F}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "GSharpInputFiles", "GSharpInputFiles", "{A70F00FB-E49D-4C8D-9A84-D738524277AF}"
-	ProjectSection(SolutionItems) = preProject
-		test\GSharpInputFiles\HelloWorld.gs = test\GSharpInputFiles\HelloWorld.gs
-		test\GSharpInputFiles\Loop.gs = test\GSharpInputFiles\Loop.gs
-	EndProjectSection
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LanguageServer", "src\LanguageServer\LanguageServer.csproj", "{704E201F-254B-42B7-8EB1-A2AEAB240EFC}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Samples", "Samples", "{CEC3D4C6-AC8C-4439-985E-26F4935886B5}"
+	ProjectSection(SolutionItems) = preProject
+		samples\HelloWorld.gs = samples\HelloWorld.gs
+		samples\Loop.gs = samples\Loop.gs
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -68,7 +68,6 @@ Global
 		{5DBF9A1E-652B-47B3-A471-B6510A0E46EC} = {F1284A86-E814-4187-B20F-06B74D63C92F}
 		{0B2E708C-8B72-4EA7-A7AD-C47AC8EBCDCB} = {A181298C-7433-4724-808A-E343FC9DC633}
 		{3B003A65-1C59-4C42-9A9D-70FB365C962F} = {F1284A86-E814-4187-B20F-06B74D63C92F}
-		{A70F00FB-E49D-4C8D-9A84-D738524277AF} = {A181298C-7433-4724-808A-E343FC9DC633}
 		{704E201F-254B-42B7-8EB1-A2AEAB240EFC} = {F1284A86-E814-4187-B20F-06B74D63C92F}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution

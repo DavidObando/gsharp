@@ -6,6 +6,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 {
     using System.Collections.Generic;
     using System.Collections.Immutable;
+    using System.IO;
     using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
@@ -37,6 +38,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// Gets the compilation unit root.
         /// </summary>
         public CompilationUnitSyntax Root { get; }
+
+        /// <summary>
+        /// Parses the source text from the provided file path into a syntax tree.
+        /// </summary>
+        /// <param name="filePath">The source file path.</param>
+        /// <returns>A parsed syntax tree.</returns>
+        public static SyntaxTree Load(string filePath)
+        {
+            var text = File.ReadAllText(filePath);
+            var sourceText = SourceText.From(text, filePath);
+            return Parse(sourceText);
+        }
 
         /// <summary>
         /// Parses the source text into a syntax tree.
