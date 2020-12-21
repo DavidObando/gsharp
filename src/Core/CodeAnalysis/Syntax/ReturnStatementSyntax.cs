@@ -12,9 +12,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ReturnStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="returnKeyword">The return keyword.</param>
         /// <param name="expression">The expression.</param>
-        public ReturnStatementSyntax(SyntaxToken returnKeyword, ExpressionSyntax expression)
+        public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, ExpressionSyntax expression)
+            : base(syntaxTree)
         {
             ReturnKeyword = returnKeyword;
             Expression = expression;

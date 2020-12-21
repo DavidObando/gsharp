@@ -7,26 +7,25 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     using System.Collections.Generic;
     using System.Collections.Immutable;
     using System.Linq;
-    using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
     /// The GSharp language parser.
     /// </summary>
     public class Parser
     {
-        private readonly SourceText text;
+        private readonly SyntaxTree syntaxTree;
         private readonly ImmutableArray<SyntaxToken> tokens;
         private int position;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Parser"/> class.
         /// </summary>
-        /// <param name="text">The source document.</param>
-        public Parser(SourceText text)
+        /// <param name="syntaxTree">The source syntax tree object.</param>
+        public Parser(SyntaxTree syntaxTree)
         {
             var tokens = new List<SyntaxToken>();
 
-            var lexer = new Lexer(text);
+            var lexer = new Lexer(syntaxTree);
             SyntaxToken token;
             do
             {
@@ -41,7 +40,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             }
             while (token.Kind != SyntaxKind.EndOfFileToken);
 
-            this.text = text;
+            this.syntaxTree = syntaxTree;
             this.tokens = tokens.ToImmutableArray();
             Diagnostics.AddRange(lexer.Diagnostics);
         }
@@ -75,7 +74,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             }
 
             junction.AddRange(members);
-            return new CompilationUnitSyntax(junction.ToImmutable(), endOfFileToken);
+            return new CompilationUnitSyntax(syntaxTree, junction.ToImmutable(), endOfFileToken);
         }
 
         private PackageSyntax ParsePackage()
@@ -91,7 +90,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
                 }
 
-                return new PackageSyntax(packageKeyword, identifiers.ToImmutableArray());
+                return new PackageSyntax(syntaxTree, packageKeyword, identifiers.ToImmutableArray());
             }
 
             return null;
@@ -111,7 +110,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
                 }
 
-                importsBuilder.Add(new ImportSyntax(importKeyword, identifiers.ToImmutableArray()));
+                importsBuilder.Add(new ImportSyntax(syntaxTree, importKeyword, identifiers.ToImmutableArray()));
             }
 
             return importsBuilder.ToImmutable();
@@ -156,7 +155,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
             var type = ParseOptionalTypeClause();
             var body = ParseBlockStatement();
-            return new FunctionDeclarationSyntax(functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+            return new FunctionDeclarationSyntax(syntaxTree, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
         }
 
         private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()
@@ -189,13 +188,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         {
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
             var type = ParseTypeClause();
-            return new ParameterSyntax(identifier, type);
+            return new ParameterSyntax(syntaxTree, identifier, type);
         }
 
         private TypeClauseSyntax ParseTypeClause()
         {
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            return new TypeClauseSyntax(identifier);
+            return new TypeClauseSyntax(syntaxTree, identifier);
         }
 
         private TypeClauseSyntax ParseOptionalTypeClause()
@@ -230,13 +229,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 
             var closeBraceToken = MatchToken(SyntaxKind.CloseBraceToken);
 
-            return new BlockStatementSyntax(openBraceToken, statements.ToImmutable(), closeBraceToken);
+            return new BlockStatementSyntax(syntaxTree, openBraceToken, statements.ToImmutable(), closeBraceToken);
         }
 
         private MemberSyntax ParseGlobalStatement()
         {
             var statement = ParseStatement();
-            return new GlobalStatementSyntax(statement);
+            return new GlobalStatementSyntax(syntaxTree, statement);
         }
 
         private StatementSyntax ParseStatement()
@@ -278,6 +277,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
             var initializer = ParseExpression();
             return new VariableDeclarationSyntax(
+                syntaxTree: syntaxTree,
                 keyword: null,
                 identifier: identifier,
                 typeClause: null,
@@ -293,7 +293,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var typeClause = ParseOptionalTypeClause();
             var equals = MatchToken(SyntaxKind.EqualsToken);
             var initializer = ParseExpression();
-            return new VariableDeclarationSyntax(keyword, identifier, typeClause, equals, initializer);
+            return new VariableDeclarationSyntax(syntaxTree, keyword, identifier, typeClause, equals, initializer);
         }
 
         private StatementSyntax ParseIfStatement()
@@ -302,7 +302,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var condition = ParseExpression();
             var statement = ParseStatement();
             var elseClause = ParseElseClause();
-            return new IfStatementSyntax(keyword, condition, statement, elseClause);
+            return new IfStatementSyntax(syntaxTree, keyword, condition, statement, elseClause);
         }
 
         private ElseClauseSyntax ParseElseClause()
@@ -314,7 +314,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 
             var keyword = NextToken();
             var statement = ParseStatement();
-            return new ElseClauseSyntax(keyword, statement);
+            return new ElseClauseSyntax(syntaxTree, keyword, statement);
         }
 
         private StatementSyntax ParseForStatement()
@@ -331,7 +331,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         {
             var keyword = MatchToken(SyntaxKind.ForKeyword);
             var body = ParseStatement();
-            return new ForInfiniteStatementSyntax(keyword, body);
+            return new ForInfiniteStatementSyntax(syntaxTree, keyword, body);
         }
 
         private StatementSyntax ParseForEllipsisStatement()
@@ -343,36 +343,36 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var toKeyword = MatchToken(SyntaxKind.EllipsisToken);
             var upperBound = ParseExpression();
             var body = ParseStatement();
-            return new ForEllipsisStatementSyntax(keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
+            return new ForEllipsisStatementSyntax(syntaxTree, keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
         }
 
         private StatementSyntax ParseBreakStatement()
         {
             var keyword = MatchToken(SyntaxKind.BreakKeyword);
-            return new BreakStatementSyntax(keyword);
+            return new BreakStatementSyntax(syntaxTree, keyword);
         }
 
         private StatementSyntax ParseContinueStatement()
         {
             var keyword = MatchToken(SyntaxKind.ContinueKeyword);
-            return new ContinueStatementSyntax(keyword);
+            return new ContinueStatementSyntax(syntaxTree, keyword);
         }
 
         private StatementSyntax ParseReturnStatement()
         {
             var keyword = MatchToken(SyntaxKind.ReturnKeyword);
-            var keywordLine = text.GetLineIndex(keyword.Span.Start);
-            var currentLine = text.GetLineIndex(Current.Span.Start);
+            var keywordLine = syntaxTree.Text.GetLineIndex(keyword.Span.Start);
+            var currentLine = syntaxTree.Text.GetLineIndex(Current.Span.Start);
             var isEof = Current.Kind == SyntaxKind.EndOfFileToken;
             var sameLine = !isEof && keywordLine == currentLine;
             var expression = sameLine ? ParseExpression() : null;
-            return new ReturnStatementSyntax(keyword, expression);
+            return new ReturnStatementSyntax(syntaxTree, keyword, expression);
         }
 
         private ExpressionStatementSyntax ParseExpressionStatement()
         {
             var expression = ParseExpression();
-            return new ExpressionStatementSyntax(expression);
+            return new ExpressionStatementSyntax(syntaxTree, expression);
         }
 
         private ExpressionSyntax ParseExpression()
@@ -388,7 +388,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 var identifierToken = NextToken();
                 var operatorToken = NextToken();
                 var right = ParseAssignmentExpression();
-                return new AssignmentExpressionSyntax(identifierToken, operatorToken, right);
+                return new AssignmentExpressionSyntax(syntaxTree, identifierToken, operatorToken, right);
             }
 
             return ParseBinaryExpression();
@@ -402,7 +402,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             {
                 var operatorToken = NextToken();
                 var operand = ParseBinaryExpression(unaryOperatorPrecedence);
-                left = new UnaryExpressionSyntax(operatorToken, operand);
+                left = new UnaryExpressionSyntax(syntaxTree, operatorToken, operand);
             }
             else
             {
@@ -419,7 +419,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
 
                 var operatorToken = NextToken();
                 var right = ParseBinaryExpression(precedence);
-                left = new BinaryExpressionSyntax(left, operatorToken, right);
+                left = new BinaryExpressionSyntax(syntaxTree, left, operatorToken, right);
             }
 
             return left;
@@ -464,7 +464,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             {
                 var dotToken = MatchToken(SyntaxKind.DotToken);
                 var rightSide = ParseNameOrCallExpression();
-                current = new AccessorExpressionSyntax(current, dotToken, rightSide);
+                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
             }
 
             return current;
@@ -476,7 +476,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
             var arguments = ParseArguments();
             var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
-            return new CallExpressionSyntax(identifier, openParenthesisToken, arguments, closeParenthesisToken);
+            return new CallExpressionSyntax(syntaxTree, identifier, openParenthesisToken, arguments, closeParenthesisToken);
         }
 
         private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()
@@ -508,7 +508,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         private ExpressionSyntax ParseNameExpression()
         {
             var identifierToken = MatchToken(SyntaxKind.IdentifierToken);
-            return new NameExpressionSyntax(identifierToken);
+            return new NameExpressionSyntax(syntaxTree, identifierToken);
         }
 
         private ExpressionSyntax ParseParenthesizedExpression()
@@ -516,26 +516,26 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var left = MatchToken(SyntaxKind.OpenParenthesisToken);
             var expression = ParseExpression();
             var right = MatchToken(SyntaxKind.CloseParenthesisToken);
-            return new ParenthesizedExpressionSyntax(left, expression, right);
+            return new ParenthesizedExpressionSyntax(syntaxTree, left, expression, right);
         }
 
         private ExpressionSyntax ParseBooleanLiteral()
         {
             var isTrue = Current.Kind == SyntaxKind.TrueKeyword;
             var keywordToken = isTrue ? MatchToken(SyntaxKind.TrueKeyword) : MatchToken(SyntaxKind.FalseKeyword);
-            return new LiteralExpressionSyntax(keywordToken, isTrue);
+            return new LiteralExpressionSyntax(syntaxTree, keywordToken, isTrue);
         }
 
         private ExpressionSyntax ParseNumberLiteral()
         {
             var numberToken = MatchToken(SyntaxKind.NumberToken);
-            return new LiteralExpressionSyntax(numberToken);
+            return new LiteralExpressionSyntax(syntaxTree, numberToken);
         }
 
         private ExpressionSyntax ParseStringLiteral()
         {
             var stringToken = MatchToken(SyntaxKind.StringToken);
-            return new LiteralExpressionSyntax(stringToken);
+            return new LiteralExpressionSyntax(syntaxTree, stringToken);
         }
 
         private SyntaxToken Peek(int offset)
@@ -564,7 +564,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             }
 
             Diagnostics.ReportUnexpectedToken(Current.Span, Current.Kind, kind);
-            return new SyntaxToken(kind, Current.Position, null, null);
+            return new SyntaxToken(syntaxTree, kind, Current.Position, null, null);
         }
     }
 }

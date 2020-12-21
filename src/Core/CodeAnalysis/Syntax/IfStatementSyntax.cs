@@ -12,15 +12,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="IfStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="ifKeyword">The if keyword.</param>
         /// <param name="condition">The condition expression.</param>
         /// <param name="thenStatement">The then statement.</param>
         /// <param name="elseClause">The else clause.</param>
         public IfStatementSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken ifKeyword,
             ExpressionSyntax condition,
             StatementSyntax thenStatement,
             ElseClauseSyntax elseClause)
+            : base(syntaxTree)
         {
             IfKeyword = ifKeyword;
             Condition = condition;

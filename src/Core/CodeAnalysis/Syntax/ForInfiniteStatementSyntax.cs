@@ -12,11 +12,14 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ForInfiniteStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="keyword">The for keyword.</param>
         /// <param name="body">The body statement.</param>
         public ForInfiniteStatementSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken keyword,
             StatementSyntax body)
+            : base(syntaxTree)
         {
             Keyword = keyword;
             Body = body;

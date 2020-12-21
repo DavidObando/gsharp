@@ -9,5 +9,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// </summary>
     public abstract class MemberSyntax : SyntaxNode
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MemberSyntax"/> class.
+        /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
+        protected MemberSyntax(SyntaxTree syntaxTree)
+            : base(syntaxTree)
+        {
+        }
     }
 }

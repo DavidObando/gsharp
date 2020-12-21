@@ -12,9 +12,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ElseClauseSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="elseKeyword">The else keyword.</param>
         /// <param name="elseStatement">The else statement.</param>
-        public ElseClauseSyntax(SyntaxToken elseKeyword, StatementSyntax elseStatement)
+        public ElseClauseSyntax(SyntaxTree syntaxTree, SyntaxToken elseKeyword, StatementSyntax elseStatement)
+            : base(syntaxTree)
         {
             ElseKeyword = elseKeyword;
             ElseStatement = elseStatement;

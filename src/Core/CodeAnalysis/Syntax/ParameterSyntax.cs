@@ -12,9 +12,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ParameterSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="identifier">The parameter identifier.</param>
         /// <param name="type">The parameter type.</param>
-        public ParameterSyntax(SyntaxToken identifier, TypeClauseSyntax type)
+        public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, TypeClauseSyntax type)
+            : base(syntaxTree)
         {
             Identifier = identifier;
             Type = type;

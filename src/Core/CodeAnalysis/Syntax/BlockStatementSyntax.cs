@@ -14,13 +14,16 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="BlockStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="openBraceToken">The open brace token.</param>
         /// <param name="statements">The immutable array of statements.</param>
         /// <param name="closeBraceToken">The close brace token.</param>
         public BlockStatementSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken openBraceToken,
             ImmutableArray<StatementSyntax> statements,
             SyntaxToken closeBraceToken)
+            : base(syntaxTree)
         {
             OpenBraceToken = openBraceToken;
             Statements = statements;

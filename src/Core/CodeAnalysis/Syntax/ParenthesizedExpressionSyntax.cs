@@ -12,10 +12,16 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ParenthesizedExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="openParenthesisToken">The open parenthesys token.</param>
         /// <param name="expression">The expression.</param>
         /// <param name="closeParenthesisToken">The close parenthesys token.</param>
-        public ParenthesizedExpressionSyntax(SyntaxToken openParenthesisToken, ExpressionSyntax expression, SyntaxToken closeParenthesisToken)
+        public ParenthesizedExpressionSyntax(
+            SyntaxTree syntaxTree,
+            SyntaxToken openParenthesisToken,
+            ExpressionSyntax expression,
+            SyntaxToken closeParenthesisToken)
+            : base(syntaxTree)
         {
             OpenParenthesisToken = openParenthesisToken;
             Expression = expression;

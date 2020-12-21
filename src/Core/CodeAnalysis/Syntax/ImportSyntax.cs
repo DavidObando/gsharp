@@ -15,11 +15,14 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ImportSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="importKeyword">The import keyword.</param>
         /// <param name="identifiers">The identifiers.</param>
         public ImportSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken importKeyword,
             ImmutableArray<SyntaxToken> identifiers)
+            : base(syntaxTree)
         {
             ImportKeyword = importKeyword;
             IdentifiersWithDots = identifiers;
