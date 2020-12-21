@@ -96,6 +96,9 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 case BoundNodeKind.ConversionExpression:
                     WriteConversionExpression((BoundConversionExpression)node, writer);
                     break;
+                case BoundNodeKind.ImportedCallExpression:
+                    WriteImportedCallExpression((BoundImportedCallExpression)node, writer);
+                    break;
                 default:
                     throw new Exception($"Unexpected node {node.Kind}");
             }
@@ -377,6 +380,32 @@ namespace GSharp.Core.CodeAnalysis.Binding
             writer.WriteIdentifier(node.Type.Name);
             writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
             node.Expression.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+        }
+
+        private static void WriteImportedCallExpression(BoundImportedCallExpression node, IndentedTextWriter writer)
+        {
+            writer.WriteIdentifier(node.Function.ImportedClass.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+            writer.WriteIdentifier(node.Function.Name);
+            writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+
+            var isFirst = true;
+            foreach (var argument in node.Arguments)
+            {
+                if (isFirst)
+                {
+                    isFirst = false;
+                }
+                else
+                {
+                    writer.WritePunctuation(SyntaxKind.CommaToken);
+                    writer.WriteSpace();
+                }
+
+                argument.WriteTo(writer);
+            }
+
             writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
         }
     }
