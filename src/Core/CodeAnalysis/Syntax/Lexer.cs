@@ -13,6 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// </summary>
     public sealed class Lexer
     {
+        private readonly SyntaxTree syntaxTree;
         private readonly SourceText text;
 
         private int position;
@@ -24,10 +25,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="Lexer"/> class.
         /// </summary>
-        /// <param name="text">The source text document to lex from.</param>
-        public Lexer(SourceText text)
+        /// <param name="syntaxTree">The source syntax tree that contains the text document to lex from.</param>
+        public Lexer(SyntaxTree syntaxTree)
         {
-            this.text = text;
+            this.syntaxTree = syntaxTree;
+            this.text = syntaxTree.Text;
         }
 
         /// <summary>
@@ -386,7 +388,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 text = this.text.ToString(start, length);
             }
 
-            return new SyntaxToken(kind, start, text, value);
+            return new SyntaxToken(syntaxTree, kind, start, text, value);
         }
 
         private char Peek(int offset)

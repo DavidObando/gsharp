@@ -14,15 +14,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// </summary>
     public class SyntaxTree
     {
-        private SyntaxTree(SourceText text)
+        private SyntaxTree(SourceText text,  ParseHandler handler)
         {
-            var parser = new Parser(text);
-            var root = parser.ParseCompilationUnit();
-
             Text = text;
-            Diagnostics = parser.Diagnostics.ToImmutableArray();
+            handler(this, out var root, out var diagnostics);
             Root = root;
+            Diagnostics = diagnostics;
         }
+
+        private delegate void ParseHandler(
+            SyntaxTree syntaxTree,
+            out CompilationUnitSyntax root,
+            out ImmutableArray<Diagnostic> diagnostics);
 
         /// <summary>
         /// Gets the source text.
@@ -69,7 +72,14 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <returns>A parsed syntax tree.</returns>
         public static SyntaxTree Parse(SourceText text)
         {
-            return new SyntaxTree(text);
+            static void Parse(SyntaxTree syntaxTree, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> diagnostics)
+            {
+                var parser = new Parser(syntaxTree);
+                root = parser.ParseCompilationUnit();
+                diagnostics = parser.Diagnostics.ToImmutableArray();
+            }
+
+            return new SyntaxTree(text, Parse);
         }
 
         /// <summary>
@@ -113,24 +123,30 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <returns>The tokens in the source text.</returns>
         public static ImmutableArray<SyntaxToken> ParseTokens(SourceText text, out ImmutableArray<Diagnostic> diagnostics)
         {
-            IEnumerable<SyntaxToken> LexTokens(Lexer lexer)
+            var tokens = new List<SyntaxToken>();
+
+            void ParseTokens(SyntaxTree st, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> d)
             {
+                root = null;
+                var l = new Lexer(st);
                 while (true)
                 {
-                    var token = lexer.Lex();
+                    var token = l.Lex();
                     if (token.Kind == SyntaxKind.EndOfFileToken)
                     {
+                        root = new CompilationUnitSyntax(st, ImmutableArray<MemberSyntax>.Empty, token);
                         break;
                     }
 
-                    yield return token;
+                    tokens.Add(token);
                 }
+
+                d = l.Diagnostics.ToImmutableArray();
             }
 
-            var l = new Lexer(text);
-            var result = LexTokens(l).ToImmutableArray();
-            diagnostics = l.Diagnostics.ToImmutableArray();
-            return result;
+            var syntaxTree = new SyntaxTree(text, ParseTokens);
+            diagnostics = syntaxTree.Diagnostics;
+            return tokens.ToImmutableArray();
         }
     }
 }

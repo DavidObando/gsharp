@@ -14,11 +14,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="SyntaxToken"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="kind">The kind of syntax token.</param>
         /// <param name="position">The position of the syntax token.</param>
         /// <param name="text">The text of the syntax token.</param>
         /// <param name="value">The value of the syntax token.</param>
-        public SyntaxToken(SyntaxKind kind, int position, string text, object value)
+        public SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object value)
+            : base(syntaxTree)
         {
             Kind = kind;
             Position = position;

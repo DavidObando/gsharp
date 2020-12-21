@@ -17,6 +17,15 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     public abstract class SyntaxNode
     {
         /// <summary>
+        /// Initializes a new instance of the <see cref="SyntaxNode"/> class.
+        /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
+        protected SyntaxNode(SyntaxTree syntaxTree)
+        {
+            SyntaxTree = syntaxTree;
+        }
+
+        /// <summary>
         /// Gets the kind of syntax of this type.
         /// </summary>
         public abstract SyntaxKind Kind { get; }
@@ -33,6 +42,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 return TextSpan.FromBounds(first.Start, last.End);
             }
         }
+
+        /// <summary>
+        /// Gets the parent syntax tree for this syntax node.
+        /// </summary>
+        public SyntaxTree SyntaxTree { get; }
 
         /// <summary>
         /// Gets an enumeration of all the children of this syntax node.

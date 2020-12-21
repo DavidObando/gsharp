@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="TypeClauseSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="identifier">The type clause identifier.</param>
-        public TypeClauseSyntax(SyntaxToken identifier)
+        public TypeClauseSyntax(SyntaxTree syntaxTree, SyntaxToken identifier)
+            : base(syntaxTree)
         {
             Identifier = identifier;
         }

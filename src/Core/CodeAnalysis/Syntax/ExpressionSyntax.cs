@@ -9,5 +9,13 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     /// </summary>
     public abstract class ExpressionSyntax : SyntaxNode
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ExpressionSyntax"/> class.
+        /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
+        protected ExpressionSyntax(SyntaxTree syntaxTree)
+            : base(syntaxTree)
+        {
+        }
     }
 }

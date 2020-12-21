@@ -12,10 +12,12 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="BinaryExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="left">The left side of the binary expression.</param>
         /// <param name="operatorToken">The operator.</param>
         /// <param name="right">The right side of the binary expression.</param>
-        public BinaryExpressionSyntax(ExpressionSyntax left, SyntaxToken operatorToken, ExpressionSyntax right)
+        public BinaryExpressionSyntax(SyntaxTree syntaxTree, ExpressionSyntax left, SyntaxToken operatorToken, ExpressionSyntax right)
+            : base(syntaxTree)
         {
             Left = left;
             OperatorToken = operatorToken;

@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ContinueStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="keyword">The continue keyword.</param>
-        public ContinueStatementSyntax(SyntaxToken keyword)
+        public ContinueStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
+            : base(syntaxTree)
         {
             Keyword = keyword;
         }

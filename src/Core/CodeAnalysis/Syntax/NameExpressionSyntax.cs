@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="NameExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="identifierToken">The identifier.</param>
-        public NameExpressionSyntax(SyntaxToken identifierToken)
+        public NameExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken identifierToken)
+            : base(syntaxTree)
         {
             IdentifierToken = identifierToken;
         }

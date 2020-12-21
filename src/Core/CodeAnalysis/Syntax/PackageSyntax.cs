@@ -15,11 +15,14 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="PackageSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="packageKeyword">The package keyword.</param>
         /// <param name="identifiers">The package identifiers.</param>
         public PackageSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken packageKeyword,
             ImmutableArray<SyntaxToken> identifiers)
+            : base(syntaxTree)
         {
             PackageKeyword = packageKeyword;
             IdentifiersWithDots = identifiers;

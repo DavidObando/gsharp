@@ -12,6 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="functionKeyword">The func keyword.</param>
         /// <param name="identifier">The function identifier.</param>
         /// <param name="openParenthesisToken">The open parenthesis token.</param>
@@ -20,6 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <param name="type">The function's type.</param>
         /// <param name="body">The function's body.</param>
         public FunctionDeclarationSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken functionKeyword,
             SyntaxToken identifier,
             SyntaxToken openParenthesisToken,
@@ -27,6 +29,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             SyntaxToken closeParenthesisToken,
             TypeClauseSyntax type,
             BlockStatementSyntax body)
+            : base(syntaxTree)
         {
             FunctionKeyword = functionKeyword;
             Identifier = identifier;

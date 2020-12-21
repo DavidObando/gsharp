@@ -12,18 +12,21 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="LiteralExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="literalToken">The literal token.</param>
-        public LiteralExpressionSyntax(SyntaxToken literalToken)
-            : this(literalToken, literalToken.Value)
+        public LiteralExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken literalToken)
+            : this(syntaxTree, literalToken, literalToken.Value)
         {
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="LiteralExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="literalToken">The literal token.</param>
         /// <param name="value">The literal expression value.</param>
-        public LiteralExpressionSyntax(SyntaxToken literalToken, object value)
+        public LiteralExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken literalToken, object value)
+            : base(syntaxTree)
         {
             LiteralToken = literalToken;
             Value = value;

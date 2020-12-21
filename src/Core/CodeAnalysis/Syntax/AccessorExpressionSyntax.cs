@@ -12,13 +12,16 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="AccessorExpressionSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="leftPart">The left part.</param>
         /// <param name="dotToken">The dot token.</param>
         /// <param name="rightPart">The right part.</param>
         public AccessorExpressionSyntax(
+            SyntaxTree syntaxTree,
             ExpressionSyntax leftPart,
             SyntaxToken dotToken,
             ExpressionSyntax rightPart)
+            : base(syntaxTree)
         {
             LeftPart = leftPart;
             DotToken = dotToken;

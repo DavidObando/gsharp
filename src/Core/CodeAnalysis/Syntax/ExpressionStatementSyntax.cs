@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ExpressionStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="expression">The expression.</param>
-        public ExpressionStatementSyntax(ExpressionSyntax expression)
+        public ExpressionStatementSyntax(SyntaxTree syntaxTree, ExpressionSyntax expression)
+            : base(syntaxTree)
         {
             Expression = expression;
         }

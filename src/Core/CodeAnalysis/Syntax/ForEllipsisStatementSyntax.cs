@@ -12,6 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="ForEllipsisStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="keyword">The for keyword.</param>
         /// <param name="identifier">The variable identifier.</param>
         /// <param name="colonEqualsToken">The colon equals token.</param>
@@ -20,6 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <param name="upperBound">The upper bound expression.</param>
         /// <param name="body">The body statement.</param>
         public ForEllipsisStatementSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken keyword,
             SyntaxToken identifier,
             SyntaxToken colonEqualsToken,
@@ -27,6 +29,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             SyntaxToken ellipsisToken,
             ExpressionSyntax upperBound,
             StatementSyntax body)
+            : base(syntaxTree)
         {
             Keyword = keyword;
             Identifier = identifier;

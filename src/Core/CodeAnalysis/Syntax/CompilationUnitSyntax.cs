@@ -14,9 +14,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="CompilationUnitSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="members">The members of this compilation unit.</param>
         /// <param name="endOfFileToken">The end of file token.</param>
-        public CompilationUnitSyntax(ImmutableArray<MemberSyntax> members, SyntaxToken endOfFileToken)
+        public CompilationUnitSyntax(SyntaxTree syntaxTree, ImmutableArray<MemberSyntax> members, SyntaxToken endOfFileToken)
+            : base(syntaxTree)
         {
             Members = members;
             EndOfFileToken = endOfFileToken;

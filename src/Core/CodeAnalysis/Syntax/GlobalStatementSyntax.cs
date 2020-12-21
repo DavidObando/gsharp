@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="GlobalStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="statement">The statements to include.</param>
-        public GlobalStatementSyntax(StatementSyntax statement)
+        public GlobalStatementSyntax(SyntaxTree syntaxTree, StatementSyntax statement)
+            : base(syntaxTree)
         {
             Statement = statement;
         }

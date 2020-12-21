@@ -12,17 +12,20 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="VariableDeclarationSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="keyword">The var keyword.</param>
         /// <param name="identifier">The variable identifier.</param>
         /// <param name="typeClause">The optional type clause.</param>
         /// <param name="equalsToken">The equals token.</param>
         /// <param name="initializer">The initializer expression.</param>
         public VariableDeclarationSyntax(
+            SyntaxTree syntaxTree,
             SyntaxToken keyword,
             SyntaxToken identifier,
             TypeClauseSyntax typeClause,
             SyntaxToken equalsToken,
             ExpressionSyntax initializer)
+            : base(syntaxTree)
         {
             Keyword = keyword;
             Identifier = identifier;

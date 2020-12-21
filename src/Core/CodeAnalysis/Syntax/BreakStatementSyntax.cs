@@ -12,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// <summary>
         /// Initializes a new instance of the <see cref="BreakStatementSyntax"/> class.
         /// </summary>
+        /// <param name="syntaxTree">The parent syntax tree.</param>
         /// <param name="keyword">The break keyword.</param>
-        public BreakStatementSyntax(SyntaxToken keyword)
+        public BreakStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
+            : base(syntaxTree)
         {
             Keyword = keyword;
         }
