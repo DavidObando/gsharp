@@ -148,13 +148,13 @@ namespace GSharp.LanguageServer
             this.documentContentService.AddOrUpdate(documentUri.ToString(), new DocumentContent(syntaxTree, newLines));
             foreach (var syntaxTreeDiagnostics in syntaxTree.Diagnostics)
             {
-                int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Span.Start);
+                int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Location.Span.Start);
                 int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
                 diagnostics.Add(new Diagnostic()
                 {
                     Code = new DiagnosticCode("Syntax"),
                     Message = syntaxTreeDiagnostics.Message,
-                    Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
+                    Range = new Range(new Position(line, syntaxTreeDiagnostics.Location.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Location.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
                     Source = Constants.LanguageIdentifier,
                 });
@@ -163,13 +163,13 @@ namespace GSharp.LanguageServer
             var compilation = new Compilation(syntaxTree);
             foreach (var syntaxTreeDiagnostics in compilation.GlobalScope.Diagnostics)
             {
-                int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Span.Start);
+                int line = newLines.Count(charNumber => charNumber < syntaxTreeDiagnostics.Location.Span.Start);
                 int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
                 diagnostics.Add(new Diagnostic()
                 {
                     Code = new DiagnosticCode("Semantic"),
                     Message = syntaxTreeDiagnostics.Message,
-                    Range = new Range(new Position(line, syntaxTreeDiagnostics.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Span.End - lineStart)),
+                    Range = new Range(new Position(line, syntaxTreeDiagnostics.Location.Span.Start - lineStart), new Position(line, syntaxTreeDiagnostics.Location.Span.End - lineStart)),
                     Severity = DiagnosticSeverity.Error,
                     Source = Constants.LanguageIdentifier,
                 });
@@ -180,13 +180,13 @@ namespace GSharp.LanguageServer
                 var program = Binder.BindProgram(compilation.GlobalScope);
                 foreach (var bindingDiagnostics in program.Diagnostics)
                 {
-                    int line = newLines.Count(charNumber => charNumber < bindingDiagnostics.Span.Start);
+                    int line = newLines.Count(charNumber => charNumber < bindingDiagnostics.Location.Span.Start);
                     int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
                     diagnostics.Add(new Diagnostic()
                     {
                         Code = new DiagnosticCode("Binding"),
                         Message = bindingDiagnostics.Message,
-                        Range = new Range(new Position(line, bindingDiagnostics.Span.Start - lineStart), new Position(line, bindingDiagnostics.Span.End - lineStart)),
+                        Range = new Range(new Position(line, bindingDiagnostics.Location.Span.Start - lineStart), new Position(line, bindingDiagnostics.Location.Span.End - lineStart)),
                         Severity = DiagnosticSeverity.Error,
                         Source = Constants.LanguageIdentifier,
                     });

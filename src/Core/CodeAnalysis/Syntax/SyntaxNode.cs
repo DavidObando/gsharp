@@ -44,6 +44,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         }
 
         /// <summary>
+        /// Gets the location of this syntax node.
+        /// </summary>
+        public virtual TextLocation Location => new TextLocation(SyntaxTree.Text, Span);
+
+        /// <summary>
         /// Gets the parent syntax tree for this syntax node.
         /// </summary>
         public SyntaxTree SyntaxTree { get; }
