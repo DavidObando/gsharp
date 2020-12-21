@@ -9,7 +9,7 @@ namespace GSharp.Core.CodeAnalysis.Text
     /// <summary>
     /// An abstraction of a source text and a text span within the source text.
     /// </summary>
-    public struct TextLocation
+    public struct TextLocation : IComparable<TextLocation>
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="TextLocation"/> struct.
@@ -51,5 +51,21 @@ namespace GSharp.Core.CodeAnalysis.Text
         /// Gets the zero-based end line character as indicated by the text span.
         /// </summary>
         public int EndCharacter => Span.End - Text.Lines[EndLine].Start;
+
+        /// <summary>
+        /// Compares two text locations, useful for sorting sets of text locations.
+        /// </summary>
+        /// <param name="other">The text location to compare to.</param>
+        /// <returns>A value indicating the relation of the first text span to the second one.</returns>
+        public int CompareTo(TextLocation other)
+        {
+            int cmp = Text.FileName.CompareTo(other.Text.FileName);
+            if (cmp == 0)
+            {
+                cmp = Span.CompareTo(other.Span);
+            }
+
+            return cmp;
+        }
     }
 }
