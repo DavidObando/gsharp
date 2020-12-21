@@ -33,7 +33,7 @@
                 "fileLocation": "absolute",
                 "pattern": [
                     {
-                        "regexp": "^(.*)\\((\\d,\\d\\,\\d\\,\\d\\))\\: (.*)$",
+                        "regexp": "^(.*)\\((\\d+,\\d+\\,\\d+\\,\\d+\\))\\: (.*)$",
                         "file": 1,
                         "location": 2,
                         "message": 3
@@ -64,7 +64,7 @@
                 "fileLocation": "absolute",
                 "pattern": [
                     {
-                        "regexp": "^(.*)\\((\\d:\\d\\,\\d\\:\\d\\))\\: (.*)$",
+                        "regexp": "^(.*)\\((\\d+,\\d+\\,\\d+\\,\\d+\\))\\: (.*)$",
                         "file": 1,
                         "location": 2,
                         "message": 3
@@ -95,7 +95,7 @@
                 "fileLocation": "absolute",
                 "pattern": [
                     {
-                        "regexp": "^(.*)\\((\\d,\\d\\,\\d\\,\\d\\))\\: (.*)$",
+                        "regexp": "^(.*)\\((\\d+,\\d+\\,\\d+\\,\\d+\\))\\: (.*)$",
                         "file": 1,
                         "location": 2,
                         "message": 3
