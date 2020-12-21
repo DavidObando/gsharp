@@ -14,18 +14,18 @@ namespace GSharp.Core.CodeAnalysis
         /// <summary>
         /// Initializes a new instance of the <see cref="Diagnostic"/> class.
         /// </summary>
-        /// <param name="span">Text span in the document where this diagnostic information originates from.</param>
+        /// <param name="location">Text location in the document where this diagnostic information originates from.</param>
         /// <param name="message">Diagnostic information message.</param>
-        public Diagnostic(TextSpan span, string message)
+        public Diagnostic(TextLocation location, string message)
         {
-            Span = span;
+            Location = location;
             Message = message;
         }
 
         /// <summary>
-        /// Gets the text span in the document where this diagnostic information originates from.
+        /// Gets the text location in the document where this diagnostic information originates from.
         /// </summary>
-        public TextSpan Span { get; }
+        public TextLocation Location { get; }
 
         /// <summary>
         /// Gets the diagnostic information message.

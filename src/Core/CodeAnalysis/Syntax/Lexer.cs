@@ -374,7 +374,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     }
                     else
                     {
-                        Diagnostics.ReportBadCharacter(position, Current);
+                        var location = new TextLocation(this.text, new TextSpan(position, 1));
+                        Diagnostics.ReportBadCharacter(location, Current);
                         position++;
                     }
 
@@ -447,8 +448,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 switch (Current)
                 {
                     case '\0':
-                        var span = new TextSpan(start, position - start);
-                        Diagnostics.ReportUnterminatedComment(span);
+                        var location = new TextLocation(this.text, new TextSpan(start, position - start));
+                        Diagnostics.ReportUnterminatedComment(location);
                         done = true;
                         break;
                     case '*':
@@ -490,8 +491,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                     case '\0':
                     case '\r':
                     case '\n':
-                        var span = new TextSpan(start, 1);
-                        Diagnostics.ReportUnterminatedString(span);
+                        var location = new TextLocation(this.text, new TextSpan(start, 1));
+                        Diagnostics.ReportUnterminatedString(location);
                         done = true;
                         break;
                     case '"':
@@ -539,7 +540,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax
             var text = this.text.ToString(start, length);
             if (!int.TryParse(text, out var value))
             {
-                Diagnostics.ReportInvalidNumber(new TextSpan(start, length), text, TypeSymbol.Int);
+                var location = new TextLocation(this.text, new TextSpan(start, length));
+                Diagnostics.ReportInvalidNumber(location, text, TypeSymbol.Int);
             }
 
             this.value = value;

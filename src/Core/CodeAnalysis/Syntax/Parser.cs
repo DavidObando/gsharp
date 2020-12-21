@@ -7,6 +7,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     using System.Collections.Generic;
     using System.Collections.Immutable;
     using System.Linq;
+    using GSharp.Core.CodeAnalysis.Text;
 
     /// <summary>
     /// The GSharp language parser.
@@ -563,7 +564,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax
                 return NextToken();
             }
 
-            Diagnostics.ReportUnexpectedToken(Current.Span, Current.Kind, kind);
+            Diagnostics.ReportUnexpectedToken(new TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind);
             return new SyntaxToken(syntaxTree, kind, Current.Position, null, null);
         }
     }
