@@ -115,7 +115,7 @@ namespace GSharp.Core.IO
         /// <param name="syntaxTree">The syntax tree that produced the diagnostics.</param>
         public static void WriteDiagnostics(this TextWriter writer, IEnumerable<Diagnostic> diagnostics, SyntaxTree syntaxTree)
         {
-            foreach (var diagnostic in diagnostics.OrderBy(diag => diag.Location.Span.Start).ThenBy(diag => diag.Location.Span.Length))
+            foreach (var diagnostic in diagnostics.OrderBy(diag => diag.Location))
             {
                 writer.WriteLine();
 
