@@ -53,6 +53,11 @@ namespace GSharp.Core.CodeAnalysis.Text
         public int EndCharacter => Span.End - Text.Lines[EndLine].Start;
 
         /// <summary>
+        /// Gets the file name.
+        /// </summary>
+        public string FileName => Text.FileName;
+
+        /// <summary>
         /// Compares two text locations, useful for sorting sets of text locations.
         /// </summary>
         /// <param name="other">The text location to compare to.</param>

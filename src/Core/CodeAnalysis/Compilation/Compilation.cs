@@ -28,16 +28,16 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// <summary>
         /// Initializes a new instance of the <see cref="Compilation"/> class.
         /// </summary>
-        /// <param name="syntaxTree">The syntax tree.</param>
-        public Compilation(SyntaxTree syntaxTree)
-            : this(null, syntaxTree)
+        /// <param name="syntaxTrees">The syntax trees.</param>
+        public Compilation(params SyntaxTree[] syntaxTrees)
+            : this(null, syntaxTrees)
         {
         }
 
-        private Compilation(Compilation previous, SyntaxTree syntaxTree)
+        private Compilation(Compilation previous, SyntaxTree[] syntaxTrees)
         {
             Previous = previous;
-            SyntaxTree = syntaxTree;
+            SyntaxTrees = syntaxTrees.ToImmutableArray();
         }
 
         /// <summary>
@@ -46,9 +46,9 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         public Compilation Previous { get; }
 
         /// <summary>
-        /// Gets the syntax tree.
+        /// Gets the syntax trees.
         /// </summary>
-        public SyntaxTree SyntaxTree { get; }
+        public ImmutableArray<SyntaxTree> SyntaxTrees { get; }
 
         /// <summary>
         /// Gets the global scope.
@@ -59,7 +59,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
             {
                 if (globalScope == null)
                 {
-                    var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTree.Root);
+                    var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees);
                     Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
                 }
 
@@ -71,11 +71,11 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// Continue the compilation with the specified syntax tree chained to the
         /// current compilation.
         /// </summary>
-        /// <param name="syntaxTree">The new syntax tree.</param>
+        /// <param name="syntaxTrees">The new syntax trees.</param>
         /// <returns>The chained compilation.</returns>
-        public Compilation ContinueWith(SyntaxTree syntaxTree)
+        public Compilation ContinueWith(params SyntaxTree[] syntaxTrees)
         {
-            return new Compilation(this, syntaxTree);
+            return new Compilation(this, syntaxTrees);
         }
 
         /// <summary>
@@ -85,7 +85,8 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// <returns>An evaluation result.</returns>
         public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables)
         {
-            var diagnostics = SyntaxTree.Diagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
+            var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
+            var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
             if (diagnostics.Any())
             {
                 return new EvaluationResult(diagnostics, null);
@@ -148,7 +149,8 @@ namespace GSharp.Core.CodeAnalysis.Compilation
         /// <returns>An emit result.</returns>
         public EmitResult Emit()
         {
-            var syntaxDiagnostics = SyntaxTree.Diagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
+            var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
+            var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
             if (syntaxDiagnostics.Any())
             {
                 return new EmitResult(success: false, syntaxDiagnostics);

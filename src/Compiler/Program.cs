@@ -19,6 +19,9 @@ namespace GSharp.Compiler
     /// </summary>
     public class Program
     {
+        private const int Success = 0;
+        private const int Error = 1;
+
         /// <summary>
         /// Entry point to the GSharp compiler.
         /// </summary>
@@ -26,47 +29,46 @@ namespace GSharp.Compiler
         /// <returns>Exit code.</returns>
         public static int Main(string[] args)
         {
-            if (args?.Length > 0)
-            {
-                var arg0 = args[0];
-                if (arg0.Length > 0 &&
-                    arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
-                    File.Exists(args[0]))
-                {
-                    var success = Compile(arg0);
-                    if (success)
-                    {
-                        return 0;
-                    }
-                }
-                else
-                {
-                    Console.Error.WriteLine($"Unable to find specified file {arg0}");
-                }
-            }
-            else
+            if (args.Length == 0)
             {
                 Console.Error.WriteLine($"Must specify path to a file via arguments.");
+                return Error;
             }
 
-            return 1;
-        }
-
-        private static bool Compile(string filePath)
-        {
-            var syntaxTree = SyntaxTree.Load(filePath);
-            var compilation = new Compilation(syntaxTree);
-
-            // var result = compilation.Emit();
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            if (result.Diagnostics.Any())
+            var paths = args;
+            var syntaxTrees = new List<SyntaxTree>(paths.Length);
+            foreach (var path in paths)
             {
-                Console.Out.WriteDiagnostics(result.Diagnostics, syntaxTree);
-                Console.WriteLine("Failed.");
-                return false;
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine($"Unable to find specified file {path}");
+                    return Error;
+                }
+
+                syntaxTrees.Add(SyntaxTree.Load(path));
+            }
+
+            if (!Compile(syntaxTrees.ToArray()))
+            {
+                Console.Error.WriteLine("Failed.");
+                return Error;
             }
 
             Console.WriteLine("Success.");
+            return Success;
+        }
+
+        private static bool Compile(params SyntaxTree[] syntaxTrees)
+        {
+            var compilation = new Compilation(syntaxTrees);
+
+            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+            if (result.Diagnostics.Any())
+            {
+                Console.Out.WriteDiagnostics(result.Diagnostics);
+                return false;
+            }
+
             return true;
         }
     }

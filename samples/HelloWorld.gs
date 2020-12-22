@@ -2,8 +2,6 @@
 
 package HelloWorld
 
-import System;
+import System
 
-func Main() {
-  Console.WriteLine("Hello, world!");
-}
+Console.WriteLine("Hello, world!")
