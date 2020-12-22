@@ -50,41 +50,34 @@ namespace GSharp.Core.CodeAnalysis.Binding
         public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
 
         /// <summary>
-        /// Binds a compilation unit to the previous global scope, resulting in a new chained global scope.
+        /// Binds a set of syntax trees to the previous global scope, resulting in a new chained global scope.
         /// </summary>
         /// <param name="previous">The previous global scope.</param>
-        /// <param name="syntax">The new compilation unit.</param>
+        /// <param name="syntaxTrees">The new syntax trees.</param>
         /// <returns>The new chained bound global scope.</returns>
-        public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, CompilationUnitSyntax syntax)
+        public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees)
         {
             var parentScope = CreateParentScope(previous);
             var binder = new Binder(parentScope, function: null);
 
-            PackageSymbol packageSymbol;
-            var package = syntax.Members.OfType<PackageSyntax>().SingleOrDefault();
-            if (package == null)
-            {
-                packageSymbol = new PackageSymbol(name: "Default", declaration: null);
-            }
-            else
-            {
-                string packageName = string.Join(string.Empty, package.IdentifiersWithDots);
-                packageSymbol = new PackageSymbol(name: packageName, declaration: package);
-            }
-
-            foreach (var import in syntax.Members.OfType<ImportSyntax>())
+            var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                     .OfType<ImportSyntax>();
+            foreach (var import in importDeclarations)
             {
                 binder.BindImport(import);
             }
 
-            foreach (var function in syntax.Members.OfType<FunctionDeclarationSyntax>())
+            var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                                  .OfType<FunctionDeclarationSyntax>();
+            foreach (var function in functionDeclarations)
             {
                 binder.BindFunctionDeclaration(function);
             }
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-
-            foreach (var globalStatement in syntax.Members.OfType<GlobalStatementSyntax>())
+            var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
+                                              .OfType<GlobalStatementSyntax>();
+            foreach (var globalStatement in globalStatements)
             {
                 var statement = binder.BindStatement(globalStatement.Statement);
                 statements.Add(statement);
@@ -100,6 +93,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
                 diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
             }
 
+            var packageSymbol = new PackageSymbol(name: "Default", declaration: null);
             return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports, functions, variables, statements.ToImmutable());
         }
 
