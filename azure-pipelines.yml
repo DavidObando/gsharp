@@ -9,7 +9,7 @@ trigger:
   batch: false
   branches:
     include:
-    - master
+    - main
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -74,3 +74,6 @@ steps:
   displayName: 'Publish Artifact: drop'
   inputs:
     PathtoPublish: out/bin/Release
+- task: IntelliCodeTeamModels@1
+  inputs:
+    branch: 'main'
