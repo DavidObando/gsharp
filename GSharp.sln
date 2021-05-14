@@ -8,6 +8,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Build", "Build", "{92730C2B-ADEB-41BF-9DEC-78F35AB8FCAD}"
 	ProjectSection(SolutionItems) = preProject
 		build\.stylecop.json = build\.stylecop.json
+		global.json = global.json
 		build\gsharp.build.props = build\gsharp.build.props
 		build\gsharp.build.ruleset = build\gsharp.build.ruleset
 		build\gsharp.build.targets = build\gsharp.build.targets
