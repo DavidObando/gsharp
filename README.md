@@ -2,8 +2,6 @@
 GSharp Programming Language.
 A modern, simple, and accessible programming language for .NET.
 
-Hey!
-
 [![Build Status](https://dev.azure.com/gsharplang/gsharp/_apis/build/status/GSharp-CI?branchName=master)](https://dev.azure.com/gsharplang/gsharp/_build/latest?definitionId=3&branchName=main)
 
 ## Motivation 1: Accessibility
