@@ -30,7 +30,7 @@
     <SystemCollectionsImmutablePackageReference Include="System.Collections.Immutable" Version="1.5.0" />
     <SystemReflectionMetadataPackageReference Include="System.Reflection.Metadata" Version="1.6.0" />
     <!-- Design-time packages -->
-    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.3.37" PrivateAssets="All" />
+    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.4.244" PrivateAssets="All" />
     <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.1.0-beta009">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
