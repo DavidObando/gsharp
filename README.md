@@ -38,3 +38,5 @@ I also wouldn't mind calling it `Festivus` (a programming language for the resto
   - [“Go programmer claims he doesn’t need generics”](https://classicprogrammerpaintings.com/post/144854447139/go-programmer-claims-he-doesnt-need-generics)
   - [The value in Go's simplicity](https://benjamincongdon.me/blog/2019/11/11/The-Value-in-Gos-Simplicity/)
   - [Learn Go in ~5mins](https://gist.github.com/prologic/5f6afe9c1b98016ca278f4d507e65510)
+
+ab0678fa-3a72-487d-8eae-7cdec82efedf
