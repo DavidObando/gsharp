@@ -26,7 +26,7 @@ namespace GSharp.Interpreter
                 var arg0 = args[0];
                 if (arg0.Length > 0 &&
                     arg0.EndsWith(".gs", ignoreCase: true, culture: CultureInfo.InvariantCulture) &&
-                    File.Exists(args[0]))
+                    File.Exists(arg0))
                 {
                     var success = EvaluateFile(repl, arg0);
                     if (!success)
