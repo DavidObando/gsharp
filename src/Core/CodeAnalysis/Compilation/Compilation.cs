@@ -16,6 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation
     using GSharp.Core.CodeAnalysis.Binding;
     using GSharp.Core.CodeAnalysis.Symbols;
     using GSharp.Core.CodeAnalysis.Syntax;
+    using GSharp.Core.CodeAnalysis.Text;
     using Binder = GSharp.Core.CodeAnalysis.Binding.Binder;
 
     /// <summary>
@@ -112,8 +113,21 @@ namespace GSharp.Core.CodeAnalysis.Compilation
             }
 
             var evaluator = new Evaluator(program, variables);
-            var value = evaluator.Evaluate();
-            return new EvaluationResult(ImmutableArray<Diagnostic>.Empty, value);
+            try
+            {
+                var value = evaluator.Evaluate();
+                return new EvaluationResult(ImmutableArray<Diagnostic>.Empty, value);
+            }
+            catch (EvaluatorException ex)
+            {
+                using var textWriter = new StringWriter();
+                ex.Node?.WriteTo(textWriter);
+                var sourceText = SourceText.From(textWriter.ToString());
+                var location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
+                var message = ex.Message;
+                var diagnostic = new Diagnostic(location, message);
+                return new EvaluationResult(ImmutableArray.Create(diagnostic), null);
+            }
         }
 
         /// <summary>

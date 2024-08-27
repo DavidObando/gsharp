@@ -95,7 +95,7 @@ namespace GSharp.Core.CodeAnalysis
                         lastValue = rs.Expression == null ? null : EvaluateExpression(rs.Expression);
                         return lastValue;
                     default:
-                        throw new Exception($"Unexpected node {s.Kind}");
+                        throw new EvaluatorException($"Unexpected node {s.Kind}", s);
                 }
             }
 
@@ -116,26 +116,24 @@ namespace GSharp.Core.CodeAnalysis
 
         private object EvaluateExpression(BoundExpression node)
         {
-            switch (node.Kind)
+            try
             {
-                case BoundNodeKind.LiteralExpression:
-                    return EvaluateLiteralExpression((BoundLiteralExpression)node);
-                case BoundNodeKind.VariableExpression:
-                    return EvaluateVariableExpression((BoundVariableExpression)node);
-                case BoundNodeKind.AssignmentExpression:
-                    return EvaluateAssignmentExpression((BoundAssignmentExpression)node);
-                case BoundNodeKind.UnaryExpression:
-                    return EvaluateUnaryExpression((BoundUnaryExpression)node);
-                case BoundNodeKind.BinaryExpression:
-                    return EvaluateBinaryExpression((BoundBinaryExpression)node);
-                case BoundNodeKind.CallExpression:
-                    return EvaluateCallExpression((BoundCallExpression)node);
-                case BoundNodeKind.ConversionExpression:
-                    return EvaluateConversionExpression((BoundConversionExpression)node);
-                case BoundNodeKind.ImportedCallExpression:
-                    return EvaluateImportedCallExpression((BoundImportedCallExpression)node);
-                default:
-                    throw new Exception($"Unexpected node {node.Kind}");
+                return node.Kind switch
+                {
+                    BoundNodeKind.LiteralExpression => EvaluateLiteralExpression((BoundLiteralExpression)node),
+                    BoundNodeKind.VariableExpression => EvaluateVariableExpression((BoundVariableExpression)node),
+                    BoundNodeKind.AssignmentExpression => EvaluateAssignmentExpression((BoundAssignmentExpression)node),
+                    BoundNodeKind.UnaryExpression => EvaluateUnaryExpression((BoundUnaryExpression)node),
+                    BoundNodeKind.BinaryExpression => EvaluateBinaryExpression((BoundBinaryExpression)node),
+                    BoundNodeKind.CallExpression => EvaluateCallExpression((BoundCallExpression)node),
+                    BoundNodeKind.ConversionExpression => EvaluateConversionExpression((BoundConversionExpression)node),
+                    BoundNodeKind.ImportedCallExpression => EvaluateImportedCallExpression((BoundImportedCallExpression)node),
+                    _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
+                };
+            }
+            catch (Exception ex) when (ex is not EvaluatorException)
+            {
+                throw new EvaluatorException(ex.Message, ex, node);
             }
         }
 
@@ -181,7 +179,7 @@ namespace GSharp.Core.CodeAnalysis
 
                 // For now we don't support DereferenceOf or ReferenceOf.
                 default:
-                    throw new Exception($"Unexpected unary operator {u.Op}");
+                    throw new EvaluatorException($"Unexpected unary operator {u.Op}", u);
             }
         }
 
@@ -263,7 +261,7 @@ namespace GSharp.Core.CodeAnalysis
                 case BoundBinaryOperatorKind.LogicalOr:
                     return (bool)left || (bool)right;
                 default:
-                    throw new Exception($"Unexpected binary operator {b.Op}");
+                    throw new EvaluatorException($"Unexpected binary operator {b.Op}", b);
             }
         }
 
@@ -315,19 +313,19 @@ namespace GSharp.Core.CodeAnalysis
             var value = EvaluateExpression(node.Expression);
             if (node.Type == TypeSymbol.Bool)
             {
-                return Convert.ToBoolean(value);
+                return Convert.ToBoolean(value, System.Globalization.CultureInfo.InvariantCulture);
             }
             else if (node.Type == TypeSymbol.Int)
             {
-                return Convert.ToInt32(value);
+                return Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
             }
             else if (node.Type == TypeSymbol.String)
             {
-                return Convert.ToString(value);
+                return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
             }
             else
             {
-                throw new Exception($"Unexpected type {node.Type}");
+                throw new EvaluatorException($"Unexpected type {node.Type}", node);
             }
         }
 

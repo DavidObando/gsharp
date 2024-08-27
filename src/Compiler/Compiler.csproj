@@ -10,8 +10,4 @@
     <ProjectReference Include="@(GsharpCore)" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="@(NewtonsoftJsonPackageReference)" />
-  </ItemGroup>
-  
 </Project>
