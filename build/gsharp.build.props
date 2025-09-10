@@ -17,7 +17,7 @@
 
   <!-- Frameworks Versions -->
   <PropertyGroup>
-    <NetCoreAppTargetFramework>net6.0</NetCoreAppTargetFramework>
+    <NetCoreAppTargetFramework>net8.0</NetCoreAppTargetFramework>
     <NetStandardTargetFramework>netstandard2.1</NetStandardTargetFramework>
   </PropertyGroup>
 
