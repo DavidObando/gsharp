@@ -195,7 +195,17 @@ namespace GSharp.Core.CodeAnalysis
                 case BoundBinaryOperatorKind.Product:
                     return (int)left * (int)right;
                 case BoundBinaryOperatorKind.Quotient:
-                    return (int)left / (int)right;
+                    {
+                        var leftInt = (int)left;
+                        var rightInt = (int)right;
+                        if (rightInt == 0)
+                        {
+                            throw new Exception("Division by zero");
+                        }
+
+                        return leftInt / rightInt;
+                    }
+
                 case BoundBinaryOperatorKind.Remainder:
                     return (int)left % (int)right;
                 case BoundBinaryOperatorKind.ShiftLeft:
