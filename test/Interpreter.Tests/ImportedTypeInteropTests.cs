@@ -54,6 +54,30 @@ public class ImportedTypeInteropTests
         Assert.Matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", output);
     }
 
+    [Fact]
+    public void Can_Chain_Static_And_Instance_Method_Calls()
+    {
+        var output = RunSubmission(
+            "import System\n" +
+            "var x = Guid.NewGuid().ToString()\n" +
+            "x\n");
+        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unable to find", output);
+        Assert.Matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", output);
+    }
+
+    [Fact]
+    public void Can_Chain_Multiple_Instance_Calls()
+    {
+        var output = RunSubmission(
+            "import System\n" +
+            "var x = Guid.NewGuid().ToString().ToUpper()\n" +
+            "x\n");
+        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unable to find", output);
+        Assert.Matches("[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}", output);
+    }
+
     private static string RunSubmission(string text)
     {
         using var outWriter = new StringWriter();

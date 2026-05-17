@@ -635,69 +635,78 @@ public sealed class Binder
 
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
-        // Hack: for now this is only supported for imported types on the left
-        var leftPart = (NameExpressionSyntax)syntax.LeftPart;
+        // Determine what the left side of the accessor is: either an imported
+        // class (for static member access) or a value-producing expression (for
+        // instance member access). Then apply the right side, which may itself
+        // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
+        var leftPart = syntax.LeftPart;
+        BoundExpression receiver = null;
+        ImportedClassSymbol classSymbol = null;
 
-        // First, try to bind the left side as a variable. If it resolves to a
-        // value whose type has a CLR backing (built-in or imported), the access
-        // is an instance member/method invocation on that value.
-        var variable = scope.TryLookupSymbol(leftPart.IdentifierToken.Text) as VariableSymbol;
-        if (variable != null && variable.Type?.ClrType != null)
+        if (leftPart is NameExpressionSyntax leftName)
         {
-            return BindInstanceAccessor(new BoundVariableExpression(variable), syntax.RightPart);
+            var name = leftName.IdentifierToken.Text;
+            if (scope.TryLookupSymbol(name) is VariableSymbol variable)
+            {
+                receiver = new BoundVariableExpression(variable);
+            }
+            else if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
+            {
+                classSymbol = importedClass;
+            }
+            else
+            {
+                Diagnostics.ReportUnableToFindType(leftName.Location, name);
+                return new BoundErrorExpression();
+            }
+        }
+        else
+        {
+            receiver = BindExpression(leftPart);
         }
 
-        var foundClass = scope.TryLookupImportedClass(leftPart.IdentifierToken.Text, syntax.LeftPart, out var importedClass);
-        if (!foundClass)
-        {
-            Diagnostics.ReportUnableToFindType(leftPart.Location, leftPart.IdentifierToken.Text);
-            return new BoundErrorExpression();
-        }
+        return BindAccessorStep(receiver, classSymbol, syntax.RightPart);
+    }
 
-        var rightPart = syntax.RightPart;
+    private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)
+    {
         switch (rightPart)
         {
+            case AccessorExpressionSyntax nested:
+                var head = BindAccessorStep(receiver, classSymbol, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
+
+            case CallExpressionSyntax ce:
+                return BindAccessorCall(receiver, classSymbol, ce);
+
             case NameExpressionSyntax ne:
-                var foundMember = importedClass.TryLookupMember(ne.IdentifierToken.Text, ne, out var member);
-                if (!foundMember)
+                if (classSymbol != null)
+                {
+                    var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out _);
+                    if (!foundMember)
+                    {
+                        Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    }
+                }
+                else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
-                    return new BoundErrorExpression();
                 }
 
-                break;
-            case CallExpressionSyntax ce:
-                var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
-                foreach (var argument in ce.Arguments)
-                {
-                    var boundArgument = BindExpression(argument);
-                    boundArguments.Add(boundArgument);
-                }
+                return new BoundErrorExpression();
 
-                var arguments = boundArguments.ToImmutable();
-                var foundFunction = importedClass.TryLookupFunction(ce.Identifier.Text, ce, arguments, out var function);
-                if (!foundFunction)
-                {
-                    Diagnostics.ReportUnableToFindFunction(ce.Location, ce.Identifier.Text);
-                    return new BoundErrorExpression();
-                }
-
-                return new BoundImportedCallExpression(function, arguments);
             default:
                 return new BoundErrorExpression();
         }
-
-        return new BoundErrorExpression();
     }
 
-    private BoundExpression BindInstanceAccessor(BoundExpression receiver, ExpressionSyntax rightPart)
+    private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
-        if (rightPart is not CallExpressionSyntax ce)
-        {
-            Diagnostics.ReportUnableToFindMember(rightPart.Location, rightPart.ToString());
-            return new BoundErrorExpression();
-        }
-
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var argument in ce.Arguments)
         {
@@ -705,9 +714,27 @@ public sealed class Binder
         }
 
         var arguments = boundArguments.ToImmutable();
-        var receiverClrType = receiver.Type.ClrType;
         var methodName = ce.Identifier.Text;
-        var candidates = receiverClrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+
+        if (classSymbol != null)
+        {
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn))
+            {
+                return new BoundImportedCallExpression(staticFn, arguments);
+            }
+
+            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+            return new BoundErrorExpression();
+        }
+
+        if (receiver == null || receiver.Type?.ClrType == null)
+        {
+            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+            return new BoundErrorExpression();
+        }
+
+        var clrType = receiver.Type.ClrType;
+        var candidates = clrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
         foreach (var candidate in candidates)
         {
             if (candidate.Name != methodName)
