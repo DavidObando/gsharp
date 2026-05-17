@@ -99,17 +99,9 @@ public sealed class ImportedClassSymbol : Symbol
 
     private bool TypesMatch(TypeSymbol type, Type parameterType)
     {
-        if (type == TypeSymbol.Bool)
+        if (type?.ClrType != null)
         {
-            return parameterType.Equals(typeof(bool));
-        }
-        else if (type == TypeSymbol.Int)
-        {
-            return parameterType.Equals(typeof(int));
-        }
-        else if (type == TypeSymbol.String)
-        {
-            return parameterType.Equals(typeof(string));
+            return parameterType.IsAssignableFrom(type.ClrType);
         }
 
         return false;

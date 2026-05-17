@@ -128,6 +128,7 @@ public sealed class Evaluator
                 BoundNodeKind.CallExpression => EvaluateCallExpression((BoundCallExpression)node),
                 BoundNodeKind.ConversionExpression => EvaluateConversionExpression((BoundConversionExpression)node),
                 BoundNodeKind.ImportedCallExpression => EvaluateImportedCallExpression((BoundImportedCallExpression)node),
+                BoundNodeKind.ImportedInstanceCallExpression => EvaluateImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -340,6 +341,18 @@ public sealed class Evaluator
         }
 
         return node.Function.Method.Invoke(null, locals.ToArray());
+    }
+
+    private object EvaluateImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+    {
+        var receiver = EvaluateExpression(node.Receiver);
+        var locals = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            locals[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        return node.Method.Invoke(receiver, locals);
     }
 
     private void Assign(VariableSymbol variable, object value)

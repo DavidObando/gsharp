@@ -87,6 +87,12 @@ public sealed class Conversion
             }
         }
 
+        // Any value backed by a CLR type can be converted to string via ToString().
+        if (to == TypeSymbol.String && from?.ClrType != null)
+        {
+            return Conversion.Explicit;
+        }
+
         return Conversion.None;
     }
 }

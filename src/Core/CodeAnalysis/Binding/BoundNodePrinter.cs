@@ -99,6 +99,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ImportedCallExpression:
                 WriteImportedCallExpression((BoundImportedCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ImportedInstanceCallExpression:
+                WriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -388,6 +391,32 @@ public static class BoundNodePrinter
         writer.WriteIdentifier(node.Function.ImportedClass.Name);
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Function.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+
+        var isFirst = true;
+        foreach (var argument in node.Arguments)
+        {
+            if (isFirst)
+            {
+                isFirst = false;
+            }
+            else
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            argument.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Method.Name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
 
         var isFirst = true;

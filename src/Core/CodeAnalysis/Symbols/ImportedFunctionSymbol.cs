@@ -57,24 +57,6 @@ public sealed class ImportedFunctionSymbol : Symbol
 
     private TypeSymbol GetMethodType(MethodInfo method)
     {
-        var returnType = method.ReturnType;
-        if (returnType == null)
-        {
-            return TypeSymbol.Void;
-        }
-        else if (returnType.Equals(typeof(bool)))
-        {
-            return TypeSymbol.Bool;
-        }
-        else if (returnType.Equals(typeof(int)))
-        {
-            return TypeSymbol.Int;
-        }
-        else if (returnType.Equals(typeof(string)))
-        {
-            return TypeSymbol.String;
-        }
-
-        return TypeSymbol.Error;
+        return TypeSymbol.FromClrType(method.ReturnType);
     }
 }

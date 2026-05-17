@@ -10,8 +10,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="$(MSBuildThisFileDirectory)xunit.runner.json">
+    <None Include="$(MSBuildThisFileDirectory)xunit.runner.json" Link="xunit.runner.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
     </None>
   </ItemGroup>
   

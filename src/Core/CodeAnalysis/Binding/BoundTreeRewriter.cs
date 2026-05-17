@@ -249,6 +249,8 @@ public abstract class BoundTreeRewriter
                 return RewriteConversionExpression((BoundConversionExpression)node);
             case BoundNodeKind.ImportedCallExpression:
                 return RewriteImportedCallExpression((BoundImportedCallExpression)node);
+            case BoundNodeKind.ImportedInstanceCallExpression:
+                return RewriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -427,5 +429,47 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundImportedCallExpression(node.Function, builder.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// Rewrites an imported instance call expression.
+    /// </summary>
+    /// <param name="node">The imported instance call expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+    {
+        var newReceiver = RewriteExpression(node.Receiver);
+        ImmutableArray<BoundExpression>.Builder builder = null;
+
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArgument = node.Arguments[i];
+            var newArgument = RewriteExpression(oldArgument);
+            if (newArgument != oldArgument)
+            {
+                if (builder == null)
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Arguments[j]);
+                    }
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArgument);
+            }
+        }
+
+        var args = builder?.MoveToImmutable() ?? node.Arguments;
+        if (newReceiver == node.Receiver && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundImportedInstanceCallExpression(newReceiver, node.Method, node.Type, args);
     }
 }

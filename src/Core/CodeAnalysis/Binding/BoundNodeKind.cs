@@ -35,6 +35,7 @@ public enum BoundNodeKind
     CallExpression,
     ConversionExpression,
     ImportedCallExpression,
+    ImportedInstanceCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

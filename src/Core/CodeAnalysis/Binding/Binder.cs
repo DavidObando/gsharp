@@ -637,6 +637,16 @@ public sealed class Binder
     {
         // Hack: for now this is only supported for imported types on the left
         var leftPart = (NameExpressionSyntax)syntax.LeftPart;
+
+        // First, try to bind the left side as a variable. If it resolves to a
+        // value whose type has a CLR backing (built-in or imported), the access
+        // is an instance member/method invocation on that value.
+        var variable = scope.TryLookupSymbol(leftPart.IdentifierToken.Text) as VariableSymbol;
+        if (variable != null && variable.Type?.ClrType != null)
+        {
+            return BindInstanceAccessor(new BoundVariableExpression(variable), syntax.RightPart);
+        }
+
         var foundClass = scope.TryLookupImportedClass(leftPart.IdentifierToken.Text, syntax.LeftPart, out var importedClass);
         if (!foundClass)
         {
@@ -677,6 +687,59 @@ public sealed class Binder
                 return new BoundErrorExpression();
         }
 
+        return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindInstanceAccessor(BoundExpression receiver, ExpressionSyntax rightPart)
+    {
+        if (rightPart is not CallExpressionSyntax ce)
+        {
+            Diagnostics.ReportUnableToFindMember(rightPart.Location, rightPart.ToString());
+            return new BoundErrorExpression();
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var argument in ce.Arguments)
+        {
+            boundArguments.Add(BindExpression(argument));
+        }
+
+        var arguments = boundArguments.ToImmutable();
+        var receiverClrType = receiver.Type.ClrType;
+        var methodName = ce.Identifier.Text;
+        var candidates = receiverClrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Name != methodName)
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length != arguments.Length)
+            {
+                continue;
+            }
+
+            var match = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argType = arguments[i].Type?.ClrType;
+                if (argType == null || !parameters[i].ParameterType.IsAssignableFrom(argType))
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                var returnType = TypeSymbol.FromClrType(candidate.ReturnType);
+                return new BoundImportedInstanceCallExpression(receiver, candidate, returnType, arguments);
+            }
+        }
+
+        Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression();
     }
 
