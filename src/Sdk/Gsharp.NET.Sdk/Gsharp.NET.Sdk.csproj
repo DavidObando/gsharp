@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- MSBuild tasks loaded by both legacy MSBuild and the dotnet build host need
+         to target netstandard2.0. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Gsharp.NET.Sdk</RootNamespace>
+    <AssemblyName>Gsharp.NET.Sdk</AssemblyName>
+    <PackageId>Gsharp.NET.Sdk</PackageId>
+    <Description>MSBuild Project SDK for the GSharp language. Enables `&lt;Project Sdk="Gsharp.NET.Sdk"&gt;` and .gsproj files to build with `dotnet build`.</Description>
+    <PackageTags>gsharp;dotnet;sdk;msbuild;compiler</PackageTags>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <!-- Don't bundle StyleCop into this MSBuild-only project. -->
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.13.9" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.13.9" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Package layout mirrors peachpie's SDK NuGet:
+           sdk/Sdk.props, sdk/Sdk.targets
+           build/Gsharp.NET.Sdk.props, build/Gsharp.NET.Current.Sdk.targets, build/Gsharp.NET.Core.Sdk.targets
+           tools/task/Gsharp.NET.Sdk.dll  (this assembly)
+           tools/compiler/gsc.dll        (built by src/Compiler) -->
+    <None Include="Sdk\Sdk.props" Pack="true" PackagePath="Sdk\Sdk.props" />
+    <None Include="Sdk\Sdk.targets" Pack="true" PackagePath="Sdk\Sdk.targets" />
+    <None Include="build\Gsharp.NET.Sdk.props" Pack="true" PackagePath="build\Gsharp.NET.Sdk.props" />
+    <None Include="build\Gsharp.NET.Current.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Current.Sdk.targets" />
+    <None Include="build\Gsharp.NET.Core.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Core.Sdk.targets" />
+  </ItemGroup>
+
+</Project>

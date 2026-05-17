@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Cross-targeting net8.0;net9.0;net10.0 is the Phase 6 goal. For now we
+      match the rest of the GSharp solution (net10.0) until GSharp.Core is
+      multi-targeted; see plan.md Phase 6.
+    -->
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Gsharp.CodeAnalysis</RootNamespace>
+    <AssemblyName>Gsharp.CodeAnalysis</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      Signing is required so that Gsharp.Microsoft.CodeAnalysis (the Roslyn fork)
+      can grant InternalsVisibleTo to us. Enable once the fork is on disk; see
+      plan.md Phase 1 ("set up Open-key signing").
+    -->
+    <SignAssembly Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">true</SignAssembly>
+    <PublicSign Condition=" '$(GsharpRoslynForkAvailable)' == 'true' and '$(OS)' != 'Windows_NT' ">true</PublicSign>
+    <AssemblyOriginatorKeyFile Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(MSBuildThisFileDirectory)..\Roslyn\eng\config\35MSSharedLib1024.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Set to true once Gsharp.Microsoft.CodeAnalysis NuGet is available
+         (build src/Roslyn with ./GsharpNuget.sh and drop the .nupkg into .nugs/). -->
+    <GsharpRoslynForkAvailable Condition=" '$(GsharpRoslynForkAvailable)' == '' ">false</GsharpRoslynForkAvailable>
+    <DefineConstants Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(DefineConstants);GSHARP_ROSLYN_FORK_AVAILABLE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">
+    <!--
+      Consumed from .nugs/ after running src/Roslyn/GsharpNuget.sh.
+      In CI this will be restored from the published package feed.
+    -->
+    <PackageReference Include="Gsharp.Microsoft.CodeAnalysis" Version="3.7.4" />
+  </ItemGroup>
+
+</Project>
