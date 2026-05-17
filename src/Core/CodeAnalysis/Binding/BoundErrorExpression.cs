@@ -2,19 +2,18 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound error expression.
+/// </summary>
+public sealed class BoundErrorExpression : BoundExpression
 {
-    using GSharp.Core.CodeAnalysis.Symbols;
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.ErrorExpression;
 
-    /// <summary>
-    /// Bound error expression.
-    /// </summary>
-    public sealed class BoundErrorExpression : BoundExpression
-    {
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.ErrorExpression;
-
-        /// <inheritdoc/>
-        public override TypeSymbol Type => TypeSymbol.Error;
-    }
+    /// <inheritdoc/>
+    public override TypeSymbol Type => TypeSymbol.Error;
 }

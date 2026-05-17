@@ -1,28 +1,27 @@
-﻿// <copyright file="Constants.cs" company="GSharp">
+// <copyright file="Constants.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.LanguageServer
+using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+
+namespace GSharp.LanguageServer;
+
+/// <summary>
+/// Constants used in GSharp LanguageServer.
+/// </summary>
+public static class Constants
 {
-    using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+    /// <summary>
+    /// Gets GSharp language identifier.
+    /// </summary>
+    public static string LanguageIdentifier { get; } = "G#";
 
     /// <summary>
-    /// Constants used in GSharp LanguageServer.
+    /// Gets the common <see cref="TextDocumentSelector"/> for all handlers.
     /// </summary>
-    public static class Constants
-    {
-        /// <summary>
-        /// Gets GSharp language identifier.
-        /// </summary>
-        public static string LanguageIdentifier { get; } = "G#";
-
-        /// <summary>
-        /// Gets the common <see cref="DocumentSelector"/> for all handlers.
-        /// </summary>
-        public static DocumentSelector DocumentSelector { get; } = new DocumentSelector(
-            new DocumentFilter()
-            {
-                Pattern = "**/*.gs",
-            });
-    }
+    public static TextDocumentSelector DocumentSelector { get; } = new(
+        new TextDocumentFilter
+        {
+            Pattern = "**/*.gs",
+        });
 }

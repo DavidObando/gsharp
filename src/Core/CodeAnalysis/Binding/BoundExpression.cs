@@ -2,18 +2,17 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
-{
-    using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols;
 
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound expression.
+/// </summary>
+public abstract class BoundExpression : BoundNode
+{
     /// <summary>
-    /// Bound expression.
+    /// Gets the bound expression type.
     /// </summary>
-    public abstract class BoundExpression : BoundNode
-    {
-        /// <summary>
-        /// Gets the bound expression type.
-        /// </summary>
-        public abstract TypeSymbol Type { get; }
-    }
+    public abstract TypeSymbol Type { get; }
 }

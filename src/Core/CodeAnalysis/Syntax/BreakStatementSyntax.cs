@@ -2,30 +2,29 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Syntax
+namespace GSharp.Core.CodeAnalysis.Syntax;
+
+/// <summary>
+/// Represents the break statement syntax in the language.
+/// </summary>
+public class BreakStatementSyntax : StatementSyntax
 {
     /// <summary>
-    /// Represents the break statement syntax in the language.
+    /// Initializes a new instance of the <see cref="BreakStatementSyntax"/> class.
     /// </summary>
-    public class BreakStatementSyntax : StatementSyntax
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="keyword">The break keyword.</param>
+    public BreakStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
+        : base(syntaxTree)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BreakStatementSyntax"/> class.
-        /// </summary>
-        /// <param name="syntaxTree">The parent syntax tree.</param>
-        /// <param name="keyword">The break keyword.</param>
-        public BreakStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
-            : base(syntaxTree)
-        {
-            Keyword = keyword;
-        }
-
-        /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.BreakStatement;
-
-        /// <summary>
-        /// Gets the break keyword.
-        /// </summary>
-        public SyntaxToken Keyword { get; }
+        Keyword = keyword;
     }
+
+    /// <inheritdoc/>
+    public override SyntaxKind Kind => SyntaxKind.BreakStatement;
+
+    /// <summary>
+    /// Gets the break keyword.
+    /// </summary>
+    public SyntaxToken Keyword { get; }
 }

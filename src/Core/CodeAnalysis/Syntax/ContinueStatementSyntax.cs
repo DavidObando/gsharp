@@ -2,30 +2,29 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Syntax
+namespace GSharp.Core.CodeAnalysis.Syntax;
+
+/// <summary>
+/// Represents the continue statement in the language.
+/// </summary>
+public class ContinueStatementSyntax : StatementSyntax
 {
     /// <summary>
-    /// Represents the continue statement in the language.
+    /// Initializes a new instance of the <see cref="ContinueStatementSyntax"/> class.
     /// </summary>
-    public class ContinueStatementSyntax : StatementSyntax
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="keyword">The continue keyword.</param>
+    public ContinueStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
+        : base(syntaxTree)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ContinueStatementSyntax"/> class.
-        /// </summary>
-        /// <param name="syntaxTree">The parent syntax tree.</param>
-        /// <param name="keyword">The continue keyword.</param>
-        public ContinueStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword)
-            : base(syntaxTree)
-        {
-            Keyword = keyword;
-        }
-
-        /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.ContinueStatement;
-
-        /// <summary>
-        /// Gets the continue keyword.
-        /// </summary>
-        public SyntaxToken Keyword { get; }
+        Keyword = keyword;
     }
+
+    /// <inheritdoc/>
+    public override SyntaxKind Kind => SyntaxKind.ContinueStatement;
+
+    /// <summary>
+    /// Gets the continue keyword.
+    /// </summary>
+    public SyntaxToken Keyword { get; }
 }

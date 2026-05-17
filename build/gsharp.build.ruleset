@@ -69,6 +69,23 @@
     <Rule Id="CA2242" Action="Warning" />
   </Rules>
   <Rules AnalyzerId="StyleCop.Analyzers" RuleNamespace="StyleCop.Analyzers">
+    <!-- Prefix local calls with `this.` not enforced. -->
     <Rule Id="SA1101" Action="None" />
+    <!-- Allow `using` directives outside namespace declarations (file-scoped namespaces convention). -->
+    <Rule Id="SA1200" Action="None" />
+    <!-- Don't enforce static-member-before-instance ordering; readability often suffers. -->
+    <Rule Id="SA1204" Action="None" />
+    <!-- Allow more than one type per file (e.g., small helper types and records). -->
+    <Rule Id="SA1402" Action="None" />
+    <!-- Don't force `System` using directives to be first; modern tooling sorts them with the rest. -->
+    <Rule Id="SA1208" Action="None" />
+    <!-- Don't require trailing commas in multi-line initializers. -->
+    <Rule Id="SA1413" Action="None" />
+    <!-- Don't require XML documentation for every element. -->
+    <Rule Id="SA1600" Action="None" />
+    <!-- Don't require XML documentation for internal members specifically. -->
+    <Rule Id="SA1601" Action="None" />
+    <!-- Don't require the use of a copyright header (we still keep them, but don't fail builds). -->
+    <Rule Id="SA1633" Action="None" />
   </Rules>
 </RuleSet>

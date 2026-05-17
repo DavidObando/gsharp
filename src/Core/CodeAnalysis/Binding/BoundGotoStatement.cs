@@ -2,28 +2,27 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound goto statement.
+/// </summary>
+public sealed class BoundGotoStatement : BoundStatement
 {
     /// <summary>
-    /// Bound goto statement.
+    /// Initializes a new instance of the <see cref="BoundGotoStatement"/> class.
     /// </summary>
-    public sealed class BoundGotoStatement : BoundStatement
+    /// <param name="label">The label.</param>
+    public BoundGotoStatement(BoundLabel label)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundGotoStatement"/> class.
-        /// </summary>
-        /// <param name="label">The label.</param>
-        public BoundGotoStatement(BoundLabel label)
-        {
-            Label = label;
-        }
-
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.GotoStatement;
-
-        /// <summary>
-        /// Gets the label.
-        /// </summary>
-        public BoundLabel Label { get; }
+        Label = label;
     }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.GotoStatement;
+
+    /// <summary>
+    /// Gets the label.
+    /// </summary>
+    public BoundLabel Label { get; }
 }

@@ -2,34 +2,33 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.CodeGen
-{
-    using System.Diagnostics;
-    using System.Reflection.Metadata;
+using System.Diagnostics;
+using System.Reflection.Metadata;
 
+namespace GSharp.Core.CodeAnalysis.CodeGen;
+
+/// <summary>
+/// Extensions for ILOpCode.
+/// </summary>
+public static partial class ILOpCodeExtensions
+{
     /// <summary>
-    /// Extensions for ILOpCode.
+    /// Gets the byte size of the ILOpcode.
     /// </summary>
-    public static partial class ILOpCodeExtensions
+    /// <param name="opcode">The ILOpCode.</param>
+    /// <returns>The amount of bytes it occupies.</returns>
+    public static int Size(this ILOpCode opcode)
     {
-        /// <summary>
-        /// Gets the byte size of the ILOpcode.
-        /// </summary>
-        /// <param name="opcode">The ILOpCode.</param>
-        /// <returns>The amount of bytes it occupies.</returns>
-        public static int Size(this ILOpCode opcode)
+        int code = (int)opcode;
+        if (code <= 0xff)
         {
-            int code = (int)opcode;
-            if (code <= 0xff)
-            {
-                Debug.Assert(code < 0xf0, "Invalid code.");
-                return 1;
-            }
-            else
-            {
-                Debug.Assert((code & 0xff00) == 0xfe00, "Invalid code.");
-                return 2;
-            }
+            Debug.Assert(code < 0xf0, "Invalid code.");
+            return 1;
+        }
+        else
+        {
+            Debug.Assert((code & 0xff00) == 0xfe00, "Invalid code.");
+            return 2;
         }
     }
 }

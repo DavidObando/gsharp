@@ -1,0 +1,119 @@
+// <copyright file="LexerTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Linq;
+using GSharp.Core.CodeAnalysis.Syntax;
+using Xunit;
+
+namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
+
+public class LexerTests
+{
+    [Theory]
+    [InlineData("+", SyntaxKind.PlusToken)]
+    [InlineData("+=", SyntaxKind.PlusEqualsToken)]
+    [InlineData("++", SyntaxKind.PlusPlusToken)]
+    [InlineData("-", SyntaxKind.MinusToken)]
+    [InlineData("*", SyntaxKind.StarToken)]
+    [InlineData("/", SyntaxKind.SlashToken)]
+    [InlineData("==", SyntaxKind.EqualsEqualsToken)]
+    [InlineData("!=", SyntaxKind.BangEqualsToken)]
+    [InlineData("<=", SyntaxKind.LessOrEqualsToken)]
+    [InlineData(">=", SyntaxKind.GreaterOrEqualsToken)]
+    [InlineData("&&", SyntaxKind.AmpersandAmpersandToken)]
+    [InlineData("||", SyntaxKind.PipePipeToken)]
+    [InlineData(":=", SyntaxKind.ColonEqualsToken)]
+    [InlineData("...", SyntaxKind.EllipsisToken)]
+    [InlineData("<-", SyntaxKind.LeftArrowToken)]
+    public void Lexes_Operator(string text, SyntaxKind expected)
+    {
+        var tokens = SyntaxTree.ParseTokens(text);
+        var token = Assert.Single(tokens);
+        Assert.Equal(expected, token.Kind);
+        Assert.Equal(text, token.Text);
+    }
+
+    [Theory]
+    [InlineData("func", SyntaxKind.FuncKeyword)]
+    [InlineData("if", SyntaxKind.IfKeyword)]
+    [InlineData("else", SyntaxKind.ElseKeyword)]
+    [InlineData("for", SyntaxKind.ForKeyword)]
+    [InlineData("return", SyntaxKind.ReturnKeyword)]
+    [InlineData("package", SyntaxKind.PackageKeyword)]
+    [InlineData("import", SyntaxKind.ImportKeyword)]
+    [InlineData("true", SyntaxKind.TrueKeyword)]
+    [InlineData("false", SyntaxKind.FalseKeyword)]
+    public void Lexes_Keyword(string text, SyntaxKind expected)
+    {
+        var tokens = SyntaxTree.ParseTokens(text);
+        var token = Assert.Single(tokens);
+        Assert.Equal(expected, token.Kind);
+    }
+
+    [Theory]
+    [InlineData("identifier")]
+    [InlineData("camelCase")]
+    public void Lexes_Identifier(string text)
+    {
+        var tokens = SyntaxTree.ParseTokens(text);
+        var token = Assert.Single(tokens);
+        Assert.Equal(SyntaxKind.IdentifierToken, token.Kind);
+        Assert.Equal(text, token.Text);
+    }
+
+    [Theory]
+    [InlineData("42")]
+    [InlineData("0")]
+    [InlineData("12345")]
+    public void Lexes_NumberLiteral(string text)
+    {
+        var tokens = SyntaxTree.ParseTokens(text);
+        var token = Assert.Single(tokens);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(int.Parse(text), token.Value);
+    }
+
+    [Fact]
+    public void Lexes_StringLiteral()
+    {
+        var tokens = SyntaxTree.ParseTokens("\"hello\"");
+        var token = Assert.Single(tokens);
+        Assert.Equal(SyntaxKind.StringToken, token.Kind);
+        Assert.Equal("hello", token.Value);
+    }
+
+    [Fact]
+    public void Lexes_UnterminatedString_ReportsDiagnostic()
+    {
+        SyntaxTree.ParseTokens("\"hello", out var diagnostics);
+        Assert.Contains(diagnostics, d => d.Message.Contains("Unterminated string", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Lexes_BadCharacter_ReportsDiagnostic()
+    {
+        SyntaxTree.ParseTokens("`", out var diagnostics);
+        Assert.NotEmpty(diagnostics);
+        Assert.Contains(diagnostics, d => d.Message.Contains("Bad character", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Whitespace_Is_Emitted_As_Trivia_Tokens()
+    {
+        var tokens = SyntaxTree.ParseTokens("a   +   b");
+        var nonWs = tokens.Where(t => t.Kind != SyntaxKind.WhitespaceToken).ToArray();
+        Assert.Equal(3, nonWs.Length);
+        Assert.Equal(SyntaxKind.IdentifierToken, nonWs[0].Kind);
+        Assert.Equal(SyntaxKind.PlusToken, nonWs[1].Kind);
+        Assert.Equal(SyntaxKind.IdentifierToken, nonWs[2].Kind);
+    }
+
+    [Fact]
+    public void LineComment_Is_Emitted_As_CommentToken()
+    {
+        var tokens = SyntaxTree.ParseTokens("// this is a comment\nx");
+        Assert.Contains(tokens, t => t.Kind == SyntaxKind.CommentToken);
+        Assert.Contains(tokens, t => t.Kind == SyntaxKind.IdentifierToken && t.Text == "x");
+    }
+}

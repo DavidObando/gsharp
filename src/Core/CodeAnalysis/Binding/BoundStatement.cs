@@ -2,12 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Statement binding.
+/// </summary>
+public abstract class BoundStatement : BoundNode
 {
-    /// <summary>
-    /// Statement binding.
-    /// </summary>
-    public abstract class BoundStatement : BoundNode
-    {
-    }
 }

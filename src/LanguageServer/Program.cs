@@ -1,44 +1,42 @@
-﻿// <copyright file="Program.cs" company="GSharp">
+// <copyright file="Program.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.LanguageServer
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OmniSharp.Extensions.LanguageServer.Server;
+using LanguageServerHost = OmniSharp.Extensions.LanguageServer.Server.LanguageServer;
+
+namespace GSharp.LanguageServer;
+
+/// <summary>
+/// GSharp Language Server.
+/// </summary>
+public class Program
 {
-    using System;
-    using System.Threading.Tasks;
-    using Microsoft.Extensions.DependencyInjection;
-    using Microsoft.Extensions.Logging;
-    using OmniSharp.Extensions.LanguageServer.Server;
-
     /// <summary>
-    /// GSharp Language Server.
+    /// Entry point for GSharp LanguageServer.
     /// </summary>
-    public class Program
+    /// <param name="args">Command line arguments.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    public static async Task Main(string[] args)
     {
-        /// <summary>
-        /// Entry point for GSharp LanguageServer.
-        /// </summary>
-        /// <param name="args">Command line arguments.</param>
-        /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
-        public static async Task Main(string[] args)
-        {
-            var server = await LanguageServer.From(options =>
-                options
-                    .WithInput(Console.OpenStandardInput())
-                    .WithOutput(Console.OpenStandardOutput())
-                    .WithLoggerFactory(new LoggerFactory())
-                    .AddDefaultLoggingProvider()
-                    .WithMinimumLogLevel(LogLevel.Trace)
-                    .WithServices(ConfigureServices)
-                    .WithHandler<DocumentSyncHandler>()
-                    .WithHandler<FoldingHandler>());
+        var server = await LanguageServerHost.From(options =>
+            options
+                .WithInput(Console.OpenStandardInput())
+                .WithOutput(Console.OpenStandardOutput())
+                .ConfigureLogging(builder => builder.SetMinimumLevel(LogLevel.Trace))
+                .WithServices(ConfigureServices)
+                .WithHandler<DocumentSyncHandler>()
+                .WithHandler<FoldingHandler>());
 
-            await server.WaitForExit;
-        }
+        await server.WaitForExit;
+    }
 
-        private static void ConfigureServices(IServiceCollection services)
-        {
-            services.AddSingleton<DocumentContentService>();
-        }
+    private static void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton<DocumentContentService>();
     }
 }

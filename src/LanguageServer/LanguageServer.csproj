@@ -15,4 +15,8 @@
     <PackageReference Include="@(OmniSharpExtensionsLanguageServerPackageReference)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.LanguageServer.Tests" />
+  </ItemGroup>
+
 </Project>

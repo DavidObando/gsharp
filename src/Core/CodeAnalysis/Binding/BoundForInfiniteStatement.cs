@@ -2,34 +2,33 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound for infinite statement.
+/// </summary>
+public sealed class BoundForInfiniteStatement : BoundLoopStatement
 {
     /// <summary>
-    /// Bound for infinite statement.
+    /// Initializes a new instance of the <see cref="BoundForInfiniteStatement"/> class.
     /// </summary>
-    public sealed class BoundForInfiniteStatement : BoundLoopStatement
+    /// <param name="body">The body.</param>
+    /// <param name="breakLabel">The break label.</param>
+    /// <param name="continueLabel">The continue label.</param>
+    public BoundForInfiniteStatement(
+        BoundStatement body,
+        BoundLabel breakLabel,
+        BoundLabel continueLabel)
+        : base(breakLabel, continueLabel)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundForInfiniteStatement"/> class.
-        /// </summary>
-        /// <param name="body">The body.</param>
-        /// <param name="breakLabel">The break label.</param>
-        /// <param name="continueLabel">The continue label.</param>
-        public BoundForInfiniteStatement(
-            BoundStatement body,
-            BoundLabel breakLabel,
-            BoundLabel continueLabel)
-            : base(breakLabel, continueLabel)
-        {
-            Body = body;
-        }
-
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.ForInfiniteStatement;
-
-        /// <summary>
-        /// Gets the body.
-        /// </summary>
-        public BoundStatement Body { get; }
+        Body = body;
     }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.ForInfiniteStatement;
+
+    /// <summary>
+    /// Gets the body.
+    /// </summary>
+    public BoundStatement Body { get; }
 }

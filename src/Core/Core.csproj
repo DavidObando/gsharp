@@ -1,13 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>$(NetStandardTargetFramework)</TargetFramework>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Core</RootNamespace>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="@(SystemCollectionsImmutablePackageReference)" />
-    <PackageReference Include="@(SystemReflectionMetadataPackageReference)" />
-  </ItemGroup>
 
 </Project>

@@ -2,28 +2,27 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound return statement.
+/// </summary>
+public sealed class BoundReturnStatement : BoundStatement
 {
     /// <summary>
-    /// Bound return statement.
+    /// Initializes a new instance of the <see cref="BoundReturnStatement"/> class.
     /// </summary>
-    public sealed class BoundReturnStatement : BoundStatement
+    /// <param name="expression">The expression to return.</param>
+    public BoundReturnStatement(BoundExpression expression)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundReturnStatement"/> class.
-        /// </summary>
-        /// <param name="expression">The expression to return.</param>
-        public BoundReturnStatement(BoundExpression expression)
-        {
-            Expression = expression;
-        }
-
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.ReturnStatement;
-
-        /// <summary>
-        /// Gets the expression to return.
-        /// </summary>
-        public BoundExpression Expression { get; }
+        Expression = expression;
     }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.ReturnStatement;
+
+    /// <summary>
+    /// Gets the expression to return.
+    /// </summary>
+    public BoundExpression Expression { get; }
 }

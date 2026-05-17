@@ -2,40 +2,39 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Syntax
+namespace GSharp.Core.CodeAnalysis.Syntax;
+
+/// <summary>
+/// Represents a for infinite statement syntax in the language.
+/// </summary>
+public sealed class ForInfiniteStatementSyntax : StatementSyntax
 {
     /// <summary>
-    /// Represents a for infinite statement syntax in the language.
+    /// Initializes a new instance of the <see cref="ForInfiniteStatementSyntax"/> class.
     /// </summary>
-    public sealed class ForInfiniteStatementSyntax : StatementSyntax
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="keyword">The for keyword.</param>
+    /// <param name="body">The body statement.</param>
+    public ForInfiniteStatementSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken keyword,
+        StatementSyntax body)
+        : base(syntaxTree)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ForInfiniteStatementSyntax"/> class.
-        /// </summary>
-        /// <param name="syntaxTree">The parent syntax tree.</param>
-        /// <param name="keyword">The for keyword.</param>
-        /// <param name="body">The body statement.</param>
-        public ForInfiniteStatementSyntax(
-            SyntaxTree syntaxTree,
-            SyntaxToken keyword,
-            StatementSyntax body)
-            : base(syntaxTree)
-        {
-            Keyword = keyword;
-            Body = body;
-        }
-
-        /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.ForInfiniteStatement;
-
-        /// <summary>
-        /// Gets the for keyword.
-        /// </summary>
-        public SyntaxToken Keyword { get; }
-
-        /// <summary>
-        /// Gets the body statement.
-        /// </summary>
-        public StatementSyntax Body { get; }
+        Keyword = keyword;
+        Body = body;
     }
+
+    /// <inheritdoc/>
+    public override SyntaxKind Kind => SyntaxKind.ForInfiniteStatement;
+
+    /// <summary>
+    /// Gets the for keyword.
+    /// </summary>
+    public SyntaxToken Keyword { get; }
+
+    /// <summary>
+    /// Gets the body statement.
+    /// </summary>
+    public StatementSyntax Body { get; }
 }

@@ -2,28 +2,27 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+using System.IO;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Abstract base for a bound node.
+/// </summary>
+public abstract class BoundNode
 {
-    using System.IO;
-
     /// <summary>
-    /// Abstract base for a bound node.
+    /// Gets the kind of bound node for this instance.
     /// </summary>
-    public abstract class BoundNode
-    {
-        /// <summary>
-        /// Gets the kind of bound node for this instance.
-        /// </summary>
-        public abstract BoundNodeKind Kind { get; }
+    public abstract BoundNodeKind Kind { get; }
 
-        /// <inheritdoc/>
-        public override string ToString()
+    /// <inheritdoc/>
+    public override string ToString()
+    {
+        using (var writer = new StringWriter())
         {
-            using (var writer = new StringWriter())
-            {
-                this.WriteTo(writer);
-                return writer.ToString();
-            }
+            this.WriteTo(writer);
+            return writer.ToString();
         }
     }
 }

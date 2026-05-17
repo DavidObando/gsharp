@@ -2,41 +2,40 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound call expression.
+/// </summary>
+public sealed class BoundImportedCallExpression : BoundExpression
 {
-    using System.Collections.Immutable;
-    using GSharp.Core.CodeAnalysis.Symbols;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundImportedCallExpression"/> class.
+    /// </summary>
+    /// <param name="function">The function symbol.</param>
+    /// <param name="arguments">The provided arguments.</param>
+    public BoundImportedCallExpression(ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments)
+    {
+        Function = function;
+        Arguments = arguments;
+    }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.ImportedCallExpression;
+
+    /// <inheritdoc/>
+    public override TypeSymbol Type => Function.Type;
 
     /// <summary>
-    /// Bound call expression.
+    /// Gets the imported function symbol.
     /// </summary>
-    public sealed class BoundImportedCallExpression : BoundExpression
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundImportedCallExpression"/> class.
-        /// </summary>
-        /// <param name="function">The function symbol.</param>
-        /// <param name="arguments">The provided arguments.</param>
-        public BoundImportedCallExpression(ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments)
-        {
-            Function = function;
-            Arguments = arguments;
-        }
+    public ImportedFunctionSymbol Function { get; }
 
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.ImportedCallExpression;
-
-        /// <inheritdoc/>
-        public override TypeSymbol Type => Function.Type;
-
-        /// <summary>
-        /// Gets the imported function symbol.
-        /// </summary>
-        public ImportedFunctionSymbol Function { get; }
-
-        /// <summary>
-        /// Gets the provided arguments.
-        /// </summary>
-        public ImmutableArray<BoundExpression> Arguments { get; }
-    }
+    /// <summary>
+    /// Gets the provided arguments.
+    /// </summary>
+    public ImmutableArray<BoundExpression> Arguments { get; }
 }

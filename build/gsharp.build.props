@@ -17,28 +17,25 @@
 
   <!-- Frameworks Versions -->
   <PropertyGroup>
-    <NetCoreAppTargetFramework>net8.0</NetCoreAppTargetFramework>
-    <NetStandardTargetFramework>netstandard2.1</NetStandardTargetFramework>
+    <NetCoreAppTargetFramework>net10.0</NetCoreAppTargetFramework>
   </PropertyGroup>
 
   <!-- Package Reference Definitions -->
   <ItemGroup>
     <!-- Runtime packages-->
-    <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="15.3.58" />
-    <OmniSharpExtensionsLanguageServerPackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.13.1" />
-    <SystemCollectionsImmutablePackageReference Include="System.Collections.Immutable" Version="1.5.0" />
-    <SystemReflectionMetadataPackageReference Include="System.Reflection.Metadata" Version="1.6.0" />
+    <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="17.8.8" />
+    <OmniSharpExtensionsLanguageServerPackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
     <!-- Design-time packages -->
-    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.4.244" PrivateAssets="All" />
-    <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.1.0-beta009">
+    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.6.143" PrivateAssets="All" />
+    <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </StyleCopAnalyzersPackageReference>
     <!-- Test packages -->
-    <CoverletCollectorPackageReference Include="coverlet.collector" Version="1.0.1" />
-    <MicrosoftNetTestSdkPackageReference Include="Microsoft.NET.Test.Sdk" Version="16.2.0" />
-    <XunitPackageReference Include="xunit" Version="2.4.0" />
-    <XunitRunnerVisualStudioPackageReference Include="xunit.runner.visualstudio" Version="2.4.0" />
+    <CoverletCollectorPackageReference Include="coverlet.collector" Version="6.0.2" />
+    <MicrosoftNetTestSdkPackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <XunitPackageReference Include="xunit" Version="2.9.2" />
+    <XunitRunnerVisualStudioPackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
   <!-- Common Runtime Package References -->
@@ -64,6 +61,8 @@
   <!-- Compiler Options -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <HighEntropyVA>true</HighEntropyVA>
     <Deterministic>true</Deterministic>

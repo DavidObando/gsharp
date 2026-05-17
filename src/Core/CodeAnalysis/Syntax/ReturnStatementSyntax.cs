@@ -2,37 +2,36 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Syntax
+namespace GSharp.Core.CodeAnalysis.Syntax;
+
+/// <summary>
+/// Represents the return statement syntax in the language.
+/// </summary>
+public sealed class ReturnStatementSyntax : StatementSyntax
 {
     /// <summary>
-    /// Represents the return statement syntax in the language.
+    /// Initializes a new instance of the <see cref="ReturnStatementSyntax"/> class.
     /// </summary>
-    public sealed class ReturnStatementSyntax : StatementSyntax
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="returnKeyword">The return keyword.</param>
+    /// <param name="expression">The expression.</param>
+    public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, ExpressionSyntax expression)
+        : base(syntaxTree)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ReturnStatementSyntax"/> class.
-        /// </summary>
-        /// <param name="syntaxTree">The parent syntax tree.</param>
-        /// <param name="returnKeyword">The return keyword.</param>
-        /// <param name="expression">The expression.</param>
-        public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, ExpressionSyntax expression)
-            : base(syntaxTree)
-        {
-            ReturnKeyword = returnKeyword;
-            Expression = expression;
-        }
-
-        /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.ReturnStatement;
-
-        /// <summary>
-        /// Gets the return keyword.
-        /// </summary>
-        public SyntaxToken ReturnKeyword { get; }
-
-        /// <summary>
-        /// Gets the expression.
-        /// </summary>
-        public ExpressionSyntax Expression { get; }
+        ReturnKeyword = returnKeyword;
+        Expression = expression;
     }
+
+    /// <inheritdoc/>
+    public override SyntaxKind Kind => SyntaxKind.ReturnStatement;
+
+    /// <summary>
+    /// Gets the return keyword.
+    /// </summary>
+    public SyntaxToken ReturnKeyword { get; }
+
+    /// <summary>
+    /// Gets the expression.
+    /// </summary>
+    public ExpressionSyntax Expression { get; }
 }

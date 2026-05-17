@@ -2,49 +2,48 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Syntax
+using System.Collections.Immutable;
+using System.Linq;
+
+namespace GSharp.Core.CodeAnalysis.Syntax;
+
+/// <summary>
+/// Represents an import declaration in the language.
+/// </summary>
+public sealed class ImportSyntax : MemberSyntax
 {
-    using System.Collections.Immutable;
-    using System.Linq;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ImportSyntax"/> class.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="importKeyword">The import keyword.</param>
+    /// <param name="identifiers">The identifiers.</param>
+    public ImportSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken importKeyword,
+        ImmutableArray<SyntaxToken> identifiers)
+        : base(syntaxTree)
+    {
+        ImportKeyword = importKeyword;
+        IdentifiersWithDots = identifiers;
+        Identifiers = identifiers.Where(t => t.Kind == SyntaxKind.IdentifierToken).ToImmutableArray();
+    }
+
+    /// <inheritdoc/>
+    public override SyntaxKind Kind => SyntaxKind.ImportDeclaration;
 
     /// <summary>
-    /// Represents an import declaration in the language.
+    /// Gets the import keyword.
     /// </summary>
-    public sealed class ImportSyntax : MemberSyntax
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ImportSyntax"/> class.
-        /// </summary>
-        /// <param name="syntaxTree">The parent syntax tree.</param>
-        /// <param name="importKeyword">The import keyword.</param>
-        /// <param name="identifiers">The identifiers.</param>
-        public ImportSyntax(
-            SyntaxTree syntaxTree,
-            SyntaxToken importKeyword,
-            ImmutableArray<SyntaxToken> identifiers)
-            : base(syntaxTree)
-        {
-            ImportKeyword = importKeyword;
-            IdentifiersWithDots = identifiers;
-            Identifiers = identifiers.Where(t => t.Kind == SyntaxKind.IdentifierToken).ToImmutableArray();
-        }
+    public SyntaxToken ImportKeyword { get; }
 
-        /// <inheritdoc/>
-        public override SyntaxKind Kind => SyntaxKind.ImportDeclaration;
+    /// <summary>
+    /// Gets the import statement identifiers, excluding dots.
+    /// </summary>
+    public ImmutableArray<SyntaxToken> Identifiers { get; }
 
-        /// <summary>
-        /// Gets the import keyword.
-        /// </summary>
-        public SyntaxToken ImportKeyword { get; }
-
-        /// <summary>
-        /// Gets the import statement identifiers, excluding dots.
-        /// </summary>
-        public ImmutableArray<SyntaxToken> Identifiers { get; }
-
-        /// <summary>
-        /// Gets the import statement identifiers, including dots.
-        /// </summary>
-        public ImmutableArray<SyntaxToken> IdentifiersWithDots { get; }
-    }
+    /// <summary>
+    /// Gets the import statement identifiers, including dots.
+    /// </summary>
+    public ImmutableArray<SyntaxToken> IdentifiersWithDots { get; }
 }

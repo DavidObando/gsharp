@@ -2,28 +2,27 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound label statement.
+/// </summary>
+public sealed class BoundLabelStatement : BoundStatement
 {
     /// <summary>
-    /// Bound label statement.
+    /// Initializes a new instance of the <see cref="BoundLabelStatement"/> class.
     /// </summary>
-    public sealed class BoundLabelStatement : BoundStatement
+    /// <param name="label">The label.</param>
+    public BoundLabelStatement(BoundLabel label)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundLabelStatement"/> class.
-        /// </summary>
-        /// <param name="label">The label.</param>
-        public BoundLabelStatement(BoundLabel label)
-        {
-            Label = label;
-        }
-
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.LabelStatement;
-
-        /// <summary>
-        /// Gets the label.
-        /// </summary>
-        public BoundLabel Label { get; }
+        Label = label;
     }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.LabelStatement;
+
+    /// <summary>
+    /// Gets the label.
+    /// </summary>
+    public BoundLabel Label { get; }
 }

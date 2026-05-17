@@ -2,33 +2,32 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-namespace GSharp.Core.CodeAnalysis.Binding
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Bound variable expression.
+/// </summary>
+public sealed class BoundVariableExpression : BoundExpression
 {
-    using GSharp.Core.CodeAnalysis.Symbols;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundVariableExpression"/> class.
+    /// </summary>
+    /// <param name="variable">The variable symbol.</param>
+    public BoundVariableExpression(VariableSymbol variable)
+    {
+        Variable = variable;
+    }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.VariableExpression;
+
+    /// <inheritdoc/>
+    public override TypeSymbol Type => Variable.Type;
 
     /// <summary>
-    /// Bound variable expression.
+    /// Gets the variable symbol.
     /// </summary>
-    public sealed class BoundVariableExpression : BoundExpression
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="BoundVariableExpression"/> class.
-        /// </summary>
-        /// <param name="variable">The variable symbol.</param>
-        public BoundVariableExpression(VariableSymbol variable)
-        {
-            Variable = variable;
-        }
-
-        /// <inheritdoc/>
-        public override BoundNodeKind Kind => BoundNodeKind.VariableExpression;
-
-        /// <inheritdoc/>
-        public override TypeSymbol Type => Variable.Type;
-
-        /// <summary>
-        /// Gets the variable symbol.
-        /// </summary>
-        public VariableSymbol Variable { get; }
-    }
+    public VariableSymbol Variable { get; }
 }
