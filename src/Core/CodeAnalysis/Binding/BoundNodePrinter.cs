@@ -72,6 +72,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.ExpressionStatement:
                 WriteExpressionStatement((BoundExpressionStatement)node, writer);
                 break;
+            case BoundNodeKind.TryStatement:
+                WriteTryStatement((BoundTryStatement)node, writer);
+                break;
+            case BoundNodeKind.ThrowStatement:
+                WriteThrowStatement((BoundThrowStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -307,6 +313,41 @@ public static class BoundNodePrinter
 
     private static void WriteExpressionStatement(BoundExpressionStatement node, IndentedTextWriter writer)
     {
+        node.Expression.WriteTo(writer);
+        writer.WriteLine();
+    }
+
+    private static void WriteTryStatement(BoundTryStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.TryKeyword);
+        writer.WriteSpace();
+        node.TryBlock.WriteTo(writer);
+
+        foreach (var clause in node.CatchClauses)
+        {
+            writer.WriteKeyword(SyntaxKind.CatchKeyword);
+            writer.WriteSpace();
+            writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+            writer.WriteIdentifier(clause.Variable.Name);
+            writer.WriteSpace();
+            writer.WriteIdentifier(clause.ExceptionType.Name);
+            writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+            writer.WriteSpace();
+            clause.Body.WriteTo(writer);
+        }
+
+        if (node.FinallyBlock != null)
+        {
+            writer.WriteKeyword(SyntaxKind.FinallyKeyword);
+            writer.WriteSpace();
+            node.FinallyBlock.WriteTo(writer);
+        }
+    }
+
+    private static void WriteThrowStatement(BoundThrowStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.ThrowKeyword);
+        writer.WriteSpace();
         node.Expression.WriteTo(writer);
         writer.WriteLine();
     }

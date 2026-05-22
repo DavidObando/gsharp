@@ -24,6 +24,8 @@ public enum BoundNodeKind
     ConditionalGotoStatement,
     ReturnStatement,
     ExpressionStatement,
+    TryStatement,
+    ThrowStatement,
 
     // Expressions
     ErrorExpression,

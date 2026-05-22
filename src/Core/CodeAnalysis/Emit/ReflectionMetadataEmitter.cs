@@ -429,53 +429,9 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il)
     {
-        foreach (var s in body.Statements)
-        {
-            switch (s)
-            {
-                case BoundVariableDeclaration decl:
-                    if (!locals.ContainsKey(decl.Variable))
-                    {
-                        locals[decl.Variable] = localTypes.Count;
-                        localTypes.Add(decl.Variable.Type);
-                    }
+        CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
+        CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
 
-                    break;
-                case BoundLabelStatement lbl:
-                    if (!labels.ContainsKey(lbl.Label))
-                    {
-                        labels[lbl.Label] = il.DefineLabel();
-                    }
-
-                    break;
-            }
-        }
-
-        // Second pass to pre-define labels referenced by gotos before their LabelStatement
-        // (forward branches are common after Lowerer flattens loops).
-        foreach (var s in body.Statements)
-        {
-            switch (s)
-            {
-                case BoundGotoStatement g:
-                    if (!labels.ContainsKey(g.Label))
-                    {
-                        labels[g.Label] = il.DefineLabel();
-                    }
-
-                    break;
-                case BoundConditionalGotoStatement cg:
-                    if (!labels.ContainsKey(cg.Label))
-                    {
-                        labels[cg.Label] = il.DefineLabel();
-                    }
-
-                    break;
-            }
-        }
-
-        // Allocate two ephemeral locals per append expression so emission can
-        // stash src and dst arrays without relying on a CLR swap opcode.
         foreach (var append in CollectAppends(body))
         {
             var srcSlot = localTypes.Count;
@@ -483,6 +439,94 @@ internal sealed class ReflectionMetadataEmitter
             var dstSlot = localTypes.Count;
             localTypes.Add(append.SliceType);
             appendSlots[append] = (srcSlot, dstSlot);
+        }
+    }
+
+    private static void CollectStatements(
+        ImmutableArray<BoundStatement> statements,
+        FunctionSymbol function,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundLabel, LabelHandle> labels,
+        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
+        InstructionEncoder il,
+        int pass)
+    {
+        foreach (var s in statements)
+        {
+            if (pass == 1)
+            {
+                switch (s)
+                {
+                    case BoundVariableDeclaration decl:
+                        if (!locals.ContainsKey(decl.Variable))
+                        {
+                            locals[decl.Variable] = localTypes.Count;
+                            localTypes.Add(decl.Variable.Type);
+                        }
+
+                        break;
+                    case BoundLabelStatement lbl:
+                        if (!labels.ContainsKey(lbl.Label))
+                        {
+                            labels[lbl.Label] = il.DefineLabel();
+                        }
+
+                        break;
+                    case BoundTryStatement t:
+                        CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        foreach (var clause in t.CatchClauses)
+                        {
+                            if (!locals.ContainsKey(clause.Variable))
+                            {
+                                locals[clause.Variable] = localTypes.Count;
+                                localTypes.Add(clause.Variable.Type);
+                            }
+
+                            CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        if (t.FinallyBlock != null)
+                        {
+                            CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        break;
+                }
+            }
+            else
+            {
+                switch (s)
+                {
+                    case BoundGotoStatement g:
+                        if (!labels.ContainsKey(g.Label))
+                        {
+                            labels[g.Label] = il.DefineLabel();
+                        }
+
+                        break;
+                    case BoundConditionalGotoStatement cg:
+                        if (!labels.ContainsKey(cg.Label))
+                        {
+                            labels[cg.Label] = il.DefineLabel();
+                        }
+
+                        break;
+                    case BoundTryStatement t:
+                        CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        foreach (var clause in t.CatchClauses)
+                        {
+                            CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        if (t.FinallyBlock != null)
+                        {
+                            CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        }
+
+                        break;
+                }
+            }
         }
     }
 
@@ -536,6 +580,22 @@ internal sealed class ReflectionMetadataEmitter
                     WalkForAppends(rs.Expression, sink);
                 }
 
+                break;
+            case BoundTryStatement t:
+                WalkForAppends(t.TryBlock, sink);
+                foreach (var clause in t.CatchClauses)
+                {
+                    WalkForAppends(clause.Body, sink);
+                }
+
+                if (t.FinallyBlock != null)
+                {
+                    WalkForAppends(t.FinallyBlock, sink);
+                }
+
+                break;
+            case BoundThrowStatement th:
+                WalkForAppends(th.Expression, sink);
                 break;
             case BoundConditionalGotoStatement cg:
                 WalkForAppends(cg.Condition, sink);
@@ -614,7 +674,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
-            EncodeTypeSymbol(encoder, nestedArr);
+            this.EncodeTypeSymbol(encoder, nestedArr);
             return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
         }
 
@@ -622,7 +682,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
-            EncodeTypeSymbol(encoder, nestedSlice);
+            this.EncodeTypeSymbol(encoder, nestedSlice);
             return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
         }
 
@@ -793,7 +853,7 @@ internal sealed class ReflectionMetadataEmitter
         return this.stringEqualsRef;
     }
 
-    private static void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
+    private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
         if (type == TypeSymbol.Bool)
         {
@@ -819,13 +879,17 @@ internal sealed class ReflectionMetadataEmitter
         {
             EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
         }
+        else if (type?.ClrType != null)
+        {
+            this.EncodeClrType(encoder, type.ClrType);
+        }
         else
         {
-            throw new NotSupportedException($"Cannot encode signature for type '{type.Name}' yet.");
+            throw new NotSupportedException($"Cannot encode signature for type '{type?.Name}' yet.");
         }
     }
 
-    private static void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
+    private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
     {
         if (type == TypeSymbol.Void)
         {
@@ -833,7 +897,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else
         {
-            EncodeTypeSymbol(encoder.Type(), type);
+            this.EncodeTypeSymbol(encoder.Type(), type);
         }
     }
 
@@ -954,6 +1018,13 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundConditionalGotoStatement cg:
                     this.EmitExpression(cg.Condition);
                     this.il.Branch(cg.JumpIfTrue ? ILOpCode.Brtrue : ILOpCode.Brfalse, this.labels[cg.Label]);
+                    break;
+                case BoundTryStatement tryStmt:
+                    this.EmitTryStatement(tryStmt);
+                    break;
+                case BoundThrowStatement throwStmt:
+                    this.EmitExpression(throwStmt.Expression);
+                    this.il.OpCode(ILOpCode.Throw);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -1312,6 +1383,94 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.il.OpCode(ILOpCode.Stelem);
                 this.il.Token(this.outer.GetElementTypeToken(elementType));
+            }
+        }
+
+        private void EmitTryStatement(BoundTryStatement node)
+        {
+            var endLabel = this.il.DefineLabel();
+            var hasCatches = node.CatchClauses.Length > 0;
+            var hasFinally = node.FinallyBlock != null;
+
+            if (hasCatches && hasFinally)
+            {
+                // Nested: outer try-finally wrapping inner try-catch.
+                var outerTryStart = this.il.DefineLabel();
+                var innerTryStart = this.il.DefineLabel();
+                var finallyStart = this.il.DefineLabel();
+                var finallyEnd = this.il.DefineLabel();
+
+                this.il.MarkLabel(outerTryStart);
+                this.il.MarkLabel(innerTryStart);
+                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                var innerTryEnd = this.il.DefineLabel();
+                this.il.Branch(ILOpCode.Leave, endLabel);
+                this.il.MarkLabel(innerTryEnd);
+
+                this.EmitCatchClauses(node.CatchClauses, innerTryStart, innerTryEnd, leaveTarget: endLabel);
+
+                this.il.MarkLabel(finallyStart);
+                this.EmitBlock((BoundBlockStatement)node.FinallyBlock);
+                this.il.OpCode(ILOpCode.Endfinally);
+                this.il.MarkLabel(finallyEnd);
+
+                this.il.ControlFlowBuilder.AddFinallyRegion(outerTryStart, finallyStart, finallyStart, finallyEnd);
+            }
+            else if (hasCatches)
+            {
+                var tryStart = this.il.DefineLabel();
+                this.il.MarkLabel(tryStart);
+                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                var tryEnd = this.il.DefineLabel();
+                this.il.Branch(ILOpCode.Leave, endLabel);
+                this.il.MarkLabel(tryEnd);
+
+                this.EmitCatchClauses(node.CatchClauses, tryStart, tryEnd, leaveTarget: endLabel);
+            }
+            else
+            {
+                // finally only
+                var tryStart = this.il.DefineLabel();
+                var finallyStart = this.il.DefineLabel();
+                var finallyEnd = this.il.DefineLabel();
+
+                this.il.MarkLabel(tryStart);
+                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                this.il.Branch(ILOpCode.Leave, finallyEnd);
+
+                this.il.MarkLabel(finallyStart);
+                this.EmitBlock((BoundBlockStatement)node.FinallyBlock);
+                this.il.OpCode(ILOpCode.Endfinally);
+                this.il.MarkLabel(finallyEnd);
+
+                this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+            }
+
+            this.il.MarkLabel(endLabel);
+        }
+
+        private void EmitCatchClauses(
+            ImmutableArray<BoundCatchClause> clauses,
+            LabelHandle tryStart,
+            LabelHandle tryEnd,
+            LabelHandle leaveTarget)
+        {
+            foreach (var clause in clauses)
+            {
+                var handlerStart = this.il.DefineLabel();
+                var handlerEnd = this.il.DefineLabel();
+
+                this.il.MarkLabel(handlerStart);
+
+                // Stack contains the caught exception; store into the catch variable.
+                this.EmitStoreVariable(clause.Variable);
+
+                this.EmitBlock((BoundBlockStatement)clause.Body);
+                this.il.Branch(ILOpCode.Leave, leaveTarget);
+                this.il.MarkLabel(handlerEnd);
+
+                var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(clause.ExceptionType.ClrType);
+                this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
             }
         }
 

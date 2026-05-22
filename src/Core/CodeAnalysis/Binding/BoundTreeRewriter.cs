@@ -41,6 +41,10 @@ public abstract class BoundTreeRewriter
                 return RewriteReturnStatement((BoundReturnStatement)node);
             case BoundNodeKind.ExpressionStatement:
                 return RewriteExpressionStatement((BoundExpressionStatement)node);
+            case BoundNodeKind.TryStatement:
+                return RewriteTryStatement((BoundTryStatement)node);
+            case BoundNodeKind.ThrowStatement:
+                return RewriteThrowStatement((BoundThrowStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -220,6 +224,57 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundExpressionStatement(expression);
+    }
+
+    /// <summary>
+    /// Rewrites a try statement.
+    /// </summary>
+    /// <param name="node">The try statement to rewrite.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewriteTryStatement(BoundTryStatement node)
+    {
+        var tryBlock = RewriteStatement(node.TryBlock);
+
+        var rewrittenClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
+        var clausesChanged = false;
+        foreach (var clause in node.CatchClauses)
+        {
+            var body = RewriteStatement(clause.Body);
+            if (body == clause.Body)
+            {
+                rewrittenClauses.Add(clause);
+            }
+            else
+            {
+                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+                clausesChanged = true;
+            }
+        }
+
+        var finallyBlock = node.FinallyBlock == null ? null : RewriteStatement(node.FinallyBlock);
+
+        if (tryBlock == node.TryBlock && !clausesChanged && finallyBlock == node.FinallyBlock)
+        {
+            return node;
+        }
+
+        return new BoundTryStatement(tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
+    }
+
+    /// <summary>
+    /// Rewrites a throw statement.
+    /// </summary>
+    /// <param name="node">The throw statement to rewrite.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewriteThrowStatement(BoundThrowStatement node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundThrowStatement(expression);
     }
 
     /// <summary>

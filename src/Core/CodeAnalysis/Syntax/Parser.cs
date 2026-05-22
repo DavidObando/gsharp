@@ -326,6 +326,12 @@ public class Parser
                 return ParseSwitchStatement();
             case SyntaxKind.FallthroughKeyword:
                 return ParseFallthroughStatement();
+            case SyntaxKind.TryKeyword:
+                return ParseTryStatement();
+            case SyntaxKind.ThrowKeyword:
+                return ParseThrowStatement();
+            case SyntaxKind.UsingKeyword:
+                return ParseUsingStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -816,6 +822,61 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.FallthroughKeyword);
         Diagnostics.ReportFallthroughNotSupported(keyword.Location);
         return new ExpressionStatementSyntax(syntaxTree, new LiteralExpressionSyntax(syntaxTree, keyword, value: 0));
+    }
+
+    private StatementSyntax ParseTryStatement()
+    {
+        var tryKeyword = MatchToken(SyntaxKind.TryKeyword);
+        var tryBlock = ParseBlockStatement();
+
+        var catchClauses = ImmutableArray.CreateBuilder<CatchClauseSyntax>();
+        while (Current.Kind == SyntaxKind.CatchKeyword)
+        {
+            catchClauses.Add(ParseCatchClause());
+        }
+
+        FinallyClauseSyntax finallyClause = null;
+        if (Current.Kind == SyntaxKind.FinallyKeyword)
+        {
+            var finallyKeyword = NextToken();
+            var body = ParseBlockStatement();
+            finallyClause = new FinallyClauseSyntax(syntaxTree, finallyKeyword, body);
+        }
+
+        return new TryStatementSyntax(syntaxTree, tryKeyword, tryBlock, catchClauses.ToImmutable(), finallyClause);
+    }
+
+    private CatchClauseSyntax ParseCatchClause()
+    {
+        var catchKeyword = MatchToken(SyntaxKind.CatchKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeClause = ParseOptionalTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var body = ParseBlockStatement();
+        return new CatchClauseSyntax(syntaxTree, catchKeyword, openParen, identifier, typeClause, closeParen, body);
+    }
+
+    private StatementSyntax ParseThrowStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ThrowKeyword);
+        var expression = ParseExpression();
+        return new ThrowStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseUsingStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.UsingKeyword);
+        if (Current.Kind != SyntaxKind.LetKeyword &&
+            Current.Kind != SyntaxKind.VarKeyword &&
+            Current.Kind != SyntaxKind.ConstKeyword)
+        {
+            // Force the expected keyword diagnostic by matching `let`.
+            MatchToken(SyntaxKind.LetKeyword);
+        }
+
+        var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
+        return new UsingStatementSyntax(syntaxTree, keyword, decl);
     }
 
     private ExpressionStatementSyntax ParseExpressionStatement()

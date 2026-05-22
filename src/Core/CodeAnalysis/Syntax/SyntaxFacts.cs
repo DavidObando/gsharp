@@ -124,6 +124,8 @@ public static class SyntaxFacts
                 return SyntaxKind.BreakKeyword;
             case "case":
                 return SyntaxKind.CaseKeyword;
+            case "catch":
+                return SyntaxKind.CatchKeyword;
             case "chan":
                 return SyntaxKind.ChanKeyword;
             case "const":
@@ -140,6 +142,8 @@ public static class SyntaxFacts
                 return SyntaxKind.FalseKeyword;
             case "fallthrough":
                 return SyntaxKind.FallthroughKeyword;
+            case "finally":
+                return SyntaxKind.FinallyKeyword;
             case "for":
                 return SyntaxKind.ForKeyword;
             case "func":
@@ -176,10 +180,16 @@ public static class SyntaxFacts
                 return SyntaxKind.StructKeyword;
             case "switch":
                 return SyntaxKind.SwitchKeyword;
+            case "throw":
+                return SyntaxKind.ThrowKeyword;
             case "true":
                 return SyntaxKind.TrueKeyword;
+            case "try":
+                return SyntaxKind.TryKeyword;
             case "type":
                 return SyntaxKind.TypeKeyword;
+            case "using":
+                return SyntaxKind.UsingKeyword;
             case "var":
                 return SyntaxKind.VarKeyword;
             default:
@@ -328,6 +338,8 @@ public static class SyntaxFacts
                 return "break";
             case SyntaxKind.CaseKeyword:
                 return "case";
+            case SyntaxKind.CatchKeyword:
+                return "catch";
             case SyntaxKind.ChanKeyword:
                 return "chan";
             case SyntaxKind.ConstKeyword:
@@ -344,6 +356,8 @@ public static class SyntaxFacts
                 return "false";
             case SyntaxKind.FallthroughKeyword:
                 return "fallthrough";
+            case SyntaxKind.FinallyKeyword:
+                return "finally";
             case SyntaxKind.ForKeyword:
                 return "for";
             case SyntaxKind.FuncKeyword:
@@ -380,10 +394,16 @@ public static class SyntaxFacts
                 return "struct";
             case SyntaxKind.SwitchKeyword:
                 return "switch";
+            case SyntaxKind.ThrowKeyword:
+                return "throw";
             case SyntaxKind.TrueKeyword:
                 return "true";
+            case SyntaxKind.TryKeyword:
+                return "try";
             case SyntaxKind.TypeKeyword:
                 return "type";
+            case SyntaxKind.UsingKeyword:
+                return "using";
             case SyntaxKind.VarKeyword:
                 return "var";
             default:

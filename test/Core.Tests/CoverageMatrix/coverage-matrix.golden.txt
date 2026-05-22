@@ -20,6 +20,8 @@ BreakKeyword
 BreakStatement
 CallExpression
 CaseKeyword
+CatchClause
+CatchKeyword
 ChanKeyword
 CloseBraceToken
 CloseParenthesisToken
@@ -44,6 +46,8 @@ EqualsToken
 ExpressionStatement
 FallthroughKeyword
 FalseKeyword
+FinallyClause
+FinallyKeyword
 ForClauseStatement
 ForConditionStatement
 ForEllipsisStatement
@@ -116,11 +120,17 @@ StructKeyword
 SwitchCase
 SwitchKeyword
 SwitchStatement
+ThrowKeyword
+ThrowStatement
 TrueKeyword
+TryKeyword
+TryStatement
 TypeAliasDeclaration
 TypeClause
 TypeKeyword
 UnaryExpression
+UsingKeyword
+UsingStatement
 VarKeyword
 VariableDeclaration
 WhitespaceToken
@@ -149,6 +159,8 @@ LabelStatement
 LenExpression
 LiteralExpression
 ReturnStatement
+ThrowStatement
+TryStatement
 UnaryExpression
 VariableDeclaration
 VariableExpression

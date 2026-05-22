@@ -94,6 +94,13 @@ public sealed class Evaluator
                     var rs = (BoundReturnStatement)s;
                     lastValue = rs.Expression == null ? null : EvaluateExpression(rs.Expression);
                     return lastValue;
+                case BoundNodeKind.TryStatement:
+                    EvaluateTryStatement((BoundTryStatement)s);
+                    index++;
+                    break;
+                case BoundNodeKind.ThrowStatement:
+                    EvaluateThrowStatement((BoundThrowStatement)s);
+                    break;
                 default:
                     throw new EvaluatorException($"Unexpected node {s.Kind}", s);
             }
@@ -112,6 +119,63 @@ public sealed class Evaluator
     private void EvaluateExpressionStatement(BoundExpressionStatement node)
     {
         lastValue = EvaluateExpression(node.Expression);
+    }
+
+    private void EvaluateTryStatement(BoundTryStatement node)
+    {
+        try
+        {
+            EvaluateStatement((BoundBlockStatement)node.TryBlock);
+        }
+        catch (Exception ex) when (TryFindCatchHandler(node, ex, out _))
+        {
+            TryFindCatchHandler(node, ex, out var handler);
+            Assign(handler.Variable, ex);
+            EvaluateStatement((BoundBlockStatement)handler.Body);
+        }
+        finally
+        {
+            if (node.FinallyBlock != null)
+            {
+                EvaluateStatement((BoundBlockStatement)node.FinallyBlock);
+            }
+        }
+    }
+
+    private void EvaluateThrowStatement(BoundThrowStatement node)
+    {
+        var value = EvaluateExpression(node.Expression);
+        if (value is Exception ex)
+        {
+            throw ex;
+        }
+
+        throw new Exception(value?.ToString());
+    }
+
+    private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
+    {
+        var actualType = ex.GetType();
+        foreach (var clause in node.CatchClauses)
+        {
+            var clrName = clause.ExceptionType?.ClrType?.FullName;
+            if (clrName == null)
+            {
+                continue;
+            }
+
+            for (var t = actualType; t != null; t = t.BaseType)
+            {
+                if (t.FullName == clrName)
+                {
+                    matched = clause;
+                    return true;
+                }
+            }
+        }
+
+        matched = null;
+        return false;
     }
 
     private object EvaluateExpression(BoundExpression node)

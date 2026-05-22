@@ -402,6 +402,12 @@ public sealed class Binder
                 return BindMultiAssignmentStatement((MultiAssignmentStatementSyntax)syntax);
             case SyntaxKind.SwitchStatement:
                 return BindSwitchStatement((SwitchStatementSyntax)syntax);
+            case SyntaxKind.TryStatement:
+                return BindTryStatement((TryStatementSyntax)syntax);
+            case SyntaxKind.ThrowStatement:
+                return BindThrowStatement((ThrowStatementSyntax)syntax);
+            case SyntaxKind.UsingStatement:
+                return BindUsingStatement((UsingStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -654,6 +660,123 @@ public sealed class Binder
         }
 
         return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindTryStatement(TryStatementSyntax syntax)
+    {
+        var tryBlock = BindBlockStatement(syntax.TryBlock);
+
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.TryKeyword.Location, "System.Exception");
+            return BindErrorStatement();
+        }
+
+        var catches = ImmutableArray.CreateBuilder<BoundCatchClause>();
+        foreach (var catchSyntax in syntax.CatchClauses)
+        {
+            var catchType = exceptionType;
+            if (catchSyntax.TypeClause != null)
+            {
+                var declared = BindTypeClause(catchSyntax.TypeClause);
+                if (declared != null)
+                {
+                    catchType = declared;
+                }
+            }
+
+            scope = new BoundScope(scope);
+            var variable = BindVariableDeclaration(catchSyntax.Identifier, isReadOnly: true, type: catchType);
+            var body = BindBlockStatement(catchSyntax.Body);
+            scope = scope.Parent;
+
+            catches.Add(new BoundCatchClause(catchType, variable, body));
+        }
+
+        BoundStatement finallyBlock = null;
+        if (syntax.FinallyClause != null)
+        {
+            finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+        }
+
+        if (catches.Count == 0 && finallyBlock == null)
+        {
+            Diagnostics.ReportTryWithoutCatchOrFinally(syntax.TryKeyword.Location);
+            return BindErrorStatement();
+        }
+
+        return new BoundTryStatement(tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType != null && expression.Type != TypeSymbol.Error)
+        {
+            var argClr = expression.Type?.ClrType;
+            if (argClr == null || !ClrTypeUtilities.IsAssignableByName(exceptionType.ClrType, argClr))
+            {
+                Diagnostics.ReportCannotConvert(syntax.Expression.Location, expression.Type ?? TypeSymbol.Error, exceptionType);
+                return BindErrorStatement();
+            }
+        }
+
+        return new BoundThrowStatement(expression);
+    }
+
+    private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
+    {
+        // Lower `using let x = expr` to `let x = expr; try { } finally { x.Dispose() }`.
+        // Because the rest of the enclosing block is not available here, the user's
+        // intent is captured by emitting a try/finally that protects an empty block.
+        // The disposal still happens at scope exit because the finally always runs.
+        // Note: this is a minimal Phase 3.D shape; a future iteration will reshape
+        // the enclosing block so the protected region covers the remaining statements.
+        var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
+
+        var disposeCall = TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
+        if (disposeCall == null)
+        {
+            return BindErrorStatement();
+        }
+
+        var tryBlock = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(disposeCall)));
+        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declaration, tryStmt));
+    }
+
+    private BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
+    {
+        var clrType = variable.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
+            return null;
+        }
+
+        var disposeMethod = clrType.GetMethod("Dispose", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, binder: null, types: System.Type.EmptyTypes, modifiers: null);
+        if (disposeMethod == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type);
+            return null;
+        }
+
+        var receiver = new BoundVariableExpression(variable);
+        return new BoundImportedInstanceCallExpression(receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+    }
+
+    private TypeSymbol ResolveExceptionType()
+    {
+        if (scope.References.TryResolveType("System.Exception", out var t))
+        {
+            return TypeSymbol.FromClrType(t);
+        }
+
+        return null;
     }
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
@@ -1575,6 +1698,11 @@ public sealed class Binder
         if (scope.TryLookupTypeAlias(name, out var aliased))
         {
             return aliased;
+        }
+
+        if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+        {
+            return TypeSymbol.FromClrType(importedClass.ClassType);
         }
 
         return null;

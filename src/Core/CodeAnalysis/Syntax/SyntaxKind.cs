@@ -105,8 +105,11 @@ public enum SyntaxKind
     SelectKeyword,
     StructKeyword,
     SwitchKeyword,
+    ThrowKeyword,
     TrueKeyword,
+    TryKeyword,
     TypeKeyword,
+    UsingKeyword,
     VarKeyword,
 
     // compilation
@@ -145,6 +148,13 @@ public enum SyntaxKind
     MultiAssignmentStatement,
     SwitchStatement,
     SwitchCase,
+    TryStatement,
+    CatchClause,
+    FinallyClause,
+    ThrowStatement,
+    UsingStatement,
+    CatchKeyword,
+    FinallyKeyword,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

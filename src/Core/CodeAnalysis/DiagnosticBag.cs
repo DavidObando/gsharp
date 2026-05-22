@@ -178,6 +178,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a 'try' statement has neither catch nor finally clauses.
+    /// </summary>
+    /// <param name="location">The text location of the 'try' keyword.</param>
+    public void ReportTryWithoutCatchOrFinally(TextLocation location)
+    {
+        Report(location, "A 'try' statement requires at least one catch or finally clause.");
+    }
+
+    /// <summary>
+    /// Reports that a type used in a 'using' declaration does not implement IDisposable.
+    /// </summary>
+    /// <param name="location">The text location of the using keyword.</param>
+    /// <param name="type">The non-disposable type.</param>
+    public void ReportTypeNotDisposable(TextLocation location, TypeSymbol type)
+    {
+        Report(location, $"Type '{type.Name}' cannot be used in a 'using' statement because it does not provide a public Dispose() method.");
+    }
+
+    /// <summary>
     /// Reports that the keyworkd can only be used inside of loops.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
