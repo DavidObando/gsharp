@@ -24,15 +24,33 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="parent">The parent scope.</param>
     public BoundScope(BoundScope parent)
+        : this(parent, references: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundScope"/> class with
+    /// an explicit reference resolver. Child scopes inherit the parent's
+    /// resolver when one is not supplied.
+    /// </summary>
+    /// <param name="parent">The parent scope.</param>
+    /// <param name="references">The reference resolver; defaults to the parent's resolver, or <see cref="ReferenceResolver.Default"/> if none.</param>
+    public BoundScope(BoundScope parent, ReferenceResolver references)
     {
         Parent = parent;
         imports = parent?.imports ?? new List<ImportSymbol>();
+        References = references ?? parent?.References ?? ReferenceResolver.Default();
     }
 
     /// <summary>
     /// Gets the parent scope.
     /// </summary>
     public BoundScope Parent { get; }
+
+    /// <summary>
+    /// Gets the reference resolver used to look up imported CLR types.
+    /// </summary>
+    public ReferenceResolver References { get; }
 
     /// <summary>
     /// Tries to add an import to this scope.
@@ -92,27 +110,18 @@ public sealed class BoundScope
     {
         importedClass = null;
 
-        if (imports != null)
+        if (imports == null)
         {
-            string[] sources = new[]
+            return false;
+        }
+
+        foreach (var import in imports)
+        {
+            var typeName = import.Name + "." + name;
+            if (References.TryResolveType(typeName, out var type))
             {
-                string.Empty,
-                ", mscorlib",
-                ", System.Runtime",
-            };
-            foreach (var source in sources)
-            {
-                foreach (var import in imports)
-                {
-                    Console.WriteLine();
-                    var typeName = import.Name + "." + name + source;
-                    var type = Type.GetType(typeName);
-                    if (type != null)
-                    {
-                        importedClass = new ImportedClassSymbol(type, declaration);
-                        return true;
-                    }
-                }
+                importedClass = new ImportedClassSymbol(type, declaration);
+                return true;
             }
         }
 

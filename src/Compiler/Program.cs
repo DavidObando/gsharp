@@ -70,7 +70,10 @@ public class Program
             syntaxTrees.Add(SyntaxTree.Load(path));
         }
 
-        var compilation = new Compilation(syntaxTrees.ToArray());
+        var references = parsed.References.Count > 0
+            ? ReferenceResolver.WithReferences(parsed.References)
+            : null;
+        var compilation = new Compilation(references, syntaxTrees.ToArray());
 
         if (parsed.OutputPath is null)
         {
@@ -210,8 +213,8 @@ public class Program
 
                     case "r":
                     case "reference":
-                        // References are accepted for SDK compatibility but unused
-                        // by the Phase 1 emitter (imports resolve via runtime reflection).
+                        // Loaded into the binder's ReferenceResolver so imports can resolve types
+                        // declared in user-supplied assemblies in addition to the BCL.
                         result.References.Add(value);
                         break;
 

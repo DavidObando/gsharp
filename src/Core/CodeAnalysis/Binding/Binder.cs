@@ -56,8 +56,20 @@ public sealed class Binder
     /// <param name="syntaxTrees">The new syntax trees.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees)
+        => BindGlobalScope(previous, syntaxTrees, references: null);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, resulting in
+    /// a new chained global scope, using the supplied reference resolver to
+    /// look up imported CLR types.
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references)
     {
-        var parentScope = CreateParentScope(previous);
+        var parentScope = CreateParentScope(previous, references);
         var binder = new Binder(parentScope, function: null);
 
         var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -108,7 +120,7 @@ public sealed class Binder
     /// <returns>A bound program.</returns>
     public static BoundProgram BindProgram(BoundGlobalScope globalScope)
     {
-        var parentScope = CreateParentScope(globalScope);
+        var parentScope = CreateParentScope(globalScope, references: null);
 
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
@@ -149,7 +161,7 @@ public sealed class Binder
         return new BoundProgram(globalScope.Package.Name, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
     }
 
-    private static BoundScope CreateParentScope(BoundGlobalScope previous)
+    private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)
     {
         var stack = new Stack<BoundGlobalScope>();
         while (previous != null)
@@ -158,7 +170,7 @@ public sealed class Binder
             previous = previous.Previous;
         }
 
-        var parent = CreateRootScope();
+        var parent = CreateRootScope(references);
 
         while (stack.Count > 0)
         {
@@ -186,9 +198,9 @@ public sealed class Binder
         return parent;
     }
 
-    private static BoundScope CreateRootScope()
+    private static BoundScope CreateRootScope(ReferenceResolver references)
     {
-        var result = new BoundScope(null);
+        var result = new BoundScope(parent: null, references: references);
 
         foreach (var f in BuiltinFunctions.GetAll())
         {

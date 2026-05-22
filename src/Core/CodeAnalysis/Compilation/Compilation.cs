@@ -29,14 +29,26 @@ public class Compilation
     /// </summary>
     /// <param name="syntaxTrees">The syntax trees.</param>
     public Compilation(params SyntaxTree[] syntaxTrees)
-        : this(null, syntaxTrees)
+        : this(null, references: null, syntaxTrees)
     {
     }
 
-    private Compilation(Compilation previous, SyntaxTree[] syntaxTrees)
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Compilation"/> class with
+    /// an explicit reference resolver.
+    /// </summary>
+    /// <param name="references">The reference resolver to use for imported CLR type lookups.</param>
+    /// <param name="syntaxTrees">The syntax trees.</param>
+    public Compilation(ReferenceResolver references, params SyntaxTree[] syntaxTrees)
+        : this(null, references, syntaxTrees)
+    {
+    }
+
+    private Compilation(Compilation previous, ReferenceResolver references, SyntaxTree[] syntaxTrees)
     {
         Previous = previous;
         SyntaxTrees = syntaxTrees.ToImmutableArray();
+        References = references ?? previous?.References;
     }
 
     /// <summary>
@@ -50,6 +62,11 @@ public class Compilation
     public ImmutableArray<SyntaxTree> SyntaxTrees { get; }
 
     /// <summary>
+    /// Gets the reference resolver used to look up imported CLR types.
+    /// </summary>
+    public ReferenceResolver References { get; }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -58,7 +75,7 @@ public class Compilation
         {
             if (globalScope == null)
             {
-                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees);
+                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 
@@ -74,7 +91,7 @@ public class Compilation
     /// <returns>The chained compilation.</returns>
     public Compilation ContinueWith(params SyntaxTree[] syntaxTrees)
     {
-        return new Compilation(this, syntaxTrees);
+        return new Compilation(this, references: null, syntaxTrees);
     }
 
     /// <summary>
