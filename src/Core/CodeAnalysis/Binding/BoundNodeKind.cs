@@ -44,6 +44,9 @@ public enum BoundNodeKind
     LenExpression,
     CapExpression,
     AppendExpression,
+    StructLiteralExpression,
+    FieldAccessExpression,
+    FieldAssignmentExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

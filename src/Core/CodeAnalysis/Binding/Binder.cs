@@ -130,6 +130,14 @@ public sealed class Binder
             binder.BindTypeAliasDeclaration(typeAlias);
         }
 
+        var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                            .OfType<StructDeclarationSyntax>();
+        foreach (var structSyntax in structDeclarations)
+        {
+            var owningPackage = packageByTree[structSyntax.SyntaxTree];
+            binder.BindStructDeclaration(structSyntax, owningPackage);
+        }
+
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
@@ -152,6 +160,7 @@ public sealed class Binder
         var functions = binder.scope.GetDeclaredFunctions();
         var variables = binder.scope.GetDeclaredVariables();
         var typeAliases = binder.scope.GetDeclaredTypeAliases();
+        var structs = binder.scope.GetDeclaredStructs();
 
         // Entry-point package: the package owning the top-level statements
         // (if any) or the package owning explicit Main (if any) or, lacking
@@ -168,7 +177,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -308,6 +317,50 @@ public sealed class Binder
         }
 
         if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+    }
+
+    private void BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+
+        switch (name)
+        {
+            case "bool":
+            case "int":
+            case "string":
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                return;
+        }
+
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+
+        var seenFieldNames = new HashSet<string>();
+        var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+        foreach (var fieldSyntax in syntax.Fields)
+        {
+            var fieldName = fieldSyntax.Identifier.Text;
+            if (!seenFieldNames.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
+                continue;
+            }
+
+            var fieldType = BindTypeClause(fieldSyntax.Type);
+            if (fieldType == null)
+            {
+                continue;
+            }
+
+            var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
+            fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility));
+        }
+
+        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name);
+
+        if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
@@ -1016,6 +1069,10 @@ public sealed class Binder
                 return BindIndexExpression((IndexExpressionSyntax)syntax);
             case SyntaxKind.IndexAssignmentExpression:
                 return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.StructLiteralExpression:
+                return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
+            case SyntaxKind.FieldAssignmentExpression:
+                return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -1144,6 +1201,71 @@ public sealed class Binder
         var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(variable, convertedExpression);
+    }
+
+    private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
+    {
+        var typeName = syntax.TypeIdentifier.Text;
+        if (!scope.TryLookupTypeAlias(typeName, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
+        {
+            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+            return new BoundErrorExpression();
+        }
+
+        var seenFieldNames = new HashSet<string>();
+        var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        foreach (var initSyntax in syntax.Initializers)
+        {
+            var fieldName = initSyntax.FieldIdentifier.Text;
+            if (!structSymbol.TryGetField(fieldName, out var field))
+            {
+                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            if (!seenFieldNames.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            var valueExpr = BindExpression(initSyntax.Value);
+            valueExpr = BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
+            inits.Add(new BoundFieldInitializer(field, valueExpr));
+        }
+
+        return new BoundStructLiteralExpression(structSymbol, inits.ToImmutable());
+    }
+
+    private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
+    {
+        var receiverName = syntax.Receiver.Text;
+        var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
+        var value = BindExpression(syntax.Value);
+        if (variable == null)
+        {
+            return value;
+        }
+
+        if (!(variable.Type is StructSymbol structSymbol))
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (!structSymbol.TryGetField(syntax.FieldIdentifier.Text, out var field))
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (variable.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
+        }
+
+        var converted = BindConversion(syntax.Value.Location, value, field.Type);
+        return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
     }
 
     private BoundExpression BindUnaryExpression(UnaryExpressionSyntax syntax)
@@ -1446,6 +1568,15 @@ public sealed class Binder
                     {
                         Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                     }
+                }
+                else if (receiver != null && receiver.Type is StructSymbol structSym)
+                {
+                    if (structSym.TryGetField(ne.IdentifierToken.Text, out var field))
+                    {
+                        return new BoundFieldAccessExpression(receiver, structSym, field);
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
                 else
                 {

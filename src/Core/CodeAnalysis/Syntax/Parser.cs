@@ -189,10 +189,53 @@ public class Parser
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        if (Current.Kind == SyntaxKind.StructKeyword)
+        {
+            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier);
+        }
+
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
         return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
+    }
+
+    private StructDeclarationSyntax ParseStructDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier)
+    {
+        var structKeyword = MatchToken(SyntaxKind.StructKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+            fields.Add(ParseFieldDeclaration());
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, structKeyword, openBrace, fields.ToImmutable(), closeBrace);
+    }
+
+    private FieldDeclarationSyntax ParseFieldDeclaration()
+    {
+        SyntaxToken fieldAccessibility = null;
+        if (Current.Kind == SyntaxKind.PublicKeyword ||
+            Current.Kind == SyntaxKind.InternalKeyword ||
+            Current.Kind == SyntaxKind.PrivateKeyword)
+        {
+            fieldAccessibility = NextToken();
+        }
+
+        var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var fieldType = ParseTypeClause();
+        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, fieldIdentifier, fieldType);
     }
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
@@ -914,6 +957,19 @@ public class Parser
         }
 
         if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.DotToken &&
+            Peek(2).Kind == SyntaxKind.IdentifierToken &&
+            Peek(3).Kind == SyntaxKind.EqualsToken)
+        {
+            var identifierToken = NextToken();
+            var dotToken = MatchToken(SyntaxKind.DotToken);
+            var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseAssignmentExpression();
+            return new FieldAssignmentExpressionSyntax(syntaxTree, identifierToken, dotToken, fieldIdentifier, equalsToken, value);
+        }
+
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.EqualsToken)
         {
             var identifierToken = NextToken();
@@ -1086,6 +1142,12 @@ public class Parser
         {
             current = ParseCallExpression();
         }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.OpenBraceToken
+            && IsStructLiteralFollowingBrace(2))
+        {
+            current = ParseStructLiteralExpression();
+        }
         else
         {
             current = ParseNameExpression();
@@ -1154,6 +1216,59 @@ public class Parser
     {
         var identifierToken = MatchToken(SyntaxKind.IdentifierToken);
         return new NameExpressionSyntax(syntaxTree, identifierToken);
+    }
+
+    private bool IsStructLiteralFollowingBrace(int braceOffsetPlusOne)
+    {
+        // braceOffsetPlusOne is the offset of the token AFTER the '{'. A struct
+        // literal is either empty (`}`) or starts with `Identifier :` (a field init).
+        var k0 = Peek(braceOffsetPlusOne).Kind;
+        if (k0 == SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        if (k0 == SyntaxKind.IdentifierToken && Peek(braceOffsetPlusOne + 1).Kind == SyntaxKind.ColonToken)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private ExpressionSyntax ParseStructLiteralExpression()
+    {
+        var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseFieldInitializer());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        var initializers = new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
+        return new StructLiteralExpressionSyntax(syntaxTree, typeIdentifier, openBrace, initializers, closeBrace);
+    }
+
+    private FieldInitializerSyntax ParseFieldInitializer()
+    {
+        var fieldId = MatchToken(SyntaxKind.IdentifierToken);
+        var colon = MatchToken(SyntaxKind.ColonToken);
+        var value = ParseExpression();
+        return new FieldInitializerSyntax(syntaxTree, fieldId, colon, value);
     }
 
     private ExpressionSyntax ParseParenthesizedExpression()

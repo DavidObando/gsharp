@@ -318,6 +318,12 @@ public abstract class BoundTreeRewriter
                 return RewriteCapExpression((BoundCapExpression)node);
             case BoundNodeKind.AppendExpression:
                 return RewriteAppendExpression((BoundAppendExpression)node);
+            case BoundNodeKind.StructLiteralExpression:
+                return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
+            case BoundNodeKind.FieldAccessExpression:
+                return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
+            case BoundNodeKind.FieldAssignmentExpression:
+                return RewriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -626,5 +632,51 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundAppendExpression(slice, element, node.SliceType);
+    }
+
+    /// <summary>Rewrites a struct composite literal.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteStructLiteralExpression(BoundStructLiteralExpression node)
+    {
+        ImmutableArray<BoundFieldInitializer>.Builder builder = null;
+        for (var i = 0; i < node.Initializers.Length; i++)
+        {
+            var init = node.Initializers[i];
+            var newValue = RewriteExpression(init.Value);
+            if (newValue != init.Value && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundFieldInitializer>(node.Initializers.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Initializers[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newValue == init.Value ? init : new BoundFieldInitializer(init.Field, newValue));
+            }
+        }
+
+        return builder == null ? node : new BoundStructLiteralExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a field read.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        return receiver == node.Receiver ? node : new BoundFieldAccessExpression(receiver, node.StructType, node.Field);
+    }
+
+    /// <summary>Rewrites a field assignment.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+    {
+        var value = RewriteExpression(node.Value);
+        return value == node.Value ? node : new BoundFieldAssignmentExpression(node.Receiver, node.StructType, node.Field, value);
     }
 }

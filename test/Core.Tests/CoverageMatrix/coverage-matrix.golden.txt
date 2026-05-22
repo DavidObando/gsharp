@@ -46,6 +46,10 @@ EqualsToken
 ExpressionStatement
 FallthroughKeyword
 FalseKeyword
+FieldAccessExpression
+FieldAssignmentExpression
+FieldDeclaration
+FieldInitializer
 FinallyClause
 FinallyKeyword
 ForClauseStatement
@@ -116,7 +120,9 @@ SlashToken
 StarEqualsToken
 StarToken
 StringToken
+StructDeclaration
 StructKeyword
+StructLiteralExpression
 SwitchCase
 SwitchKeyword
 SwitchStatement
@@ -147,6 +153,8 @@ ConditionalGotoStatement
 ConversionExpression
 ErrorExpression
 ExpressionStatement
+FieldAccessExpression
+FieldAssignmentExpression
 ForEllipsisStatement
 ForInfiniteStatement
 GotoStatement
@@ -159,6 +167,7 @@ LabelStatement
 LenExpression
 LiteralExpression
 ReturnStatement
+StructLiteralExpression
 ThrowStatement
 TryStatement
 UnaryExpression

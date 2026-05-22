@@ -199,6 +199,9 @@ public sealed class Evaluator
                 BoundNodeKind.LenExpression => EvaluateLenExpression((BoundLenExpression)node),
                 BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
+                BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
+                BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
+                BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -293,6 +296,80 @@ public sealed class Evaluator
         System.Array.Copy(src, dst, src.Length);
         dst.SetValue(element, src.Length);
         return dst;
+    }
+
+    private object EvaluateStructLiteralExpression(BoundStructLiteralExpression node)
+    {
+        var sv = new StructValue(node.StructType);
+
+        // Default-initialize all fields, then apply explicit initializers.
+        foreach (var f in node.StructType.Fields)
+        {
+            sv.Fields[f.Name] = DefaultValue(f.Type);
+        }
+
+        foreach (var init in node.Initializers)
+        {
+            sv.Fields[init.Field.Name] = EvaluateExpression(init.Value);
+        }
+
+        return sv;
+    }
+
+    private object EvaluateFieldAccessExpression(BoundFieldAccessExpression node)
+    {
+        var receiverValue = EvaluateExpression(node.Receiver);
+        if (receiverValue is StructValue sv && sv.Fields.TryGetValue(node.Field.Name, out var value))
+        {
+            return value;
+        }
+
+        return DefaultValue(node.Field.Type);
+    }
+
+    private object EvaluateFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+    {
+        var current = node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
+            ? globals[node.Receiver]
+            : locals.Peek()[node.Receiver];
+
+        var sv = current as StructValue ?? new StructValue(node.StructType);
+        var copy = sv.Copy();
+        var value = EvaluateExpression(node.Value);
+        copy.Fields[node.Field.Name] = value;
+        Assign(node.Receiver, copy);
+        return value;
+    }
+
+    private static object DefaultValue(Symbols.TypeSymbol type)
+    {
+        if (type == Symbols.TypeSymbol.Bool)
+        {
+            return false;
+        }
+
+        if (type == Symbols.TypeSymbol.Int)
+        {
+            return 0;
+        }
+
+        if (type == Symbols.TypeSymbol.String)
+        {
+            return string.Empty;
+        }
+
+        if (type is Symbols.StructSymbol s)
+        {
+            var sv = new StructValue(s);
+            foreach (var f in s.Fields)
+            {
+                sv.Fields[f.Name] = DefaultValue(f.Type);
+            }
+
+            return sv;
+        }
+
+        return null;
     }
 
     private object EvaluateUnaryExpression(BoundUnaryExpression u)
@@ -489,6 +566,11 @@ public sealed class Evaluator
 
     private void Assign(VariableSymbol variable, object value)
     {
+        if (value is StructValue sv)
+        {
+            value = sv.Copy();
+        }
+
         if (variable.Kind == SymbolKind.GlobalVariable)
         {
             globals[variable] = value;

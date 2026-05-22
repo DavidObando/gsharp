@@ -126,6 +126,15 @@ public static class BoundNodePrinter
             case BoundNodeKind.AppendExpression:
                 WriteAppendExpression((BoundAppendExpression)node, writer);
                 break;
+            case BoundNodeKind.StructLiteralExpression:
+                WriteStructLiteralExpression((BoundStructLiteralExpression)node, writer);
+                break;
+            case BoundNodeKind.FieldAccessExpression:
+                WriteFieldAccessExpression((BoundFieldAccessExpression)node, writer);
+                break;
+            case BoundNodeKind.FieldAssignmentExpression:
+                WriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -565,5 +574,45 @@ public static class BoundNodePrinter
         writer.WriteSpace();
         node.Element.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteStructLiteralExpression(BoundStructLiteralExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        for (var i = 0; i < node.Initializers.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            var init = node.Initializers[i];
+            writer.WriteIdentifier(init.Field.Name);
+            writer.WritePunctuation(SyntaxKind.ColonToken);
+            writer.WriteSpace();
+            init.Value.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteFieldAccessExpression(BoundFieldAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Field.Name);
+    }
+
+    private static void WriteFieldAssignmentExpression(BoundFieldAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Receiver.Name);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Field.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
     }
 }

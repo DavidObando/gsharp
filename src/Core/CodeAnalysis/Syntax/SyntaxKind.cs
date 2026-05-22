@@ -155,6 +155,12 @@ public enum SyntaxKind
     UsingStatement,
     CatchKeyword,
     FinallyKeyword,
+    StructDeclaration,
+    FieldDeclaration,
+    StructLiteralExpression,
+    FieldInitializer,
+    FieldAccessExpression,
+    FieldAssignmentExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

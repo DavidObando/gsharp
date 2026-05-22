@@ -53,4 +53,9 @@ public enum SymbolKind
     /// The symbol is an imported function.
     /// </summary>
     ImportedFunction,
+
+    /// <summary>
+    /// The symbol is a field on a struct or class.
+    /// </summary>
+    Field,
 }

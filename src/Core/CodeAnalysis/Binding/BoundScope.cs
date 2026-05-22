@@ -225,6 +225,15 @@ public sealed class BoundScope
     public ImmutableDictionary<string, TypeSymbol> GetDeclaredTypeAliases()
         => typeAliases == null ? ImmutableDictionary<string, TypeSymbol>.Empty : typeAliases.ToImmutableDictionary();
 
+    /// <summary>
+    /// Gets the set of declared user-defined struct types in this scope chain.
+    /// </summary>
+    /// <returns>The structs in declaration order.</returns>
+    public ImmutableArray<StructSymbol> GetDeclaredStructs()
+        => typeAliases == null
+            ? ImmutableArray<StructSymbol>.Empty
+            : typeAliases.Values.OfType<StructSymbol>().ToImmutableArray();
+
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {
