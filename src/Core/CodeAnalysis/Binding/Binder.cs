@@ -390,10 +390,31 @@ public sealed class Binder
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)
     {
-        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-        var thenStatement = BindStatement(syntax.ThenStatement);
-        var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
-        return new BoundIfStatement(condition, thenStatement, elseStatement);
+        if (syntax.Initializer == null)
+        {
+            var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+            var thenStatement = BindStatement(syntax.ThenStatement);
+            var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+            return new BoundIfStatement(condition, thenStatement, elseStatement);
+        }
+
+        // `if init; cond { then } else { else }` lowers to a block that
+        // scopes the initializer to both arms:
+        //   {
+        //     <init>
+        //     if cond { then } else { else }
+        //   }
+        scope = new BoundScope(scope);
+
+        var initStatement = BindStatement(syntax.Initializer);
+        var initCondition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var initThen = BindStatement(syntax.ThenStatement);
+        var initElse = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+        scope = scope.Parent;
+
+        var inner = new BoundIfStatement(initCondition, initThen, initElse);
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
     }
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)

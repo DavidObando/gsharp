@@ -347,10 +347,55 @@ public class Parser
     private StatementSyntax ParseIfStatement()
     {
         var keyword = MatchToken(SyntaxKind.IfKeyword);
+
+        StatementSyntax initializer = null;
+        SyntaxToken semicolon = null;
+        if (HasIfInitClause())
+        {
+            initializer = ParseSimpleStatement();
+            semicolon = MatchToken(SyntaxKind.SemicolonToken);
+        }
+
         var condition = ParseExpression();
         var statement = ParseStatement();
         var elseClause = ParseElseClause();
-        return new IfStatementSyntax(syntaxTree, keyword, condition, statement, elseClause);
+        return new IfStatementSyntax(syntaxTree, keyword, initializer, semicolon, condition, statement, elseClause);
+    }
+
+    private bool HasIfInitClause()
+    {
+        // Mirrors LooksLikeForClause: scan ahead from the position
+        // after `if` looking for a depth-zero semicolon before the
+        // opening brace of the then-block.
+        int depth = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.SemicolonToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
     }
 
     private ElseClauseSyntax ParseElseClause()
