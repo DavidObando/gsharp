@@ -110,21 +110,29 @@ public class Program
             Directory.CreateDirectory(outputDir);
         }
 
+        var refOutputPath = args.RefOutputPath;
+        if (!string.IsNullOrEmpty(refOutputPath))
+        {
+            var refDir = Path.GetDirectoryName(refOutputPath);
+            if (!string.IsNullOrEmpty(refDir))
+            {
+                Directory.CreateDirectory(refDir);
+            }
+        }
+
         EmitResult result;
         using (var peStream = File.Create(outputPath))
+        using (var refStream = string.IsNullOrEmpty(refOutputPath) ? null : File.Create(refOutputPath))
         {
-            result = compilation.Emit(peStream, args.AssemblyName);
+            result = compilation.Emit(peStream, refStream, args.AssemblyName);
         }
 
         if (!result.Success)
         {
-            try
+            TryDelete(outputPath);
+            if (!string.IsNullOrEmpty(refOutputPath))
             {
-                File.Delete(outputPath);
-            }
-            catch (IOException)
-            {
-                // Best-effort cleanup; ignore.
+                TryDelete(refOutputPath);
             }
 
             Console.Out.WriteDiagnostics(result.Diagnostics);
@@ -138,7 +146,24 @@ public class Program
         }
 
         Console.WriteLine($"Wrote {outputPath}");
+        if (!string.IsNullOrEmpty(refOutputPath))
+        {
+            Console.WriteLine($"Wrote {refOutputPath}");
+        }
+
         return Success;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup; ignore.
+        }
     }
 
     private static void WriteRuntimeConfig(string assemblyPath, string targetFramework)
@@ -198,6 +223,10 @@ public class Program
                 {
                     case "out":
                         result.OutputPath = value;
+                        break;
+
+                    case "refout":
+                        result.RefOutputPath = value;
                         break;
 
                     case "assemblyname":
@@ -350,6 +379,8 @@ public class Program
         public List<string> References { get; } = new();
 
         public string OutputPath { get; set; }
+
+        public string RefOutputPath { get; set; }
 
         public string AssemblyName { get; set; }
 

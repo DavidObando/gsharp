@@ -9,10 +9,10 @@
     <EnableDefaultCompileItems Condition=" '$(EnableDefaultCompileItems)' == '' ">true</EnableDefaultCompileItems>
     <EnableDefaultItems Condition=" '$(EnableDefaultItems)' == '' ">true</EnableDefaultItems>
 
-    <!-- gsc does not yet emit reference assemblies; suppress the SDK's
-         post-CoreCompile step that expects to find them. -->
-    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
-    <ProduceReferenceAssemblyInOutDir>false</ProduceReferenceAssemblyInOutDir>
+    <!-- gsc emits a metadata-only sibling assembly via /refout:. Enable the
+         SDK's reference-assembly pipeline so consumers get refint/ and ref/
+         outputs alongside the runtime assembly. -->
+    <ProduceReferenceAssembly Condition=" '$(ProduceReferenceAssembly)' == '' ">true</ProduceReferenceAssembly>
   </PropertyGroup>
 
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />

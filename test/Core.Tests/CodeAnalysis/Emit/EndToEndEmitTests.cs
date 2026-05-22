@@ -276,4 +276,68 @@ Console.WriteLine(factorial(5))
             firstPe.PEHeaders.CoffHeader.TimeDateStamp,
             secondPe.PEHeaders.CoffHeader.TimeDateStamp);
     }
+
+    [Fact]
+    public void Emit_Reference_Assembly_Has_No_Method_Bodies_And_Carries_RefAsmAttribute()
+    {
+        const string Source = @"package RefAsm
+import System
+func add(a int, b int) int { return a + b }
+Console.WriteLine(add(2, 3))
+";
+        using var peStream = new MemoryStream();
+        using var refStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream, refStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        refStream.Position = 0;
+        using var refPe = new PEReader(refStream, PEStreamOptions.LeaveOpen);
+        var md = refPe.GetMetadataReader();
+
+        // No entry point should be set on a metadata-only PE.
+        Assert.Equal(0, refPe.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress);
+
+        // Every method definition must have RVA 0 — no IL body.
+        foreach (var mdh in md.MethodDefinitions)
+        {
+            var method = md.GetMethodDefinition(mdh);
+            Assert.Equal(0, method.RelativeVirtualAddress);
+        }
+
+        // The assembly must carry [ReferenceAssemblyAttribute].
+        var assembly = md.GetAssemblyDefinition();
+        var foundRefAsm = false;
+        foreach (var cah in assembly.GetCustomAttributes())
+        {
+            var ca = md.GetCustomAttribute(cah);
+            var ctor = ca.Constructor;
+            string typeName = null;
+            if (ctor.Kind == HandleKind.MemberReference)
+            {
+                var mr = md.GetMemberReference((MemberReferenceHandle)ctor);
+                if (mr.Parent.Kind == HandleKind.TypeReference)
+                {
+                    var tr = md.GetTypeReference((TypeReferenceHandle)mr.Parent);
+                    typeName = md.GetString(tr.Namespace) + "." + md.GetString(tr.Name);
+                }
+            }
+
+            if (typeName == "System.Runtime.CompilerServices.ReferenceAssemblyAttribute")
+            {
+                foundRefAsm = true;
+                break;
+            }
+        }
+
+        Assert.True(foundRefAsm, "metadata-only emit must mark the assembly with ReferenceAssemblyAttribute.");
+
+        // The runtime PE should still carry IL and an entry point.
+        peStream.Position = 0;
+        using var runtimePe = new PEReader(peStream, PEStreamOptions.LeaveOpen);
+        Assert.NotEqual(0, runtimePe.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress);
+    }
 }

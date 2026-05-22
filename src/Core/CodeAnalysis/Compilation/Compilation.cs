@@ -222,9 +222,20 @@ public class Compilation
     /// the filesystem.
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
+    /// <returns>An emit result.</returns>
+    public EmitResult Emit(Stream peStream) => Emit(peStream, refStream: null, assemblyName: null);
+
+    /// <summary>
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// <paramref name="peStream"/>. When <paramref name="refStream"/> is
+    /// supplied, also writes a metadata-only sibling assembly (a reference
+    /// assembly) to it.
+    /// </summary>
+    /// <param name="peStream">Destination stream for the PE bytes. May be <c>null</c> when only a reference assembly is desired.</param>
+    /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
     /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream, string assemblyName = null)
+    public EmitResult Emit(Stream peStream, Stream refStream, string assemblyName = null)
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
@@ -241,7 +252,15 @@ public class Compilation
 
         try
         {
-            EmitAssembly(program, peStream, References, assemblyName);
+            if (peStream is not null)
+            {
+                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false);
+            }
+
+            if (refStream is not null)
+            {
+                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true);
+            }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -253,8 +272,8 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly);
     }
 }

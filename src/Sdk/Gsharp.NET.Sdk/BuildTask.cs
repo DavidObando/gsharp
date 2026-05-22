@@ -63,6 +63,9 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the MSBuild OutputType (Exe / Library).</summary>
     public string OutputType { get; set; }
 
+    /// <summary>Gets or sets the path of the metadata-only reference assembly to write (refint).</summary>
+    public string RefAssembly { get; set; }
+
     /// <summary>Gets or sets the Compile item group (the .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
 
@@ -109,6 +112,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (!string.IsNullOrEmpty(this.PdbFile))
         {
             args.Add($"/pdb:{this.PdbFile}");
+        }
+
+        if (!string.IsNullOrEmpty(this.RefAssembly))
+        {
+            args.Add($"/refout:{this.RefAssembly}");
         }
 
         foreach (var r in this.References)
