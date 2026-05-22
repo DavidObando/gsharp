@@ -103,6 +103,17 @@ public class Parser
         while (Current.Kind == SyntaxKind.ImportKeyword)
         {
             var importKeyword = MatchToken(SyntaxKind.ImportKeyword);
+
+            // Detect the alias form: `import <ident> = <ident>(.<ident>)*`.
+            // Lookahead: if the next two tokens are IDENT '=', consume them as alias + equals.
+            SyntaxToken aliasIdentifier = null;
+            SyntaxToken equalsToken = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken)
+            {
+                aliasIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+                equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            }
+
             var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
             identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
             while (Current.Kind == SyntaxKind.DotToken)
@@ -111,7 +122,7 @@ public class Parser
                 identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
             }
 
-            importsBuilder.Add(new ImportSyntax(syntaxTree, importKeyword, identifiers.ToImmutableArray()));
+            importsBuilder.Add(new ImportSyntax(syntaxTree, importKeyword, aliasIdentifier, equalsToken, identifiers.ToImmutableArray()));
         }
 
         return importsBuilder.ToImmutable();
@@ -246,6 +257,7 @@ public class Parser
             case SyntaxKind.OpenBraceToken:
                 return ParseBlockStatement();
             case SyntaxKind.ConstKeyword:
+            case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
                 return ParseVariableDeclaration();
             case SyntaxKind.IfKeyword:
@@ -288,7 +300,20 @@ public class Parser
 
     private StatementSyntax ParseVariableDeclaration()
     {
-        var expected = Current.Kind == SyntaxKind.ConstKeyword ? SyntaxKind.ConstKeyword : SyntaxKind.VarKeyword;
+        SyntaxKind expected;
+        switch (Current.Kind)
+        {
+            case SyntaxKind.ConstKeyword:
+                expected = SyntaxKind.ConstKeyword;
+                break;
+            case SyntaxKind.LetKeyword:
+                expected = SyntaxKind.LetKeyword;
+                break;
+            default:
+                expected = SyntaxKind.VarKeyword;
+                break;
+        }
+
         var keyword = MatchToken(expected);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
@@ -443,6 +468,9 @@ public class Parser
             case SyntaxKind.StringToken:
                 return ParseStringLiteral();
 
+            case SyntaxKind.InterpolatedStringToken:
+                return ParseInterpolatedStringLiteral();
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
@@ -537,6 +565,53 @@ public class Parser
     {
         var stringToken = MatchToken(SyntaxKind.StringToken);
         return new LiteralExpressionSyntax(syntaxTree, stringToken);
+    }
+
+    private ExpressionSyntax ParseInterpolatedStringLiteral()
+    {
+        var token = MatchToken(SyntaxKind.InterpolatedStringToken);
+        var fragments = (ImmutableArray<InterpolationFragment>)token.Value;
+        var segments = ImmutableArray.CreateBuilder<InterpolatedStringSegment>(fragments.Length);
+        foreach (var fragment in fragments)
+        {
+            if (!fragment.IsExpression)
+            {
+                segments.Add(InterpolatedStringSegment.FromText(fragment.Text));
+                continue;
+            }
+
+            // Parse the captured expression source by spinning up a fresh
+            // parser; embedded expressions are independent of the outer parser
+            // state aside from sharing the same syntax tree.
+            var innerText = SourceText.From(fragment.Text);
+            var innerTree = SyntaxTree.Parse(innerText);
+            var innerExpression = ExtractFirstExpression(innerTree);
+            if (innerExpression == null)
+            {
+                // Fall back to a synthetic missing-name node anchored on the
+                // string token so binders still see a valid (error-producing)
+                // expression syntax.
+                var synthetic = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, token.Position, fragment.Text, null);
+                innerExpression = new NameExpressionSyntax(syntaxTree, synthetic);
+            }
+
+            segments.Add(InterpolatedStringSegment.FromExpression(innerExpression));
+        }
+
+        return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
+    }
+
+    private static ExpressionSyntax ExtractFirstExpression(SyntaxTree innerTree)
+    {
+        foreach (var member in innerTree.Root.Members)
+        {
+            if (member is GlobalStatementSyntax gs && gs.Statement is ExpressionStatementSyntax es)
+            {
+                return es.Expression;
+            }
+        }
+
+        return null;
     }
 
     private SyntaxToken Peek(int offset)

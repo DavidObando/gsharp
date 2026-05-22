@@ -73,7 +73,10 @@ public class Program
         var references = parsed.References.Count > 0
             ? ReferenceResolver.WithReferences(parsed.References)
             : null;
-        var compilation = new Compilation(references, syntaxTrees.ToArray());
+        var compilation = new Compilation(references, syntaxTrees.ToArray())
+        {
+            ImplicitSystemImport = parsed.ImplicitSystemImport,
+        };
 
         if (parsed.OutputPath is null)
         {
@@ -222,6 +225,16 @@ public class Program
                         result.References.Add(value);
                         break;
 
+                    case "implicitimports":
+                    case "implicit-imports":
+                        result.ImplicitSystemImport = ParseBoolFlag(value, defaultIfEmpty: true);
+                        break;
+
+                    case "noimplicitimports":
+                    case "no-implicit-imports":
+                        result.ImplicitSystemImport = false;
+                        break;
+
                     case "debug":
                     case "pdb":
                         // Accepted for SDK compatibility; debug info emit is Phase 2.
@@ -279,6 +292,21 @@ public class Program
         return result;
     }
 
+    private static bool ParseBoolFlag(string value, bool defaultIfEmpty)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return defaultIfEmpty;
+        }
+
+        return value.ToLowerInvariant() switch
+        {
+            "true" or "1" or "on" or "yes" => true,
+            "false" or "0" or "off" or "no" => false,
+            _ => throw new CommandLineException($"Unsupported boolean value: {value}"),
+        };
+    }
+
     private static bool IsSwitch(string arg)
     {
         if (arg.Length == 0)
@@ -330,6 +358,8 @@ public class Program
         public string TargetFramework { get; set; }
 
         public bool ShowHelp { get; set; }
+
+        public bool ImplicitSystemImport { get; set; } = true;
     }
 
     private sealed class CommandLineException : Exception

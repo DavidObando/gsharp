@@ -56,7 +56,7 @@ public sealed class Binder
     /// <param name="syntaxTrees">The new syntax trees.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees)
-        => BindGlobalScope(previous, syntaxTrees, references: null);
+        => BindGlobalScope(previous, syntaxTrees, references: null, implicitSystemImport: true);
 
     /// <summary>
     /// Binds a set of syntax trees to the previous global scope, resulting in
@@ -68,9 +68,29 @@ public sealed class Binder
     /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport: true);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full control over implicit-import seeding.
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport)
     {
         var parentScope = CreateParentScope(previous, references);
         var binder = new Binder(parentScope, function: null);
+
+        if (implicitSystemImport && previous == null)
+        {
+            // Seed an implicit `import System` so common BCL types (Console,
+            // String, Int32, ...) resolve without an explicit import. The user
+            // may still write `import System` redundantly; lookup short-circuits
+            // on the first matching import so duplicates are harmless.
+            binder.scope.TryImport(new ImportSymbol("System", "System", declaration: null));
+        }
 
         // Resolve each syntax tree's package declaration to a PackageSymbol.
         // Trees without a `package X` declaration fall into the implicit
@@ -248,8 +268,9 @@ public sealed class Binder
             sb.Append(i.Text);
         }
 
-        var importName = sb.ToString();
-        var importSymbol = new ImportSymbol(importName, import);
+        var targetPath = sb.ToString();
+        var localName = import.AliasIdentifier?.Text ?? targetPath;
+        var importSymbol = new ImportSymbol(localName, targetPath, import);
         scope.TryImport(importSymbol);
     }
 
@@ -336,7 +357,8 @@ public sealed class Binder
 
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
     {
-        var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword;
+        var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
+            || syntax.Keyword?.Kind == SyntaxKind.LetKeyword;
         var type = BindTypeClause(syntax.TypeClause);
         var initializer = BindExpression(syntax.Initializer);
         var variableType = type ?? initializer.Type;
@@ -497,6 +519,8 @@ public sealed class Binder
                 return BindParenthesizedExpression((ParenthesizedExpressionSyntax)syntax);
             case SyntaxKind.LiteralExpression:
                 return BindLiteralExpression((LiteralExpressionSyntax)syntax);
+            case SyntaxKind.InterpolatedStringExpression:
+                return BindInterpolatedStringExpression((InterpolatedStringExpressionSyntax)syntax);
             case SyntaxKind.NameExpression:
                 return BindNameExpression((NameExpressionSyntax)syntax);
             case SyntaxKind.AssignmentExpression:
@@ -523,6 +547,80 @@ public sealed class Binder
     {
         var value = syntax.Value ?? 0;
         return new BoundLiteralExpression(value);
+    }
+
+    private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
+    {
+        // Lower `"a $x b ${expr} c"` to a `+`-chain of string-typed sub-
+        // expressions: literal parts become string literals; expression parts
+        // are bound recursively and, when not already string-typed, wrapped in
+        // an instance `.ToString()` call. An empty interpolation collapses to
+        // the empty-string literal.
+        BoundExpression result = null;
+        foreach (var segment in syntax.Segments)
+        {
+            BoundExpression piece;
+            if (segment.IsExpression)
+            {
+                var bound = BindExpression(segment.Expression);
+                if (bound is BoundErrorExpression)
+                {
+                    return bound;
+                }
+
+                piece = ConvertToString(bound, segment.Expression.Location);
+                if (piece is BoundErrorExpression)
+                {
+                    return piece;
+                }
+            }
+            else
+            {
+                piece = new BoundLiteralExpression(segment.Text ?? string.Empty);
+            }
+
+            result = result == null ? piece : Concat(result, piece);
+        }
+
+        return result ?? new BoundLiteralExpression(string.Empty);
+    }
+
+    private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
+    {
+        if (expression.Type == TypeSymbol.String)
+        {
+            return expression;
+        }
+
+        var clrType = expression.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression();
+        }
+
+        // Bind a call to `System.Convert.ToString(<expr.Type>)`. Convert.ToString
+        // is a static overload set covering every primitive (int, long, bool,
+        // double, ...) plus `object`, so it works uniformly without emitter
+        // changes for value-type instance dispatch.
+        var convertType = typeof(System.Convert);
+        var method = convertType.GetMethod("ToString", new[] { clrType })
+            ?? convertType.GetMethod("ToString", new[] { typeof(object) });
+        if (method == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression();
+        }
+
+        var importedClass = new ImportedClassSymbol(convertType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(method.Name, importedClass, method, declaration: null);
+        return new BoundImportedCallExpression(importedFn, ImmutableArray.Create(expression));
+    }
+
+    private static BoundExpression Concat(BoundExpression left, BoundExpression right)
+    {
+        var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
+        return new BoundBinaryExpression(left, op, right);
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)
@@ -694,6 +792,7 @@ public sealed class Binder
         // instance member access). Then apply the right side, which may itself
         // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
         var leftPart = syntax.LeftPart;
+        var rightPart = syntax.RightPart;
         BoundExpression receiver = null;
         ImportedClassSymbol classSymbol = null;
 
@@ -703,6 +802,11 @@ public sealed class Binder
             if (scope.TryLookupSymbol(name) is VariableSymbol variable)
             {
                 receiver = new BoundVariableExpression(variable);
+            }
+            else if (scope.TryLookupImport(name, out var matchedImport)
+                && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
+            {
+                classSymbol = typeFromImport;
             }
             else if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
             {
@@ -719,7 +823,44 @@ public sealed class Binder
             receiver = BindExpression(leftPart);
         }
 
-        return BindAccessorStep(receiver, classSymbol, syntax.RightPart);
+        return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    {
+        // Handle `<importName>.<TypeName>(.<more>)*` where <importName> is either an
+        // alias or the import's path. The next segment of the chain names the type;
+        // we resolve `<import.Target>.<TypeName>` and consume that segment.
+        importedClass = null;
+
+        NameExpressionSyntax typeNameSyntax;
+        ExpressionSyntax remainder;
+
+        switch (rightPart)
+        {
+            case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
+                typeNameSyntax = leftName;
+                remainder = nested.RightPart;
+                break;
+
+            case NameExpressionSyntax ne:
+                typeNameSyntax = ne;
+                remainder = ne;
+                break;
+
+            default:
+                return false;
+        }
+
+        var fullTypeName = import.Target + "." + typeNameSyntax.IdentifierToken.Text;
+        if (!scope.References.TryResolveType(fullTypeName, out var type))
+        {
+            return false;
+        }
+
+        importedClass = new ImportedClassSymbol(type, typeNameSyntax);
+        rightPart = remainder;
+        return true;
     }
 
     private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)

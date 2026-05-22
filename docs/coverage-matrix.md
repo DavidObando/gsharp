@@ -12,9 +12,10 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 
 | Token / class | Lexer | Reachable by parser? | Notes |
 | --- | --- | --- | --- |
-| Numeric literal (decimal int) | ✅ | ✅ | No float / hex / octal / binary / underscore literals. |
-| String literal (double-quoted) | ✅ | ✅ | No raw strings, no interpolation, no escape verification surfaced in design. |
-| Identifier | ✅ | ✅ | ASCII-oriented; Unicode rules unspecified. |
+| Numeric literal | ✅ | ✅ | Decimal, `0x` hex, `0o` octal, `0b` binary (Phase 1.3); `_` allowed between digits and after the prefix. Floats / Go-style leading-zero octal not yet supported. |
+| String literal (double-quoted) | ✅ | ✅ | Includes Kotlin-style interpolation (`$ident`, `${expr}`) lowered to `+`-chain with `Convert.ToString` (Phase 1.1). `$$` escapes a literal `$`. |
+| Raw string literal (backtick) | ✅ | ✅ | Phase 1.2: contents verbatim, no escapes, CRLF/CR normalized to LF, multi-line allowed; embedded backticks not representable. |
+| Identifier | ✅ | ✅ | Unicode-aware via `char.IsLetter`/`char.IsLetterOrDigit` (categories Lu/Ll/Lt/Lm/Lo/Nl + Nd). Surrogate pairs not yet supported. See `docs/lexical.md`. |
 | `++` / `--` | ✅ | ❌ | Lexed but the parser has no increment/decrement statement form; `Loop.gs`'s `i--` is currently unparseable. |
 | Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ❌ | `ParseAssignmentExpression` only accepts `IdentifierToken EqualsToken …`. |
 | `[` / `]` | ✅ | ❌ | No syntax node consumes them; indexing/slicing unreachable. |
@@ -27,7 +28,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Construct | Parser | Binder | Emit | Interp | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `package A.B.C` | ✅ | ✅ | ✅ | ✅ | Dotted; no aliases. |
-| `import A.B.C` | ✅ | ✅ | ✅ | ✅ | No aliases, no parenthesized groups, no string-path imports, no per-file `import` blocks. |
+| `import A.B.C` | ✅ | ✅ | ✅ | ✅ | Aliased form `import alias = path` lands in Phase 1.4. Implicit `import System` is on by default (Phase 1.5; opt-out via `gsc /noimplicitimports`). No parenthesized groups, no string-path imports, no per-file `import` blocks. |
 | Top-level statements | ✅ | ✅ | ✅ | ✅ | Entry point synthesized; one file may carry them. |
 | `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. |
 | Multiple return values / named returns / variadic / receivers / generic params | ❌ | — | — | — | |
@@ -37,7 +38,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Statement | Parser | Binder | Emit | Interp | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Block `{ … }` | ✅ | ✅ | ✅ | ✅ | |
-| `var x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. |
+| `var x [T] = e` / `let x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. `let` (since Phase 1.6) is an immutable runtime binding — same binder behavior as `const`. |
 | `x := e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `a, b := …`. |
 | `x = e` | ✅ | ✅ | ✅ | ✅ | Single identifier on LHS. |
 | `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |
@@ -98,6 +99,6 @@ Implicit and explicit conversions: `BindConversion` exists but the emitter (`Emi
 
 1. **The dominant gap is parser → binder**, not binder → emit. The emitter implements essentially every bound node the binder can currently produce; failures show up as parser-rejections or binder "operator/conversion not supported" diagnostics.
 2. **Two design samples already exceed the implementation.** `samples/Loop.gs` (pre-Phase-0 rewrite) and `design/Gsharp-design-v0.1.md` use C-style `for init; cond; post`, `args[0]` indexing, `i--`, and `*count` — none of which parse today. The Phase-0 rewrite of `samples/Loop.gs` removes those constructs; the v0.1 design Loop section is annotated as aspirational pointing at `design/Gsharp-design-v0.2.md`.
-3. **String literal interpolation is faked in samples.** `"Count value: {i}"` (in the aspirational v0.1 Loop) is emitted verbatim — there is no interpolation pass. Phase 1.1 ships Kotlin-style `$ident` / `${expr}` interpolation.
+3. **String interpolation is real (Phase 1.1).** `"Count value: $i"` lexes as an `InterpolatedStringToken`, parses as `InterpolatedStringExpressionSyntax`, and lowers in the binder to a `+`-chain over `Convert.ToString` calls — emitted unchanged.
 4. **The emitter caps literals at `int`/`string`/`bool`.** Adding any new literal kind (float, char/rune, null) requires coordinated lexer + binder + `EmitLiteral` changes.
 5. **`int ↔ bool` is the only conversion path that emits.** Before adding numeric types or imported-type conversions to the binder, `EmitConversion` must be extended; otherwise valid programs will compile under the interpreter and crash the emitter.
