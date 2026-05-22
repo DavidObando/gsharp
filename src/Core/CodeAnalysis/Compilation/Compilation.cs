@@ -7,11 +7,9 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
-using System.Reflection.PortableExecutable;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -158,7 +156,9 @@ public class Compilation
     }
 
     /// <summary>
-    /// Compiles the current syntax tree into a compilation result.
+    /// Compiles the current syntax tree into a compilation result. The
+    /// resulting assembly is written to <c>{PackageName}.dll</c> in the
+    /// current working directory.
     /// </summary>
     /// <returns>An emit result.</returns>
     public EmitResult Emit()
@@ -176,30 +176,59 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
-        var emitDiagnostics = EmitAssembly(program);
-        if (emitDiagnostics.Any())
+        try
         {
-            return new EmitResult(success: false, emitDiagnostics);
+            using var stream = File.Create(program.PackageName + ".dll");
+            EmitAssembly(program, stream);
+        }
+        catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
+        {
+            var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
+            var diagnostic = new Diagnostic(location, ex.Message);
+            return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
         }
 
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private ImmutableArray<Diagnostic> EmitAssembly(BoundProgram program)
+    /// <summary>
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// <paramref name="peStream"/>. Useful for tests that don't want to touch
+    /// the filesystem.
+    /// </summary>
+    /// <param name="peStream">Destination stream for the PE bytes.</param>
+    /// <returns>An emit result.</returns>
+    public EmitResult Emit(Stream peStream)
     {
-        var header = new PEHeaderBuilder();
-        var metadataBuilder = new MetadataBuilder();
-        var metadataRootBuilder = new MetadataRootBuilder(metadataBuilder);
-        var blobBuilder = new BlobBuilder();
-        var peBuilder = new ManagedPEBuilder(header, metadataRootBuilder, blobBuilder);
-        peBuilder.Serialize(blobBuilder);
-
-        // TODO: Produce portable assembly contents here
-        using (var stream = new StreamWriter(program.PackageName + ".dll"))
+        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
+        var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
+        if (syntaxDiagnostics.Any())
         {
-            blobBuilder.WriteContentTo(stream.BaseStream);
+            return new EmitResult(success: false, syntaxDiagnostics);
         }
 
-        return ImmutableArray<Diagnostic>.Empty;
+        var program = Binder.BindProgram(GlobalScope);
+        if (program.Diagnostics.Any())
+        {
+            return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
+        }
+
+        try
+        {
+            EmitAssembly(program, peStream);
+        }
+        catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
+        {
+            var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
+            var diagnostic = new Diagnostic(location, ex.Message);
+            return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
+        }
+
+        return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
+    }
+
+    private static void EmitAssembly(BoundProgram program, Stream peStream)
+    {
+        ReflectionMetadataEmitter.Emit(program, peStream);
     }
 }
