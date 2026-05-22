@@ -4,6 +4,9 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Compiler</RootNamespace>
+    <!-- Compiler is shipped as gsc.dll so the Gsharp.NET.Sdk and end users
+         can invoke `dotnet gsc.dll` (matching csc/vbc naming convention). -->
+    <AssemblyName>gsc</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
