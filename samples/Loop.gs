@@ -1,16 +1,20 @@
 // file: Loop.gs
+// Demonstrates the constructs the front-end accepts today: top-level
+// statements, var declarations, the `for i := lo ... hi` range form,
+// and BCL interop via `Console.WriteLine`. The original aspirational
+// form of this sample (C-style for, decrement, `args[0]` indexing,
+// string interpolation) is preserved in `design/Gsharp-design-v0.1.md`
+// and will be reintroduced as Phases 1 and 2 of the execution plan
+// land — see `docs/adr/0010-aspirational-samples.md`.
 
 package GSharp.Example.Loop
 
 import System
 
-func Main(args string[]) {
-  count := 0
-  if args.Length == 1 {
-    Int.TryParse(args[0], *count)
-  }
-  
-  for i := count; i > 0; i-- {
-    Console.WriteLine("Count value: {i}")
-  }
+var count = 5
+
+// `lo ... hi` is half-open (prints `lo` through `hi - 1`),
+// so use `count + 1` to print 1 through `count` inclusive.
+for i := 1 ... count + 1 {
+    Console.WriteLine(i)
 }
