@@ -126,11 +126,13 @@ VariableDeclaration
 WhitespaceToken
 
 [BoundNodeKind]
+AppendExpression
 ArrayCreationExpression
 AssignmentExpression
 BinaryExpression
 BlockStatement
 CallExpression
+CapExpression
 ConditionalGotoStatement
 ConversionExpression
 ErrorExpression
@@ -144,6 +146,7 @@ ImportedInstanceCallExpression
 IndexAssignmentExpression
 IndexExpression
 LabelStatement
+LenExpression
 LiteralExpression
 ReturnStatement
 UnaryExpression

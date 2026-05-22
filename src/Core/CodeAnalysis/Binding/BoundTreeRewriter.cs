@@ -257,6 +257,12 @@ public abstract class BoundTreeRewriter
                 return RewriteIndexExpression((BoundIndexExpression)node);
             case BoundNodeKind.IndexAssignmentExpression:
                 return RewriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node);
+            case BoundNodeKind.LenExpression:
+                return RewriteLenExpression((BoundLenExpression)node);
+            case BoundNodeKind.CapExpression:
+                return RewriteCapExpression((BoundCapExpression)node);
+            case BoundNodeKind.AppendExpression:
+                return RewriteAppendExpression((BoundAppendExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -501,7 +507,7 @@ public abstract class BoundTreeRewriter
             builder?.Add(newEl);
         }
 
-        return builder == null ? node : new BoundArrayCreationExpression(node.ArrayType, builder.MoveToImmutable());
+        return builder == null ? node : new BoundArrayCreationExpression(node.ContainerType, builder.MoveToImmutable());
     }
 
     /// <summary>Rewrites an index expression.</summary>
@@ -532,5 +538,38 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundIndexAssignmentExpression(node.Target, index, value, node.Type);
+    }
+
+    /// <summary>Rewrites a <c>len(x)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteLenExpression(BoundLenExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        return operand == node.Operand ? node : new BoundLenExpression(operand);
+    }
+
+    /// <summary>Rewrites a <c>cap(x)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteCapExpression(BoundCapExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        return operand == node.Operand ? node : new BoundCapExpression(operand);
+    }
+
+    /// <summary>Rewrites an <c>append(s, e)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteAppendExpression(BoundAppendExpression node)
+    {
+        var slice = RewriteExpression(node.Slice);
+        var element = RewriteExpression(node.Element);
+        if (slice == node.Slice && element == node.Element)
+        {
+            return node;
+        }
+
+        return new BoundAppendExpression(slice, element, node.SliceType);
     }
 }

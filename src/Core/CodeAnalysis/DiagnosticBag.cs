@@ -166,6 +166,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a built-in intrinsic was applied to an unsupported argument type.
+    /// </summary>
+    /// <param name="location">The text location of the offending argument.</param>
+    /// <param name="name">The intrinsic name.</param>
+    /// <param name="type">The actual argument type.</param>
+    public void ReportIntrinsicArgumentType(TextLocation location, string name, TypeSymbol type)
+    {
+        var message = $"Built-in '{name}' cannot be applied to a value of type '{type.Name}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the keyworkd can only be used inside of loops.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

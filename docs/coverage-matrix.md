@@ -70,8 +70,9 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Member access `a.b.c` | ✅ | ✅ | ✅ | ✅ | `AccessorExpressionSyntax`; resolves through `ReferenceResolver` to imported CLR types. |
 | Parenthesized | ✅ | ✅ | ✅ | ✅ | |
 | Assignment expression `x = e` | ✅ | ✅ | ✅ | ✅ | Identifier LHS only. |
-| Indexing `a[i]` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.3: read and write indexing on fixed-length arrays via `IndexExpressionSyntax` and `IndexAssignmentExpressionSyntax`. Slicing `a[lo:hi]` lands with slices in Phase 3.A.2. |
-| Composite literal `[N]T{…}` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.1: fixed-length array literal `ArrayCreationExpressionSyntax`. Initialiser count must match declared length. Struct / map composite literals arrive in Phase 3.B / 3.A.4. |
+| Indexing `a[i]` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.3: read and write indexing on fixed-length arrays and slices via `IndexExpressionSyntax` and `IndexAssignmentExpressionSyntax`. Sliced reads (`a[lo:hi]`, `a[lo:hi:max]`) are not implemented. |
+| Composite literal `[N]T{…}` / `[]T{…}` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.1: fixed-length array literal `ArrayCreationExpressionSyntax`; Phase 3.A.2 extends the same node to variable-length slice literals (length omitted). Struct / map composite literals arrive in Phase 3.B / 3.A.4. |
+| Built-in `len(x)` / `cap(x)` / `append(s, e)` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.2: `len` on string/array/slice, `cap` on array/slice (aliases length per ADR-0016), `append` on slice (single trailing element only; variadic Go form deferred to Phase 4). |
 | Type assertion / conversion (`x.(T)`, `T(x)`) | 🟡 | 🟡 | — | 🟡 | Built-in type names invoked as `int(x)` route through `BindCallExpression` → `BindConversion`; emit currently only handles bool↔int. Go-style `x.(T)` does not exist. |
 | Address-of `&x` / dereference `*x` | 🟡 | ❌ | — | — | Parsed as unary, but no `BoundUnaryOperator` entry → binder rejects. The `Loop.gs` design sample's `*count` is **unimplementable today**. |
 | Channel receive `<-ch` | 🟡 | ❌ | — | — | Parsed; no binding. |

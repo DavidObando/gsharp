@@ -39,6 +39,9 @@ public enum BoundNodeKind
     ArrayCreationExpression,
     IndexExpression,
     IndexAssignmentExpression,
+    LenExpression,
+    CapExpression,
+    AppendExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

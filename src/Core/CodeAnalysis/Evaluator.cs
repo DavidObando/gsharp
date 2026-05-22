@@ -132,6 +132,9 @@ public sealed class Evaluator
                 BoundNodeKind.ArrayCreationExpression => EvaluateArrayCreationExpression((BoundArrayCreationExpression)node),
                 BoundNodeKind.IndexExpression => EvaluateIndexExpression((BoundIndexExpression)node),
                 BoundNodeKind.IndexAssignmentExpression => EvaluateIndexAssignmentExpression((BoundIndexAssignmentExpression)node),
+                BoundNodeKind.LenExpression => EvaluateLenExpression((BoundLenExpression)node),
+                BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
+                BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -168,8 +171,8 @@ public sealed class Evaluator
 
     private object EvaluateArrayCreationExpression(BoundArrayCreationExpression node)
     {
-        var clrType = node.ArrayType.ElementType.ClrType ?? typeof(object);
-        var array = System.Array.CreateInstance(clrType, node.ArrayType.Length);
+        var clrType = node.ElementType.ClrType ?? typeof(object);
+        var array = System.Array.CreateInstance(clrType, node.Elements.Length);
         for (var i = 0; i < node.Elements.Length; i++)
         {
             array.SetValue(EvaluateExpression(node.Elements[i]), i);
@@ -194,6 +197,38 @@ public sealed class Evaluator
         var value = EvaluateExpression(node.Value);
         target.SetValue(value, index);
         return value;
+    }
+
+    private object EvaluateLenExpression(BoundLenExpression node)
+    {
+        var v = EvaluateExpression(node.Operand);
+        return v switch
+        {
+            string s => s.Length,
+            System.Array a => a.Length,
+            _ => throw new EvaluatorException($"len: unsupported operand of CLR type '{v?.GetType()}'.", node),
+        };
+    }
+
+    private object EvaluateCapExpression(BoundCapExpression node)
+    {
+        var v = EvaluateExpression(node.Operand);
+        return v switch
+        {
+            System.Array a => a.Length,
+            _ => throw new EvaluatorException($"cap: unsupported operand of CLR type '{v?.GetType()}'.", node),
+        };
+    }
+
+    private object EvaluateAppendExpression(BoundAppendExpression node)
+    {
+        var src = (System.Array)EvaluateExpression(node.Slice);
+        var element = EvaluateExpression(node.Element);
+        var clrType = node.SliceType.ElementType.ClrType ?? typeof(object);
+        var dst = System.Array.CreateInstance(clrType, src.Length + 1);
+        System.Array.Copy(src, dst, src.Length);
+        dst.SetValue(element, src.Length);
+        return dst;
     }
 
     private object EvaluateUnaryExpression(BoundUnaryExpression u)

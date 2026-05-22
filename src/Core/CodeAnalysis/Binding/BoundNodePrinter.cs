@@ -111,6 +111,15 @@ public static class BoundNodePrinter
             case BoundNodeKind.IndexAssignmentExpression:
                 WriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node, writer);
                 break;
+            case BoundNodeKind.LenExpression:
+                WriteIntrinsicCall("len", ((BoundLenExpression)node).Operand, writer);
+                break;
+            case BoundNodeKind.CapExpression:
+                WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
+                break;
+            case BoundNodeKind.AppendExpression:
+                WriteAppendExpression((BoundAppendExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -450,9 +459,13 @@ public static class BoundNodePrinter
     private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)
     {
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
-        writer.WriteNumber(node.ArrayType.Length.ToString());
+        if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol arr)
+        {
+            writer.WriteNumber(arr.Length.ToString());
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
-        writer.WriteIdentifier(node.ArrayType.ElementType.Name);
+        writer.WriteIdentifier(node.ElementType.Name);
         writer.WritePunctuation(SyntaxKind.OpenBraceToken);
 
         var isFirst = true;
@@ -492,5 +505,24 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.EqualsToken);
         writer.WriteSpace();
         node.Value.WriteTo(writer);
+    }
+
+    private static void WriteIntrinsicCall(string name, BoundExpression operand, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        operand.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAppendExpression(BoundAppendExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("append");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        node.Slice.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CommaToken);
+        writer.WriteSpace();
+        node.Element.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 }

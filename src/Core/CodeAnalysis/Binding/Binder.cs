@@ -456,6 +456,11 @@ public sealed class Binder
             return element;
         }
 
+        if (syntax.IsSlice)
+        {
+            return SliceTypeSymbol.Get(element);
+        }
+
         if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
         {
             Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
@@ -1066,6 +1071,11 @@ public sealed class Binder
             return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
         }
 
+        if (TryBindIntrinsicCall(syntax, out var intrinsic))
+        {
+            return intrinsic;
+        }
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
         foreach (var argument in syntax.Arguments)
@@ -1138,6 +1148,77 @@ public sealed class Binder
         }
 
         return new BoundCallExpression(function, boundArguments.ToImmutable());
+    }
+
+    private bool TryBindIntrinsicCall(CallExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var name = syntax.Identifier.Text;
+        switch (name)
+        {
+            case "len":
+            case "cap":
+            {
+                if (syntax.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var operand = BindExpression(syntax.Arguments[0]);
+                if (operand.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
+                    || (name == "len" && operand.Type == TypeSymbol.String);
+                if (!ok)
+                {
+                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                result = name == "len"
+                    ? new BoundLenExpression(operand)
+                    : new BoundCapExpression(operand);
+                return true;
+            }
+
+            case "append":
+            {
+                if (syntax.Arguments.Count != 2)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var slice = BindExpression(syntax.Arguments[0]);
+                if (slice.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                if (slice.Type is not SliceTypeSymbol sliceType)
+                {
+                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, slice.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var element = BindConversion(syntax.Arguments[1], sliceType.ElementType);
+                result = new BoundAppendExpression(slice, element, sliceType);
+                return true;
+            }
+
+            default:
+                return false;
+        }
     }
 
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
@@ -1329,6 +1410,17 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+        foreach (var elementSyntax in syntax.Elements)
+        {
+            elements.Add(BindConversion(elementSyntax, elementType));
+        }
+
+        if (syntax.LengthToken == null)
+        {
+            return new BoundArrayCreationExpression(SliceTypeSymbol.Get(elementType), elements.ToImmutable());
+        }
+
         if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
         {
             Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
@@ -1340,12 +1432,6 @@ public sealed class Binder
             Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, syntax.Elements.Count);
         }
 
-        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
-        foreach (var elementSyntax in syntax.Elements)
-        {
-            elements.Add(BindConversion(elementSyntax, elementType));
-        }
-
         return new BoundArrayCreationExpression(ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
     }
 
@@ -1354,9 +1440,10 @@ public sealed class Binder
         var target = BindExpression(syntax.Target);
         var index = BindConversion(syntax.Index, TypeSymbol.Int);
 
-        if (target.Type is ArrayTypeSymbol arr)
+        var element = GetIndexElementType(target.Type);
+        if (element != null)
         {
-            return new BoundIndexExpression(target, index, arr.ElementType);
+            return new BoundIndexExpression(target, index, element);
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -1376,7 +1463,8 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        if (variable.Type is not ArrayTypeSymbol arr)
+        var element = GetIndexElementType(variable.Type);
+        if (element == null)
         {
             if (variable.Type != TypeSymbol.Error)
             {
@@ -1387,8 +1475,18 @@ public sealed class Binder
         }
 
         var index = BindConversion(syntax.Index, TypeSymbol.Int);
-        var value = BindConversion(syntax.Value, arr.ElementType);
-        return new BoundIndexAssignmentExpression(variable, index, value, arr.ElementType);
+        var value = BindConversion(syntax.Value, element);
+        return new BoundIndexAssignmentExpression(variable, index, value, element);
+    }
+
+    private static TypeSymbol GetIndexElementType(TypeSymbol type)
+    {
+        return type switch
+        {
+            ArrayTypeSymbol arr => arr.ElementType,
+            SliceTypeSymbol slice => slice.ElementType,
+            _ => null,
+        };
     }
 
     private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)

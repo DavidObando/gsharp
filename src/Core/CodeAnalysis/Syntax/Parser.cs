@@ -245,7 +245,12 @@ public class Parser
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-            var length = MatchToken(SyntaxKind.NumberToken);
+            SyntaxToken length = null;
+            if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                length = MatchToken(SyntaxKind.NumberToken);
+            }
+
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
             return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier);
@@ -936,7 +941,12 @@ public class Parser
     private ExpressionSyntax ParseArrayCreationExpression()
     {
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-        var length = MatchToken(SyntaxKind.NumberToken);
+        SyntaxToken length = null;
+        if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
+        {
+            length = MatchToken(SyntaxKind.NumberToken);
+        }
+
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
         var elementType = MatchToken(SyntaxKind.IdentifierToken);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);

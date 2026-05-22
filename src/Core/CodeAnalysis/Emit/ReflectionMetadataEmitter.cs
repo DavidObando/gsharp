@@ -47,6 +47,7 @@ internal sealed class ReflectionMetadataEmitter
     private Type coreStringType;
     private Type coreInt32Type;
     private Type coreBooleanType;
+    private Type coreArrayType;
     private TypeReferenceHandle objectTypeRef;
     private MemberReferenceHandle objectCtorRef;
     private MemberReferenceHandle stringConcatRef;
@@ -104,6 +105,7 @@ internal sealed class ReflectionMetadataEmitter
         this.coreStringType = this.ResolveCoreType("System.String", typeof(string));
         this.coreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
         this.coreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
+        this.coreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
 
@@ -336,7 +338,8 @@ internal sealed class ReflectionMetadataEmitter
             var locals = new Dictionary<VariableSymbol, int>();
             var labels = new Dictionary<BoundLabel, LabelHandle>();
             var localTypes = new List<TypeSymbol>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, il);
+            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, il);
 
             // Parameters → arg indices.
             var parameters = new Dictionary<ParameterSymbol, int>();
@@ -358,7 +361,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -423,6 +426,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
+        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il)
     {
         foreach (var s in body.Statements)
@@ -469,6 +473,124 @@ internal sealed class ReflectionMetadataEmitter
                     break;
             }
         }
+
+        // Allocate two ephemeral locals per append expression so emission can
+        // stash src and dst arrays without relying on a CLR swap opcode.
+        foreach (var append in CollectAppends(body))
+        {
+            var srcSlot = localTypes.Count;
+            localTypes.Add(append.SliceType);
+            var dstSlot = localTypes.Count;
+            localTypes.Add(append.SliceType);
+            appendSlots[append] = (srcSlot, dstSlot);
+        }
+    }
+
+    private static IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
+    {
+        var list = new List<BoundAppendExpression>();
+        WalkForAppends(node, list);
+        return list;
+    }
+
+    private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
+    {
+        switch (node)
+        {
+            case BoundAppendExpression app:
+                sink.Add(app);
+                WalkForAppends(app.Slice, sink);
+                WalkForAppends(app.Element, sink);
+                break;
+            case BoundLenExpression len:
+                WalkForAppends(len.Operand, sink);
+                break;
+            case BoundCapExpression cap:
+                WalkForAppends(cap.Operand, sink);
+                break;
+            case BoundBlockStatement blk:
+                foreach (var s in blk.Statements)
+                {
+                    WalkForAppends(s, sink);
+                }
+
+                break;
+            case BoundExpressionStatement es:
+                WalkForAppends(es.Expression, sink);
+                break;
+            case BoundVariableDeclaration vd:
+                WalkForAppends(vd.Initializer, sink);
+                break;
+            case BoundIfStatement ifs:
+                WalkForAppends(ifs.Condition, sink);
+                WalkForAppends(ifs.ThenStatement, sink);
+                if (ifs.ElseStatement != null)
+                {
+                    WalkForAppends(ifs.ElseStatement, sink);
+                }
+
+                break;
+            case BoundReturnStatement rs:
+                if (rs.Expression != null)
+                {
+                    WalkForAppends(rs.Expression, sink);
+                }
+
+                break;
+            case BoundConditionalGotoStatement cg:
+                WalkForAppends(cg.Condition, sink);
+                break;
+            case BoundAssignmentExpression a:
+                WalkForAppends(a.Expression, sink);
+                break;
+            case BoundUnaryExpression u:
+                WalkForAppends(u.Operand, sink);
+                break;
+            case BoundBinaryExpression b:
+                WalkForAppends(b.Left, sink);
+                WalkForAppends(b.Right, sink);
+                break;
+            case BoundCallExpression c:
+                foreach (var arg in c.Arguments)
+                {
+                    WalkForAppends(arg, sink);
+                }
+
+                break;
+            case BoundImportedCallExpression ic:
+                foreach (var arg in ic.Arguments)
+                {
+                    WalkForAppends(arg, sink);
+                }
+
+                break;
+            case BoundImportedInstanceCallExpression iic:
+                WalkForAppends(iic.Receiver, sink);
+                foreach (var arg in iic.Arguments)
+                {
+                    WalkForAppends(arg, sink);
+                }
+
+                break;
+            case BoundConversionExpression conv:
+                WalkForAppends(conv.Expression, sink);
+                break;
+            case BoundArrayCreationExpression arr:
+                foreach (var e in arr.Elements)
+                {
+                    WalkForAppends(e, sink);
+                }
+
+                break;
+            case BoundIndexExpression ix:
+                WalkForAppends(ix.Target, sink);
+                WalkForAppends(ix.Index, sink);
+                break;
+            case BoundIndexAssignmentExpression ixa:
+                WalkForAppends(ixa.Index, sink);
+                WalkForAppends(ixa.Value, sink);
+                break;
+        }
     }
 
     private EntityHandle GetElementTypeToken(TypeSymbol element)
@@ -496,6 +618,14 @@ internal sealed class ReflectionMetadataEmitter
             return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
         }
 
+        if (element is SliceTypeSymbol nestedSlice)
+        {
+            var sigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+            EncodeTypeSymbol(encoder, nestedSlice);
+            return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element.ClrType != null)
         {
             return this.GetTypeReference(element.ClrType);
@@ -512,6 +642,24 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return fallback;
+    }
+
+    private MemberReferenceHandle GetStringLengthReference()
+    {
+        // System.String::get_Length() — used to implement len(string).
+        var method = this.coreStringType.GetMethod("get_Length", Type.EmptyTypes)
+            ?? throw new InvalidOperationException("String.get_Length is not resolvable from the supplied references.");
+        return this.GetMethodReference(method);
+    }
+
+    private MemberReferenceHandle GetArrayCopyReference()
+    {
+        // System.Array::Copy(Array, Array, Int32) — used to implement append(slice, element).
+        var method = this.coreArrayType.GetMethod(
+            "Copy",
+            new[] { this.coreArrayType, this.coreArrayType, this.coreInt32Type })
+            ?? throw new InvalidOperationException("Array.Copy(Array, Array, int) is not resolvable from the supplied references.");
+        return this.GetMethodReference(method);
     }
 
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)
@@ -567,12 +715,12 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !method.IsStatic)
             .Parameters(
                 method.GetParameters().Length,
-                returnType: r => EncodeReturnClr(r, method.ReturnType),
+                returnType: r => this.EncodeReturnClr(r, method.ReturnType),
                 parameters: ps =>
                 {
                     foreach (var p in method.GetParameters())
                     {
-                        EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                        this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
                     }
                 });
 
@@ -667,6 +815,10 @@ internal sealed class ReflectionMetadataEmitter
         {
             EncodeTypeSymbol(encoder.SZArray(), arr.ElementType);
         }
+        else if (type is SliceTypeSymbol slice)
+        {
+            EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
+        }
         else
         {
             throw new NotSupportedException($"Cannot encode signature for type '{type.Name}' yet.");
@@ -685,7 +837,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static void EncodeClrType(SignatureTypeEncoder encoder, Type type)
+    private void EncodeClrType(SignatureTypeEncoder encoder, Type type)
     {
         // Compare by FullName so types from a MetadataLoadContext (carrying the target
         // framework's identity) still encode to the same well-known primitive opcodes.
@@ -708,11 +860,17 @@ internal sealed class ReflectionMetadataEmitter
                 encoder.Object();
                 break;
             default:
-                throw new NotSupportedException($"Cannot encode signature for CLR type '{type}' yet.");
+                if (type == null)
+                {
+                    throw new NotSupportedException("Cannot encode signature for a null CLR type.");
+                }
+
+                encoder.Type(this.GetTypeReference(type), isValueType: type.IsValueType);
+                break;
         }
     }
 
-    private static void EncodeReturnClr(ReturnTypeEncoder encoder, Type type)
+    private void EncodeReturnClr(ReturnTypeEncoder encoder, Type type)
     {
         if (type?.FullName == "System.Void")
         {
@@ -720,7 +878,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else
         {
-            EncodeClrType(encoder.Type(), type);
+            this.EncodeClrType(encoder.Type(), type);
         }
     }
 
@@ -734,19 +892,22 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<VariableSymbol, int> locals;
         private readonly Dictionary<ParameterSymbol, int> parameters;
         private readonly Dictionary<BoundLabel, LabelHandle> labels;
+        private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
             InstructionEncoder il,
             Dictionary<VariableSymbol, int> locals,
             Dictionary<ParameterSymbol, int> parameters,
-            Dictionary<BoundLabel, LabelHandle> labels)
+            Dictionary<BoundLabel, LabelHandle> labels,
+            Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots)
         {
             this.outer = outer;
             this.il = il;
             this.locals = locals;
             this.parameters = parameters;
             this.labels = labels;
+            this.appendSlots = appendSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -873,6 +1034,17 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitLoadVariable(ixa.Target);
                     this.EmitExpression(ixa.Index);
                     this.EmitLoadElement(ixa.Type);
+                    break;
+                case BoundLenExpression len:
+                    this.EmitLen(len);
+                    break;
+                case BoundCapExpression cap:
+                    this.EmitExpression(cap.Operand);
+                    this.il.OpCode(ILOpCode.Ldlen);
+                    this.il.OpCode(ILOpCode.Conv_i4);
+                    break;
+                case BoundAppendExpression app:
+                    this.EmitAppend(app);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -1088,16 +1260,16 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitArrayCreation(BoundArrayCreationExpression arr)
         {
-            this.il.LoadConstantI4(arr.ArrayType.Length);
+            this.il.LoadConstantI4(arr.Elements.Length);
             this.il.OpCode(ILOpCode.Newarr);
-            this.il.Token(this.outer.GetElementTypeToken(arr.ArrayType.ElementType));
+            this.il.Token(this.outer.GetElementTypeToken(arr.ElementType));
 
             for (var i = 0; i < arr.Elements.Length; i++)
             {
                 this.il.OpCode(ILOpCode.Dup);
                 this.il.LoadConstantI4(i);
                 this.EmitExpression(arr.Elements[i]);
-                this.EmitStoreElement(arr.ArrayType.ElementType);
+                this.EmitStoreElement(arr.ElementType);
             }
         }
 
@@ -1141,6 +1313,60 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Stelem);
                 this.il.Token(this.outer.GetElementTypeToken(elementType));
             }
+        }
+
+        private void EmitLen(BoundLenExpression len)
+        {
+            this.EmitExpression(len.Operand);
+            if (len.Operand.Type == TypeSymbol.String)
+            {
+                this.il.Call(this.outer.GetStringLengthReference());
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Ldlen);
+                this.il.OpCode(ILOpCode.Conv_i4);
+            }
+        }
+
+        private void EmitAppend(BoundAppendExpression app)
+        {
+            var slots = this.appendSlots[app];
+            var element = app.SliceType.ElementType;
+            var elementToken = this.outer.GetElementTypeToken(element);
+
+            // src = slice
+            this.EmitExpression(app.Slice);
+            this.il.StoreLocal(slots.Src);
+
+            // dst = new T[src.Length + 1]
+            this.il.LoadLocal(slots.Src);
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.LoadConstantI4(1);
+            this.il.OpCode(ILOpCode.Add);
+            this.il.OpCode(ILOpCode.Newarr);
+            this.il.Token(elementToken);
+            this.il.StoreLocal(slots.Dst);
+
+            // Array.Copy(src, dst, src.Length)
+            this.il.LoadLocal(slots.Src);
+            this.il.LoadLocal(slots.Dst);
+            this.il.LoadLocal(slots.Src);
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.Call(this.outer.GetArrayCopyReference());
+
+            // dst[src.Length] = element
+            this.il.LoadLocal(slots.Dst);
+            this.il.LoadLocal(slots.Src);
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.EmitExpression(app.Element);
+            this.EmitStoreElement(element);
+
+            // Leave dst on stack
+            this.il.LoadLocal(slots.Dst);
         }
     }
 }

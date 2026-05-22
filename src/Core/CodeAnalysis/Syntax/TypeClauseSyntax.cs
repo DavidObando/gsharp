@@ -57,6 +57,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the (element) type identifier.</summary>
     public SyntaxToken Identifier { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a fixed-length array type.</summary>
+    /// <summary>Gets a value indicating whether this clause denotes an array-shaped type (fixed-length array or slice).</summary>
     public bool IsArray => OpenBracketToken != null;
+
+    /// <summary>Gets a value indicating whether this clause denotes a variable-length slice type <c>[]T</c>.</summary>
+    public bool IsSlice => OpenBracketToken != null && LengthToken == null;
 }
