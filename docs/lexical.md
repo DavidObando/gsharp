@@ -57,5 +57,5 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 ## See also
 
 * `docs/coverage-matrix.md` — language-construct coverage matrix.
-* `docs/adr/0011-string-interpolation.md` *(planned)*
-* `docs/adr/0012-raw-string-delimiter.md` *(planned)*
+* `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering.
+* `docs/adr/0012-raw-string-delimiter.md` — rationale for backtick raw strings.
