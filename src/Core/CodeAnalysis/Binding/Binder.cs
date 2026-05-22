@@ -56,7 +56,7 @@ public sealed class Binder
     /// <param name="syntaxTrees">The new syntax trees.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees)
-        => BindGlobalScope(previous, syntaxTrees, references: null);
+        => BindGlobalScope(previous, syntaxTrees, references: null, implicitSystemImport: true);
 
     /// <summary>
     /// Binds a set of syntax trees to the previous global scope, resulting in
@@ -68,9 +68,29 @@ public sealed class Binder
     /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport: true);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full control over implicit-import seeding.
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport)
     {
         var parentScope = CreateParentScope(previous, references);
         var binder = new Binder(parentScope, function: null);
+
+        if (implicitSystemImport && previous == null)
+        {
+            // Seed an implicit `import System` so common BCL types (Console,
+            // String, Int32, ...) resolve without an explicit import. The user
+            // may still write `import System` redundantly; lookup short-circuits
+            // on the first matching import so duplicates are harmless.
+            binder.scope.TryImport(new ImportSymbol("System", "System", declaration: null));
+        }
 
         // Resolve each syntax tree's package declaration to a PackageSymbol.
         // Trees without a `package X` declaration fall into the implicit

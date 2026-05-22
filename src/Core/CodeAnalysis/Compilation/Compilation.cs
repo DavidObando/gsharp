@@ -49,6 +49,7 @@ public class Compilation
         Previous = previous;
         SyntaxTrees = syntaxTrees.ToImmutableArray();
         References = references ?? previous?.References;
+        ImplicitSystemImport = previous?.ImplicitSystemImport ?? true;
     }
 
     /// <summary>
@@ -67,6 +68,13 @@ public class Compilation
     public ReferenceResolver References { get; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether an implicit <c>import System</c>
+    /// should be seeded before user imports are processed. Defaults to
+    /// <see langword="true"/>.
+    /// </summary>
+    public bool ImplicitSystemImport { get; set; }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -75,7 +83,7 @@ public class Compilation
         {
             if (globalScope == null)
             {
-                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References);
+                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 
