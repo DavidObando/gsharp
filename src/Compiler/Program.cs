@@ -110,7 +110,7 @@ public class Program
         EmitResult result;
         using (var peStream = File.Create(outputPath))
         {
-            result = compilation.Emit(peStream);
+            result = compilation.Emit(peStream, args.AssemblyName);
         }
 
         if (!result.Success)
@@ -195,6 +195,10 @@ public class Program
                 {
                     case "out":
                         result.OutputPath = value;
+                        break;
+
+                    case "assemblyname":
+                        result.AssemblyName = value;
                         break;
 
                     case "target":
@@ -318,6 +322,8 @@ public class Program
         public List<string> References { get; } = new();
 
         public string OutputPath { get; set; }
+
+        public string AssemblyName { get; set; }
 
         public OutputTarget Target { get; set; } = OutputTarget.Exe;
 

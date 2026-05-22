@@ -32,6 +32,7 @@ internal sealed class ReflectionMetadataEmitter
 {
     private readonly BoundProgram program;
     private readonly ReferenceResolver references;
+    private readonly string assemblyNameOverride;
     private readonly MetadataBuilder metadata = new MetadataBuilder();
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
@@ -47,10 +48,11 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references)
+    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName)
     {
         this.program = program;
         this.references = references ?? ReferenceResolver.Default();
+        this.assemblyNameOverride = assemblyName;
         this.methodBodyStream = new MethodBodyStreamEncoder(this.ilStream);
     }
 
@@ -67,9 +69,14 @@ internal sealed class ReflectionMetadataEmitter
     /// runtime (in-process scenarios only — produces an assembly bound to
     /// the gsc host's TFM).
     /// </param>
-    public static void Emit(BoundProgram program, Stream peStream, ReferenceResolver references = null)
+    /// <param name="assemblyName">
+    /// Optional override for the assembly identity (module + assembly rows).
+    /// When <c>null</c>, the entry-point package's name is used. Supplied by
+    /// the SDK BuildTask from MSBuild's <c>AssemblyName</c>.
+    /// </param>
+    public static void Emit(BoundProgram program, Stream peStream, ReferenceResolver references = null, string assemblyName = null)
     {
-        var emitter = new ReflectionMetadataEmitter(program, references);
+        var emitter = new ReflectionMetadataEmitter(program, references, assemblyName);
         emitter.EmitCore(peStream);
     }
 
@@ -183,7 +190,7 @@ internal sealed class ReflectionMetadataEmitter
 
         // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
         // patch it with a content-derived value after PE serialization.
-        var assemblyName = this.program.PackageName ?? "Default";
+        var assemblyName = this.assemblyNameOverride ?? this.program.PackageName ?? "Default";
         var mvidFixup = this.metadata.ReserveGuid();
         this.metadata.AddModule(
             generation: 0,
