@@ -776,7 +776,7 @@ public sealed class Binder
             for (var i = 0; i < parameters.Length; i++)
             {
                 var argType = arguments[i].Type?.ClrType;
-                if (argType == null || !parameters[i].ParameterType.IsAssignableFrom(argType))
+                if (argType == null || !ClrTypeUtilities.IsAssignableByName(parameters[i].ParameterType, argType))
                 {
                     match = false;
                     break;

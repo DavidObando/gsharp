@@ -196,7 +196,7 @@ public class Compilation
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
-            EmitAssembly(program, stream);
+            EmitAssembly(program, stream, References);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -232,7 +232,7 @@ public class Compilation
 
         try
         {
-            EmitAssembly(program, peStream);
+            EmitAssembly(program, peStream, References);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -244,8 +244,8 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream);
+        ReflectionMetadataEmitter.Emit(program, peStream, references);
     }
 }
