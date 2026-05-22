@@ -39,6 +39,8 @@ internal sealed class ReflectionMetadataEmitter
     private readonly MethodBodyStreamEncoder methodBodyStream;
     private readonly BlobBuilder ilStream = new BlobBuilder();
 
+    private readonly bool metadataOnly;
+
     private Type coreObjectType;
     private Type coreStringType;
     private TypeReferenceHandle objectTypeRef;
@@ -46,10 +48,11 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references)
+    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, bool metadataOnly)
     {
         this.program = program;
         this.references = references ?? ReferenceResolver.Default();
+        this.metadataOnly = metadataOnly;
         this.methodBodyStream = new MethodBodyStreamEncoder(this.ilStream);
     }
 
@@ -66,9 +69,18 @@ internal sealed class ReflectionMetadataEmitter
     /// runtime (in-process scenarios only — produces an assembly bound to
     /// the gsc host's TFM).
     /// </param>
-    public static void Emit(BoundProgram program, Stream peStream, ReferenceResolver references = null)
+    /// <param name="metadataOnly">
+    /// When true, emits a metadata-only reference assembly: method bodies
+    /// are omitted (RVA 0) and the assembly is marked with
+    /// <c>System.Runtime.CompilerServices.ReferenceAssemblyAttribute</c>.
+    /// </param>
+    public static void Emit(
+        BoundProgram program,
+        Stream peStream,
+        ReferenceResolver references = null,
+        bool metadataOnly = false)
     {
-        var emitter = new ReflectionMetadataEmitter(program, references);
+        var emitter = new ReflectionMetadataEmitter(program, references, metadataOnly);
         emitter.EmitCore(peStream);
     }
 
@@ -154,13 +166,18 @@ internal sealed class ReflectionMetadataEmitter
             encId: default(GuidHandle),
             encBaseId: default(GuidHandle));
 
-        this.metadata.AddAssembly(
+        var assemblyHandle = this.metadata.AddAssembly(
             name: this.metadata.GetOrAddString(this.program.PackageName),
             version: new Version(1, 0, 0, 0),
             culture: default(StringHandle),
             publicKey: default(BlobHandle),
             flags: 0,
             hashAlgorithm: AssemblyHashAlgorithm.Sha1);
+
+        if (this.metadataOnly)
+        {
+            this.EmitReferenceAssemblyAttribute(assemblyHandle);
+        }
 
         // 7. Serialize PE deterministically: a SHA-256 of the serialized PE
         // content produces the BlobContentId, which patches both the PE
@@ -173,12 +190,46 @@ internal sealed class ReflectionMetadataEmitter
             header: peHeaderBuilder,
             metadataRootBuilder: new MetadataRootBuilder(this.metadata),
             ilStream: this.ilStream,
-            entryPoint: entryHandle,
+            entryPoint: this.metadataOnly ? default : entryHandle,
             deterministicIdProvider: ComputeDeterministicContentId);
         var peBlob = new BlobBuilder();
         var contentId = peBuilder.Serialize(peBlob);
         mvidFixup.CreateWriter().WriteGuid(contentId.Guid);
         peBlob.WriteContentTo(peStream);
+    }
+
+    /// <summary>
+    /// Marks the assembly with
+    /// <c>System.Runtime.CompilerServices.ReferenceAssemblyAttribute()</c> so
+    /// loaders treat it as metadata-only and refuse to execute its (absent)
+    /// method bodies.
+    /// </summary>
+    private void EmitReferenceAssemblyAttribute(AssemblyDefinitionHandle assemblyHandle)
+    {
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", out var resolved)
+            ? resolved
+            : throw new InvalidOperationException(
+                "Reference assembly emit requires System.Runtime.CompilerServices.ReferenceAssemblyAttribute to be resolvable from the supplied references.");
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        // Empty fixed/named argument blob: prolog 0x0001 + 0 named args.
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: assemblyHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -200,11 +251,15 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitDefaultConstructor()
     {
-        var il = new InstructionEncoder(new BlobBuilder());
-        il.LoadArgument(0);
-        il.Call(this.objectCtorRef);
-        il.OpCode(ILOpCode.Ret);
-        var bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.LoadArgument(0);
+            il.Call(this.objectCtorRef);
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
 
         var ctorSig = new BlobBuilder();
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
@@ -222,44 +277,48 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
-        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-        // Pre-scan body for locals (top-level only — Lowerer flattens blocks) and labels.
-        var locals = new Dictionary<VariableSymbol, int>();
-        var labels = new Dictionary<BoundLabel, LabelHandle>();
-        var localTypes = new List<TypeSymbol>();
-        CollectLocalsAndLabels(body, function, locals, localTypes, labels, il);
-
-        // Parameters → arg indices.
-        var parameters = new Dictionary<ParameterSymbol, int>();
-        for (var i = 0; i < function.Parameters.Length; i++)
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
         {
-            parameters[function.Parameters[i]] = i;
-        }
+            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
-        StandaloneSignatureHandle localsSignature = default;
-        if (localTypes.Count > 0)
-        {
-            var localsSigBlob = new BlobBuilder();
-            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-            foreach (var t in localTypes)
+            // Pre-scan body for locals (top-level only — Lowerer flattens blocks) and labels.
+            var locals = new Dictionary<VariableSymbol, int>();
+            var labels = new Dictionary<BoundLabel, LabelHandle>();
+            var localTypes = new List<TypeSymbol>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, il);
+
+            // Parameters → arg indices.
+            var parameters = new Dictionary<ParameterSymbol, int>();
+            for (var i = 0; i < function.Parameters.Length; i++)
             {
-                EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                parameters[function.Parameters[i]] = i;
             }
 
-            localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+            StandaloneSignatureHandle localsSignature = default;
+            if (localTypes.Count > 0)
+            {
+                var localsSigBlob = new BlobBuilder();
+                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+                foreach (var t in localTypes)
+                {
+                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                }
+
+                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+            }
+
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels);
+            emitter.EmitBlock(body);
+
+            // Always cap with a trailing ret. Lowering does not guarantee one for void.
+            if (function.Type == TypeSymbol.Void)
+            {
+                il.OpCode(ILOpCode.Ret);
+            }
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
-
-        var emitter = new BodyEmitter(this, il, locals, parameters, labels);
-        emitter.EmitBlock(body);
-
-        // Always cap with a trailing ret. Lowering does not guarantee one for void.
-        if (function.Type == TypeSymbol.Void)
-        {
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)

@@ -16,6 +16,14 @@
           Outputs="@(IntermediateAssembly)"
           DependsOnTargets="$(CoreCompileDependsOn)">
 
+    <!-- When the SDK asks for a reference assembly (ProduceReferenceAssembly=true),
+         Microsoft.Common.Targets sets @(IntermediateRefAssembly) to obj/refint/{name}.dll.
+         Forward that path to gsc via /refout: so the metadata-only sibling is written
+         in the same pass as the runtime assembly. -->
+    <PropertyGroup>
+      <_GsharpRefAssemblyPath Condition=" '$(ProduceReferenceAssembly)' == 'true' ">@(IntermediateRefAssembly)</_GsharpRefAssemblyPath>
+    </PropertyGroup>
+
     <BuildTask
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
         OutputPath="$(IntermediateOutputPath)"
@@ -28,12 +36,14 @@
         PdbFile="@(_DebugSymbolsIntermediatePath)"
         Version="$(Version)"
         OutputType="$(OutputType)"
+        RefAssembly="$(_GsharpRefAssemblyPath)"
         Compile="@(Compile)"
         References="@(ReferencePath)"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
 
     <ItemGroup>
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
+      <FileWrites Include="$(_GsharpRefAssemblyPath)" Condition=" '$(_GsharpRefAssemblyPath)' != '' " />
     </ItemGroup>
   </Target>
 

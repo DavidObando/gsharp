@@ -98,6 +98,20 @@ public class SdkLayoutTests
         Assert.Equal("@(ReferencePath)", attrs["References"]);
         Assert.Equal("$(OutputType)", attrs["OutputType"]);
         Assert.Equal("$(TargetFramework)", attrs["TargetFramework"]);
+
+        // Reference-assembly emit must be forwarded so MSBuild's
+        // ProduceReferenceAssembly pipeline (which sets @(IntermediateRefAssembly)
+        // to obj/refint/{name}.dll) is honored.
+        Assert.Equal("$(_GsharpRefAssemblyPath)", attrs["RefAssembly"]);
+    }
+
+    [Fact]
+    public void Sdk_Props_Enables_ProduceReferenceAssembly()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "Sdk", "Sdk.props");
+        var text = File.ReadAllText(path);
+        Assert.Contains("<ProduceReferenceAssembly", text, System.StringComparison.Ordinal);
+        Assert.Contains(">true</ProduceReferenceAssembly>", text, System.StringComparison.Ordinal);
     }
 
     [Fact]
