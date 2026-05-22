@@ -68,22 +68,25 @@ public class TypeSymbol : Symbol
             return Void;
         }
 
-        if (clrType == typeof(bool))
+        // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
+        // target framework's identity) still map onto the built-in primitive symbols.
+        var fullName = clrType.FullName;
+        if (fullName == "System.Boolean")
         {
             return Bool;
         }
 
-        if (clrType == typeof(int))
+        if (fullName == "System.Int32")
         {
             return Int;
         }
 
-        if (clrType == typeof(string))
+        if (fullName == "System.String")
         {
             return String;
         }
 
-        if (clrType == typeof(void))
+        if (fullName == "System.Void")
         {
             return Void;
         }

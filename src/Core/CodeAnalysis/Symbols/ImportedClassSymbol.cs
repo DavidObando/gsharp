@@ -101,7 +101,7 @@ public sealed class ImportedClassSymbol : Symbol
     {
         if (type?.ClrType != null)
         {
-            return parameterType.IsAssignableFrom(type.ClrType);
+            return ClrTypeUtilities.IsAssignableByName(parameterType, type.ClrType);
         }
 
         return false;

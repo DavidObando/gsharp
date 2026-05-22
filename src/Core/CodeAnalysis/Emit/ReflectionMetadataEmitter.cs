@@ -29,6 +29,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 internal sealed class ReflectionMetadataEmitter
 {
     private readonly BoundProgram program;
+    private readonly ReferenceResolver references;
     private readonly MetadataBuilder metadata = new MetadataBuilder();
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
@@ -37,14 +38,17 @@ internal sealed class ReflectionMetadataEmitter
     private readonly MethodBodyStreamEncoder methodBodyStream;
     private readonly BlobBuilder ilStream = new BlobBuilder();
 
+    private Type coreObjectType;
+    private Type coreStringType;
     private TypeReferenceHandle objectTypeRef;
     private MemberReferenceHandle objectCtorRef;
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
 
-    private ReflectionMetadataEmitter(BoundProgram program)
+    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references)
     {
         this.program = program;
+        this.references = references ?? ReferenceResolver.Default();
         this.methodBodyStream = new MethodBodyStreamEncoder(this.ilStream);
     }
 
@@ -54,16 +58,27 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     /// <param name="program">The bound program to emit.</param>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
-    public static void Emit(BoundProgram program, Stream peStream)
+    /// <param name="references">
+    /// Reference resolver providing the target framework's core types
+    /// (<c>System.Object</c>, <c>System.String</c>) and any user-supplied
+    /// imports. Pass <c>null</c> to resolve from the gsc host's loaded
+    /// runtime (in-process scenarios only — produces an assembly bound to
+    /// the gsc host's TFM).
+    /// </param>
+    public static void Emit(BoundProgram program, Stream peStream, ReferenceResolver references = null)
     {
-        var emitter = new ReflectionMetadataEmitter(program);
+        var emitter = new ReflectionMetadataEmitter(program, references);
         emitter.EmitCore(peStream);
     }
 
     private void EmitCore(Stream peStream)
     {
-        // 1. Seed Object reference (every type derives from it; default ctor is needed for .ctor chains).
-        this.objectTypeRef = this.GetTypeReference(typeof(object));
+        // 1. Seed Object reference. Resolve from the supplied references so the type-ref
+        //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
+        //    target framework rather than the gsc host's System.Private.CoreLib.
+        this.coreObjectType = this.ResolveCoreType("System.Object", typeof(object));
+        this.coreStringType = this.ResolveCoreType("System.String", typeof(string));
+        this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
@@ -303,6 +318,16 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private Type ResolveCoreType(string fullName, Type fallback)
+    {
+        if (this.references.TryResolveType(fullName, out var t))
+        {
+            return t;
+        }
+
+        return fallback;
+    }
+
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)
     {
         if (this.assemblyRefs.TryGetValue(assembly, out var existing))
@@ -391,7 +416,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.stringConcatRef;
         }
 
-        var stringTypeRef = this.GetTypeReference(typeof(string));
+        var stringTypeRef = this.GetTypeReference(this.coreStringType);
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
@@ -416,7 +441,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.stringEqualsRef;
         }
 
-        var stringTypeRef = this.GetTypeReference(typeof(string));
+        var stringTypeRef = this.GetTypeReference(this.coreStringType);
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
@@ -472,35 +497,34 @@ internal sealed class ReflectionMetadataEmitter
 
     private static void EncodeClrType(SignatureTypeEncoder encoder, Type type)
     {
-        if (type == typeof(bool))
+        // Compare by FullName so types from a MetadataLoadContext (carrying the target
+        // framework's identity) still encode to the same well-known primitive opcodes.
+        var fullName = type?.FullName;
+        switch (fullName)
         {
-            encoder.Boolean();
-        }
-        else if (type == typeof(int))
-        {
-            encoder.Int32();
-        }
-        else if (type == typeof(long))
-        {
-            encoder.Int64();
-        }
-        else if (type == typeof(string))
-        {
-            encoder.String();
-        }
-        else if (type == typeof(object))
-        {
-            encoder.Object();
-        }
-        else
-        {
-            throw new NotSupportedException($"Cannot encode signature for CLR type '{type}' yet.");
+            case "System.Boolean":
+                encoder.Boolean();
+                break;
+            case "System.Int32":
+                encoder.Int32();
+                break;
+            case "System.Int64":
+                encoder.Int64();
+                break;
+            case "System.String":
+                encoder.String();
+                break;
+            case "System.Object":
+                encoder.Object();
+                break;
+            default:
+                throw new NotSupportedException($"Cannot encode signature for CLR type '{type}' yet.");
         }
     }
 
     private static void EncodeReturnClr(ReturnTypeEncoder encoder, Type type)
     {
-        if (type == typeof(void))
+        if (type?.FullName == "System.Void")
         {
             encoder.Void();
         }
