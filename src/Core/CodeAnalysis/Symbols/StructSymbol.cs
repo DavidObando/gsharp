@@ -70,6 +70,30 @@ public sealed class StructSymbol : TypeSymbol
         string packageName,
         bool isData,
         bool isClass)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
+    /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds to a field of the same name; empty when the type has no explicit primary constructor (default parameterless ctor).</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters)
         : base(name)
     {
         Fields = fields;
@@ -78,6 +102,7 @@ public sealed class StructSymbol : TypeSymbol
         PackageName = packageName;
         IsData = isData;
         IsClass = isClass;
+        PrimaryConstructorParameters = primaryConstructorParameters;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -97,6 +122,12 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets a value indicating whether this is a <c>class</c> declaration (Phase 3.B.3). Class types are reference types on the CLR; struct types (this flag false) are value types.</summary>
     public bool IsClass { get; }
+
+    /// <summary>Gets the Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds 1:1 to a field of the same name and type on this class; empty when no primary constructor was declared (default parameterless ctor).</summary>
+    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters { get; }
+
+    /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
+    public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
 
     /// <summary>Tries to find a field by name.</summary>
     /// <param name="name">The field name.</param>

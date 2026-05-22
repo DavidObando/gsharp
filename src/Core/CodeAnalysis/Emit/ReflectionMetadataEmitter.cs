@@ -46,6 +46,7 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
+    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
     private Type coreObjectType;
     private Type coreStringType;
@@ -149,13 +150,22 @@ internal sealed class ReflectionMetadataEmitter
         var moduleFirstFieldRow = allAggregates.IsDefaultOrEmpty ? 1 : 1;
         var programFirstFieldRow = totalStructFields + 1;
 
-        // Plan method rows for class default ctors first (rows 1..K), so each
-        // class TypeDef can point its methodList at its own ctor.
+        // Plan method rows for class ctors first. Each class always owns a
+        // parameterless default ctor (so `Foo{}` composite literal continues
+        // to work) and, when a primary constructor was declared, a second
+        // parameterized ctor immediately after it. Rows are non-decreasing
+        // per ECMA-335: class TypeDef.methodList points at the class's
+        // default ctor row, and the methods are emitted in this row order.
         var classCtorRows = new Dictionary<StructSymbol, int>();
+        var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
         int methodRow = 1;
         foreach (var c in classes)
         {
             classCtorRows[c] = methodRow++;
+            if (c.HasPrimaryConstructor)
+            {
+                classPrimaryCtorRows[c] = methodRow++;
+            }
         }
 
         int firstPackageCtorRow = methodRow;
@@ -251,6 +261,12 @@ internal sealed class ReflectionMetadataEmitter
         {
             var ctorHandle = this.EmitClassDefaultConstructor();
             this.classCtorHandles[c] = ctorHandle;
+
+            if (c.HasPrimaryConstructor)
+            {
+                var primaryHandle = this.EmitClassPrimaryConstructor(c);
+                this.classPrimaryCtorHandles[c] = primaryHandle;
+            }
         }
 
         foreach (var pkg in packages)
@@ -443,6 +459,72 @@ internal sealed class ReflectionMetadataEmitter
     {
         // Identical IL to <Program>'s default ctor — chain to object base.
         return this.EmitDefaultConstructor();
+    }
+
+    /// <summary>
+    /// Emits the Kotlin-style primary constructor for a class
+    /// (Phase 3.B.3 sub-step 2): an instance ctor taking one parameter per
+    /// declared primary-ctor param, chaining to <c>object::.ctor()</c> and
+    /// assigning each argument to the same-named field.
+    /// </summary>
+    /// <param name="classSym">The class with a declared primary constructor.</param>
+    private MethodDefinitionHandle EmitClassPrimaryConstructor(StructSymbol classSym)
+    {
+        var parameters = classSym.PrimaryConstructorParameters;
+
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.LoadArgument(0);
+            il.Call(this.objectCtorRef);
+
+            // For each ctor param: this.<field> = arg; positional 1:1 with
+            // fields of the same name.
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var param = parameters[i];
+                if (!classSym.TryGetField(param.Name, out var field))
+                {
+                    throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                }
+
+                if (!this.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                {
+                    throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
+                }
+
+                il.LoadArgument(0);
+                il.LoadArgument(i + 1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(fieldHandle);
+            }
+
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameters.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in parameters)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: MetadataTokens.ParameterHandle(1));
     }
 
     private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
@@ -1470,6 +1552,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundStructLiteralExpression structLit:
                     this.EmitStructLiteral(structLit);
                     break;
+                case BoundConstructorCallExpression ctorCall:
+                    this.EmitConstructorCall(ctorCall);
+                    break;
                 case BoundFieldAccessExpression fa:
                     this.EmitFieldAccess(fa);
                     break;
@@ -1909,6 +1994,23 @@ internal sealed class ReflectionMetadataEmitter
 
             // Leave dst on stack
             this.il.LoadLocal(slots.Dst);
+        }
+
+        private void EmitConstructorCall(BoundConstructorCallExpression call)
+        {
+            if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out var ctorHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Class '{call.StructType.Name}' has no emitted primary ctor.");
+            }
+
+            foreach (var arg in call.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(ctorHandle);
         }
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)

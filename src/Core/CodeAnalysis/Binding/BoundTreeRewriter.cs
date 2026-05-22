@@ -320,6 +320,8 @@ public abstract class BoundTreeRewriter
                 return RewriteAppendExpression((BoundAppendExpression)node);
             case BoundNodeKind.StructLiteralExpression:
                 return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
+            case BoundNodeKind.ConstructorCallExpression:
+                return RewriteConstructorCallExpression((BoundConstructorCallExpression)node);
             case BoundNodeKind.FieldAccessExpression:
                 return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
             case BoundNodeKind.FieldAssignmentExpression:
@@ -660,6 +662,34 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundStructLiteralExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a class primary-constructor call.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteConstructorCallExpression(BoundConstructorCallExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        return builder == null ? node : new BoundConstructorCallExpression(node.StructType, builder.ToImmutable());
     }
 
     /// <summary>Rewrites a field read.</summary>

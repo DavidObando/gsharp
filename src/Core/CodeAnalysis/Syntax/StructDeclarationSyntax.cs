@@ -57,6 +57,38 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, primaryConstructorOpenParen: null, primaryConstructorParameters: new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty), primaryConstructorCloseParen: null, openBraceToken, fields, closeBraceToken)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The aggregate identifier.</param>
+    /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
+    /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
+    /// <param name="primaryConstructorParameters">The primary constructor parameter list (empty when no primary constructor is declared).</param>
+    /// <param name="primaryConstructorCloseParen">The optional closing paren of the primary constructor.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="fields">The body field declarations.</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public StructDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken structKeyword,
+        SyntaxToken primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
+        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FieldDeclarationSyntax> fields,
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -64,6 +96,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         Identifier = identifier;
         DataKeyword = dataKeyword;
         StructKeyword = structKeyword;
+        PrimaryConstructorOpenParenthesisToken = primaryConstructorOpenParen;
+        PrimaryConstructorParameters = primaryConstructorParameters;
+        PrimaryConstructorCloseParenthesisToken = primaryConstructorCloseParen;
         OpenBraceToken = openBraceToken;
         Fields = fields;
         CloseBraceToken = closeBraceToken;
@@ -86,6 +121,18 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the <c>struct</c> or <c>class</c> keyword that marks this aggregate declaration. Inspect <see cref="IsClass"/> to distinguish.</summary>
     public SyntaxToken StructKeyword { get; }
+
+    /// <summary>Gets the optional opening paren of a Kotlin-style primary constructor parameter list (Phase 3.B.3 sub-step 2); null when none was declared.</summary>
+    public SyntaxToken PrimaryConstructorOpenParenthesisToken { get; }
+
+    /// <summary>Gets the primary constructor parameter list. Empty when no primary constructor was declared.</summary>
+    public SeparatedSyntaxList<ParameterSyntax> PrimaryConstructorParameters { get; }
+
+    /// <summary>Gets the optional closing paren of the primary constructor parameter list; null when none was declared.</summary>
+    public SyntaxToken PrimaryConstructorCloseParenthesisToken { get; }
+
+    /// <summary>Gets a value indicating whether this declaration carries a Kotlin-style primary constructor parameter list.</summary>
+    public bool HasPrimaryConstructor => PrimaryConstructorOpenParenthesisToken != null;
 
     /// <summary>Gets a value indicating whether this struct was declared with the <c>data</c> contextual keyword.</summary>
     public bool IsData => DataKeyword != null;

@@ -200,6 +200,7 @@ public sealed class Evaluator
                 BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
+                BoundNodeKind.ConstructorCallExpression => EvaluateConstructorCallExpression((BoundConstructorCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
@@ -311,6 +312,26 @@ public sealed class Evaluator
         foreach (var init in node.Initializers)
         {
             sv.Fields[init.Field.Name] = EvaluateExpression(init.Value);
+        }
+
+        return sv;
+    }
+
+    private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
+    {
+        var sv = new StructValue(node.StructType);
+
+        // Default-initialize all fields first, then bind primary-ctor args to
+        // their same-named fields (binder guarantees positional alignment).
+        foreach (var f in node.StructType.Fields)
+        {
+            sv.Fields[f.Name] = DefaultValue(f.Type);
+        }
+
+        var parameters = node.StructType.PrimaryConstructorParameters;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            sv.Fields[parameters[i].Name] = EvaluateExpression(node.Arguments[i]);
         }
 
         return sv;

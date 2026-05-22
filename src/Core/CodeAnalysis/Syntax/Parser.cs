@@ -236,6 +236,26 @@ public class Parser
             Diagnostics.ReportUnexpectedToken(structOrClassKeyword.Location, SyntaxKind.ClassKeyword, SyntaxKind.StructKeyword);
         }
 
+        // Phase 3.B.3 sub-step 2: optional Kotlin-style primary constructor
+        // parameter list `(name Type, name Type, ...)` directly after the
+        // `class` keyword. Each parameter becomes both a ctor argument and a
+        // public field of the same name. Only valid for classes; structs are
+        // constructed exclusively via composite literals.
+        SyntaxToken primaryCtorOpenParen = null;
+        SyntaxToken primaryCtorCloseParen = null;
+        SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
+            }
+
+            primaryCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            primaryCtorParameters = ParseParameterList();
+            primaryCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
@@ -250,7 +270,19 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structOrClassKeyword, openBrace, fields.ToImmutable(), closeBrace);
+        return new StructDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword,
+            identifier,
+            dataKeyword,
+            structOrClassKeyword,
+            primaryCtorOpenParen,
+            primaryCtorParameters,
+            primaryCtorCloseParen,
+            openBrace,
+            fields.ToImmutable(),
+            closeBrace);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

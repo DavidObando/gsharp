@@ -339,6 +339,36 @@ public sealed class Binder
 
         var seenFieldNames = new HashSet<string>();
         var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+
+        // Phase 3.B.3 sub-step 2: Kotlin-style primary constructor parameters
+        // declare fields of the same name + type, in source order, in addition
+        // to becoming the ctor's parameters.
+        var primaryCtorParameters = ImmutableArray<ParameterSymbol>.Empty;
+        if (syntax.HasPrimaryConstructor)
+        {
+            var ctorBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
+            foreach (var paramSyntax in syntax.PrimaryConstructorParameters)
+            {
+                var paramName = paramSyntax.Identifier.Text;
+                var paramType = BindTypeClause(paramSyntax.Type);
+                if (paramType == null)
+                {
+                    continue;
+                }
+
+                if (!seenFieldNames.Add(paramName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(paramSyntax.Identifier.Location, paramName);
+                    continue;
+                }
+
+                ctorBuilder.Add(new ParameterSymbol(paramName, paramType));
+                fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public));
+            }
+
+            primaryCtorParameters = ctorBuilder.ToImmutable();
+        }
+
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.Identifier.Text;
@@ -363,7 +393,7 @@ public sealed class Binder
             Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
         }
 
-        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData, syntax.IsClass);
+        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData, syntax.IsClass, primaryCtorParameters);
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
@@ -1314,11 +1344,86 @@ public sealed class Binder
         return new BoundBinaryExpression(boundLeft, boundOperator, boundRight);
     }
 
+    private BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
+    {
+        var parameters = classType.PrimaryConstructorParameters;
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        foreach (var argument in syntax.Arguments)
+        {
+            boundArguments.Add(BindExpression(argument));
+        }
+
+        if (syntax.Arguments.Count != parameters.Length)
+        {
+            TextSpan span;
+            if (syntax.Arguments.Count > parameters.Length)
+            {
+                SyntaxNode firstExceedingNode;
+                if (parameters.Length > 0)
+                {
+                    firstExceedingNode = syntax.Arguments.GetSeparator(parameters.Length - 1);
+                }
+                else
+                {
+                    firstExceedingNode = syntax.Arguments[0];
+                }
+
+                var lastExceedingArgument = syntax.Arguments[syntax.Arguments.Count - 1];
+                span = TextSpan.FromBounds(firstExceedingNode.Span.Start, lastExceedingArgument.Span.End);
+            }
+            else
+            {
+                span = syntax.CloseParenthesisToken.Span;
+            }
+
+            Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), classType.Name, parameters.Length, syntax.Arguments.Count);
+            return new BoundErrorExpression();
+        }
+
+        var hasErrors = false;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var argument = boundArguments[i];
+            var parameter = parameters[i];
+            if (argument.Type != parameter.Type)
+            {
+                if (argument.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
+                }
+
+                hasErrors = true;
+            }
+        }
+
+        if (hasErrors)
+        {
+            return new BoundErrorExpression();
+        }
+
+        return new BoundConstructorCallExpression(classType, boundArguments.ToImmutable());
+    }
+
     private BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
         if (syntax.Arguments.Count == 1 && LookupType(syntax.Identifier.Text) is TypeSymbol type)
         {
-            return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+            // A single-arg call to a primitive-typed name is a conversion
+            // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
+            // type with a one-parameter primary constructor, treat it as a
+            // ctor call instead.
+            if (!(type is StructSymbol singleArgStruct && singleArgStruct.IsClass && singleArgStruct.HasPrimaryConstructor))
+            {
+                return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+            }
+        }
+
+        // Phase 3.B.3 sub-step 2: `ClassName(arg1, arg2, ...)` invokes the
+        // class's primary constructor when the call target resolves to a
+        // class type with a declared primary ctor.
+        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && classType.IsClass && classType.HasPrimaryConstructor)
+        {
+            return BindConstructorCallExpression(syntax, classType);
         }
 
         if (TryBindIntrinsicCall(syntax, out var intrinsic))

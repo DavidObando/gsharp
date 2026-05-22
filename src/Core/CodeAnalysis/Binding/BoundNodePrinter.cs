@@ -129,6 +129,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.StructLiteralExpression:
                 WriteStructLiteralExpression((BoundStructLiteralExpression)node, writer);
                 break;
+            case BoundNodeKind.ConstructorCallExpression:
+                WriteConstructorCallExpression((BoundConstructorCallExpression)node, writer);
+                break;
             case BoundNodeKind.FieldAccessExpression:
                 WriteFieldAccessExpression((BoundFieldAccessExpression)node, writer);
                 break;
@@ -596,6 +599,24 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteConstructorCallExpression(BoundConstructorCallExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 
     private static void WriteFieldAccessExpression(BoundFieldAccessExpression node, IndentedTextWriter writer)

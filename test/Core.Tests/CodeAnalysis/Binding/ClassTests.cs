@@ -124,6 +124,82 @@ type Foo data class {
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void PrimaryConstructor_PositionalCtorCall()
+    {
+        // Phase 3.B.3 sub-step 2: Kotlin-style primary ctor — params become
+        // public fields of the same name; the class is constructed positionally
+        // via `Name(args)`.
+        var source = @"
+type Point class(X int, Y int) {
+}
+
+var p = Point(3, 4)
+p.X + p.Y
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_AdditionalBodyFieldZeroInitialized()
+    {
+        // Body fields not listed in the primary ctor are zero-initialized.
+        var source = @"
+type Counter class(initial int) {
+    Count int
+}
+
+var c = Counter(10)
+c.initial + c.Count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_WrongArgumentCount_Diagnoses()
+    {
+        var source = @"
+type Point class(X int, Y int) {
+}
+
+var p = Point(3)
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_WrongArgumentType_Diagnoses()
+    {
+        var source = @"
+type Point class(X int, Y int) {
+}
+
+var p = Point(3, true)
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_NameCollidesWithBodyField_Diagnoses()
+    {
+        var source = @"
+type Point class(X int, Y int) {
+    X int
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
