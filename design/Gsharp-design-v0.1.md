@@ -27,6 +27,9 @@ Console.WriteLine("Hello, World!");
 ```
 
 ## Prototype program: if and loop
+
+> **Aspirational sample — does not parse with today's compiler.** The form below uses C-style `for init; cond; post` headers, postfix `--`, slice indexing (`args[0]`), an `out`-style `*` argument, and `"{i}"` string interpolation — none of which the current parser/binder accept. It is preserved here as the v1.0 target. The parseable form of this same program lives in [`samples/Loop.gs`](../samples/Loop.gs); see [`design/Gsharp-design-v0.2.md`](Gsharp-design-v0.2.md) for the locked-down syntax surface and [`docs/adr/0010-aspirational-samples.md`](../docs/adr/0010-aspirational-samples.md) for the policy on re-expanding samples as later phases land.
+
 This program tries to parse the first command line argument as an integer, and then does that many loops printing values all the way to 1. With top-level statements, command-line arguments are available via the implicit `args` parameter on the synthesized entry point:
 ```go
 // file: Loop.gs

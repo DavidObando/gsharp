@@ -73,7 +73,10 @@ public class Program
         var references = parsed.References.Count > 0
             ? ReferenceResolver.WithReferences(parsed.References)
             : null;
-        var compilation = new Compilation(references, syntaxTrees.ToArray());
+        var compilation = new Compilation(references, syntaxTrees.ToArray())
+        {
+            ImplicitSystemImport = parsed.ImplicitSystemImport,
+        };
 
         if (parsed.OutputPath is null)
         {
@@ -121,7 +124,7 @@ public class Program
         using (var peStream = File.Create(outputPath))
         using (var refStream = string.IsNullOrEmpty(refOutputPath) ? null : File.Create(refOutputPath))
         {
-            result = compilation.Emit(peStream, refStream);
+            result = compilation.Emit(peStream, refStream, args.AssemblyName);
         }
 
         if (!result.Success)
@@ -226,6 +229,10 @@ public class Program
                         result.RefOutputPath = value;
                         break;
 
+                    case "assemblyname":
+                        result.AssemblyName = value;
+                        break;
+
                     case "target":
                         result.Target = value.ToLowerInvariant() switch
                         {
@@ -245,6 +252,16 @@ public class Program
                         // Loaded into the binder's ReferenceResolver so imports can resolve types
                         // declared in user-supplied assemblies in addition to the BCL.
                         result.References.Add(value);
+                        break;
+
+                    case "implicitimports":
+                    case "implicit-imports":
+                        result.ImplicitSystemImport = ParseBoolFlag(value, defaultIfEmpty: true);
+                        break;
+
+                    case "noimplicitimports":
+                    case "no-implicit-imports":
+                        result.ImplicitSystemImport = false;
                         break;
 
                     case "debug":
@@ -304,6 +321,21 @@ public class Program
         return result;
     }
 
+    private static bool ParseBoolFlag(string value, bool defaultIfEmpty)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return defaultIfEmpty;
+        }
+
+        return value.ToLowerInvariant() switch
+        {
+            "true" or "1" or "on" or "yes" => true,
+            "false" or "0" or "off" or "no" => false,
+            _ => throw new CommandLineException($"Unsupported boolean value: {value}"),
+        };
+    }
+
     private static bool IsSwitch(string arg)
     {
         if (arg.Length == 0)
@@ -350,11 +382,15 @@ public class Program
 
         public string RefOutputPath { get; set; }
 
+        public string AssemblyName { get; set; }
+
         public OutputTarget Target { get; set; } = OutputTarget.Exe;
 
         public string TargetFramework { get; set; }
 
         public bool ShowHelp { get; set; }
+
+        public bool ImplicitSystemImport { get; set; } = true;
     }
 
     private sealed class CommandLineException : Exception

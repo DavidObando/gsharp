@@ -19,16 +19,19 @@ public sealed class FunctionSymbol : Symbol
     /// <param name="parameters">The parameters of the function.</param>
     /// <param name="type">The type of the function.</param>
     /// <param name="declaration">The declaration of the function.</param>
+    /// <param name="package">The package this function belongs to, or null for built-ins.</param>
     public FunctionSymbol(
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration = null)
+        FunctionDeclarationSyntax declaration = null,
+        PackageSymbol package = null)
         : base(name)
     {
         Parameters = parameters;
         Type = type;
         Declaration = declaration;
+        Package = package;
     }
 
     /// <inheritdoc/>
@@ -48,4 +51,10 @@ public sealed class FunctionSymbol : Symbol
     /// Gets the declaration of the function.
     /// </summary>
     public FunctionDeclarationSyntax Declaration { get; }
+
+    /// <summary>
+    /// Gets the package this function belongs to. <c>null</c> for built-in
+    /// functions, which are not scoped to a user package.
+    /// </summary>
+    public PackageSymbol Package { get; }
 }

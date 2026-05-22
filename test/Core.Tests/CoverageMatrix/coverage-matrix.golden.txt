@@ -1,0 +1,171 @@
+# GSharp coverage-matrix snapshot
+# Generated from SyntaxKind, BoundNodeKind, BoundBinaryOperator,
+# and BoundUnaryOperator. Drift fails CoverageMatrixGoldenTests.
+
+[SyntaxKind]
+AccessorExpression
+AmpersandAmpersandToken
+AmpersandEqualsToken
+AmpersandHatEqualsToken
+AmpersandHatToken
+AmpersandToken
+AssignmentExpression
+BadToken
+BangEqualsToken
+BangToken
+BinaryExpression
+BlockStatement
+BreakKeyword
+BreakStatement
+CallExpression
+CaseKeyword
+ChanKeyword
+CloseBraceToken
+CloseParenthesisToken
+CloseSquareBracketToken
+ColonEqualsToken
+ColonToken
+CommaToken
+CommentToken
+CompilationUnit
+ConstKeyword
+ContinueKeyword
+ContinueStatement
+DefaultKeyword
+DeferKeyword
+DotToken
+EllipsisToken
+ElseClause
+ElseKeyword
+EndOfFileToken
+EqualsEqualsToken
+EqualsToken
+ExpressionStatement
+FallthroughKeyword
+FalseKeyword
+ForEllipsisStatement
+ForInfiniteStatement
+ForKeyword
+FuncKeyword
+FunctionDeclaration
+GlobalStatement
+GoKeyword
+GotoKeyword
+GreaterOrEqualsToken
+GreaterToken
+HatEqualsToken
+HatToken
+IdentifierToken
+IfKeyword
+IfStatement
+ImportDeclaration
+ImportKeyword
+InterfaceKeyword
+InterpolatedStringExpression
+InterpolatedStringToken
+LeftArrowToken
+LessOrEqualsToken
+LessToken
+LetKeyword
+LiteralExpression
+MapKeyword
+MinusEqualsToken
+MinusMinusToken
+MinusToken
+NameExpression
+NumberToken
+OpenBraceToken
+OpenParenthesisToken
+OpenSquareBracketToken
+PackageDeclaration
+PackageKeyword
+Parameter
+ParenthesizedExpression
+PercentEqualsToken
+PercentToken
+PipeEqualsToken
+PipePipeToken
+PipeToken
+PlusEqualsToken
+PlusPlusToken
+PlusToken
+RangeKeyword
+ReturnKeyword
+ReturnStatement
+SelectKeyword
+SemicolonToken
+ShiftLeftEqualsToken
+ShiftLeftToken
+ShiftRightEqualsToken
+ShiftRightToken
+SlashEqualsToken
+SlashToken
+StarEqualsToken
+StarToken
+StringToken
+StructKeyword
+SwitchKeyword
+TrueKeyword
+TypeClause
+TypeKeyword
+UnaryExpression
+VarKeyword
+VariableDeclaration
+WhitespaceToken
+
+[BoundNodeKind]
+AssignmentExpression
+BinaryExpression
+BlockStatement
+CallExpression
+ConditionalGotoStatement
+ConversionExpression
+ErrorExpression
+ExpressionStatement
+ForEllipsisStatement
+ForInfiniteStatement
+GotoStatement
+IfStatement
+ImportedCallExpression
+ImportedInstanceCallExpression
+LabelStatement
+LiteralExpression
+ReturnStatement
+UnaryExpression
+VariableDeclaration
+VariableExpression
+
+[BoundBinaryOperator]
+AmpersandAmpersandToken LogicalAnd (bool,bool) -> bool
+AmpersandHatToken BitClear (int,int) -> int
+AmpersandToken BitwiseAnd (bool,bool) -> bool
+AmpersandToken BitwiseAnd (int,int) -> int
+BangEqualsToken NotEquals (bool,bool) -> bool
+BangEqualsToken NotEquals (int,int) -> bool
+BangEqualsToken NotEquals (string,string) -> bool
+EqualsEqualsToken Equals (bool,bool) -> bool
+EqualsEqualsToken Equals (int,int) -> bool
+EqualsEqualsToken Equals (string,string) -> bool
+GreaterOrEqualsToken GreaterOrEquals (int,int) -> bool
+GreaterToken Greater (int,int) -> bool
+HatToken BitwiseXor (bool,bool) -> bool
+HatToken BitwiseXor (int,int) -> int
+LessOrEqualsToken LessOrEquals (int,int) -> bool
+LessToken Less (int,int) -> bool
+MinusToken Difference (int,int) -> int
+PercentToken Remainder (int,int) -> int
+PipePipeToken LogicalOr (bool,bool) -> bool
+PipeToken BitwiseOr (bool,bool) -> bool
+PipeToken BitwiseOr (int,int) -> int
+PlusToken Sum (int,int) -> int
+PlusToken Sum (string,string) -> string
+ShiftLeftToken ShiftLeft (int,int) -> int
+ShiftRightToken ShiftRight (int,int) -> int
+SlashToken Quotient (int,int) -> int
+StarToken Product (int,int) -> int
+
+[BoundUnaryOperator]
+BangToken LogicalNegation (bool) -> bool
+HatToken OnesComplement (int) -> int
+MinusToken Negation (int) -> int
+PlusToken Identity (int) -> int

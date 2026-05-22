@@ -126,6 +126,8 @@ public static class SyntaxFacts
                 return SyntaxKind.ImportKeyword;
             case "interface":
                 return SyntaxKind.InterfaceKeyword;
+            case "let":
+                return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
             case "package":
@@ -322,6 +324,8 @@ public static class SyntaxFacts
                 return "import";
             case SyntaxKind.InterfaceKeyword:
                 return "interface";
+            case SyntaxKind.LetKeyword:
+                return "let";
             case SyntaxKind.MapKeyword:
                 return "map";
             case SyntaxKind.PackageKeyword:
