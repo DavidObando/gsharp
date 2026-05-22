@@ -130,6 +130,8 @@ public enum SyntaxKind
     ElseClause,
     ForInfiniteStatement,
     ForEllipsisStatement,
+    ForConditionStatement,
+    ForClauseStatement,
     BreakStatement,
     ContinueStatement,
     ReturnStatement,

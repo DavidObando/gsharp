@@ -326,6 +326,10 @@ public sealed class Binder
                 return BindForInfiniteStatement((ForInfiniteStatementSyntax)syntax);
             case SyntaxKind.ForEllipsisStatement:
                 return BindForEllipsisStatement((ForEllipsisStatementSyntax)syntax);
+            case SyntaxKind.ForConditionStatement:
+                return BindForConditionStatement((ForConditionStatementSyntax)syntax);
+            case SyntaxKind.ForClauseStatement:
+                return BindForClauseStatement((ForClauseStatementSyntax)syntax);
             case SyntaxKind.BreakStatement:
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
@@ -416,6 +420,96 @@ public sealed class Binder
         scope = scope.Parent;
 
         return new BoundForEllipsisStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
+    }
+
+    private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
+    {
+        // Lowers to:
+        //   {
+        //     goto checkLabel
+        //     bodyLabel:
+        //     <body>
+        //     continueLabel:
+        //     checkLabel:
+        //     if cond goto bodyLabel
+        //     breakLabel:
+        //   }
+        scope = new BoundScope(scope);
+
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        var bodyLabel = new BoundLabel($"body{labelCounter}");
+        var checkLabel = new BoundLabel($"check{labelCounter}");
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundGotoStatement(checkLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(continueLabel));
+        statements.Add(new BoundLabelStatement(checkLabel));
+        statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(breakLabel));
+
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindForClauseStatement(ForClauseStatementSyntax syntax)
+    {
+        // Lowers to:
+        //   {
+        //     <init>?
+        //     goto checkLabel
+        //     bodyLabel:
+        //     <body>
+        //     continueLabel:
+        //     <post>?
+        //     checkLabel:
+        //     [if cond] goto bodyLabel
+        //     breakLabel:
+        //   }
+        scope = new BoundScope(scope);
+
+        var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
+        var condition = syntax.Condition == null ? null : BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var post = syntax.Post == null ? null : BindStatement(syntax.Post);
+        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        var bodyLabel = new BoundLabel($"body{labelCounter}");
+        var checkLabel = new BoundLabel($"check{labelCounter}");
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (init != null)
+        {
+            statements.Add(init);
+        }
+
+        statements.Add(new BoundGotoStatement(checkLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(continueLabel));
+        if (post != null)
+        {
+            statements.Add(post);
+        }
+
+        statements.Add(new BoundLabelStatement(checkLabel));
+        if (condition == null)
+        {
+            statements.Add(new BoundGotoStatement(bodyLabel));
+        }
+        else
+        {
+            statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
+        }
+
+        statements.Add(new BoundLabelStatement(breakLabel));
+
+        return new BoundBlockStatement(statements.ToImmutable());
     }
 
     private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)

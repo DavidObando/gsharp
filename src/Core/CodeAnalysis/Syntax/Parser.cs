@@ -372,7 +372,162 @@ public class Parser
             return ParseForInfiniteStatement();
         }
 
-        return ParseForEllipsisStatement();
+        if (LooksLikeForEllipsis())
+        {
+            return ParseForEllipsisStatement();
+        }
+
+        if (LooksLikeForClause())
+        {
+            return ParseForClauseStatement();
+        }
+
+        return ParseForConditionStatement();
+    }
+
+    private bool LooksLikeForEllipsis()
+    {
+        // `for <ident> := <expr> ... <expr> { ... }`
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        if (Peek(2).Kind != SyntaxKind.ColonEqualsToken)
+        {
+            return false;
+        }
+
+        int depth = 0;
+        for (int i = 3; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.EllipsisToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.SemicolonToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
+    }
+
+    private bool LooksLikeForClause()
+    {
+        // `for [init]; [cond]; [post] { ... }` — a semicolon at depth zero
+        // before the opening brace marks the C-style clause form.
+        if (Peek(1).Kind == SyntaxKind.SemicolonToken)
+        {
+            return true;
+        }
+
+        int depth = 0;
+        for (int i = 1; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.SemicolonToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
+    }
+
+    private StatementSyntax ParseForConditionStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+        var condition = ParseExpression();
+        var body = ParseStatement();
+        return new ForConditionStatementSyntax(syntaxTree, keyword, condition, body);
+    }
+
+    private StatementSyntax ParseForClauseStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+
+        StatementSyntax initializer = null;
+        if (Current.Kind != SyntaxKind.SemicolonToken)
+        {
+            initializer = ParseSimpleStatement();
+        }
+
+        var firstSemicolon = MatchToken(SyntaxKind.SemicolonToken);
+
+        ExpressionSyntax condition = null;
+        if (Current.Kind != SyntaxKind.SemicolonToken)
+        {
+            condition = ParseExpression();
+        }
+
+        var secondSemicolon = MatchToken(SyntaxKind.SemicolonToken);
+
+        StatementSyntax post = null;
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            post = ParseSimpleStatement();
+        }
+
+        var body = ParseStatement();
+        return new ForClauseStatementSyntax(syntaxTree, keyword, initializer, firstSemicolon, condition, secondSemicolon, post, body);
+    }
+
+    private StatementSyntax ParseSimpleStatement()
+    {
+        // A "simple statement" in the for-header context is one of:
+        //   short variable declaration `x := expr`
+        //   increment/decrement       `x++` / `x--`
+        //   assignment                `x = expr`, `x += expr`, ...
+        //   expression statement      `f()`
+        if (Current.Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.ColonEqualsToken)
+        {
+            return ParseSingleShortVariableDeclaration();
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken &&
+            (Peek(1).Kind == SyntaxKind.PlusPlusToken || Peek(1).Kind == SyntaxKind.MinusMinusToken))
+        {
+            return ParseIncrementDecrementStatement();
+        }
+
+        return ParseExpressionStatement();
     }
 
     private StatementSyntax ParseForInfiniteStatement()

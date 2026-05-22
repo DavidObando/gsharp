@@ -16,8 +16,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | String literal (double-quoted) | ✅ | ✅ | Includes Kotlin-style interpolation (`$ident`, `${expr}`) lowered to `+`-chain with `Convert.ToString` (Phase 1.1). `$$` escapes a literal `$`. |
 | Raw string literal (backtick) | ✅ | ✅ | Phase 1.2: contents verbatim, no escapes, CRLF/CR normalized to LF, multi-line allowed; embedded backticks not representable. |
 | Identifier | ✅ | ✅ | Unicode-aware via `char.IsLetter`/`char.IsLetterOrDigit` (categories Lu/Ll/Lt/Lm/Lo/Nl + Nd). Surrogate pairs not yet supported. See `docs/lexical.md`. |
-| `++` / `--` | ✅ | ❌ | Lexed but the parser has no increment/decrement statement form; `Loop.gs`'s `i--` is currently unparseable. |
-| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ❌ | `ParseAssignmentExpression` only accepts `IdentifierToken EqualsToken …`. |
+| `++` / `--` | ✅ | ✅ | Statement-only (Phase 2.2); the parser desugars `i++`/`i--` to `i = i ± 1` so the rest of the pipeline is unchanged. `let y = x++` is rejected at parse time. |
+| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ✅ | Phase 2.1: the parser desugars `x op= rhs` to `x = x op rhs`; the binder/lowerer/emitter need no per-operator change. |
 | `[` / `]` | ✅ | ❌ | No syntax node consumes them; indexing/slicing unreachable. |
 | `;` | ✅ | ❌ | Only synthesized internally; no statement separator role in source. |
 | `<-` (channel send/recv arrow) | ✅ | 🟡 | Parsed only as a unary operator (`ParseBinaryExpression` calls it via `GetUnaryOperatorPrecedence`). No bound form → binder rejects. |
@@ -44,8 +44,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |
 | `for { }` (infinite) | ✅ | ✅ | ✅ | ✅ | |
 | `for i := lo ... hi { }` | ✅ | ✅ | ✅ | ✅ | GSharp-specific; not Go's `for i := lo; i < hi; i++`. |
-| `for cond { }` (while-style) | ❌ | — | — | — | |
-| `for init; cond; post { }` (C-style) | ❌ | — | — | — | |
+| `for cond { }` (while-style) | ✅ | ✅ | ✅ | ✅ | Lowered in the binder to `goto checkLabel; body; check: if cond goto body`. |
+| `for init; cond; post { }` (C-style) | ✅ | ✅ | ✅ | ✅ | Header parts are all optional; `for ;; { }` is the infinite form. `continue` jumps to `post` then re-evaluates `cond`. |
 | `for k, v := range coll` | ❌ | — | — | — | |
 | `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
 | `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
@@ -55,7 +55,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `select` | ❌ | — | — | — | Keyword reserved. |
 | `goto` / labels | ❌ | 🟡 | 🟡 | 🟡 | `BoundGotoStatement` / `BoundLabelStatement` exist as **lowering artifacts** for `for`/`if`; not surfaceable from source. |
 | Send statement `ch <- v` / receive `<-ch` | ❌ | — | — | — | |
-| Increment/decrement statement (`i++`, `i--`) | ❌ | — | — | — | Tokens lex but no syntax. |
+| Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |
 | `type` declaration (alias or defined type) | ❌ | — | — | — | Keyword reserved. |
 
 ## Expressions
