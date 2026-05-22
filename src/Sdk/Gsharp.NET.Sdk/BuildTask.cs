@@ -91,6 +91,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             args.Add($"/target:{t}");
         }
 
+        if (!string.IsNullOrEmpty(this.TargetFramework))
+        {
+            args.Add($"/targetframework:{this.TargetFramework}");
+        }
+
         if (!string.IsNullOrEmpty(this.DebugType))
         {
             args.Add($"/debug:{this.DebugType}");
