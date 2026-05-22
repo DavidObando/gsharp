@@ -20,18 +20,21 @@ public sealed class FunctionSymbol : Symbol
     /// <param name="type">The type of the function.</param>
     /// <param name="declaration">The declaration of the function.</param>
     /// <param name="package">The package this function belongs to, or null for built-ins.</param>
+    /// <param name="accessibility">The CLR visibility level (defaults to <see cref="Accessibility.Public"/>).</param>
     public FunctionSymbol(
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
         FunctionDeclarationSyntax declaration = null,
-        PackageSymbol package = null)
+        PackageSymbol package = null,
+        Accessibility accessibility = Accessibility.Public)
         : base(name)
     {
         Parameters = parameters;
         Type = type;
         Declaration = declaration;
         Package = package;
+        Accessibility = accessibility;
     }
 
     /// <inheritdoc/>
@@ -57,4 +60,9 @@ public sealed class FunctionSymbol : Symbol
     /// functions, which are not scoped to a user package.
     /// </summary>
     public PackageSymbol Package { get; }
+
+    /// <summary>
+    /// Gets the CLR visibility level for this function.
+    /// </summary>
+    public Accessibility Accessibility { get; }
 }

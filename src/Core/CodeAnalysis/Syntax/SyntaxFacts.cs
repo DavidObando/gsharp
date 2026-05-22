@@ -83,6 +83,34 @@ public static class SyntaxFacts
     }
 
     /// <summary>
+    /// If the given token is a compound assignment operator (e.g. <c>+=</c>),
+    /// returns the underlying binary operator kind (e.g. <c>+</c>).
+    /// </summary>
+    /// <param name="kind">The candidate compound assignment token kind.</param>
+    /// <param name="baseOperatorKind">The base binary operator kind, if any.</param>
+    /// <returns><c>true</c> if the token is a compound assignment operator.</returns>
+    public static bool TryGetCompoundAssignmentBaseOperator(SyntaxKind kind, out SyntaxKind baseOperatorKind)
+    {
+#pragma warning disable SA1025 // Code should not contain multiple whitespace in a row
+        switch (kind)
+        {
+            case SyntaxKind.PlusEqualsToken:           baseOperatorKind = SyntaxKind.PlusToken; return true;
+            case SyntaxKind.MinusEqualsToken:          baseOperatorKind = SyntaxKind.MinusToken; return true;
+            case SyntaxKind.StarEqualsToken:           baseOperatorKind = SyntaxKind.StarToken; return true;
+            case SyntaxKind.SlashEqualsToken:          baseOperatorKind = SyntaxKind.SlashToken; return true;
+            case SyntaxKind.PercentEqualsToken:        baseOperatorKind = SyntaxKind.PercentToken; return true;
+            case SyntaxKind.HatEqualsToken:            baseOperatorKind = SyntaxKind.HatToken; return true;
+            case SyntaxKind.AmpersandEqualsToken:      baseOperatorKind = SyntaxKind.AmpersandToken; return true;
+            case SyntaxKind.PipeEqualsToken:           baseOperatorKind = SyntaxKind.PipeToken; return true;
+            case SyntaxKind.AmpersandHatEqualsToken:   baseOperatorKind = SyntaxKind.AmpersandHatToken; return true;
+            case SyntaxKind.ShiftLeftEqualsToken:      baseOperatorKind = SyntaxKind.ShiftLeftToken; return true;
+            case SyntaxKind.ShiftRightEqualsToken:     baseOperatorKind = SyntaxKind.ShiftRightToken; return true;
+            default:                                   baseOperatorKind = SyntaxKind.BadToken; return false;
+        }
+#pragma warning restore SA1025 // Code should not contain multiple whitespace in a row
+    }
+
+    /// <summary>
     /// Given a string, if it's a language keyword, this method will return
     /// the syntax kind for that keyword.
     /// </summary>
@@ -126,12 +154,18 @@ public static class SyntaxFacts
                 return SyntaxKind.ImportKeyword;
             case "interface":
                 return SyntaxKind.InterfaceKeyword;
+            case "internal":
+                return SyntaxKind.InternalKeyword;
             case "let":
                 return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
             case "package":
                 return SyntaxKind.PackageKeyword;
+            case "private":
+                return SyntaxKind.PrivateKeyword;
+            case "public":
+                return SyntaxKind.PublicKeyword;
             case "range":
                 return SyntaxKind.RangeKeyword;
             case "return":
@@ -324,12 +358,18 @@ public static class SyntaxFacts
                 return "import";
             case SyntaxKind.InterfaceKeyword:
                 return "interface";
+            case SyntaxKind.InternalKeyword:
+                return "internal";
             case SyntaxKind.LetKeyword:
                 return "let";
             case SyntaxKind.MapKeyword:
                 return "map";
             case SyntaxKind.PackageKeyword:
                 return "package";
+            case SyntaxKind.PrivateKeyword:
+                return "private";
+            case SyntaxKind.PublicKeyword:
+                return "public";
             case SyntaxKind.RangeKeyword:
                 return "range";
             case SyntaxKind.ReturnKeyword:

@@ -150,15 +150,52 @@ public class Parser
 
     private MemberSyntax ParseMember()
     {
+        SyntaxToken accessibilityModifier = null;
+        if (Current.Kind == SyntaxKind.PublicKeyword ||
+            Current.Kind == SyntaxKind.InternalKeyword ||
+            Current.Kind == SyntaxKind.PrivateKeyword)
+        {
+            accessibilityModifier = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
-            return ParseFunctionDeclaration();
+            return ParseFunctionDeclaration(accessibilityModifier);
+        }
+
+        if (Current.Kind == SyntaxKind.TypeKeyword)
+        {
+            return ParseTypeAliasDeclaration(accessibilityModifier);
+        }
+
+        if (accessibilityModifier != null &&
+            (Current.Kind == SyntaxKind.VarKeyword ||
+             Current.Kind == SyntaxKind.LetKeyword ||
+             Current.Kind == SyntaxKind.ConstKeyword))
+        {
+            var declaration = ParseVariableDeclaration(accessibilityModifier);
+            return new GlobalStatementSyntax(syntaxTree, declaration);
+        }
+
+        if (accessibilityModifier != null)
+        {
+            Diagnostics.ReportAccessibilityModifierNotAllowedHere(accessibilityModifier.Location, accessibilityModifier.Text);
         }
 
         return ParseGlobalStatement();
     }
 
-    private MemberSyntax ParseFunctionDeclaration()
+    private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)
+    {
+        var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+        var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
+        return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
+    }
+
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -167,7 +204,7 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()
@@ -270,6 +307,10 @@ public class Parser
                 return ParseContinueStatement();
             case SyntaxKind.ReturnKeyword:
                 return ParseReturnStatement();
+            case SyntaxKind.SwitchKeyword:
+                return ParseSwitchStatement();
+            case SyntaxKind.FallthroughKeyword:
+                return ParseFallthroughStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -278,6 +319,17 @@ public class Parser
                     // short variable declarations aren't expressions but
                     // statements.
                     return ParseSingleShortVariableDeclaration();
+                }
+
+                if (Current.Kind == SyntaxKind.IdentifierToken &&
+                    (Peek(1).Kind == SyntaxKind.PlusPlusToken || Peek(1).Kind == SyntaxKind.MinusMinusToken))
+                {
+                    return ParseIncrementDecrementStatement();
+                }
+
+                if (LooksLikeMultiAssignment())
+                {
+                    return ParseMultiAssignmentStatement();
                 }
 
                 return ParseExpressionStatement();
@@ -298,7 +350,114 @@ public class Parser
             initializer: initializer);
     }
 
+    private StatementSyntax ParseIncrementDecrementStatement()
+    {
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var op = NextToken();
+        var baseOpKind = op.Kind == SyntaxKind.PlusPlusToken ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+
+        var leftName = new NameExpressionSyntax(syntaxTree, identifier);
+        var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, op.Position, SyntaxFacts.GetText(baseOpKind), null);
+        var oneToken = new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, op.Position, "1", 1);
+        var oneLiteral = new LiteralExpressionSyntax(syntaxTree, oneToken, 1);
+        var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, oneLiteral);
+        var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+        var assignment = new AssignmentExpressionSyntax(syntaxTree, identifier, equalsToken, binary);
+        return new ExpressionStatementSyntax(syntaxTree, assignment);
+    }
+
+    private bool LooksLikeMultiAssignment()
+    {
+        // Pattern: ident, ident (, ident)* (= | :=) ...
+        if (Current.Kind != SyntaxKind.IdentifierToken ||
+            Peek(1).Kind != SyntaxKind.CommaToken)
+        {
+            return false;
+        }
+
+        int i = 2;
+        while (i < 256)
+        {
+            if (Peek(i).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            var next = Peek(i + 1).Kind;
+            if (next == SyntaxKind.CommaToken)
+            {
+                i += 2;
+                continue;
+            }
+
+            return next == SyntaxKind.EqualsToken || next == SyntaxKind.ColonEqualsToken;
+        }
+
+        return false;
+    }
+
+    private StatementSyntax ParseMultiAssignmentStatement()
+    {
+        var targets = ParseMultiTargetList();
+        SyntaxToken op;
+        if (Current.Kind == SyntaxKind.ColonEqualsToken)
+        {
+            op = MatchToken(SyntaxKind.ColonEqualsToken);
+        }
+        else
+        {
+            op = MatchToken(SyntaxKind.EqualsToken);
+        }
+
+        var values = ParseMultiValueList();
+        return new MultiAssignmentStatementSyntax(syntaxTree, targets, op, values);
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseMultiTargetList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (true)
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            nodesAndSeparators.Add(new NameExpressionSyntax(syntaxTree, identifier));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                continue;
+            }
+
+            break;
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseMultiValueList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (true)
+        {
+            nodesAndSeparators.Add(ParseExpression());
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                continue;
+            }
+
+            break;
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
     private StatementSyntax ParseVariableDeclaration()
+    {
+        return ParseVariableDeclaration(accessibilityModifier: null);
+    }
+
+    private StatementSyntax ParseVariableDeclaration(SyntaxToken accessibilityModifier)
     {
         SyntaxKind expected;
         switch (Current.Kind)
@@ -319,16 +478,61 @@ public class Parser
         var typeClause = ParseOptionalTypeClause();
         var equals = MatchToken(SyntaxKind.EqualsToken);
         var initializer = ParseExpression();
-        return new VariableDeclarationSyntax(syntaxTree, keyword, identifier, typeClause, equals, initializer);
+        return new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
     }
 
     private StatementSyntax ParseIfStatement()
     {
         var keyword = MatchToken(SyntaxKind.IfKeyword);
+
+        StatementSyntax initializer = null;
+        SyntaxToken semicolon = null;
+        if (HasIfInitClause())
+        {
+            initializer = ParseSimpleStatement();
+            semicolon = MatchToken(SyntaxKind.SemicolonToken);
+        }
+
         var condition = ParseExpression();
         var statement = ParseStatement();
         var elseClause = ParseElseClause();
-        return new IfStatementSyntax(syntaxTree, keyword, condition, statement, elseClause);
+        return new IfStatementSyntax(syntaxTree, keyword, initializer, semicolon, condition, statement, elseClause);
+    }
+
+    private bool HasIfInitClause()
+    {
+        // Mirrors LooksLikeForClause: scan ahead from the position
+        // after `if` looking for a depth-zero semicolon before the
+        // opening brace of the then-block.
+        int depth = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.SemicolonToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
     }
 
     private ElseClauseSyntax ParseElseClause()
@@ -350,7 +554,162 @@ public class Parser
             return ParseForInfiniteStatement();
         }
 
-        return ParseForEllipsisStatement();
+        if (LooksLikeForEllipsis())
+        {
+            return ParseForEllipsisStatement();
+        }
+
+        if (LooksLikeForClause())
+        {
+            return ParseForClauseStatement();
+        }
+
+        return ParseForConditionStatement();
+    }
+
+    private bool LooksLikeForEllipsis()
+    {
+        // `for <ident> := <expr> ... <expr> { ... }`
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        if (Peek(2).Kind != SyntaxKind.ColonEqualsToken)
+        {
+            return false;
+        }
+
+        int depth = 0;
+        for (int i = 3; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.EllipsisToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.SemicolonToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
+    }
+
+    private bool LooksLikeForClause()
+    {
+        // `for [init]; [cond]; [post] { ... }` — a semicolon at depth zero
+        // before the opening brace marks the C-style clause form.
+        if (Peek(1).Kind == SyntaxKind.SemicolonToken)
+        {
+            return true;
+        }
+
+        int depth = 0;
+        for (int i = 1; i < 256; i++)
+        {
+            var k = Peek(i).Kind;
+            if (depth == 0)
+            {
+                if (k == SyntaxKind.SemicolonToken)
+                {
+                    return true;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken ||
+                    k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+            }
+
+            if (k == SyntaxKind.OpenParenthesisToken)
+            {
+                depth++;
+            }
+            else if (k == SyntaxKind.CloseParenthesisToken && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return false;
+    }
+
+    private StatementSyntax ParseForConditionStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+        var condition = ParseExpression();
+        var body = ParseStatement();
+        return new ForConditionStatementSyntax(syntaxTree, keyword, condition, body);
+    }
+
+    private StatementSyntax ParseForClauseStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+
+        StatementSyntax initializer = null;
+        if (Current.Kind != SyntaxKind.SemicolonToken)
+        {
+            initializer = ParseSimpleStatement();
+        }
+
+        var firstSemicolon = MatchToken(SyntaxKind.SemicolonToken);
+
+        ExpressionSyntax condition = null;
+        if (Current.Kind != SyntaxKind.SemicolonToken)
+        {
+            condition = ParseExpression();
+        }
+
+        var secondSemicolon = MatchToken(SyntaxKind.SemicolonToken);
+
+        StatementSyntax post = null;
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            post = ParseSimpleStatement();
+        }
+
+        var body = ParseStatement();
+        return new ForClauseStatementSyntax(syntaxTree, keyword, initializer, firstSemicolon, condition, secondSemicolon, post, body);
+    }
+
+    private StatementSyntax ParseSimpleStatement()
+    {
+        // A "simple statement" in the for-header context is one of:
+        //   short variable declaration `x := expr`
+        //   increment/decrement       `x++` / `x--`
+        //   assignment                `x = expr`, `x += expr`, ...
+        //   expression statement      `f()`
+        if (Current.Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.ColonEqualsToken)
+        {
+            return ParseSingleShortVariableDeclaration();
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken &&
+            (Peek(1).Kind == SyntaxKind.PlusPlusToken || Peek(1).Kind == SyntaxKind.MinusMinusToken))
+        {
+            return ParseIncrementDecrementStatement();
+        }
+
+        return ParseExpressionStatement();
     }
 
     private StatementSyntax ParseForInfiniteStatement()
@@ -395,6 +754,55 @@ public class Parser
         return new ReturnStatementSyntax(syntaxTree, keyword, expression);
     }
 
+    private StatementSyntax ParseSwitchStatement()
+    {
+        var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
+        var expression = ParseExpression();
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var cases = ImmutableArray.CreateBuilder<SwitchCaseSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+            cases.Add(ParseSwitchCase());
+
+            // Defensive: if ParseSwitchCase failed to consume any token, break to
+            // avoid an infinite loop.
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new SwitchStatementSyntax(syntaxTree, switchKeyword, expression, openBrace, cases.ToImmutable(), closeBrace);
+    }
+
+    private SwitchCaseSyntax ParseSwitchCase()
+    {
+        if (Current.Kind == SyntaxKind.DefaultKeyword)
+        {
+            var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
+            var body = ParseBlockStatement();
+            return new SwitchCaseSyntax(syntaxTree, defaultKeyword, value: null, body);
+        }
+
+        var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
+        var value = ParseExpression();
+        var caseBody = ParseBlockStatement();
+        return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, caseBody);
+    }
+
+    private StatementSyntax ParseFallthroughStatement()
+    {
+        // ADR-0013: `fallthrough` is reserved but unsupported. Consume the token and
+        // emit a diagnostic so user code surfaces a clear error.
+        var keyword = MatchToken(SyntaxKind.FallthroughKeyword);
+        Diagnostics.ReportFallthroughNotSupported(keyword.Location);
+        return new ExpressionStatementSyntax(syntaxTree, new LiteralExpressionSyntax(syntaxTree, keyword, value: 0));
+    }
+
     private ExpressionStatementSyntax ParseExpressionStatement()
     {
         var expression = ParseExpression();
@@ -415,6 +823,20 @@ public class Parser
             var operatorToken = NextToken();
             var right = ParseAssignmentExpression();
             return new AssignmentExpressionSyntax(syntaxTree, identifierToken, operatorToken, right);
+        }
+
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Peek(1).Kind, out var baseOpKind))
+        {
+            var identifierToken = NextToken();
+            var compoundToken = NextToken();
+            var right = ParseAssignmentExpression();
+
+            var leftName = new NameExpressionSyntax(syntaxTree, identifierToken);
+            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, compoundToken.Position, SyntaxFacts.GetText(baseOpKind), null);
+            var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, right);
+            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, compoundToken.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+            return new AssignmentExpressionSyntax(syntaxTree, identifierToken, equalsToken, binary);
         }
 
         return ParseBinaryExpression();

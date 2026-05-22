@@ -123,6 +123,13 @@ public sealed class Binder
             binder.BindImport(import);
         }
 
+        var typeAliasDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                               .OfType<TypeAliasDeclarationSyntax>();
+        foreach (var typeAlias in typeAliasDeclarations)
+        {
+            binder.BindTypeAliasDeclaration(typeAlias);
+        }
+
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
@@ -144,6 +151,7 @@ public sealed class Binder
         var imports = binder.scope.GetDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
         var variables = binder.scope.GetDeclaredVariables();
+        var typeAliases = binder.scope.GetDeclaredTypeAliases();
 
         // Entry-point package: the package owning the top-level statements
         // (if any) or the package owning explicit Main (if any) or, lacking
@@ -160,7 +168,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -232,6 +240,11 @@ public sealed class Binder
                 scope.TryImport(i);
             }
 
+            foreach (var alias in previous.TypeAliases)
+            {
+                scope.TryDeclareTypeAlias(alias.Key, alias.Value);
+            }
+
             foreach (var f in previous.Functions)
             {
                 scope.TryDeclareFunction(f);
@@ -274,6 +287,32 @@ public sealed class Binder
         scope.TryImport(importSymbol);
     }
 
+    private void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax)
+    {
+        var name = syntax.Identifier.Text;
+
+        // Reject shadowing of primitive type names.
+        switch (name)
+        {
+            case "bool":
+            case "int":
+            case "string":
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                return;
+        }
+
+        var aliasedType = BindTypeClause(syntax.AliasedType);
+        if (aliasedType == null)
+        {
+            return;
+        }
+
+        if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+    }
+
     private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
     {
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
@@ -297,10 +336,31 @@ public sealed class Binder
 
         var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
 
-        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package);
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
         if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+        }
+    }
+
+    private static Accessibility ResolveAccessibility(SyntaxToken modifier)
+    {
+        if (modifier == null)
+        {
+            return Accessibility.Public;
+        }
+
+        switch (modifier.Kind)
+        {
+            case SyntaxKind.PublicKeyword:
+                return Accessibility.Public;
+            case SyntaxKind.InternalKeyword:
+                return Accessibility.Internal;
+            case SyntaxKind.PrivateKeyword:
+                return Accessibility.Private;
+            default:
+                return Accessibility.Public;
         }
     }
 
@@ -326,6 +386,10 @@ public sealed class Binder
                 return BindForInfiniteStatement((ForInfiniteStatementSyntax)syntax);
             case SyntaxKind.ForEllipsisStatement:
                 return BindForEllipsisStatement((ForEllipsisStatementSyntax)syntax);
+            case SyntaxKind.ForConditionStatement:
+                return BindForConditionStatement((ForConditionStatementSyntax)syntax);
+            case SyntaxKind.ForClauseStatement:
+                return BindForClauseStatement((ForClauseStatementSyntax)syntax);
             case SyntaxKind.BreakStatement:
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
@@ -334,6 +398,10 @@ public sealed class Binder
                 return BindReturnStatement((ReturnStatementSyntax)syntax);
             case SyntaxKind.ExpressionStatement:
                 return BindExpressionStatement((ExpressionStatementSyntax)syntax);
+            case SyntaxKind.MultiAssignmentStatement:
+                return BindMultiAssignmentStatement((MultiAssignmentStatementSyntax)syntax);
+            case SyntaxKind.SwitchStatement:
+                return BindSwitchStatement((SwitchStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -362,7 +430,8 @@ public sealed class Binder
         var type = BindTypeClause(syntax.TypeClause);
         var initializer = BindExpression(syntax.Initializer);
         var variableType = type ?? initializer.Type;
-        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType);
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
         var convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
 
         return new BoundVariableDeclaration(variable, convertedInitializer);
@@ -386,10 +455,188 @@ public sealed class Binder
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)
     {
-        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-        var thenStatement = BindStatement(syntax.ThenStatement);
-        var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
-        return new BoundIfStatement(condition, thenStatement, elseStatement);
+        if (syntax.Initializer == null)
+        {
+            var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+            var thenStatement = BindStatement(syntax.ThenStatement);
+            var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+            return new BoundIfStatement(condition, thenStatement, elseStatement);
+        }
+
+        // `if init; cond { then } else { else }` lowers to a block that
+        // scopes the initializer to both arms:
+        //   {
+        //     <init>
+        //     if cond { then } else { else }
+        //   }
+        scope = new BoundScope(scope);
+
+        var initStatement = BindStatement(syntax.Initializer);
+        var initCondition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var initThen = BindStatement(syntax.ThenStatement);
+        var initElse = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+        scope = scope.Parent;
+
+        var inner = new BoundIfStatement(initCondition, initThen, initElse);
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
+    {
+        var targets = syntax.Targets.ToImmutableArray();
+        var values = syntax.Values.ToImmutableArray();
+
+        if (targets.Length != values.Length)
+        {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var isShortDecl = syntax.OperatorToken.Kind == SyntaxKind.ColonEqualsToken;
+
+        if (isShortDecl)
+        {
+            for (var i = 0; i < targets.Length; i++)
+            {
+                var nameExpr = (NameExpressionSyntax)targets[i];
+                var initializer = BindExpression(values[i]);
+                var variable = BindVariableDeclaration(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
+                statements.Add(new BoundVariableDeclaration(variable, initializer));
+            }
+
+            return new BoundBlockStatement(statements.ToImmutable());
+        }
+
+        // Plain assignment: evaluate every RHS into a fresh temp, then assign each temp to its target.
+        // This is the semantics Go specifies for `a, b = b, a` and friends.
+        var temps = ImmutableArray.CreateBuilder<VariableSymbol>(targets.Length);
+        var basePos = syntax.OperatorToken.Position;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var initializer = BindExpression(values[i]);
+            var tempName = $"<>m_{basePos}_{i}";
+            var temp = function == null
+                ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, initializer.Type)
+                : new LocalVariableSymbol(tempName, isReadOnly: true, initializer.Type);
+            scope.TryDeclareVariable(temp);
+            temps.Add(temp);
+            statements.Add(new BoundVariableDeclaration(temp, initializer));
+        }
+
+        for (var i = 0; i < targets.Length; i++)
+        {
+            var nameExpr = (NameExpressionSyntax)targets[i];
+            var name = nameExpr.IdentifierToken.Text;
+            var variable = BindVariableReference(name, nameExpr.IdentifierToken.Location);
+            if (variable == null)
+            {
+                continue;
+            }
+
+            if (variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            }
+
+            var tempRef = new BoundVariableExpression(temps[i]);
+            var converted = BindConversion(values[i].Location, tempRef, variable.Type);
+            statements.Add(new BoundExpressionStatement(new BoundAssignmentExpression(variable, converted)));
+        }
+
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
+    {
+        var discriminant = BindExpression(syntax.Expression);
+        var switchType = discriminant.Type;
+
+        if (switchType != TypeSymbol.Error &&
+            switchType != TypeSymbol.Int &&
+            switchType != TypeSymbol.String &&
+            switchType != TypeSymbol.Bool)
+        {
+            Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
+            return BindErrorStatement();
+        }
+
+        var tempName = $"<>switch_{syntax.SwitchKeyword.Position}";
+        var tempVar = function == null
+            ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, switchType)
+            : new LocalVariableSymbol(tempName, isReadOnly: true, switchType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(tempVar, discriminant));
+
+        BoundStatement defaultBody = null;
+        TextLocation? duplicateDefaultLocation = null;
+
+        // First pass: locate the default body (and flag duplicates) so the case
+        // chain can be threaded through it regardless of source position.
+        for (var i = 0; i < syntax.Cases.Length; i++)
+        {
+            var caseSyntax = syntax.Cases[i];
+            if (!caseSyntax.IsDefault)
+            {
+                continue;
+            }
+
+            if (defaultBody != null)
+            {
+                duplicateDefaultLocation = caseSyntax.Keyword.Location;
+            }
+            else
+            {
+                defaultBody = BindBlockStatement(caseSyntax.Body);
+            }
+        }
+
+        BoundStatement chain = defaultBody;
+
+        for (var i = syntax.Cases.Length - 1; i >= 0; i--)
+        {
+            var caseSyntax = syntax.Cases[i];
+            if (caseSyntax.IsDefault)
+            {
+                continue;
+            }
+
+            var caseBody = BindBlockStatement(caseSyntax.Body);
+            var caseValue = BindExpression(caseSyntax.Value);
+            var converted = BindConversion(caseSyntax.Value.Location, caseValue, switchType, allowExplicit: false);
+            var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, switchType, switchType);
+            if (op == null)
+            {
+                Diagnostics.ReportSwitchCaseTypeMismatch(caseSyntax.Value.Location, caseValue.Type, switchType);
+                continue;
+            }
+
+            var condition = new BoundBinaryExpression(new BoundVariableExpression(tempVar), op, converted);
+            chain = new BoundIfStatement(condition, caseBody, chain);
+        }
+
+        if (duplicateDefaultLocation.HasValue)
+        {
+            Diagnostics.ReportDuplicateSwitchDefault(duplicateDefaultLocation.Value);
+        }
+
+        if (chain == null)
+        {
+            // No non-default cases at all -- just run the default (if any).
+            if (defaultBody != null)
+            {
+                statements.Add(defaultBody);
+            }
+        }
+        else
+        {
+            statements.Add(chain);
+        }
+
+        return new BoundBlockStatement(statements.ToImmutable());
     }
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
@@ -416,6 +663,96 @@ public sealed class Binder
         scope = scope.Parent;
 
         return new BoundForEllipsisStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
+    }
+
+    private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
+    {
+        // Lowers to:
+        //   {
+        //     goto checkLabel
+        //     bodyLabel:
+        //     <body>
+        //     continueLabel:
+        //     checkLabel:
+        //     if cond goto bodyLabel
+        //     breakLabel:
+        //   }
+        scope = new BoundScope(scope);
+
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        var bodyLabel = new BoundLabel($"body{labelCounter}");
+        var checkLabel = new BoundLabel($"check{labelCounter}");
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundGotoStatement(checkLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(continueLabel));
+        statements.Add(new BoundLabelStatement(checkLabel));
+        statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(breakLabel));
+
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindForClauseStatement(ForClauseStatementSyntax syntax)
+    {
+        // Lowers to:
+        //   {
+        //     <init>?
+        //     goto checkLabel
+        //     bodyLabel:
+        //     <body>
+        //     continueLabel:
+        //     <post>?
+        //     checkLabel:
+        //     [if cond] goto bodyLabel
+        //     breakLabel:
+        //   }
+        scope = new BoundScope(scope);
+
+        var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
+        var condition = syntax.Condition == null ? null : BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var post = syntax.Post == null ? null : BindStatement(syntax.Post);
+        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        var bodyLabel = new BoundLabel($"body{labelCounter}");
+        var checkLabel = new BoundLabel($"check{labelCounter}");
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (init != null)
+        {
+            statements.Add(init);
+        }
+
+        statements.Add(new BoundGotoStatement(checkLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(continueLabel));
+        if (post != null)
+        {
+            statements.Add(post);
+        }
+
+        statements.Add(new BoundLabelStatement(checkLabel));
+        if (condition == null)
+        {
+            statements.Add(new BoundGotoStatement(bodyLabel));
+        }
+        else
+        {
+            statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
+        }
+
+        statements.Add(new BoundLabelStatement(breakLabel));
+
+        return new BoundBlockStatement(statements.ToImmutable());
     }
 
     private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)
@@ -1000,10 +1337,15 @@ public sealed class Binder
 
     private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
     {
+        return BindVariableDeclaration(identifier, isReadOnly, type, Accessibility.Public);
+    }
+
+    private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type, Accessibility accessibility)
+    {
         var name = identifier.Text ?? "?";
         var declare = !identifier.IsMissing;
         var variable = function == null
-                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type)
+                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type, accessibility)
                             : new LocalVariableSymbol(name, isReadOnly, type);
 
         if (declare && !scope.TryDeclareVariable(variable))
@@ -1041,9 +1383,14 @@ public sealed class Binder
                 return TypeSymbol.Int;
             case "string":
                 return TypeSymbol.String;
-            default:
-                return null;
         }
+
+        if (scope.TryLookupTypeAlias(name, out var aliased))
+        {
+            return aliased;
+        }
+
+        return null;
     }
 
     /// <summary>

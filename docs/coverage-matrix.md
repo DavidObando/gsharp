@@ -16,8 +16,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | String literal (double-quoted) | ✅ | ✅ | Includes Kotlin-style interpolation (`$ident`, `${expr}`) lowered to `+`-chain with `Convert.ToString` (Phase 1.1). `$$` escapes a literal `$`. |
 | Raw string literal (backtick) | ✅ | ✅ | Phase 1.2: contents verbatim, no escapes, CRLF/CR normalized to LF, multi-line allowed; embedded backticks not representable. |
 | Identifier | ✅ | ✅ | Unicode-aware via `char.IsLetter`/`char.IsLetterOrDigit` (categories Lu/Ll/Lt/Lm/Lo/Nl + Nd). Surrogate pairs not yet supported. See `docs/lexical.md`. |
-| `++` / `--` | ✅ | ❌ | Lexed but the parser has no increment/decrement statement form; `Loop.gs`'s `i--` is currently unparseable. |
-| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ❌ | `ParseAssignmentExpression` only accepts `IdentifierToken EqualsToken …`. |
+| `++` / `--` | ✅ | ✅ | Statement-only (Phase 2.2); the parser desugars `i++`/`i--` to `i = i ± 1` so the rest of the pipeline is unchanged. `let y = x++` is rejected at parse time. |
+| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ✅ | Phase 2.1: the parser desugars `x op= rhs` to `x = x op rhs`; the binder/lowerer/emitter need no per-operator change. |
 | `[` / `]` | ✅ | ❌ | No syntax node consumes them; indexing/slicing unreachable. |
 | `;` | ✅ | ❌ | Only synthesized internally; no statement separator role in source. |
 | `<-` (channel send/recv arrow) | ✅ | 🟡 | Parsed only as a unary operator (`ParseBinaryExpression` calls it via `GetUnaryOperatorPrecedence`). No bound form → binder rejects. |
@@ -30,8 +30,9 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `package A.B.C` | ✅ | ✅ | ✅ | ✅ | Dotted; no aliases. |
 | `import A.B.C` | ✅ | ✅ | ✅ | ✅ | Aliased form `import alias = path` lands in Phase 1.4. Implicit `import System` is on by default (Phase 1.5; opt-out via `gsc /noimplicitimports`). No parenthesized groups, no string-path imports, no per-file `import` blocks. |
 | Top-level statements | ✅ | ✅ | ✅ | ✅ | Entry point synthesized; one file may carry them. |
-| `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. |
+| `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. Accepts optional `public`/`internal`/`private` modifier (Phase 2.8); default is `public` per ADR-0014. |
 | Multiple return values / named returns / variadic / receivers / generic params | ❌ | — | — | — | |
+| `public` / `internal` / `private` modifiers | ✅ | ✅ | ✅ (func) | — | Phase 2.8 / ADR-0014: allowed on top-level `func`, `type`, `var`, `let`, `const`. Default is `public`. Emitter maps to `MethodAttributes.Public`/`Assembly`/`Private` for functions; global-variable accessibility is recorded for future field emission. |
 
 ## Statements
 
@@ -39,24 +40,25 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | --- | --- | --- | --- | --- | --- |
 | Block `{ … }` | ✅ | ✅ | ✅ | ✅ | |
 | `var x [T] = e` / `let x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. `let` (since Phase 1.6) is an immutable runtime binding — same binder behavior as `const`. |
-| `x := e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `a, b := …`. |
-| `x = e` | ✅ | ✅ | ✅ | ✅ | Single identifier on LHS. |
+| `x := e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b := 1, 2` declares N variables. Call-form `a, b := f()` still waits on Phase 4 multi-return. |
+| `x = e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b = b, a` evaluates every RHS into a fresh temporary before any assignment lands, matching Go's swap semantics. |
 | `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |
 | `for { }` (infinite) | ✅ | ✅ | ✅ | ✅ | |
 | `for i := lo ... hi { }` | ✅ | ✅ | ✅ | ✅ | GSharp-specific; not Go's `for i := lo; i < hi; i++`. |
-| `for cond { }` (while-style) | ❌ | — | — | — | |
-| `for init; cond; post { }` (C-style) | ❌ | — | — | — | |
+| `for cond { }` (while-style) | ✅ | ✅ | ✅ | ✅ | Lowered in the binder to `goto checkLabel; body; check: if cond goto body`. |
+| `for init; cond; post { }` (C-style) | ✅ | ✅ | ✅ | ✅ | Header parts are all optional; `for ;; { }` is the infinite form. `continue` jumps to `post` then re-evaluates `cond`. |
 | `for k, v := range coll` | ❌ | — | — | — | |
 | `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
 | `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
-| `switch` / `case` / `default` / `fallthrough` | ❌ | — | — | — | Keywords reserved. |
+| `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: discriminant over `int`/`string`/`bool`; each case body is a brace block; binder lowers to a chain of if/else around the bound discriminant. Multiple case values per arm and pattern-matching variants land in Phase 6. |
+| `fallthrough` | ❌ | — | — | — | ADR-0013 rejects Go-style implicit case fallthrough. The keyword remains reserved; the parser emits a diagnostic if it appears. |
 | `defer` | ❌ | — | — | — | Keyword reserved. |
 | `go` (goroutine) | ❌ | — | — | — | Keyword reserved. |
 | `select` | ❌ | — | — | — | Keyword reserved. |
 | `goto` / labels | ❌ | 🟡 | 🟡 | 🟡 | `BoundGotoStatement` / `BoundLabelStatement` exist as **lowering artifacts** for `for`/`if`; not surfaceable from source. |
 | Send statement `ch <- v` / receive `<-ch` | ❌ | — | — | — | |
-| Increment/decrement statement (`i++`, `i--`) | ❌ | — | — | — | Tokens lex but no syntax. |
-| `type` declaration (alias or defined type) | ❌ | — | — | — | Keyword reserved. |
+| Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |
+| `type` declaration (alias or defined type) | ✅ | ✅ | — | ✅ | Phase 2.7: `type Name = Other` declares an erased alias resolvable anywhere an `int`/`bool`/`string` (or other alias) is. Defined types (with their own identity) and structural types arrive in Phase 3. |
 
 ## Expressions
 

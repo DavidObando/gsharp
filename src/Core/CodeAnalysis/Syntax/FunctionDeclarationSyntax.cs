@@ -29,8 +29,35 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken closeParenthesisToken,
         TypeClauseSyntax type,
         BlockStatementSyntax body)
+        : this(syntaxTree, accessibilityModifier: null, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class with an explicit accessibility modifier.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>).</param>
+    /// <param name="functionKeyword">The func keyword.</param>
+    /// <param name="identifier">The function identifier.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token.</param>
+    /// <param name="parameters">The function's parameters.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token.</param>
+    /// <param name="type">The function's type.</param>
+    /// <param name="body">The function's body.</param>
+    public FunctionDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken functionKeyword,
+        SyntaxToken identifier,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenthesisToken,
+        TypeClauseSyntax type,
+        BlockStatementSyntax body)
         : base(syntaxTree)
     {
+        AccessibilityModifier = accessibilityModifier;
         FunctionKeyword = functionKeyword;
         Identifier = identifier;
         OpenParenthesisToken = openParenthesisToken;
@@ -42,6 +69,11 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.FunctionDeclaration;
+
+    /// <summary>
+    /// Gets the optional accessibility modifier token (<c>public</c>/<c>internal</c>/<c>private</c>), or <c>null</c> if none was supplied.
+    /// </summary>
+    public SyntaxToken AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the func keyword.

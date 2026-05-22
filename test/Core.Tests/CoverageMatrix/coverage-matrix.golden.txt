@@ -43,6 +43,8 @@ EqualsToken
 ExpressionStatement
 FallthroughKeyword
 FalseKeyword
+ForClauseStatement
+ForConditionStatement
 ForEllipsisStatement
 ForInfiniteStatement
 ForKeyword
@@ -61,6 +63,7 @@ IfStatement
 ImportDeclaration
 ImportKeyword
 InterfaceKeyword
+InternalKeyword
 InterpolatedStringExpression
 InterpolatedStringToken
 LeftArrowToken
@@ -72,6 +75,7 @@ MapKeyword
 MinusEqualsToken
 MinusMinusToken
 MinusToken
+MultiAssignmentStatement
 NameExpression
 NumberToken
 OpenBraceToken
@@ -89,6 +93,8 @@ PipeToken
 PlusEqualsToken
 PlusPlusToken
 PlusToken
+PrivateKeyword
+PublicKeyword
 RangeKeyword
 ReturnKeyword
 ReturnStatement
@@ -104,8 +110,11 @@ StarEqualsToken
 StarToken
 StringToken
 StructKeyword
+SwitchCase
 SwitchKeyword
+SwitchStatement
 TrueKeyword
+TypeAliasDeclaration
 TypeClause
 TypeKeyword
 UnaryExpression
