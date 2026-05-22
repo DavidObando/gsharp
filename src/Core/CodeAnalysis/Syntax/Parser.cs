@@ -285,6 +285,10 @@ public class Parser
                 return ParseContinueStatement();
             case SyntaxKind.ReturnKeyword:
                 return ParseReturnStatement();
+            case SyntaxKind.SwitchKeyword:
+                return ParseSwitchStatement();
+            case SyntaxKind.FallthroughKeyword:
+                return ParseFallthroughStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -721,6 +725,55 @@ public class Parser
         var sameLine = !isEof && keywordLine == currentLine;
         var expression = sameLine ? ParseExpression() : null;
         return new ReturnStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseSwitchStatement()
+    {
+        var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
+        var expression = ParseExpression();
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var cases = ImmutableArray.CreateBuilder<SwitchCaseSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+            cases.Add(ParseSwitchCase());
+
+            // Defensive: if ParseSwitchCase failed to consume any token, break to
+            // avoid an infinite loop.
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new SwitchStatementSyntax(syntaxTree, switchKeyword, expression, openBrace, cases.ToImmutable(), closeBrace);
+    }
+
+    private SwitchCaseSyntax ParseSwitchCase()
+    {
+        if (Current.Kind == SyntaxKind.DefaultKeyword)
+        {
+            var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
+            var body = ParseBlockStatement();
+            return new SwitchCaseSyntax(syntaxTree, defaultKeyword, value: null, body);
+        }
+
+        var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
+        var value = ParseExpression();
+        var caseBody = ParseBlockStatement();
+        return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, caseBody);
+    }
+
+    private StatementSyntax ParseFallthroughStatement()
+    {
+        // ADR-0013: `fallthrough` is reserved but unsupported. Consume the token and
+        // emit a diagnostic so user code surfaces a clear error.
+        var keyword = MatchToken(SyntaxKind.FallthroughKeyword);
+        Diagnostics.ReportFallthroughNotSupported(keyword.Location);
+        return new ExpressionStatementSyntax(syntaxTree, new LiteralExpressionSyntax(syntaxTree, keyword, value: 0));
     }
 
     private ExpressionStatementSyntax ParseExpressionStatement()

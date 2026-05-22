@@ -379,6 +379,8 @@ public sealed class Binder
                 return BindExpressionStatement((ExpressionStatementSyntax)syntax);
             case SyntaxKind.MultiAssignmentStatement:
                 return BindMultiAssignmentStatement((MultiAssignmentStatementSyntax)syntax);
+            case SyntaxKind.SwitchStatement:
+                return BindSwitchStatement((SwitchStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -519,6 +521,97 @@ public sealed class Binder
             var tempRef = new BoundVariableExpression(temps[i]);
             var converted = BindConversion(values[i].Location, tempRef, variable.Type);
             statements.Add(new BoundExpressionStatement(new BoundAssignmentExpression(variable, converted)));
+        }
+
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
+    {
+        var discriminant = BindExpression(syntax.Expression);
+        var switchType = discriminant.Type;
+
+        if (switchType != TypeSymbol.Error &&
+            switchType != TypeSymbol.Int &&
+            switchType != TypeSymbol.String &&
+            switchType != TypeSymbol.Bool)
+        {
+            Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
+            return BindErrorStatement();
+        }
+
+        var tempName = $"<>switch_{syntax.SwitchKeyword.Position}";
+        var tempVar = function == null
+            ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, switchType)
+            : new LocalVariableSymbol(tempName, isReadOnly: true, switchType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(tempVar, discriminant));
+
+        BoundStatement defaultBody = null;
+        TextLocation? duplicateDefaultLocation = null;
+
+        // First pass: locate the default body (and flag duplicates) so the case
+        // chain can be threaded through it regardless of source position.
+        for (var i = 0; i < syntax.Cases.Length; i++)
+        {
+            var caseSyntax = syntax.Cases[i];
+            if (!caseSyntax.IsDefault)
+            {
+                continue;
+            }
+
+            if (defaultBody != null)
+            {
+                duplicateDefaultLocation = caseSyntax.Keyword.Location;
+            }
+            else
+            {
+                defaultBody = BindBlockStatement(caseSyntax.Body);
+            }
+        }
+
+        BoundStatement chain = defaultBody;
+
+        for (var i = syntax.Cases.Length - 1; i >= 0; i--)
+        {
+            var caseSyntax = syntax.Cases[i];
+            if (caseSyntax.IsDefault)
+            {
+                continue;
+            }
+
+            var caseBody = BindBlockStatement(caseSyntax.Body);
+            var caseValue = BindExpression(caseSyntax.Value);
+            var converted = BindConversion(caseSyntax.Value.Location, caseValue, switchType, allowExplicit: false);
+            var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, switchType, switchType);
+            if (op == null)
+            {
+                Diagnostics.ReportSwitchCaseTypeMismatch(caseSyntax.Value.Location, caseValue.Type, switchType);
+                continue;
+            }
+
+            var condition = new BoundBinaryExpression(new BoundVariableExpression(tempVar), op, converted);
+            chain = new BoundIfStatement(condition, caseBody, chain);
+        }
+
+        if (duplicateDefaultLocation.HasValue)
+        {
+            Diagnostics.ReportDuplicateSwitchDefault(duplicateDefaultLocation.Value);
+        }
+
+        if (chain == null)
+        {
+            // No non-default cases at all -- just run the default (if any).
+            if (defaultBody != null)
+            {
+                statements.Add(defaultBody);
+            }
+        }
+        else
+        {
+            statements.Add(chain);
         }
 
         return new BoundBlockStatement(statements.ToImmutable());

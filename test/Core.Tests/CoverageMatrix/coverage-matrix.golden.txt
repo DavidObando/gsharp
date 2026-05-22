@@ -107,7 +107,9 @@ StarEqualsToken
 StarToken
 StringToken
 StructKeyword
+SwitchCase
 SwitchKeyword
+SwitchStatement
 TrueKeyword
 TypeAliasDeclaration
 TypeClause

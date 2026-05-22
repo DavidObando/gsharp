@@ -49,7 +49,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `for k, v := range coll` | ❌ | — | — | — | |
 | `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
 | `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
-| `switch` / `case` / `default` / `fallthrough` | ❌ | — | — | — | Keywords reserved. |
+| `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: discriminant over `int`/`string`/`bool`; each case body is a brace block; binder lowers to a chain of if/else around the bound discriminant. Multiple case values per arm and pattern-matching variants land in Phase 6. |
+| `fallthrough` | ❌ | — | — | — | ADR-0013 rejects Go-style implicit case fallthrough. The keyword remains reserved; the parser emits a diagnostic if it appears. |
 | `defer` | ❌ | — | — | — | Keyword reserved. |
 | `go` (goroutine) | ❌ | — | — | — | Keyword reserved. |
 | `select` | ❌ | — | — | — | Keyword reserved. |

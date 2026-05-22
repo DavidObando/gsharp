@@ -382,6 +382,49 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>
+    /// Reports a use of the reserved <c>fallthrough</c> keyword (ADR-0013: GSharp
+    /// does not support Go-style implicit case fallthrough).
+    /// </summary>
+    /// <param name="location">The text location where <c>fallthrough</c> was found.</param>
+    public void ReportFallthroughNotSupported(TextLocation location)
+    {
+        var message = "'fallthrough' is not supported (ADR-0013). GSharp 'switch' cases do not fall through.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a duplicate <c>default</c> arm in a switch statement.
+    /// </summary>
+    /// <param name="location">The text location of the offending default arm.</param>
+    public void ReportDuplicateSwitchDefault(TextLocation location)
+    {
+        var message = "A 'switch' statement can only have one 'default' arm.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a non-constant value used in a switch case.
+    /// </summary>
+    /// <param name="location">The text location of the offending case value.</param>
+    public void ReportSwitchCaseValueNotConstant(TextLocation location)
+    {
+        var message = "Switch case value must be a constant expression.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a switch case value whose type doesn't match the discriminant.
+    /// </summary>
+    /// <param name="location">The text location of the offending case value.</param>
+    /// <param name="caseType">The case value type.</param>
+    /// <param name="switchType">The switched-on discriminant type.</param>
+    public void ReportSwitchCaseTypeMismatch(TextLocation location, TypeSymbol caseType, TypeSymbol switchType)
+    {
+        var message = $"Switch case value of type '{caseType}' is incompatible with switch expression of type '{switchType}'.";
+        Report(location, message);
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);
