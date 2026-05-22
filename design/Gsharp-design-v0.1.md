@@ -67,6 +67,15 @@ for (var i = count; i > 0; i--)
 - The binder synthesizes a single hidden method (conceptually `<TopLevel>$.<Main>$(string[] args)`) whose body is the lowered top-level `BoundBlockStatement`. The emitter marks that method as the assembly entry point.
 - An explicit `func Main()` (or `func Main(args string[])`) is supported and takes precedence: when present, top-level statements are not allowed in the same compilation.
 
+## Execution backends
+
+GSharp has two execution paths that share the same front-end (lexer, parser, binder, lowering):
+
+- **Interpreter (`Evaluator`)** walks the lowered bound tree in-process. It backs the REPL and most language tests and is treated as authoritative for language semantics — if the interpreter and emit pipeline ever disagree on observable behavior, the interpreter is the source of truth.
+- **Emit (`ReflectionMetadataEmitter` + `gsc.dll` + `Gsharp.NET.Sdk`)** produces standalone managed PEs that load and run under any compatible .NET runtime. This is the production path for `dotnet build` and is what enables `.gsproj` files to participate in the .NET ecosystem.
+
+See [`docs/emit-pipeline.md`](../docs/emit-pipeline.md) for the emit-side architecture.
+
 ## Notes
 I found an interesting project that attempts to convert Go code to C# code. It has interesting ideas in it:
   - https://github.com/GridProtectionAlliance/go2cs
