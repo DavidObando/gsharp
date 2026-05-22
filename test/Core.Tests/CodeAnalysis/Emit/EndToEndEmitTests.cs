@@ -200,4 +200,33 @@ if x > 5 {
         var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Cond");
         Assert.Contains("big", output);
     }
+
+    [Fact]
+    public void Emits_String_Concatenation_With_Variable()
+    {
+        const string Source = @"package Concat
+import System
+var name = ""world""
+Console.WriteLine(""hi "" + name)
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Concat");
+        Assert.Contains("hi world", output);
+    }
+
+    [Fact]
+    public void Emits_Recursive_User_Function()
+    {
+        const string Source = @"package Recurse
+import System
+func factorial(n int) int {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+Console.WriteLine(factorial(5))
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Recurse");
+        Assert.Contains("120", output);
+    }
 }
