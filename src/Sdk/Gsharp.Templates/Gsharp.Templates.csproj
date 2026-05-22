@@ -1,0 +1,90 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Template packages are content-only; no compile output. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+
+    <PackageType>Template</PackageType>
+    <PackageId>Gsharp.Templates</PackageId>
+    <Title>GSharp project templates</Title>
+    <Description>`dotnet new` templates for the GSharp language. After installation, `dotnet new gsharp-console` scaffolds a console application that builds with `Gsharp.NET.Sdk`.</Description>
+    <PackageTags>gsharp;dotnet-new;templates;sdk</PackageTags>
+
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IsPackable>true</IsPackable>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+
+    <!-- Where the substituted (versioned) template content lives. Mirrors content/ with
+         __GSHARP_SDK_VERSION__ placeholders replaced by the current SDK version. -->
+    <GsharpTemplatesIntermediateContent>obj/$(Configuration)/templates-content</GsharpTemplatesIntermediateContent>
+  </PropertyGroup>
+
+  <!-- Inline MSBuild task that substitutes a placeholder token in template files at pack time. -->
+  <UsingTask TaskName="SubstituteTokens"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <Token Required="true" />
+      <Replacement Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        foreach (var f in Files)
+        {
+            var path = f.ItemSpec;
+            if (!File.Exists(path)) continue;
+            var content = File.ReadAllText(path);
+            if (content.Contains(Token))
+            {
+                File.WriteAllText(path, content.Replace(Token, Replacement));
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <!-- Materialize template source items at evaluation time so the target's Inputs/Outputs check sees them. -->
+  <ItemGroup>
+    <_TemplateSourceFile Include="content/**/*" />
+  </ItemGroup>
+
+  <!-- Build the substituted template content tree before NuGet collects files to pack. -->
+  <Target Name="BuildGsharpTemplatesContent"
+          BeforeTargets="AssignTargetPaths;_GetPackageFiles;GenerateNuspec;CoreCompile"
+          Inputs="@(_TemplateSourceFile)"
+          Outputs="$(GsharpTemplatesIntermediateContent)/.stamp">
+    <MakeDir Directories="$(GsharpTemplatesIntermediateContent)" />
+
+    <Copy SourceFiles="@(_TemplateSourceFile)"
+          DestinationFiles="@(_TemplateSourceFile->'$(GsharpTemplatesIntermediateContent)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="false" />
+
+    <SubstituteTokens Files="@(_TemplateSourceFile->'$(GsharpTemplatesIntermediateContent)/%(RecursiveDir)%(Filename)%(Extension)')"
+                      Token="__GSHARP_SDK_VERSION__"
+                      Replacement="$(Version)" />
+
+    <WriteLinesToFile File="$(GsharpTemplatesIntermediateContent)/.stamp" Lines="$(Version)" Overwrite="true" />
+  </Target>
+
+  <!-- Materialize substituted content as Content items that NuGet will pack under content/. -->
+  <Target Name="CollectGsharpTemplatesContent"
+          DependsOnTargets="BuildGsharpTemplatesContent"
+          BeforeTargets="_GetPackageFiles;GenerateNuspec">
+    <ItemGroup>
+      <_PackagedTemplateFile Include="$(GsharpTemplatesIntermediateContent)/**/*" Exclude="$(GsharpTemplatesIntermediateContent)/.stamp" />
+      <Content Include="@(_PackagedTemplateFile)"
+               Pack="true"
+               PackagePath="content/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+
+</Project>
