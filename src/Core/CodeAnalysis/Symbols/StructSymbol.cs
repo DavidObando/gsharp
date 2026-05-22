@@ -28,12 +28,33 @@ public sealed class StructSymbol : TypeSymbol
         Accessibility accessibility,
         StructDeclarationSyntax declaration,
         string packageName)
+        : this(name, fields, accessibility, declaration, packageName, isData: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The struct type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The struct's CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the struct lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData)
         : base(name)
     {
         Fields = fields;
         Accessibility = accessibility;
         Declaration = declaration;
         PackageName = packageName;
+        IsData = isData;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -47,6 +68,9 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
+
+    /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
+    public bool IsData { get; }
 
     /// <summary>Tries to find a field by name.</summary>
     /// <param name="name">The field name.</param>

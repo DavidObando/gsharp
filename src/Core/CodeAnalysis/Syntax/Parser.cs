@@ -189,9 +189,27 @@ public class Parser
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // `data` is a context-sensitive keyword (ADR-0029): only acts as the
+        // data-struct marker when followed directly by `struct`. Elsewhere it
+        // is an ordinary identifier.
+        SyntaxToken dataKeyword = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && Peek(1).Kind == SyntaxKind.StructKeyword)
+        {
+            dataKeyword = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.StructKeyword)
         {
-            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier);
+            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword);
+        }
+
+        if (dataKeyword != null)
+        {
+            // We already consumed `data` but the next token wasn't `struct`.
+            // This path is unreachable given the lookahead above, but keeps
+            // the parser deterministic if peek state ever drifts.
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
         }
 
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
@@ -203,7 +221,8 @@ public class Parser
     private StructDeclarationSyntax ParseStructDeclaration(
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
-        SyntaxToken identifier)
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword)
     {
         var structKeyword = MatchToken(SyntaxKind.StructKeyword);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -220,7 +239,7 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, structKeyword, openBrace, fields.ToImmutable(), closeBrace);
+        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, openBrace, fields.ToImmutable(), closeBrace);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

@@ -3,6 +3,8 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis;
@@ -46,5 +48,68 @@ public sealed class StructValue
         }
 
         return new StructValue(StructType, copy);
+    }
+
+    /// <inheritdoc/>
+    public override bool Equals(object obj)
+    {
+        if (obj is not StructValue other)
+        {
+            return false;
+        }
+
+        if (StructType != other.StructType)
+        {
+            return false;
+        }
+
+        foreach (var field in StructType.Fields)
+        {
+            Fields.TryGetValue(field.Name, out var lv);
+            other.Fields.TryGetValue(field.Name, out var rv);
+            if (!object.Equals(lv, rv))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        var hash = default(HashCode);
+        hash.Add(StructType);
+        foreach (var field in StructType.Fields)
+        {
+            Fields.TryGetValue(field.Name, out var v);
+            hash.Add(v);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    /// <inheritdoc/>
+    public override string ToString()
+    {
+        var sb = new StringBuilder();
+        sb.Append(StructType.Name).Append('(');
+        var first = true;
+        foreach (var field in StructType.Fields)
+        {
+            if (!first)
+            {
+                sb.Append(", ");
+            }
+
+            first = false;
+            Fields.TryGetValue(field.Name, out var v);
+            sb.Append(field.Name).Append('=');
+            sb.Append(v is null ? "nil" : System.Convert.ToString(v, CultureInfo.InvariantCulture));
+        }
+
+        sb.Append(')');
+        return sb.ToString();
     }
 }

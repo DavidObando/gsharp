@@ -121,6 +121,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a <c>data struct</c> was declared with no fields (ADR-0029).
+    /// </summary>
+    /// <param name="location">The text location of the struct identifier.</param>
+    /// <param name="name">The struct name.</param>
+    public void ReportEmptyDataStruct(TextLocation location, string name)
+    {
+        var message = $"'data struct {name}' requires at least one field; use 'struct' instead.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that a type doesn't exist.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

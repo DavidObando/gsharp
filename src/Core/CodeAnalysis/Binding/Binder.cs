@@ -358,7 +358,12 @@ public sealed class Binder
             fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility));
         }
 
-        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name);
+        if (syntax.IsData && fields.Count == 0)
+        {
+            Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
+        }
+
+        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData);
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {

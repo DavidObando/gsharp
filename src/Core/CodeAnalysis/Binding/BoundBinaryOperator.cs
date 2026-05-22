@@ -110,6 +110,20 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
+        if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
+        {
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken)
+            {
+                return new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, ls, ls, TypeSymbol.Bool);
+            }
+
+            if (syntaxKind == SyntaxKind.BangEqualsToken)
+            {
+                return new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, ls, ls, TypeSymbol.Bool);
+            }
+        }
+
         return null;
     }
 }

@@ -60,6 +60,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |
 | `type` declaration (alias or defined type) | ✅ | ✅ | — | ✅ | Phase 2.7: `type Name = Other` declares an erased alias resolvable anywhere an `int`/`bool`/`string` (or other alias) is. Defined types (with their own identity) and structural types arrive in Phase 3. |
 | `struct` declaration | ✅ | ✅ | ✅ | ✅ | Phase 3.B.1: `type Name struct { Field Type … }` declares a value-typed aggregate. Emitted as a CLR `ValueType` (sealed, sequential layout) under the declaring package's namespace. Composite literal `Name{Field: …}`, field read `p.Field`, and field assignment `p.Field = …` work on both backends with Go-style value semantics (assignment deep-copies). Field assignment receivers are restricted to simple variables for Phase 3.B.1. |
+| `data struct` declaration | ✅ | ✅ | ⚠️ | ✅ | Phase 3.B.2 / ADR-0029: `type Name data struct { Field Type … }` is a struct with compiler-synthesized structural `Equals`/`GetHashCode`/`ToString` and `==` / `!=` operators. `data` is a context-sensitive keyword (only special before `struct`); empty `data struct` is a binder diagnostic. Interpreter implements full semantics; emit-side synthesized members land in a follow-up commit. |
 
 ## Expressions
 
