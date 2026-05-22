@@ -1,0 +1,17 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <Language>Gsharp</Language>
+    <TargetRuntime>Managed</TargetRuntime>
+    <WarningLevel>4</WarningLevel>
+
+    <!-- Resolve gsc and the build task. In a packed Gsharp.NET.Sdk NuGet these
+         sit alongside this .props in ../tools/. -->
+    <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\task\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
+    <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\compiler\gsc.dll</GsharpCompilerFullPath>
+
+    <!-- Pull in the gsharp language targets (CoreCompile override). -->
+    <LanguageTargets>$(MSBuildThisFileDirectory)Gsharp.NET.Current.Sdk.targets</LanguageTargets>
+  </PropertyGroup>
+
+</Project>

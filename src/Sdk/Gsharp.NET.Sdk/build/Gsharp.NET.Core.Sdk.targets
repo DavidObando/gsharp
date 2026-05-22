@@ -1,0 +1,43 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" />
+
+  <PropertyGroup>
+    <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+  </PropertyGroup>
+
+  <!-- Locate and add mscorlib unless NoStdLib. Mirrors peachpie's Core.Sdk.targets. -->
+  <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
+    <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
+  </ItemGroup>
+
+  <Target Name="CoreCompile"
+          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePath)"
+          Outputs="@(IntermediateAssembly)"
+          DependsOnTargets="$(CoreCompileDependsOn)">
+
+    <BuildTask
+        GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
+        OutputPath="$(IntermediateOutputPath)"
+        OutputName="$(TargetName)"
+        TempOutputPath="$(IntermediateOutputPath)"
+        TargetFramework="$(TargetFramework)"
+        BasePath="$(MSBuildProjectDirectory)"
+        Optimization="$(Optimize)"
+        DebugType="$(DebugType)"
+        PdbFile="@(_DebugSymbolsIntermediatePath)"
+        Version="$(Version)"
+        OutputType="$(OutputType)"
+        Compile="@(Compile)"
+        References="@(ReferencePath)"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
+
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The CreateManifestResourceNames target is required by Common.targets; defer to C# semantics. -->
+  <Target Name="CreateManifestResourceNames" />
+
+</Project>

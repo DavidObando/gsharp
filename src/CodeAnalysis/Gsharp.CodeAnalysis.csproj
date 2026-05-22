@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Cross-targeting net8.0;net9.0;net10.0 is the Phase 6 goal. For now we
+      match the rest of the GSharp solution (net10.0) until GSharp.Core is
+      multi-targeted; see plan.md Phase 6.
+    -->
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>Gsharp.CodeAnalysis</RootNamespace>
+    <AssemblyName>Gsharp.CodeAnalysis</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      Signing is required so that Gsharp.Microsoft.CodeAnalysis (the Roslyn fork)
+      can grant InternalsVisibleTo to us. The fork inherits Arcade's "Open" key
+      (the standard public-signed Roslyn key); Arcade ships it as part of the
+      Microsoft.DotNet.Arcade.Sdk package so no .snk file ships in our tree.
+    -->
+    <SignAssembly Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">true</SignAssembly>
+    <PublicSign Condition=" '$(GsharpRoslynForkAvailable)' == 'true' and '$(OS)' != 'Windows_NT' ">true</PublicSign>
+    <StrongNameKeyId Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">Open</StrongNameKeyId>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Set to true once Gsharp.Microsoft.CodeAnalysis NuGet is available
+         (build src/Roslyn per src/Roslyn/README-GSHARP.md and drop the .nupkg into .nugs).
+         The default stays false so the scaffold builds without the fork on disk;
+         Phase 1 will implement the Roslyn-derived members and flip this to true. -->
+    <GsharpRoslynForkAvailable Condition=" '$(GsharpRoslynForkAvailable)' == '' ">false</GsharpRoslynForkAvailable>
+    <DefineConstants Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(DefineConstants);GSHARP_ROSLYN_FORK_AVAILABLE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">
+    <!--
+      Consumed from .nugs/ after running the fork build (see src/Roslyn/README-GSHARP.md).
+      Version floats so day-to-day fork rebuilds don't require a csproj bump.
+    -->
+    <PackageReference Include="Gsharp.Microsoft.CodeAnalysis" Version="*-*" />
+  </ItemGroup>
+
+</Project>
