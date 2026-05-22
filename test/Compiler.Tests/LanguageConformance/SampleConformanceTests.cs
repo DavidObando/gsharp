@@ -33,12 +33,31 @@ public class SampleConformanceTests
             yield break;
         }
 
+        // Single-file samples: <name>.gs paired with <name>.golden in samples/.
         foreach (var gs in Directory.EnumerateFiles(samplesDir, "*.gs", SearchOption.TopDirectoryOnly).OrderBy(p => p))
         {
             var golden = Path.ChangeExtension(gs, ".golden");
             if (File.Exists(golden))
             {
                 yield return new object[] { Path.GetFileName(gs) };
+            }
+        }
+
+        // Multi-file samples: subdirectories of samples/ that contain *.gs and a
+        // single <DirName>.golden. All .gs files in the directory are compiled
+        // into one assembly per ADR-0028.
+        foreach (var sub in Directory.EnumerateDirectories(samplesDir).OrderBy(p => p))
+        {
+            var dirName = Path.GetFileName(sub);
+            if (string.Equals(dirName, "aspirational", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var golden = Path.Combine(sub, dirName + ".golden");
+            if (File.Exists(golden) && Directory.EnumerateFiles(sub, "*.gs").Any())
+            {
+                yield return new object[] { dirName + "/" };
             }
         }
     }
@@ -49,14 +68,32 @@ public class SampleConformanceTests
     {
         var samplesDir = LocateSamplesDirectory();
         Assert.NotNull(samplesDir);
-        var samplePath = Path.Combine(samplesDir, sampleName);
-        var goldenPath = Path.ChangeExtension(samplePath, ".golden");
+
+        string[] sourceFiles;
+        string goldenPath;
+        string baseName;
+        if (sampleName.EndsWith("/", StringComparison.Ordinal))
+        {
+            var dirName = sampleName.TrimEnd('/');
+            var sampleDir = Path.Combine(samplesDir, dirName);
+            sourceFiles = Directory.EnumerateFiles(sampleDir, "*.gs").OrderBy(p => p).ToArray();
+            goldenPath = Path.Combine(sampleDir, dirName + ".golden");
+            baseName = dirName;
+        }
+        else
+        {
+            var samplePath = Path.Combine(samplesDir, sampleName);
+            sourceFiles = new[] { samplePath };
+            goldenPath = Path.ChangeExtension(samplePath, ".golden");
+            baseName = Path.GetFileNameWithoutExtension(sampleName);
+        }
+
         var expected = File.ReadAllText(goldenPath).Replace("\r\n", "\n");
 
-        var tempDir = Directory.CreateTempSubdirectory($"gs_conformance_{Path.GetFileNameWithoutExtension(sampleName)}_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory($"gs_conformance_{baseName}_").FullName;
         try
         {
-            var outPath = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(sampleName) + ".dll");
+            var outPath = Path.Combine(tempDir, baseName + ".dll");
 
             using var compileOut = new StringWriter();
             using var compileErr = new StringWriter();
@@ -67,13 +104,14 @@ public class SampleConformanceTests
             int compileExit;
             try
             {
-                compileExit = Program.Main(new[]
+                var args = new List<string>
                 {
                     "/out:" + outPath,
                     "/target:exe",
                     "/targetframework:net10.0",
-                    samplePath,
-                });
+                };
+                args.AddRange(sourceFiles);
+                compileExit = Program.Main(args.ToArray());
             }
             finally
             {

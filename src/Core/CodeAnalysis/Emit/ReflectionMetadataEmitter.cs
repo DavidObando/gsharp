@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -91,71 +92,108 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(1),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
 
-        // 3. Plan the MethodDef order on <Program>:
-        //    row 1: <Program>..ctor
-        //    rows 2..N+1: user-defined functions (excluding entry point), in iteration order
-        //    row N+2 (if present): entry point
-        // Pre-assign MethodDefinitionHandles so user-function calls can be encoded before
-        // their bodies are added to the method-body stream.
-        var userFunctions = new List<FunctionSymbol>();
-        foreach (var kvp in this.program.Functions)
+        // 3. Group functions by their declaring package. One <Program> type
+        //    is emitted per package, in BoundProgram.Packages declaration
+        //    order; method-row layout for each package is:
+        //        package.ctor  → [package's non-entry user fns]  → [package's entry point if any]
+        //    The entry-point function (if any) is placed last in its package
+        //    so the EntryPoint token resolves cleanly.
+        var packages = this.program.Packages.IsDefaultOrEmpty
+            ? ImmutableArray.Create(this.program.EntryPointPackage ?? new PackageSymbol("Default", declaration: null))
+            : this.program.Packages;
+
+        var functionsByPackage = new Dictionary<PackageSymbol, List<FunctionSymbol>>();
+        foreach (var pkg in packages)
         {
-            if (kvp.Key != this.program.EntryPoint)
-            {
-                userFunctions.Add(kvp.Key);
-            }
+            functionsByPackage[pkg] = new List<FunctionSymbol>();
         }
 
-        var nextRow = 2;
-        foreach (var fn in userFunctions)
+        foreach (var kvp in this.program.Functions)
         {
-            this.functionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+            if (kvp.Key == this.program.EntryPoint)
+            {
+                continue;
+            }
+
+            var owningPackage = kvp.Key.Package ?? this.program.EntryPointPackage ?? packages[0];
+            if (!functionsByPackage.TryGetValue(owningPackage, out var bucket))
+            {
+                bucket = new List<FunctionSymbol>();
+                functionsByPackage[owningPackage] = bucket;
+                packages = packages.Add(owningPackage);
+            }
+
+            bucket.Add(kvp.Key);
+        }
+
+        var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
+
+        // Plan method rows AND remember each package's ctor row (the methodList
+        // pointer on its <Program> TypeDef). Pre-assign function handles so
+        // call sites can be encoded before bodies are written.
+        var packageCtorRows = new Dictionary<PackageSymbol, int>();
+        var nextRow = 1;
+        foreach (var pkg in packages)
+        {
+            packageCtorRows[pkg] = nextRow++;
+            foreach (var fn in functionsByPackage[pkg])
+            {
+                this.functionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+            }
+
+            if (this.program.EntryPoint is not null && pkg == entryPointPackage)
+            {
+                this.functionHandles[this.program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+            }
         }
 
         MethodDefinitionHandle entryHandle = default;
         if (this.program.EntryPoint is not null)
         {
-            entryHandle = MetadataTokens.MethodDefinitionHandle(nextRow++);
-            this.functionHandles[this.program.EntryPoint] = entryHandle;
+            entryHandle = this.functionHandles[this.program.EntryPoint];
         }
 
-        // 4. Emit method definitions in row order.
-        var programCtor = this.EmitDefaultConstructor();
-
-        foreach (var fn in userFunctions)
+        // 4. Emit method definitions in row order, grouped by package.
+        foreach (var pkg in packages)
         {
-            var body = this.program.Functions[fn];
-            this.EmitFunction(fn, body, isEntryPoint: false);
-        }
+            var pkgCtor = this.EmitDefaultConstructor();
 
-        if (this.program.EntryPoint is not null)
-        {
-            var entryBody = this.program.Functions[this.program.EntryPoint];
-            this.EmitFunction(this.program.EntryPoint, entryBody, isEntryPoint: true);
-        }
+            foreach (var fn in functionsByPackage[pkg])
+            {
+                var body = this.program.Functions[fn];
+                this.EmitFunction(fn, body, isEntryPoint: false);
+            }
 
-        // 5. <Program> type definition.
-        this.metadata.AddTypeDefinition(
-            attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
-                | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
-            @namespace: this.metadata.GetOrAddString(this.program.PackageName),
-            name: this.metadata.GetOrAddString("<Program>"),
-            baseType: this.objectTypeRef,
-            fieldList: MetadataTokens.FieldDefinitionHandle(1),
-            methodList: programCtor);
+            if (this.program.EntryPoint is not null && pkg == entryPointPackage)
+            {
+                var entryBody = this.program.Functions[this.program.EntryPoint];
+                this.EmitFunction(this.program.EntryPoint, entryBody, isEntryPoint: true);
+            }
+
+            // 5. <Program> type definition for this package — namespace = package name.
+            this.metadata.AddTypeDefinition(
+                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
+                @namespace: this.metadata.GetOrAddString(pkg.Name),
+                name: this.metadata.GetOrAddString("<Program>"),
+                baseType: this.objectTypeRef,
+                fieldList: MetadataTokens.FieldDefinitionHandle(1),
+                methodList: pkgCtor);
+        }
 
         // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
         // patch it with a content-derived value after PE serialization.
+        var assemblyName = this.program.PackageName ?? "Default";
         var mvidFixup = this.metadata.ReserveGuid();
         this.metadata.AddModule(
             generation: 0,
-            moduleName: this.metadata.GetOrAddString(this.program.PackageName + ".dll"),
+            moduleName: this.metadata.GetOrAddString(assemblyName + ".dll"),
             mvid: mvidFixup.Handle,
             encId: default(GuidHandle),
             encBaseId: default(GuidHandle));
 
         this.metadata.AddAssembly(
-            name: this.metadata.GetOrAddString(this.program.PackageName),
+            name: this.metadata.GetOrAddString(assemblyName),
             version: new Version(1, 0, 0, 0),
             culture: default(StringHandle),
             publicKey: default(BlobHandle),
