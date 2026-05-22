@@ -54,12 +54,36 @@ public class LexerTests
     [Theory]
     [InlineData("identifier")]
     [InlineData("camelCase")]
+    [InlineData("num1")]
+    [InlineData("a1b2c3")]
+    [InlineData("_x")]
+    [InlineData("x_y")]
+    [InlineData("var123")]
+    [InlineData("_")]
     public void Lexes_Identifier(string text)
     {
         var tokens = SyntaxTree.ParseTokens(text);
         var token = Assert.Single(tokens);
         Assert.Equal(SyntaxKind.IdentifierToken, token.Kind);
         Assert.Equal(text, token.Text);
+    }
+
+    [Fact]
+    public void Identifier_Cannot_Start_With_Digit()
+    {
+        var tokens = SyntaxTree.ParseTokens("1abc");
+        Assert.Collection(
+            tokens,
+            t =>
+            {
+                Assert.Equal(SyntaxKind.NumberToken, t.Kind);
+                Assert.Equal("1", t.Text);
+            },
+            t =>
+            {
+                Assert.Equal(SyntaxKind.IdentifierToken, t.Kind);
+                Assert.Equal("abc", t.Text);
+            });
     }
 
     [Theory]

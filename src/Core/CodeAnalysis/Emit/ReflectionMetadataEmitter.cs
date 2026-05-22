@@ -19,16 +19,12 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <see cref="System.Reflection.Metadata"/> directly.
 /// </summary>
 /// <remarks>
-/// This is the short-path emitter that lives in <c>GSharp.Core</c> so the
-/// existing <c>Compilation.Emit</c> flow can produce real CIL without taking
-/// a dependency on the heavier Roslyn-derived backend in
-/// <c>Gsharp.CodeAnalysis</c>. Phase 1 only covers the surface needed by
-/// <c>samples/HelloWorld.gs</c>: a synthesized entry point whose body is a
-/// single imported-static-method call (e.g. <c>Console.WriteLine</c>) with
-/// literal string arguments. Other bound node kinds throw
-/// <see cref="NotSupportedException"/>; Phase 2 broadens coverage to all
-/// <c>BoundNodeKind</c>s and revisits consolidating with the Roslyn-derived
-/// backend in <c>Gsharp.CodeAnalysis</c>.
+/// Phase 2 (p2-langcov) coverage: locals, parameters, unary/binary operators,
+/// assignments, label/goto/conditional-goto, user-defined function calls
+/// (emitted as static methods on <c>&lt;Program&gt;</c>), and the imported-call
+/// surface inherited from Phase 1. The pure-Roslyn-subclass backend in
+/// <c>Gsharp.CodeAnalysis</c> remains the long-term home for cross-assembly
+/// semantic-model needs.
 /// </remarks>
 internal sealed class ReflectionMetadataEmitter
 {
@@ -37,11 +33,14 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
+    private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
     private readonly MethodBodyStreamEncoder methodBodyStream;
     private readonly BlobBuilder ilStream = new BlobBuilder();
 
     private TypeReferenceHandle objectTypeRef;
     private MemberReferenceHandle objectCtorRef;
+    private MemberReferenceHandle stringConcatRef;
+    private MemberReferenceHandle stringEqualsRef;
 
     private ReflectionMetadataEmitter(BoundProgram program)
     {
@@ -76,16 +75,50 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(1),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
 
-        // 3. Emit <Program> type: default .ctor + entry point (if any).
-        MethodDefinitionHandle entryPointHandle = default;
-        var programCtor = this.EmitDefaultConstructor();
-
-        if (this.program.EntryPoint is not null
-            && this.program.Functions.TryGetValue(this.program.EntryPoint, out var entryBody))
+        // 3. Plan the MethodDef order on <Program>:
+        //    row 1: <Program>..ctor
+        //    rows 2..N+1: user-defined functions (excluding entry point), in iteration order
+        //    row N+2 (if present): entry point
+        // Pre-assign MethodDefinitionHandles so user-function calls can be encoded before
+        // their bodies are added to the method-body stream.
+        var userFunctions = new List<FunctionSymbol>();
+        foreach (var kvp in this.program.Functions)
         {
-            entryPointHandle = this.EmitEntryPoint(this.program.EntryPoint, entryBody);
+            if (kvp.Key != this.program.EntryPoint)
+            {
+                userFunctions.Add(kvp.Key);
+            }
         }
 
+        var nextRow = 2;
+        foreach (var fn in userFunctions)
+        {
+            this.functionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+        }
+
+        MethodDefinitionHandle entryHandle = default;
+        if (this.program.EntryPoint is not null)
+        {
+            entryHandle = MetadataTokens.MethodDefinitionHandle(nextRow++);
+            this.functionHandles[this.program.EntryPoint] = entryHandle;
+        }
+
+        // 4. Emit method definitions in row order.
+        var programCtor = this.EmitDefaultConstructor();
+
+        foreach (var fn in userFunctions)
+        {
+            var body = this.program.Functions[fn];
+            this.EmitFunction(fn, body, isEntryPoint: false);
+        }
+
+        if (this.program.EntryPoint is not null)
+        {
+            var entryBody = this.program.Functions[this.program.EntryPoint];
+            this.EmitFunction(this.program.EntryPoint, entryBody, isEntryPoint: true);
+        }
+
+        // 5. <Program> type definition.
         this.metadata.AddTypeDefinition(
             attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
@@ -95,7 +128,7 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(1),
             methodList: programCtor);
 
-        // 4. Module + assembly rows.
+        // 6. Module + assembly rows.
         this.metadata.AddModule(
             generation: 0,
             moduleName: this.metadata.GetOrAddString(this.program.PackageName + ".dll"),
@@ -111,16 +144,16 @@ internal sealed class ReflectionMetadataEmitter
             flags: 0,
             hashAlgorithm: AssemblyHashAlgorithm.Sha1);
 
-        // 5. Serialize PE.
+        // 7. Serialize PE.
         var peHeaderBuilder = new PEHeaderBuilder(
-            imageCharacteristics: entryPointHandle.IsNil
+            imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
                 : Characteristics.ExecutableImage);
         var peBuilder = new ManagedPEBuilder(
             header: peHeaderBuilder,
             metadataRootBuilder: new MetadataRootBuilder(this.metadata),
             ilStream: this.ilStream,
-            entryPoint: entryPointHandle);
+            entryPoint: entryHandle);
         var peBlob = new BlobBuilder();
         peBuilder.Serialize(peBlob);
         peBlob.WriteContentTo(peStream);
@@ -148,34 +181,126 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: MetadataTokens.ParameterHandle(1));
     }
 
-    private MethodDefinitionHandle EmitEntryPoint(FunctionSymbol entryPoint, BoundBlockStatement body)
+    private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        var emitter = new BodyEmitter(this, il);
+
+        // Pre-scan body for locals (top-level only — Lowerer flattens blocks) and labels.
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        CollectLocalsAndLabels(body, function, locals, localTypes, labels, il);
+
+        // Parameters → arg indices.
+        var parameters = new Dictionary<ParameterSymbol, int>();
+        for (var i = 0; i < function.Parameters.Length; i++)
+        {
+            parameters[function.Parameters[i]] = i;
+        }
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+            }
+
+            localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new BodyEmitter(this, il, locals, parameters, labels);
         emitter.EmitBlock(body);
 
-        // Always cap with ret. (Lowering does not guarantee a trailing ret for void.)
-        il.OpCode(ILOpCode.Ret);
+        // Always cap with a trailing ret. Lowering does not guarantee one for void.
+        if (function.Type == TypeSymbol.Void)
+        {
+            il.OpCode(ILOpCode.Ret);
+        }
 
-        var bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        var bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
-                0,
-                r => EncodeReturnSymbol(r, entryPoint.Type),
-                _ => { });
+                function.Parameters.Length,
+                r => EncodeReturnSymbol(r, function.Type),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
 
-        // Synthesized entry point uses the C#-style mangled name; explicit Main keeps its source name.
-        var methodName = entryPoint.Declaration is null ? "<Main>$" : entryPoint.Name;
+        // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
+        var methodName = isEntryPoint && function.Declaration is null ? "<Main>$" : function.Name;
 
-        return this.metadata.AddMethodDefinition(
+        var handle = this.metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString(methodName),
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: MetadataTokens.ParameterHandle(1));
+
+        return handle;
+    }
+
+    private static void CollectLocalsAndLabels(
+        BoundBlockStatement body,
+        FunctionSymbol function,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundLabel, LabelHandle> labels,
+        InstructionEncoder il)
+    {
+        foreach (var s in body.Statements)
+        {
+            switch (s)
+            {
+                case BoundVariableDeclaration decl:
+                    if (!locals.ContainsKey(decl.Variable))
+                    {
+                        locals[decl.Variable] = localTypes.Count;
+                        localTypes.Add(decl.Variable.Type);
+                    }
+
+                    break;
+                case BoundLabelStatement lbl:
+                    if (!labels.ContainsKey(lbl.Label))
+                    {
+                        labels[lbl.Label] = il.DefineLabel();
+                    }
+
+                    break;
+            }
+        }
+
+        // Second pass to pre-define labels referenced by gotos before their LabelStatement
+        // (forward branches are common after Lowerer flattens loops).
+        foreach (var s in body.Statements)
+        {
+            switch (s)
+            {
+                case BoundGotoStatement g:
+                    if (!labels.ContainsKey(g.Label))
+                    {
+                        labels[g.Label] = il.DefineLabel();
+                    }
+
+                    break;
+                case BoundConditionalGotoStatement cg:
+                    if (!labels.ContainsKey(cg.Label))
+                    {
+                        labels[cg.Label] = il.DefineLabel();
+                    }
+
+                    break;
+            }
+        }
     }
 
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)
@@ -257,6 +382,56 @@ internal sealed class ReflectionMetadataEmitter
             parent: this.objectTypeRef,
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(sigBlob));
+    }
+
+    private MemberReferenceHandle GetStringConcatReference()
+    {
+        if (!this.stringConcatRef.IsNil)
+        {
+            return this.stringConcatRef;
+        }
+
+        var stringTypeRef = this.GetTypeReference(typeof(string));
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().String(),
+                ps =>
+                {
+                    ps.AddParameter().Type().String();
+                    ps.AddParameter().Type().String();
+                });
+        this.stringConcatRef = this.metadata.AddMemberReference(
+            parent: stringTypeRef,
+            name: this.metadata.GetOrAddString("Concat"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.stringConcatRef;
+    }
+
+    private MemberReferenceHandle GetStringEqualsReference()
+    {
+        if (!this.stringEqualsRef.IsNil)
+        {
+            return this.stringEqualsRef;
+        }
+
+        var stringTypeRef = this.GetTypeReference(typeof(string));
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().Boolean(),
+                ps =>
+                {
+                    ps.AddParameter().Type().String();
+                    ps.AddParameter().Type().String();
+                });
+        this.stringEqualsRef = this.metadata.AddMemberReference(
+            parent: stringTypeRef,
+            name: this.metadata.GetOrAddString("Equals"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.stringEqualsRef;
     }
 
     private static void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
@@ -342,11 +517,22 @@ internal sealed class ReflectionMetadataEmitter
     {
         private readonly ReflectionMetadataEmitter outer;
         private readonly InstructionEncoder il;
+        private readonly Dictionary<VariableSymbol, int> locals;
+        private readonly Dictionary<ParameterSymbol, int> parameters;
+        private readonly Dictionary<BoundLabel, LabelHandle> labels;
 
-        public BodyEmitter(ReflectionMetadataEmitter outer, InstructionEncoder il)
+        public BodyEmitter(
+            ReflectionMetadataEmitter outer,
+            InstructionEncoder il,
+            Dictionary<VariableSymbol, int> locals,
+            Dictionary<ParameterSymbol, int> parameters,
+            Dictionary<BoundLabel, LabelHandle> labels)
         {
             this.outer = outer;
             this.il = il;
+            this.locals = locals;
+            this.parameters = parameters;
+            this.labels = labels;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -361,6 +547,9 @@ internal sealed class ReflectionMetadataEmitter
         {
             switch (statement)
             {
+                case BoundBlockStatement block:
+                    this.EmitBlock(block);
+                    break;
                 case BoundExpressionStatement expr:
                     this.EmitExpression(expr.Expression);
                     if (expr.Expression.Type != TypeSymbol.Void)
@@ -377,10 +566,23 @@ internal sealed class ReflectionMetadataEmitter
 
                     this.il.OpCode(ILOpCode.Ret);
                     break;
+                case BoundVariableDeclaration decl:
+                    this.EmitExpression(decl.Initializer);
+                    this.EmitStoreVariable(decl.Variable);
+                    break;
+                case BoundLabelStatement lbl:
+                    this.il.MarkLabel(this.labels[lbl.Label]);
+                    break;
+                case BoundGotoStatement g:
+                    this.il.Branch(ILOpCode.Br, this.labels[g.Label]);
+                    break;
+                case BoundConditionalGotoStatement cg:
+                    this.EmitExpression(cg.Condition);
+                    this.il.Branch(cg.JumpIfTrue ? ILOpCode.Brtrue : ILOpCode.Brfalse, this.labels[cg.Label]);
+                    break;
                 default:
                     throw new NotSupportedException(
-                        $"Bound statement kind '{statement.Kind}' is not yet supported by the Phase 1 emitter. "
-                        + "See plan.md Phase 2 (p2-langcov).");
+                        $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
             }
         }
 
@@ -391,20 +593,245 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundLiteralExpression literal:
                     this.EmitLiteral(literal);
                     break;
-                case BoundImportedCallExpression call:
+                case BoundVariableExpression v:
+                    this.EmitLoadVariable(v.Variable);
+                    break;
+                case BoundAssignmentExpression a:
+                    this.EmitExpression(a.Expression);
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.EmitStoreVariable(a.Variable);
+                    break;
+                case BoundUnaryExpression u:
+                    this.EmitUnary(u);
+                    break;
+                case BoundBinaryExpression b:
+                    this.EmitBinary(b);
+                    break;
+                case BoundCallExpression call:
                     foreach (var arg in call.Arguments)
                     {
                         this.EmitExpression(arg);
                     }
 
-                    var methodRef = this.outer.GetMethodReference(call.Function.Method);
-                    this.il.Call(methodRef);
+                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
+                    }
+
+                    this.il.Call(fnHandle);
+                    break;
+                case BoundImportedCallExpression impCall:
+                    foreach (var arg in impCall.Arguments)
+                    {
+                        this.EmitExpression(arg);
+                    }
+
+                    this.il.Call(this.outer.GetMethodReference(impCall.Function.Method));
+                    break;
+                case BoundImportedInstanceCallExpression instCall:
+                    this.EmitExpression(instCall.Receiver);
+                    foreach (var arg in instCall.Arguments)
+                    {
+                        this.EmitExpression(arg);
+                    }
+
+                    this.il.Call(this.outer.GetMethodReference(instCall.Method));
+                    break;
+                case BoundConversionExpression conv:
+                    this.EmitConversion(conv);
                     break;
                 default:
                     throw new NotSupportedException(
-                        $"Bound expression kind '{expression.Kind}' is not yet supported by the Phase 1 emitter. "
-                        + "See plan.md Phase 2 (p2-langcov).");
+                        $"Bound expression kind '{expression.Kind}' is not yet supported by the emitter.");
             }
+        }
+
+        private void EmitConversion(BoundConversionExpression conv)
+        {
+            this.EmitExpression(conv.Expression);
+            var from = conv.Expression.Type;
+            var to = conv.Type;
+            if (from == to)
+            {
+                return;
+            }
+
+            // Minimal numeric / to-string conversions sufficient for current language coverage.
+            if (to == TypeSymbol.Int && from == TypeSymbol.Bool)
+            {
+                // bool already lives as i4 on the stack; no-op.
+                return;
+            }
+
+            if (to == TypeSymbol.Bool && from == TypeSymbol.Int)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                return;
+            }
+
+            throw new NotSupportedException(
+                $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+        }
+
+        private void EmitUnary(BoundUnaryExpression u)
+        {
+            this.EmitExpression(u.Operand);
+            switch (u.Op.Kind)
+            {
+                case BoundUnaryOperatorKind.Identity:
+                    break;
+                case BoundUnaryOperatorKind.Negation:
+                    this.il.OpCode(ILOpCode.Neg);
+                    break;
+                case BoundUnaryOperatorKind.LogicalNegation:
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundUnaryOperatorKind.OnesComplement:
+                    this.il.OpCode(ILOpCode.Not);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Unary operator '{u.Op.Kind}' is not yet supported by the emitter.");
+            }
+        }
+
+        private void EmitBinary(BoundBinaryExpression b)
+        {
+            // String concatenation / equality go through BCL helpers.
+            if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
+            {
+                switch (b.Op.Kind)
+                {
+                    case BoundBinaryOperatorKind.Sum:
+                        this.EmitExpression(b.Left);
+                        this.EmitExpression(b.Right);
+                        this.il.Call(this.outer.GetStringConcatReference());
+                        return;
+                    case BoundBinaryOperatorKind.Equals:
+                        this.EmitExpression(b.Left);
+                        this.EmitExpression(b.Right);
+                        this.il.Call(this.outer.GetStringEqualsReference());
+                        return;
+                    case BoundBinaryOperatorKind.NotEquals:
+                        this.EmitExpression(b.Left);
+                        this.EmitExpression(b.Right);
+                        this.il.Call(this.outer.GetStringEqualsReference());
+                        this.il.LoadConstantI4(0);
+                        this.il.OpCode(ILOpCode.Ceq);
+                        return;
+                }
+            }
+
+            this.EmitExpression(b.Left);
+            this.EmitExpression(b.Right);
+            switch (b.Op.Kind)
+            {
+                case BoundBinaryOperatorKind.Sum:
+                    this.il.OpCode(ILOpCode.Add);
+                    break;
+                case BoundBinaryOperatorKind.Difference:
+                    this.il.OpCode(ILOpCode.Sub);
+                    break;
+                case BoundBinaryOperatorKind.Product:
+                    this.il.OpCode(ILOpCode.Mul);
+                    break;
+                case BoundBinaryOperatorKind.Quotient:
+                    this.il.OpCode(ILOpCode.Div);
+                    break;
+                case BoundBinaryOperatorKind.Remainder:
+                    this.il.OpCode(ILOpCode.Rem);
+                    break;
+                case BoundBinaryOperatorKind.ShiftLeft:
+                    this.il.OpCode(ILOpCode.Shl);
+                    break;
+                case BoundBinaryOperatorKind.ShiftRight:
+                    this.il.OpCode(ILOpCode.Shr);
+                    break;
+                case BoundBinaryOperatorKind.BitwiseAnd:
+                case BoundBinaryOperatorKind.LogicalAnd:
+                    this.il.OpCode(ILOpCode.And);
+                    break;
+                case BoundBinaryOperatorKind.BitwiseOr:
+                case BoundBinaryOperatorKind.LogicalOr:
+                    this.il.OpCode(ILOpCode.Or);
+                    break;
+                case BoundBinaryOperatorKind.BitwiseXor:
+                    this.il.OpCode(ILOpCode.Xor);
+                    break;
+                case BoundBinaryOperatorKind.BitClear:
+                    // Go's a &^ b == a & ~b. Right operand is already on top: not, then and.
+                    this.il.OpCode(ILOpCode.Not);
+                    this.il.OpCode(ILOpCode.And);
+                    break;
+                case BoundBinaryOperatorKind.Equals:
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.NotEquals:
+                    this.il.OpCode(ILOpCode.Ceq);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.Less:
+                    this.il.OpCode(ILOpCode.Clt);
+                    break;
+                case BoundBinaryOperatorKind.LessOrEquals:
+                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.Greater:
+                    this.il.OpCode(ILOpCode.Cgt);
+                    break;
+                case BoundBinaryOperatorKind.GreaterOrEquals:
+                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Binary operator '{b.Op.Kind}' is not yet supported by the emitter.");
+            }
+        }
+
+        private void EmitLoadVariable(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
+            {
+                this.il.LoadArgument(argIndex);
+                return;
+            }
+
+            if (this.locals.TryGetValue(variable, out var slot))
+            {
+                this.il.LoadLocal(slot);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Variable '{variable.Name}' has no local slot or parameter index in the current method.");
+        }
+
+        private void EmitStoreVariable(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
+            {
+                this.il.StoreArgument(argIndex);
+                return;
+            }
+
+            if (this.locals.TryGetValue(variable, out var slot))
+            {
+                this.il.StoreLocal(slot);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Variable '{variable.Name}' has no local slot or parameter index in the current method.");
         }
 
         private void EmitLiteral(BoundLiteralExpression literal)

@@ -102,4 +102,102 @@ public class EndToEndEmitTests
         var compilation = new Compilation(tree);
         return compilation.Emit(peStream);
     }
+
+    private static string CompileLoadInvokeCaptureStdout(string source, string contextName)
+    {
+        using var peStream = new MemoryStream();
+        var result = Compile(source, peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(contextName, isCollectible: true);
+        try
+        {
+            var asm = loadContext.LoadFromStream(peStream);
+            var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");
+            Assert.NotNull(programType);
+            var entry = programType!.GetMethod(
+                "<Main>$",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(entry);
+
+            var stdout = Console.Out;
+            var captured = new StringWriter();
+            Console.SetOut(captured);
+            try
+            {
+                entry!.Invoke(null, parameters: null);
+            }
+            finally
+            {
+                Console.SetOut(stdout);
+            }
+
+            return captured.ToString();
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void Emits_Arithmetic_With_Locals_And_BinaryOps()
+    {
+        const string Source = @"package Arith
+import System
+var x = 2 + 3 * 4
+Console.WriteLine(x)
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Arith");
+        Assert.Contains("14", output);
+    }
+
+    [Fact]
+    public void Emits_User_Defined_Function_With_Digit_In_Param_Names()
+    {
+        // Exercises both BoundCallExpression emit AND issue #32 (digits in identifiers).
+        const string Source = @"package UserFn
+import System
+func add(num1 int, num2 int) int {
+    return num1 + num2
+}
+Console.WriteLine(add(2, 3))
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-UserFn");
+        Assert.Contains("5", output);
+    }
+
+    [Fact]
+    public void Emits_For_Loop_With_Branching()
+    {
+        const string Source = @"package Loop
+import System
+var sum = 0
+for i := 1 ... 5 {
+    sum = sum + i
+}
+Console.WriteLine(sum)
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Loop");
+        Assert.Contains("10", output);
+    }
+
+    [Fact]
+    public void Emits_If_Statement_With_Comparison()
+    {
+        const string Source = @"package Cond
+import System
+var x = 7
+if x > 5 {
+    Console.WriteLine(""big"")
+} else {
+    Console.WriteLine(""small"")
+}
+";
+        var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Cond");
+        Assert.Contains("big", output);
+    }
 }
