@@ -417,6 +417,20 @@ public class Parser
             return new AssignmentExpressionSyntax(syntaxTree, identifierToken, operatorToken, right);
         }
 
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Peek(1).Kind, out var baseOpKind))
+        {
+            var identifierToken = NextToken();
+            var compoundToken = NextToken();
+            var right = ParseAssignmentExpression();
+
+            var leftName = new NameExpressionSyntax(syntaxTree, identifierToken);
+            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, compoundToken.Position, SyntaxFacts.GetText(baseOpKind), null);
+            var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, right);
+            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, compoundToken.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+            return new AssignmentExpressionSyntax(syntaxTree, identifierToken, equalsToken, binary);
+        }
+
         return ParseBinaryExpression();
     }
 
