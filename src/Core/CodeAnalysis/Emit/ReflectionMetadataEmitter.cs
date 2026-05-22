@@ -45,6 +45,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
+    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
     private Type coreObjectType;
     private Type coreStringType;
@@ -127,18 +128,37 @@ internal sealed class ReflectionMetadataEmitter
         //   TypeDef 4: <Program>  fieldList=N+1  methodList=1
         //
         // Where N = total struct fields. <Module> "owns" rows [1, 1) = none.
-        var structs = this.program.Structs;
+        var allAggregates = this.program.Structs;
+        var classes = allAggregates.Where(s => s.IsClass).ToList();
+        var structs = allAggregates.Where(s => !s.IsClass).ToList();
+
+        // TypeDef row order: <Module>, classes (each owns a ctor row), structs
+        // (no methods of their own — yet), <Program>s. Field-row planning is
+        // independent of methods so we walk allAggregates in their original
+        // order; the methodList re-planning is what requires classes before
+        // structs (non-decreasing methodList rule per ECMA-335).
         int nextFieldRow = 1;
         var structFirstFieldRow = new Dictionary<StructSymbol, int>();
-        foreach (var s in structs)
+        foreach (var s in allAggregates)
         {
             structFirstFieldRow[s] = nextFieldRow;
             nextFieldRow += s.Fields.Length;
         }
 
         int totalStructFields = nextFieldRow - 1;
-        var moduleFirstFieldRow = structs.IsDefaultOrEmpty ? 1 : 1;
+        var moduleFirstFieldRow = allAggregates.IsDefaultOrEmpty ? 1 : 1;
         var programFirstFieldRow = totalStructFields + 1;
+
+        // Plan method rows for class default ctors first (rows 1..K), so each
+        // class TypeDef can point its methodList at its own ctor.
+        var classCtorRows = new Dictionary<StructSymbol, int>();
+        int methodRow = 1;
+        foreach (var c in classes)
+        {
+            classCtorRows[c] = methodRow++;
+        }
+
+        int firstPackageCtorRow = methodRow;
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
         this.metadata.AddTypeDefinition(
@@ -149,10 +169,18 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
 
-        // 2b. Emit one TypeDef per user struct (between <Module> and <Program>).
+        // 2b. Emit class TypeDefs first (so methodLists stay non-decreasing),
+        // then struct TypeDefs. Class TypeDefs' methodList points at the
+        // class's preassigned ctor row; struct TypeDefs point past the last
+        // class ctor (they own zero methods today).
+        foreach (var c in classes)
+        {
+            this.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+        }
+
         foreach (var s in structs)
         {
-            this.EmitStructTypeDef(s, structFirstFieldRow[s]);
+            this.EmitStructTypeDef(s, structFirstFieldRow[s], firstPackageCtorRow);
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -193,9 +221,10 @@ internal sealed class ReflectionMetadataEmitter
 
         // Plan method rows AND remember each package's ctor row (the methodList
         // pointer on its <Program> TypeDef). Pre-assign function handles so
-        // call sites can be encoded before bodies are written.
+        // call sites can be encoded before bodies are written. Class default
+        // ctors already occupy rows 1..K, so package ctors start at K+1.
         var packageCtorRows = new Dictionary<PackageSymbol, int>();
-        var nextRow = 1;
+        var nextRow = firstPackageCtorRow;
         foreach (var pkg in packages)
         {
             packageCtorRows[pkg] = nextRow++;
@@ -216,7 +245,14 @@ internal sealed class ReflectionMetadataEmitter
             entryHandle = this.functionHandles[this.program.EntryPoint];
         }
 
-        // 4. Emit method definitions in row order, grouped by package.
+        // 4. Emit method definitions in row order. Class default ctors come
+        // first (rows 1..K), then per-package ctor + functions + entry point.
+        foreach (var c in classes)
+        {
+            var ctorHandle = this.EmitClassDefaultConstructor();
+            this.classCtorHandles[c] = ctorHandle;
+        }
+
         foreach (var pkg in packages)
         {
             var pkgCtor = this.EmitDefaultConstructor();
@@ -338,7 +374,7 @@ internal sealed class ReflectionMetadataEmitter
         return BlobContentId.FromHash(sha.GetHashAndReset());
     }
 
-    private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow)
+    private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
         // Emit field definitions in source order. Each field's signature is a
         // FieldSig encoding the GSharp type symbol.
@@ -367,18 +403,46 @@ internal sealed class ReflectionMetadataEmitter
             firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
         }
 
-        var structAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
-            | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
-            | MapTypeAccessibility(structSym.Accessibility);
+        TypeAttributes typeAttrs;
+        EntityHandle baseType;
+        if (structSym.IsClass)
+        {
+            // Phase 3.B.3: class types are CLR reference types. Sealed by
+            // default per ADR-0017 (Kotlin-style `open` opt-in lands with
+            // sub-step 3). Base is Object; AutoLayout matches what the C#
+            // compiler emits for a plain class.
+            typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
+                | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
+                | TypeAttributes.BeforeFieldInit
+                | MapTypeAccessibility(structSym.Accessibility);
+            baseType = this.objectTypeRef;
+        }
+        else
+        {
+            typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
+                | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
+                | MapTypeAccessibility(structSym.Accessibility);
+            baseType = this.valueTypeRef;
+        }
 
         var handle2 = this.metadata.AddTypeDefinition(
-            attributes: structAttrs,
+            attributes: typeAttrs,
             @namespace: this.metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
             name: this.metadata.GetOrAddString(structSym.Name),
-            baseType: this.valueTypeRef,
+            baseType: baseType,
             fieldList: firstField,
-            methodList: MetadataTokens.MethodDefinitionHandle(1));
+            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.structTypeDefs[structSym] = handle2;
+    }
+
+    /// <summary>
+    /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
+    /// (Phase 3.B.3). The body chains to <c>object::.ctor()</c> and returns.
+    /// </summary>
+    private MethodDefinitionHandle EmitClassDefaultConstructor()
+    {
+        // Identical IL to <Program>'s default ctor — chain to object base.
+        return this.EmitDefaultConstructor();
     }
 
     private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
@@ -545,6 +609,13 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var literal in CollectStructLiterals(body))
         {
+            // Class literals do not need a pre-allocated local slot — they
+            // use newobj rather than initobj-into-a-slot.
+            if (literal.StructType.IsClass)
+            {
+                continue;
+            }
+
             var slot = localTypes.Count;
             localTypes.Add(literal.StructType);
             structLiteralSlots[literal] = slot;
@@ -1153,7 +1224,7 @@ internal sealed class ReflectionMetadataEmitter
                 throw new InvalidOperationException($"Struct '{structSym.Name}' has no emitted TypeDef.");
             }
 
-            encoder.Type(typeDef, isValueType: true);
+            encoder.Type(typeDef, isValueType: !structSym.IsClass);
         }
         else if (type?.ClrType != null)
         {
@@ -1842,16 +1913,45 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)
         {
-            if (!this.structLiteralSlots.TryGetValue(literal, out var slot))
-            {
-                throw new InvalidOperationException(
-                    $"Struct literal of type '{literal.StructType.Name}' has no preallocated slot.");
-            }
-
             if (!this.outer.structTypeDefs.TryGetValue(literal.StructType, out var typeDef))
             {
                 throw new InvalidOperationException(
                     $"Struct '{literal.StructType.Name}' has no emitted TypeDef.");
+            }
+
+            // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
+            if (literal.StructType.IsClass)
+            {
+                if (!this.outer.classCtorHandles.TryGetValue(literal.StructType, out var ctorHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Class '{literal.StructType.Name}' has no emitted default ctor.");
+                }
+
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(ctorHandle);
+
+                foreach (var init in literal.Initializers)
+                {
+                    if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Class field '{init.Field.Name}' has no emitted FieldDef.");
+                    }
+
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.EmitExpression(init.Value);
+                    this.il.OpCode(ILOpCode.Stfld);
+                    this.il.Token(fieldHandle);
+                }
+
+                return;
+            }
+
+            if (!this.structLiteralSlots.TryGetValue(literal, out var slot))
+            {
+                throw new InvalidOperationException(
+                    $"Struct literal of type '{literal.StructType.Name}' has no preallocated slot.");
             }
 
             // ldloca slot; initobj typedef — zero-initializes the value type.
@@ -1886,10 +1986,13 @@ internal sealed class ReflectionMetadataEmitter
                     $"Struct field '{fa.Field.Name}' has no emitted FieldDef.");
             }
 
-            // For a variable receiver, load by address to avoid a copy and to
-            // keep the IL verifier-friendly. For any other receiver, fall back
-            // to value form (CLI permits ldfld on a value-type value on stack).
-            if (fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+            // Class receivers are references: load the value (the ref) and ldfld.
+            // For struct receivers, load by address when the receiver is a
+            // simple variable (avoids a copy and is verifier-friendly); fall
+            // back to value form otherwise (CLI permits ldfld on a value-type
+            // value on stack).
+            var receiverIsClass = fa.Receiver.Type is StructSymbol rs && rs.IsClass;
+            if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
             {
                 // address is on the stack
             }
@@ -1908,6 +2011,22 @@ internal sealed class ReflectionMetadataEmitter
             {
                 throw new InvalidOperationException(
                     $"Struct field '{fas.Field.Name}' has no emitted FieldDef.");
+            }
+
+            // Class field assignment: load the reference, evaluate the value,
+            // stfld through the reference. Re-load the receiver + ldfld to
+            // leave the new value on the stack as the expression result.
+            if (fas.StructType.IsClass)
+            {
+                this.EmitLoadVariable(fas.Receiver);
+                this.EmitExpression(fas.Value);
+                this.il.OpCode(ILOpCode.Stfld);
+                this.il.Token(fieldHandle);
+
+                this.EmitLoadVariable(fas.Receiver);
+                this.il.OpCode(ILOpCode.Ldfld);
+                this.il.Token(fieldHandle);
+                return;
             }
 
             // Binder guarantees the receiver is a simple variable for Phase 3.B.1.
