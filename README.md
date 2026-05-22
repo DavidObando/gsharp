@@ -4,6 +4,56 @@ A modern, simple, and accessible programming language for .NET.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
 
+## Getting started
+
+GSharp ships an MSBuild SDK (`Gsharp.NET.Sdk`) and a `dotnet new` template (`Gsharp.Templates`) so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
+
+```sh
+dotnet new install Gsharp.Templates
+dotnet new gsharp-console -n MyApp
+cd MyApp && dotnet build && dotnet run
+# -> Hello from GSharp!
+```
+
+A minimal `.gsproj` looks like any other modern .NET project:
+
+```xml
+<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MyApp</RootNamespace>
+  </PropertyGroup>
+</Project>
+```
+
+The SDK is validated against `net8.0` and `net10.0`; adding additional target frameworks is a one-line change in [`build/multitarget-e2e.sh`](build/multitarget-e2e.sh). See [`docs/sdk-usage.md`](docs/sdk-usage.md) for the full SDK + templates walkthrough (including how to side-load the SDK locally before it is published to a public NuGet feed) and [`docs/emit-pipeline.md`](docs/emit-pipeline.md) for the compiler architecture.
+
+## Documentation
+
+| Topic | Doc |
+| --- | --- |
+| Language design (top-level statements, entry-point synthesis, samples) | [`design/Gsharp-design-v0.1.md`](design/Gsharp-design-v0.1.md) |
+| MSBuild SDK + `dotnet new` template usage | [`docs/sdk-usage.md`](docs/sdk-usage.md) |
+| Compiler architecture (syntax → bound → emit), cross-TFM, interpreter vs emit | [`docs/emit-pipeline.md`](docs/emit-pipeline.md) |
+
+## Repository layout
+
+```
+src/
+  Core/             # Shared front-end: syntax, binder, lowering, symbols, emit
+  Compiler/         # gsc.dll command-line driver
+  Interpreter/      # In-process evaluator (REPL + language tests)
+  LanguageServer/   # LSP server backing the editor experience
+  Roslyn/           # Roslyn fork, staged for future semantic-model work
+  Sdk/
+    Gsharp.NET.Sdk/ # MSBuild SDK that wires .gsproj into dotnet build
+    Gsharp.Templates/ # dotnet new template package (gsharp-console)
+samples/            # HelloWorld and other end-user fixtures
+build/              # End-to-end smoke scripts: sdk-e2e, templates-e2e, multitarget-e2e
+test/               # xUnit projects covering Core, Compiler, Interpreter, LSP
+```
+
 ## Motivation 1: Accessibility
 I want to enable other developers to benefit from the .NET framework without necessarily having to learn C#. In particular, I want to ensure new developers and developers who find C#'s learning curve a bit steep to be able to use .NET. I want VB.NET developers and Python developers to find a language that speaks to them as well. I want non-English speakers to have access to powerful libraries and technologies in .NET. In short, I want simplicity and productivity at the hand of everyone.
 
