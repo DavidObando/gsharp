@@ -382,8 +382,13 @@ internal sealed class ReflectionMetadataEmitter
         // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
         var methodName = isEntryPoint && function.Declaration is null ? "<Main>$" : function.Name;
 
+        // The synthesized entry point must remain Public so the runtime can find it.
+        var visibility = isEntryPoint && function.Declaration is null
+            ? MethodAttributes.Public
+            : ToMethodVisibility(function.Accessibility);
+
         var handle = this.metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+            attributes: visibility | MethodAttributes.Static | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString(methodName),
             signature: this.metadata.GetOrAddBlob(sigBlob),
@@ -391,6 +396,21 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: MetadataTokens.ParameterHandle(1));
 
         return handle;
+    }
+
+    private static MethodAttributes ToMethodVisibility(Accessibility accessibility)
+    {
+        switch (accessibility)
+        {
+            case Accessibility.Public:
+                return MethodAttributes.Public;
+            case Accessibility.Internal:
+                return MethodAttributes.Assembly;
+            case Accessibility.Private:
+                return MethodAttributes.Private;
+            default:
+                return MethodAttributes.Public;
+        }
     }
 
     private static void CollectLocalsAndLabels(

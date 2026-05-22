@@ -15,11 +15,18 @@ public sealed class GlobalVariableSymbol : VariableSymbol
     /// <param name="name">The variable name.</param>
     /// <param name="isReadOnly">Whether it's read-only or not.</param>
     /// <param name="type">The type of the variable.</param>
-    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type)
+    /// <param name="accessibility">The CLR visibility level (defaults to <see cref="Accessibility.Public"/>).</param>
+    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, Accessibility accessibility = Accessibility.Public)
         : base(name, isReadOnly, type)
     {
+        Accessibility = accessibility;
     }
 
     /// <inheritdoc/>
     public override SymbolKind Kind => SymbolKind.GlobalVariable;
+
+    /// <summary>
+    /// Gets the CLR visibility level for this global variable.
+    /// </summary>
+    public Accessibility Accessibility { get; }
 }

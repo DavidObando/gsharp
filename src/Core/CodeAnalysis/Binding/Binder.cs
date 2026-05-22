@@ -336,10 +336,31 @@ public sealed class Binder
 
         var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
 
-        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package);
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
         if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+        }
+    }
+
+    private static Accessibility ResolveAccessibility(SyntaxToken modifier)
+    {
+        if (modifier == null)
+        {
+            return Accessibility.Public;
+        }
+
+        switch (modifier.Kind)
+        {
+            case SyntaxKind.PublicKeyword:
+                return Accessibility.Public;
+            case SyntaxKind.InternalKeyword:
+                return Accessibility.Internal;
+            case SyntaxKind.PrivateKeyword:
+                return Accessibility.Private;
+            default:
+                return Accessibility.Public;
         }
     }
 
@@ -409,7 +430,8 @@ public sealed class Binder
         var type = BindTypeClause(syntax.TypeClause);
         var initializer = BindExpression(syntax.Initializer);
         var variableType = type ?? initializer.Type;
-        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType);
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
         var convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
 
         return new BoundVariableDeclaration(variable, convertedInitializer);
@@ -1315,10 +1337,15 @@ public sealed class Binder
 
     private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
     {
+        return BindVariableDeclaration(identifier, isReadOnly, type, Accessibility.Public);
+    }
+
+    private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type, Accessibility accessibility)
+    {
         var name = identifier.Text ?? "?";
         var declare = !identifier.IsMissing;
         var variable = function == null
-                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type)
+                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type, accessibility)
                             : new LocalVariableSymbol(name, isReadOnly, type);
 
         if (declare && !scope.TryDeclareVariable(variable))

@@ -150,30 +150,52 @@ public class Parser
 
     private MemberSyntax ParseMember()
     {
+        SyntaxToken accessibilityModifier = null;
+        if (Current.Kind == SyntaxKind.PublicKeyword ||
+            Current.Kind == SyntaxKind.InternalKeyword ||
+            Current.Kind == SyntaxKind.PrivateKeyword)
+        {
+            accessibilityModifier = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
-            return ParseFunctionDeclaration();
+            return ParseFunctionDeclaration(accessibilityModifier);
         }
 
         if (Current.Kind == SyntaxKind.TypeKeyword)
         {
-            return ParseTypeAliasDeclaration();
+            return ParseTypeAliasDeclaration(accessibilityModifier);
+        }
+
+        if (accessibilityModifier != null &&
+            (Current.Kind == SyntaxKind.VarKeyword ||
+             Current.Kind == SyntaxKind.LetKeyword ||
+             Current.Kind == SyntaxKind.ConstKeyword))
+        {
+            var declaration = ParseVariableDeclaration(accessibilityModifier);
+            return new GlobalStatementSyntax(syntaxTree, declaration);
+        }
+
+        if (accessibilityModifier != null)
+        {
+            Diagnostics.ReportAccessibilityModifierNotAllowedHere(accessibilityModifier.Location, accessibilityModifier.Text);
         }
 
         return ParseGlobalStatement();
     }
 
-    private MemberSyntax ParseTypeAliasDeclaration()
+    private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
-        return new TypeAliasDeclarationSyntax(syntaxTree, typeKeyword, identifier, equalsToken, aliasedType);
+        return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
     }
 
-    private MemberSyntax ParseFunctionDeclaration()
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -182,7 +204,7 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()
@@ -432,6 +454,11 @@ public class Parser
 
     private StatementSyntax ParseVariableDeclaration()
     {
+        return ParseVariableDeclaration(accessibilityModifier: null);
+    }
+
+    private StatementSyntax ParseVariableDeclaration(SyntaxToken accessibilityModifier)
+    {
         SyntaxKind expected;
         switch (Current.Kind)
         {
@@ -451,7 +478,7 @@ public class Parser
         var typeClause = ParseOptionalTypeClause();
         var equals = MatchToken(SyntaxKind.EqualsToken);
         var initializer = ParseExpression();
-        return new VariableDeclarationSyntax(syntaxTree, keyword, identifier, typeClause, equals, initializer);
+        return new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
     }
 
     private StatementSyntax ParseIfStatement()

@@ -30,8 +30,9 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `package A.B.C` | ✅ | ✅ | ✅ | ✅ | Dotted; no aliases. |
 | `import A.B.C` | ✅ | ✅ | ✅ | ✅ | Aliased form `import alias = path` lands in Phase 1.4. Implicit `import System` is on by default (Phase 1.5; opt-out via `gsc /noimplicitimports`). No parenthesized groups, no string-path imports, no per-file `import` blocks. |
 | Top-level statements | ✅ | ✅ | ✅ | ✅ | Entry point synthesized; one file may carry them. |
-| `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. |
+| `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. Accepts optional `public`/`internal`/`private` modifier (Phase 2.8); default is `public` per ADR-0014. |
 | Multiple return values / named returns / variadic / receivers / generic params | ❌ | — | — | — | |
+| `public` / `internal` / `private` modifiers | ✅ | ✅ | ✅ (func) | — | Phase 2.8 / ADR-0014: allowed on top-level `func`, `type`, `var`, `let`, `const`. Default is `public`. Emitter maps to `MethodAttributes.Public`/`Assembly`/`Private` for functions; global-variable accessibility is recorded for future field emission. |
 
 ## Statements
 

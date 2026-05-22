@@ -425,6 +425,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>
+    /// Reports an accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>) appearing on a construct that does not accept one.
+    /// </summary>
+    /// <param name="location">The text location of the modifier token.</param>
+    /// <param name="modifier">The modifier text.</param>
+    public void ReportAccessibilityModifierNotAllowedHere(TextLocation location, string modifier)
+    {
+        var message = $"Accessibility modifier '{modifier}' is not allowed here. It is only valid on top-level 'func', 'type', 'var', 'let' and 'const' declarations.";
+        Report(location, message);
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);

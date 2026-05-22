@@ -154,12 +154,18 @@ public static class SyntaxFacts
                 return SyntaxKind.ImportKeyword;
             case "interface":
                 return SyntaxKind.InterfaceKeyword;
+            case "internal":
+                return SyntaxKind.InternalKeyword;
             case "let":
                 return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
             case "package":
                 return SyntaxKind.PackageKeyword;
+            case "private":
+                return SyntaxKind.PrivateKeyword;
+            case "public":
+                return SyntaxKind.PublicKeyword;
             case "range":
                 return SyntaxKind.RangeKeyword;
             case "return":
@@ -352,12 +358,18 @@ public static class SyntaxFacts
                 return "import";
             case SyntaxKind.InterfaceKeyword:
                 return "interface";
+            case SyntaxKind.InternalKeyword:
+                return "internal";
             case SyntaxKind.LetKeyword:
                 return "let";
             case SyntaxKind.MapKeyword:
                 return "map";
             case SyntaxKind.PackageKeyword:
                 return "package";
+            case SyntaxKind.PrivateKeyword:
+                return "private";
+            case SyntaxKind.PublicKeyword:
+                return "public";
             case SyntaxKind.RangeKeyword:
                 return "range";
             case SyntaxKind.ReturnKeyword:
