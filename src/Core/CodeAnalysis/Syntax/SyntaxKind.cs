@@ -93,6 +93,7 @@ public enum SyntaxKind
     IfKeyword,
     ImportKeyword,
     InterfaceKeyword,
+    LetKeyword,
     MapKeyword,
     PackageKeyword,
     RangeKeyword,

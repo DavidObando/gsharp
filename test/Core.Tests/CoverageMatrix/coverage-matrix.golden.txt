@@ -64,6 +64,7 @@ InterfaceKeyword
 LeftArrowToken
 LessOrEqualsToken
 LessToken
+LetKeyword
 LiteralExpression
 MapKeyword
 MinusEqualsToken

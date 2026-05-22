@@ -37,7 +37,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Statement | Parser | Binder | Emit | Interp | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Block `{ … }` | ✅ | ✅ | ✅ | ✅ | |
-| `var x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. |
+| `var x [T] = e` / `let x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. `let` (since Phase 1.6) is an immutable runtime binding — same binder behavior as `const`. |
 | `x := e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `a, b := …`. |
 | `x = e` | ✅ | ✅ | ✅ | ✅ | Single identifier on LHS. |
 | `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |

@@ -246,6 +246,7 @@ public class Parser
             case SyntaxKind.OpenBraceToken:
                 return ParseBlockStatement();
             case SyntaxKind.ConstKeyword:
+            case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
                 return ParseVariableDeclaration();
             case SyntaxKind.IfKeyword:
@@ -288,7 +289,20 @@ public class Parser
 
     private StatementSyntax ParseVariableDeclaration()
     {
-        var expected = Current.Kind == SyntaxKind.ConstKeyword ? SyntaxKind.ConstKeyword : SyntaxKind.VarKeyword;
+        SyntaxKind expected;
+        switch (Current.Kind)
+        {
+            case SyntaxKind.ConstKeyword:
+                expected = SyntaxKind.ConstKeyword;
+                break;
+            case SyntaxKind.LetKeyword:
+                expected = SyntaxKind.LetKeyword;
+                break;
+            default:
+                expected = SyntaxKind.VarKeyword;
+                break;
+        }
+
         var keyword = MatchToken(expected);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
