@@ -58,15 +58,36 @@ public class BinderEntryPointTests
     }
 
     [Fact]
-    public void Reports_When_TopLevel_Statements_Span_Multiple_Files()
+    public void Reports_When_TopLevel_Statements_Span_Multiple_Packages()
     {
-        var tree1 = SyntaxTree.Parse(SourceText.From("Console.WriteLine(\"a\")\n"));
-        var tree2 = SyntaxTree.Parse(SourceText.From("Console.WriteLine(\"b\")\n"));
+        // Per ADR-0028, top-level statements may span multiple files *within the
+        // same package* but cannot span packages: there is exactly one
+        // synthesized <Main>$ in the entry-point package's <Program>.
+        var tree1 = SyntaxTree.Parse(SourceText.From("package P1\nConsole.WriteLine(\"a\")\n"));
+        var tree2 = SyntaxTree.Parse(SourceText.From("package P2\nConsole.WriteLine(\"b\")\n"));
 
         var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree1, tree2));
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Contains(globalScope.Diagnostics, d => d.Message.Contains("Only one source file"));
+    }
+
+    [Fact]
+    public void Allows_TopLevel_Statements_Across_Multiple_Files_In_Same_Package()
+    {
+        // Companion to Reports_When_TopLevel_Statements_Span_Multiple_Packages:
+        // two files that share a package may both carry top-level statements;
+        // they're concatenated into the package's synthesized <Main>$.
+        var tree1 = SyntaxTree.Parse(SourceText.From("package P\nConsole.WriteLine(\"a\")\n"));
+        var tree2 = SyntaxTree.Parse(SourceText.From("package P\nConsole.WriteLine(\"b\")\n"));
+
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree1, tree2));
+
+        Assert.NotNull(globalScope.EntryPoint);
+        // The two files only contribute Console.WriteLine calls; the only
+        // diagnostics expected are the unresolved-Console messages (Console
+        // isn't imported), not the multi-file/-package conflict.
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Message.Contains("Only one source file"));
     }
 
     [Fact]

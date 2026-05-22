@@ -16,7 +16,8 @@ public sealed class BoundGlobalScope
     /// Initializes a new instance of the <see cref="BoundGlobalScope"/> class.
     /// </summary>
     /// <param name="previous">Previous compilation global scope.</param>
-    /// <param name="package">The package for the current compilation.</param>
+    /// <param name="package">The entry-point package for the current compilation.</param>
+    /// <param name="packages">All distinct packages declared in the current compilation, in declaration order.</param>
     /// <param name="diagnostics">Diagnostics for the current compilation.</param>
     /// <param name="imports">Imports in the current compilation.</param>
     /// <param name="functions">Functions in the current compilation.</param>
@@ -26,6 +27,7 @@ public sealed class BoundGlobalScope
     public BoundGlobalScope(
         BoundGlobalScope previous,
         PackageSymbol package,
+        ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableArray<ImportSymbol> imports,
         ImmutableArray<FunctionSymbol> functions,
@@ -35,6 +37,7 @@ public sealed class BoundGlobalScope
     {
         Previous = previous;
         Package = package;
+        Packages = packages;
         Diagnostics = diagnostics;
         Imports = imports;
         Functions = functions;
@@ -49,9 +52,20 @@ public sealed class BoundGlobalScope
     public BoundGlobalScope Previous { get; }
 
     /// <summary>
-    /// Gets the package symbol for the current compilation.
+    /// Gets the entry-point package symbol for the current compilation. This
+    /// is the package owning the synthesized top-level statements or the
+    /// explicit <c>Main</c> function, and it is the package whose
+    /// <c>&lt;Program&gt;</c> type holds the assembly's entry point.
     /// </summary>
     public PackageSymbol Package { get; }
+
+    /// <summary>
+    /// Gets all distinct packages declared across the current compilation's
+    /// syntax trees, in first-seen declaration order. Each user-defined
+    /// function is tagged with its declaring package via
+    /// <see cref="FunctionSymbol.Package"/>.
+    /// </summary>
+    public ImmutableArray<PackageSymbol> Packages { get; }
 
     /// <summary>
     /// Gets the diagnostics for the current compilation.
