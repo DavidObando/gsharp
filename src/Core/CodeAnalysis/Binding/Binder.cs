@@ -225,7 +225,7 @@ public sealed class Binder
             functionBodies[globalScope.EntryPoint] = statement;
         }
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)

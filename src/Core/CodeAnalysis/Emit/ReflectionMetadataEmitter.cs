@@ -43,12 +43,17 @@ internal sealed class ReflectionMetadataEmitter
 
     private readonly bool metadataOnly;
 
+    private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
+    private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
     private Type coreBooleanType;
     private Type coreArrayType;
+    private Type coreValueType;
     private TypeReferenceHandle objectTypeRef;
+    private TypeReferenceHandle valueTypeRef;
     private MemberReferenceHandle objectCtorRef;
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
@@ -106,8 +111,33 @@ internal sealed class ReflectionMetadataEmitter
         this.coreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
         this.coreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
         this.coreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
+        this.coreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
+        this.valueTypeRef = this.GetTypeReference(this.coreValueType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
+
+        // Pre-assign FieldDefinitionHandles for user struct fields. Struct
+        // TypeDefs are emitted between <Module> and the per-package <Program>
+        // types so the field/method-row ranges fall out correctly:
+        //
+        //   TypeDef 1: <Module>   fieldList=1    methodList=1
+        //   TypeDef 2: Struct A   fieldList=1    methodList=1   (owns rows 1..K1)
+        //   TypeDef 3: Struct B   fieldList=K1+1 methodList=1   (owns rows K1+1..K2)
+        //   TypeDef 4: <Program>  fieldList=N+1  methodList=1
+        //
+        // Where N = total struct fields. <Module> "owns" rows [1, 1) = none.
+        var structs = this.program.Structs;
+        int nextFieldRow = 1;
+        var structFirstFieldRow = new Dictionary<StructSymbol, int>();
+        foreach (var s in structs)
+        {
+            structFirstFieldRow[s] = nextFieldRow;
+            nextFieldRow += s.Fields.Length;
+        }
+
+        int totalStructFields = nextFieldRow - 1;
+        var moduleFirstFieldRow = structs.IsDefaultOrEmpty ? 1 : 1;
+        var programFirstFieldRow = totalStructFields + 1;
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
         this.metadata.AddTypeDefinition(
@@ -115,8 +145,14 @@ internal sealed class ReflectionMetadataEmitter
             @namespace: default(StringHandle),
             name: this.metadata.GetOrAddString("<Module>"),
             baseType: default(EntityHandle),
-            fieldList: MetadataTokens.FieldDefinitionHandle(1),
+            fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
+
+        // 2b. Emit one TypeDef per user struct (between <Module> and <Program>).
+        foreach (var s in structs)
+        {
+            this.EmitStructTypeDef(s, structFirstFieldRow[s]);
+        }
 
         // 3. Group functions by their declaring package. One <Program> type
         //    is emitted per package, in BoundProgram.Packages declaration
@@ -203,7 +239,7 @@ internal sealed class ReflectionMetadataEmitter
                 @namespace: this.metadata.GetOrAddString(pkg.Name),
                 name: this.metadata.GetOrAddString("<Program>"),
                 baseType: this.objectTypeRef,
-                fieldList: MetadataTokens.FieldDefinitionHandle(1),
+                fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
                 methodList: pkgCtor);
         }
 
@@ -301,6 +337,69 @@ internal sealed class ReflectionMetadataEmitter
         return BlobContentId.FromHash(sha.GetHashAndReset());
     }
 
+    private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow)
+    {
+        // Emit field definitions in source order. Each field's signature is a
+        // FieldSig encoding the GSharp type symbol.
+        FieldDefinitionHandle firstField = default;
+        foreach (var field in structSym.Fields)
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
+            var attrs = MapFieldAccessibility(field.Accessibility);
+            var handle = this.metadata.AddFieldDefinition(
+                attributes: attrs,
+                name: this.metadata.GetOrAddString(field.Name),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = handle;
+            }
+
+            this.structFieldDefs[field] = handle;
+        }
+
+        if (firstField.IsNil)
+        {
+            // Empty struct: no field rows added; point at next row, which is
+            // (firstFieldRow) — same as the next TypeDef's first field row.
+            firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
+        }
+
+        var structAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
+            | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
+            | MapTypeAccessibility(structSym.Accessibility);
+
+        var handle2 = this.metadata.AddTypeDefinition(
+            attributes: structAttrs,
+            @namespace: this.metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
+            name: this.metadata.GetOrAddString(structSym.Name),
+            baseType: this.valueTypeRef,
+            fieldList: firstField,
+            methodList: MetadataTokens.MethodDefinitionHandle(1));
+        this.structTypeDefs[structSym] = handle2;
+    }
+
+    private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
+    {
+        return accessibility switch
+        {
+            Accessibility.Internal => TypeAttributes.NotPublic,
+            Accessibility.Private => TypeAttributes.NotPublic,
+            _ => TypeAttributes.Public,
+        };
+    }
+
+    private static FieldAttributes MapFieldAccessibility(Accessibility accessibility)
+    {
+        return accessibility switch
+        {
+            Accessibility.Internal => FieldAttributes.Assembly,
+            Accessibility.Private => FieldAttributes.Private,
+            _ => FieldAttributes.Public,
+        };
+    }
+
     private MethodDefinitionHandle EmitDefaultConstructor()
     {
         int bodyOffset = -1;
@@ -339,7 +438,8 @@ internal sealed class ReflectionMetadataEmitter
             var labels = new Dictionary<BoundLabel, LabelHandle>();
             var localTypes = new List<TypeSymbol>();
             var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, il);
+            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, il);
 
             // Parameters → arg indices.
             var parameters = new Dictionary<ParameterSymbol, int>();
@@ -361,7 +461,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -427,6 +527,7 @@ internal sealed class ReflectionMetadataEmitter
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
         Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
+        Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -439,6 +540,137 @@ internal sealed class ReflectionMetadataEmitter
             var dstSlot = localTypes.Count;
             localTypes.Add(append.SliceType);
             appendSlots[append] = (srcSlot, dstSlot);
+        }
+
+        foreach (var literal in CollectStructLiterals(body))
+        {
+            var slot = localTypes.Count;
+            localTypes.Add(literal.StructType);
+            structLiteralSlots[literal] = slot;
+        }
+    }
+
+    private static IEnumerable<BoundStructLiteralExpression> CollectStructLiterals(BoundBlockStatement body)
+    {
+        var list = new List<BoundStructLiteralExpression>();
+        foreach (var s in body.Statements)
+        {
+            WalkForStructLiterals(s, list);
+        }
+
+        return list;
+    }
+
+    private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
+    {
+        switch (node)
+        {
+            case BoundStructLiteralExpression literal:
+                sink.Add(literal);
+                foreach (var init in literal.Initializers)
+                {
+                    WalkForStructLiterals(init.Value, sink);
+                }
+
+                break;
+            case BoundFieldAccessExpression fa:
+                WalkForStructLiterals(fa.Receiver, sink);
+                break;
+            case BoundFieldAssignmentExpression fas:
+                WalkForStructLiterals(fas.Value, sink);
+                break;
+            case BoundExpressionStatement es:
+                WalkForStructLiterals(es.Expression, sink);
+                break;
+            case BoundVariableDeclaration decl:
+                WalkForStructLiterals(decl.Initializer, sink);
+                break;
+            case BoundReturnStatement ret:
+                if (ret.Expression != null)
+                {
+                    WalkForStructLiterals(ret.Expression, sink);
+                }
+
+                break;
+            case BoundConditionalGotoStatement cg:
+                WalkForStructLiterals(cg.Condition, sink);
+                break;
+            case BoundAssignmentExpression a:
+                WalkForStructLiterals(a.Expression, sink);
+                break;
+            case BoundUnaryExpression u:
+                WalkForStructLiterals(u.Operand, sink);
+                break;
+            case BoundBinaryExpression b:
+                WalkForStructLiterals(b.Left, sink);
+                WalkForStructLiterals(b.Right, sink);
+                break;
+            case BoundCallExpression c:
+                foreach (var arg in c.Arguments)
+                {
+                    WalkForStructLiterals(arg, sink);
+                }
+
+                break;
+            case BoundImportedCallExpression ic:
+                foreach (var arg in ic.Arguments)
+                {
+                    WalkForStructLiterals(arg, sink);
+                }
+
+                break;
+            case BoundImportedInstanceCallExpression iic:
+                WalkForStructLiterals(iic.Receiver, sink);
+                foreach (var arg in iic.Arguments)
+                {
+                    WalkForStructLiterals(arg, sink);
+                }
+
+                break;
+            case BoundConversionExpression conv:
+                WalkForStructLiterals(conv.Expression, sink);
+                break;
+            case BoundArrayCreationExpression arr:
+                foreach (var e in arr.Elements)
+                {
+                    WalkForStructLiterals(e, sink);
+                }
+
+                break;
+            case BoundIndexExpression ix:
+                WalkForStructLiterals(ix.Target, sink);
+                WalkForStructLiterals(ix.Index, sink);
+                break;
+            case BoundIndexAssignmentExpression ixa:
+                WalkForStructLiterals(ixa.Index, sink);
+                WalkForStructLiterals(ixa.Value, sink);
+                break;
+            case BoundTryStatement t:
+                foreach (var st in ((BoundBlockStatement)t.TryBlock).Statements)
+                {
+                    WalkForStructLiterals(st, sink);
+                }
+
+                foreach (var clause in t.CatchClauses)
+                {
+                    foreach (var st in ((BoundBlockStatement)clause.Body).Statements)
+                    {
+                        WalkForStructLiterals(st, sink);
+                    }
+                }
+
+                if (t.FinallyBlock != null)
+                {
+                    foreach (var st in ((BoundBlockStatement)t.FinallyBlock).Statements)
+                    {
+                        WalkForStructLiterals(st, sink);
+                    }
+                }
+
+                break;
+            case BoundThrowStatement th:
+                WalkForStructLiterals(th.Expression, sink);
+                break;
         }
     }
 
@@ -879,6 +1111,15 @@ internal sealed class ReflectionMetadataEmitter
         {
             EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
         }
+        else if (type is StructSymbol structSym)
+        {
+            if (!this.structTypeDefs.TryGetValue(structSym, out var typeDef))
+            {
+                throw new InvalidOperationException($"Struct '{structSym.Name}' has no emitted TypeDef.");
+            }
+
+            encoder.Type(typeDef, isValueType: true);
+        }
         else if (type?.ClrType != null)
         {
             this.EncodeClrType(encoder, type.ClrType);
@@ -957,6 +1198,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<ParameterSymbol, int> parameters;
         private readonly Dictionary<BoundLabel, LabelHandle> labels;
         private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
+        private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -964,7 +1206,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<VariableSymbol, int> locals,
             Dictionary<ParameterSymbol, int> parameters,
             Dictionary<BoundLabel, LabelHandle> labels,
-            Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots)
+            Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
+            Dictionary<BoundStructLiteralExpression, int> structLiteralSlots)
         {
             this.outer = outer;
             this.il = il;
@@ -972,6 +1215,7 @@ internal sealed class ReflectionMetadataEmitter
             this.parameters = parameters;
             this.labels = labels;
             this.appendSlots = appendSlots;
+            this.structLiteralSlots = structLiteralSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -1116,6 +1360,15 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundAppendExpression app:
                     this.EmitAppend(app);
+                    break;
+                case BoundStructLiteralExpression structLit:
+                    this.EmitStructLiteral(structLit);
+                    break;
+                case BoundFieldAccessExpression fa:
+                    this.EmitFieldAccess(fa);
+                    break;
+                case BoundFieldAssignmentExpression fas:
+                    this.EmitFieldAssignment(fas);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -1526,6 +1779,115 @@ internal sealed class ReflectionMetadataEmitter
 
             // Leave dst on stack
             this.il.LoadLocal(slots.Dst);
+        }
+
+        private void EmitStructLiteral(BoundStructLiteralExpression literal)
+        {
+            if (!this.structLiteralSlots.TryGetValue(literal, out var slot))
+            {
+                throw new InvalidOperationException(
+                    $"Struct literal of type '{literal.StructType.Name}' has no preallocated slot.");
+            }
+
+            if (!this.outer.structTypeDefs.TryGetValue(literal.StructType, out var typeDef))
+            {
+                throw new InvalidOperationException(
+                    $"Struct '{literal.StructType.Name}' has no emitted TypeDef.");
+            }
+
+            // ldloca slot; initobj typedef — zero-initializes the value type.
+            this.il.LoadLocalAddress(slot);
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(typeDef);
+
+            // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
+            foreach (var init in literal.Initializers)
+            {
+                if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Struct field '{init.Field.Name}' has no emitted FieldDef.");
+                }
+
+                this.il.LoadLocalAddress(slot);
+                this.EmitExpression(init.Value);
+                this.il.OpCode(ILOpCode.Stfld);
+                this.il.Token(fieldHandle);
+            }
+
+            // Leave the constructed struct value on the stack.
+            this.il.LoadLocal(slot);
+        }
+
+        private void EmitFieldAccess(BoundFieldAccessExpression fa)
+        {
+            if (!this.outer.structFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Struct field '{fa.Field.Name}' has no emitted FieldDef.");
+            }
+
+            // For a variable receiver, load by address to avoid a copy and to
+            // keep the IL verifier-friendly. For any other receiver, fall back
+            // to value form (CLI permits ldfld on a value-type value on stack).
+            if (fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+            {
+                // address is on the stack
+            }
+            else
+            {
+                this.EmitExpression(fa.Receiver);
+            }
+
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+        }
+
+        private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
+        {
+            if (!this.outer.structFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Struct field '{fas.Field.Name}' has no emitted FieldDef.");
+            }
+
+            // Binder guarantees the receiver is a simple variable for Phase 3.B.1.
+            if (!this.TryLoadVariableAddress(fas.Receiver))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+            }
+
+            this.EmitExpression(fas.Value);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(fieldHandle);
+
+            // Leave the assigned value on the stack as the expression result.
+            if (!this.TryLoadVariableAddress(fas.Receiver))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+            }
+
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+        }
+
+        private bool TryLoadVariableAddress(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
+            {
+                this.il.LoadArgumentAddress(argIndex);
+                return true;
+            }
+
+            if (this.locals.TryGetValue(variable, out var slot))
+            {
+                this.il.LoadLocalAddress(slot);
+                return true;
+            }
+
+            return false;
         }
     }
 }
