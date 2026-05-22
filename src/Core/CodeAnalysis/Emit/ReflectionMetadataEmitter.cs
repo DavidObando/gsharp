@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -143,11 +144,13 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(1),
             methodList: programCtor);
 
-        // 6. Module + assembly rows.
+        // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
+        // patch it with a content-derived value after PE serialization.
+        var mvidFixup = this.metadata.ReserveGuid();
         this.metadata.AddModule(
             generation: 0,
             moduleName: this.metadata.GetOrAddString(this.program.PackageName + ".dll"),
-            mvid: this.metadata.GetOrAddGuid(Guid.NewGuid()),
+            mvid: mvidFixup.Handle,
             encId: default(GuidHandle),
             encBaseId: default(GuidHandle));
 
@@ -159,7 +162,9 @@ internal sealed class ReflectionMetadataEmitter
             flags: 0,
             hashAlgorithm: AssemblyHashAlgorithm.Sha1);
 
-        // 7. Serialize PE.
+        // 7. Serialize PE deterministically: a SHA-256 of the serialized PE
+        // content produces the BlobContentId, which patches both the PE
+        // TimeDateStamp and the reserved MVID guid in the metadata heap.
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
@@ -168,10 +173,29 @@ internal sealed class ReflectionMetadataEmitter
             header: peHeaderBuilder,
             metadataRootBuilder: new MetadataRootBuilder(this.metadata),
             ilStream: this.ilStream,
-            entryPoint: entryHandle);
+            entryPoint: entryHandle,
+            deterministicIdProvider: ComputeDeterministicContentId);
         var peBlob = new BlobBuilder();
-        peBuilder.Serialize(peBlob);
+        var contentId = peBuilder.Serialize(peBlob);
+        mvidFixup.CreateWriter().WriteGuid(contentId.Guid);
         peBlob.WriteContentTo(peStream);
+    }
+
+    /// <summary>
+    /// Derives the module MVID and PE timestamp from a SHA-256 hash of the
+    /// serialized PE content blobs, mirroring Roslyn's deterministic emit so
+    /// the same bound program always produces a byte-for-byte identical PE.
+    /// </summary>
+    private static BlobContentId ComputeDeterministicContentId(IEnumerable<Blob> content)
+    {
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var blob in content)
+        {
+            var bytes = blob.GetBytes();
+            sha.AppendData(bytes.Array, bytes.Offset, bytes.Count);
+        }
+
+        return BlobContentId.FromHash(sha.GetHashAndReset());
     }
 
     private MethodDefinitionHandle EmitDefaultConstructor()
