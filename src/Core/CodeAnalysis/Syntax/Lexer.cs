@@ -345,6 +345,9 @@ public sealed class Lexer
             case '"':
                 ReadString();
                 break;
+            case '`':
+                ReadRawString();
+                break;
             case '0':
             case '1':
             case '2':
@@ -473,6 +476,51 @@ public sealed class Lexer
         }
 
         kind = SyntaxKind.CommentToken;
+        value = sb.ToString();
+    }
+
+    private void ReadRawString()
+    {
+        // Backtick-delimited raw strings (Go-style). No escape processing,
+        // multi-line allowed, no interpolation. Embedded backticks are not
+        // representable; concatenate adjacent raw + interpreted literals to
+        // include one (matches Go's choice).
+        position++; // consume opening backtick
+
+        var sb = new StringBuilder();
+        var done = false;
+
+        while (!done)
+        {
+            switch (Current)
+            {
+                case '\0':
+                    var loc = new TextLocation(this.text, new TextSpan(start, position - start));
+                    Diagnostics.ReportUnterminatedString(loc);
+                    done = true;
+                    break;
+                case '`':
+                    position++;
+                    done = true;
+                    break;
+                case '\r':
+                    // Normalize CRLF and bare CR to LF inside raw strings, matching Go's spec.
+                    if (Lookahead == '\n')
+                    {
+                        position++;
+                    }
+
+                    sb.Append('\n');
+                    position++;
+                    break;
+                default:
+                    sb.Append(Current);
+                    position++;
+                    break;
+            }
+        }
+
+        kind = SyntaxKind.StringToken;
         value = sb.ToString();
     }
 

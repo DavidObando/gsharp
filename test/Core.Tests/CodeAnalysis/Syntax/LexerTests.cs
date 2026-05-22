@@ -156,9 +156,43 @@ public class LexerTests
     [Fact]
     public void Lexes_BadCharacter_ReportsDiagnostic()
     {
-        SyntaxTree.ParseTokens("`", out var diagnostics);
+        // Backtick alone (without a closing backtick) is now an unterminated
+        // raw string per Phase 1.2, not a bad character. Use a character that
+        // remains unmapped to exercise the bad-character diagnostic.
+        SyntaxTree.ParseTokens("#", out var diagnostics);
         Assert.NotEmpty(diagnostics);
         Assert.Contains(diagnostics, d => d.Message.Contains("Bad character", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("`hello`", "hello")]
+    [InlineData("``", "")]
+    [InlineData("`line1\nline2`", "line1\nline2")]
+    [InlineData("`no \\n escapes here`", "no \\n escapes here")]
+    [InlineData("`\"quoted\"`", "\"quoted\"")]
+    public void Lexes_RawStringLiteral(string text, string expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.StringToken, token.Kind);
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    [Fact]
+    public void Lexes_RawString_NormalizesCRLF_To_LF()
+    {
+        var tokens = SyntaxTree.ParseTokens("`a\r\nb\rc`", out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal("a\nb\nc", token.Value);
+    }
+
+    [Fact]
+    public void Lexes_UnterminatedRawString_ReportsDiagnostic()
+    {
+        SyntaxTree.ParseTokens("`unclosed", out var diagnostics);
+        Assert.Contains(diagnostics, d => d.Message.Contains("Unterminated string", System.StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
