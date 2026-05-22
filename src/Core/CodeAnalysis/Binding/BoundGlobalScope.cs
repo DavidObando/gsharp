@@ -21,6 +21,7 @@ public sealed class BoundGlobalScope
     /// <param name="imports">Imports in the current compilation.</param>
     /// <param name="functions">Functions in the current compilation.</param>
     /// <param name="variables">Variables in the current compilation.</param>
+    /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
         BoundGlobalScope previous,
@@ -29,6 +30,7 @@ public sealed class BoundGlobalScope
         ImmutableArray<ImportSymbol> imports,
         ImmutableArray<FunctionSymbol> functions,
         ImmutableArray<VariableSymbol> variables,
+        FunctionSymbol entryPoint,
         ImmutableArray<BoundStatement> statements)
     {
         Previous = previous;
@@ -37,6 +39,7 @@ public sealed class BoundGlobalScope
         Imports = imports;
         Functions = functions;
         Variables = variables;
+        EntryPoint = entryPoint;
         Statements = statements;
     }
 
@@ -69,6 +72,12 @@ public sealed class BoundGlobalScope
     /// Gets the variables in the current compilation.
     /// </summary>
     public ImmutableArray<VariableSymbol> Variables { get; }
+
+    /// <summary>
+    /// Gets the synthesized or explicit entry-point function for this compilation,
+    /// or null if the compilation produces a library (no entry point).
+    /// </summary>
+    public FunctionSymbol EntryPoint { get; }
 
     /// <summary>
     /// Gets the statements in the current compilation.
