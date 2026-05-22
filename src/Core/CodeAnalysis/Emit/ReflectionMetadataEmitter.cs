@@ -57,6 +57,7 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle objectCtorRef;
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
+    private MemberReferenceHandle objectStaticEqualsRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -1085,6 +1086,40 @@ internal sealed class ReflectionMetadataEmitter
         return this.stringEqualsRef;
     }
 
+    /// <summary>
+    /// Returns a MemberRef for static <c>bool System.Object.Equals(object, object)</c>.
+    /// Used by Phase 3.B.2 data-struct <c>==</c> / <c>!=</c> lowering: we box
+    /// the operand values and call this static helper, which routes through
+    /// the virtual <c>ValueType.Equals(object)</c> override (reflection-based
+    /// field-by-field comparison) for user value types. Same observable
+    /// semantics as the interpreter's structural equality (ADR-0029); a
+    /// future iteration may replace this with a direct synthesized
+    /// <c>Equals(T)</c> method for performance.
+    /// </summary>
+    private MemberReferenceHandle GetObjectStaticEqualsReference()
+    {
+        if (!this.objectStaticEqualsRef.IsNil)
+        {
+            return this.objectStaticEqualsRef;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().Boolean(),
+                ps =>
+                {
+                    ps.AddParameter().Type().Object();
+                    ps.AddParameter().Type().Object();
+                });
+        this.objectStaticEqualsRef = this.metadata.AddMemberReference(
+            parent: this.objectTypeRef,
+            name: this.metadata.GetOrAddString("Equals"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.objectStaticEqualsRef;
+    }
+
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
         if (type == TypeSymbol.Bool)
@@ -1454,6 +1489,30 @@ internal sealed class ReflectionMetadataEmitter
                         this.il.OpCode(ILOpCode.Ceq);
                         return;
                 }
+            }
+
+            // Phase 3.B.2 / ADR-0029: structural == / != on data-struct
+            // values. Box both operands and dispatch through static
+            // Object.Equals(object, object) which routes through the
+            // virtual ValueType.Equals override.
+            if (b.Left.Type is StructSymbol ds && ds.IsData && b.Right.Type == ds &&
+                (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+            {
+                var structTypeDef = this.outer.structTypeDefs[ds];
+                this.EmitExpression(b.Left);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(structTypeDef);
+                this.EmitExpression(b.Right);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(structTypeDef);
+                this.il.Call(this.outer.GetObjectStaticEqualsReference());
+                if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+                {
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                }
+
+                return;
             }
 
             this.EmitExpression(b.Left);
