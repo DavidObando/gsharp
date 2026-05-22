@@ -248,8 +248,9 @@ public sealed class Binder
             sb.Append(i.Text);
         }
 
-        var importName = sb.ToString();
-        var importSymbol = new ImportSymbol(importName, import);
+        var targetPath = sb.ToString();
+        var localName = import.AliasIdentifier?.Text ?? targetPath;
+        var importSymbol = new ImportSymbol(localName, targetPath, import);
         scope.TryImport(importSymbol);
     }
 
@@ -695,6 +696,7 @@ public sealed class Binder
         // instance member access). Then apply the right side, which may itself
         // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
         var leftPart = syntax.LeftPart;
+        var rightPart = syntax.RightPart;
         BoundExpression receiver = null;
         ImportedClassSymbol classSymbol = null;
 
@@ -704,6 +706,11 @@ public sealed class Binder
             if (scope.TryLookupSymbol(name) is VariableSymbol variable)
             {
                 receiver = new BoundVariableExpression(variable);
+            }
+            else if (scope.TryLookupImport(name, out var matchedImport)
+                && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
+            {
+                classSymbol = typeFromImport;
             }
             else if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
             {
@@ -720,7 +727,44 @@ public sealed class Binder
             receiver = BindExpression(leftPart);
         }
 
-        return BindAccessorStep(receiver, classSymbol, syntax.RightPart);
+        return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    {
+        // Handle `<importName>.<TypeName>(.<more>)*` where <importName> is either an
+        // alias or the import's path. The next segment of the chain names the type;
+        // we resolve `<import.Target>.<TypeName>` and consume that segment.
+        importedClass = null;
+
+        NameExpressionSyntax typeNameSyntax;
+        ExpressionSyntax remainder;
+
+        switch (rightPart)
+        {
+            case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
+                typeNameSyntax = leftName;
+                remainder = nested.RightPart;
+                break;
+
+            case NameExpressionSyntax ne:
+                typeNameSyntax = ne;
+                remainder = ne;
+                break;
+
+            default:
+                return false;
+        }
+
+        var fullTypeName = import.Target + "." + typeNameSyntax.IdentifierToken.Text;
+        if (!scope.References.TryResolveType(fullTypeName, out var type))
+        {
+            return false;
+        }
+
+        importedClass = new ImportedClassSymbol(type, typeNameSyntax);
+        rightPart = remainder;
+        return true;
     }
 
     private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)

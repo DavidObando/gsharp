@@ -103,6 +103,17 @@ public class Parser
         while (Current.Kind == SyntaxKind.ImportKeyword)
         {
             var importKeyword = MatchToken(SyntaxKind.ImportKeyword);
+
+            // Detect the alias form: `import <ident> = <ident>(.<ident>)*`.
+            // Lookahead: if the next two tokens are IDENT '=', consume them as alias + equals.
+            SyntaxToken aliasIdentifier = null;
+            SyntaxToken equalsToken = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken)
+            {
+                aliasIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+                equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            }
+
             var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
             identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
             while (Current.Kind == SyntaxKind.DotToken)
@@ -111,7 +122,7 @@ public class Parser
                 identifiers.Add(MatchToken(SyntaxKind.IdentifierToken));
             }
 
-            importsBuilder.Add(new ImportSyntax(syntaxTree, importKeyword, identifiers.ToImmutableArray()));
+            importsBuilder.Add(new ImportSyntax(syntaxTree, importKeyword, aliasIdentifier, equalsToken, identifiers.ToImmutableArray()));
         }
 
         return importsBuilder.ToImmutable();

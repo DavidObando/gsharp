@@ -117,10 +117,38 @@ public sealed class BoundScope
 
         foreach (var import in imports)
         {
-            var typeName = import.Name + "." + name;
+            var typeName = import.Target + "." + name;
             if (References.TryResolveType(typeName, out var type))
             {
                 importedClass = new ImportedClassSymbol(type, declaration);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Tries to look up an imported namespace by the name the user references it with
+    /// (the alias if one was declared, otherwise the import path).
+    /// </summary>
+    /// <param name="name">The name as it appears in user code.</param>
+    /// <param name="import">The matching import, when found.</param>
+    /// <returns>Whether a matching import exists.</returns>
+    public bool TryLookupImport(string name, out ImportSymbol import)
+    {
+        import = null;
+
+        if (imports == null)
+        {
+            return false;
+        }
+
+        foreach (var candidate in imports)
+        {
+            if (string.Equals(candidate.Name, name, System.StringComparison.Ordinal))
+            {
+                import = candidate;
                 return true;
             }
         }
