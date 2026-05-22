@@ -229,4 +229,51 @@ Console.WriteLine(factorial(5))
         var output = CompileLoadInvokeCaptureStdout(Source, "EndToEndEmitTests-Recurse");
         Assert.Contains("120", output);
     }
+
+    [Fact]
+    public void Emit_Is_Deterministic_For_Same_Source()
+    {
+        using var first = new MemoryStream();
+        using var second = new MemoryStream();
+
+        Assert.True(Compile(HelloWorldSource, first).Success);
+        Assert.True(Compile(HelloWorldSource, second).Success);
+
+        var firstBytes = first.ToArray();
+        var secondBytes = second.ToArray();
+
+        Assert.Equal(firstBytes.Length, secondBytes.Length);
+        Assert.True(
+            firstBytes.AsSpan().SequenceEqual(secondBytes),
+            "two emits of the same source must produce byte-identical PEs (deterministic MVID + timestamp).");
+    }
+
+    [Fact]
+    public void Emit_Produces_NonZero_Mvid_Derived_From_Content()
+    {
+        using var first = new MemoryStream();
+        using var second = new MemoryStream();
+
+        Assert.True(Compile(HelloWorldSource, first).Success);
+        Assert.True(
+            Compile(HelloWorldSource.Replace("Hello, world!", "Hi, world!"), second).Success);
+
+        first.Position = 0;
+        second.Position = 0;
+
+        using var firstPe = new PEReader(first, PEStreamOptions.LeaveOpen);
+        using var secondPe = new PEReader(second, PEStreamOptions.LeaveOpen);
+
+        var firstMvid = firstPe.GetMetadataReader().GetGuid(firstPe.GetMetadataReader().GetModuleDefinition().Mvid);
+        var secondMvid = secondPe.GetMetadataReader().GetGuid(secondPe.GetMetadataReader().GetModuleDefinition().Mvid);
+
+        Assert.NotEqual(Guid.Empty, firstMvid);
+        Assert.NotEqual(firstMvid, secondMvid);
+
+        // Deterministic emit zeros out the PE TimeDateStamp (the content id's
+        // stamp goes into the COFF header; both should differ across content).
+        Assert.NotEqual(
+            firstPe.PEHeaders.CoffHeader.TimeDateStamp,
+            secondPe.PEHeaders.CoffHeader.TimeDateStamp);
+    }
 }
