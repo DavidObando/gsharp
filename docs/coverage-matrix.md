@@ -56,7 +56,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `goto` / labels | ❌ | 🟡 | 🟡 | 🟡 | `BoundGotoStatement` / `BoundLabelStatement` exist as **lowering artifacts** for `for`/`if`; not surfaceable from source. |
 | Send statement `ch <- v` / receive `<-ch` | ❌ | — | — | — | |
 | Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |
-| `type` declaration (alias or defined type) | ❌ | — | — | — | Keyword reserved. |
+| `type` declaration (alias or defined type) | ✅ | ✅ | — | ✅ | Phase 2.7: `type Name = Other` declares an erased alias resolvable anywhere an `int`/`bool`/`string` (or other alias) is. Defined types (with their own identity) and structural types arrive in Phase 3. |
 
 ## Expressions
 

@@ -155,7 +155,22 @@ public class Parser
             return ParseFunctionDeclaration();
         }
 
+        if (Current.Kind == SyntaxKind.TypeKeyword)
+        {
+            return ParseTypeAliasDeclaration();
+        }
+
         return ParseGlobalStatement();
+    }
+
+    private MemberSyntax ParseTypeAliasDeclaration()
+    {
+        var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+        var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
+        return new TypeAliasDeclarationSyntax(syntaxTree, typeKeyword, identifier, equalsToken, aliasedType);
     }
 
     private MemberSyntax ParseFunctionDeclaration()

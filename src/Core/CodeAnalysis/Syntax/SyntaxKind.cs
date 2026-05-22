@@ -122,6 +122,7 @@ public enum SyntaxKind
     PackageDeclaration,
     ImportDeclaration,
     FunctionDeclaration,
+    TypeAliasDeclaration,
     Parameter,
     TypeClause,
     BlockStatement,

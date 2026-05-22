@@ -108,6 +108,7 @@ StringToken
 StructKeyword
 SwitchKeyword
 TrueKeyword
+TypeAliasDeclaration
 TypeClause
 TypeKeyword
 UnaryExpression

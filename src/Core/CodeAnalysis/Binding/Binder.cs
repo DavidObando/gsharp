@@ -123,6 +123,13 @@ public sealed class Binder
             binder.BindImport(import);
         }
 
+        var typeAliasDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                               .OfType<TypeAliasDeclarationSyntax>();
+        foreach (var typeAlias in typeAliasDeclarations)
+        {
+            binder.BindTypeAliasDeclaration(typeAlias);
+        }
+
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
@@ -144,6 +151,7 @@ public sealed class Binder
         var imports = binder.scope.GetDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
         var variables = binder.scope.GetDeclaredVariables();
+        var typeAliases = binder.scope.GetDeclaredTypeAliases();
 
         // Entry-point package: the package owning the top-level statements
         // (if any) or the package owning explicit Main (if any) or, lacking
@@ -160,7 +168,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -232,6 +240,11 @@ public sealed class Binder
                 scope.TryImport(i);
             }
 
+            foreach (var alias in previous.TypeAliases)
+            {
+                scope.TryDeclareTypeAlias(alias.Key, alias.Value);
+            }
+
             foreach (var f in previous.Functions)
             {
                 scope.TryDeclareFunction(f);
@@ -272,6 +285,32 @@ public sealed class Binder
         var localName = import.AliasIdentifier?.Text ?? targetPath;
         var importSymbol = new ImportSymbol(localName, targetPath, import);
         scope.TryImport(importSymbol);
+    }
+
+    private void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax)
+    {
+        var name = syntax.Identifier.Text;
+
+        // Reject shadowing of primitive type names.
+        switch (name)
+        {
+            case "bool":
+            case "int":
+            case "string":
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                return;
+        }
+
+        var aliasedType = BindTypeClause(syntax.AliasedType);
+        if (aliasedType == null)
+        {
+            return;
+        }
+
+        if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
     }
 
     private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
@@ -1156,9 +1195,14 @@ public sealed class Binder
                 return TypeSymbol.Int;
             case "string":
                 return TypeSymbol.String;
-            default:
-                return null;
         }
+
+        if (scope.TryLookupTypeAlias(name, out var aliased))
+        {
+            return aliased;
+        }
+
+        return null;
     }
 
     /// <summary>

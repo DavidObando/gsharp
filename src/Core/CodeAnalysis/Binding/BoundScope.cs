@@ -18,6 +18,7 @@ public sealed class BoundScope
 {
     private Dictionary<string, Symbol> symbols;
     private List<ImportSymbol> imports;
+    private Dictionary<string, TypeSymbol> typeAliases;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundScope"/> class.
@@ -39,6 +40,7 @@ public sealed class BoundScope
     {
         Parent = parent;
         imports = parent?.imports ?? new List<ImportSymbol>();
+        typeAliases = parent?.typeAliases ?? new Dictionary<string, TypeSymbol>();
         References = references ?? parent?.References ?? ReferenceResolver.Default();
     }
 
@@ -176,6 +178,52 @@ public sealed class BoundScope
     /// <returns>The declared imports.</returns>
     public ImmutableArray<ImportSymbol> GetDeclaredImports()
         => imports.ToImmutableArray();
+
+    /// <summary>
+    /// Tries to declare a type alias.
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="target">The underlying type.</param>
+    /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
+    public bool TryDeclareTypeAlias(string name, TypeSymbol target)
+    {
+        if (typeAliases == null)
+        {
+            typeAliases = new Dictionary<string, TypeSymbol>();
+        }
+
+        if (typeAliases.ContainsKey(name))
+        {
+            return false;
+        }
+
+        typeAliases.Add(name, target);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to look up a type alias by name.
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="type">The aliased type, when found.</param>
+    /// <returns>Whether an alias exists.</returns>
+    public bool TryLookupTypeAlias(string name, out TypeSymbol type)
+    {
+        if (typeAliases != null && typeAliases.TryGetValue(name, out type))
+        {
+            return true;
+        }
+
+        type = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Gets the set of declared type aliases.
+    /// </summary>
+    /// <returns>The map of alias names to underlying types.</returns>
+    public ImmutableDictionary<string, TypeSymbol> GetDeclaredTypeAliases()
+        => typeAliases == null ? ImmutableDictionary<string, TypeSymbol>.Empty : typeAliases.ToImmutableDictionary();
 
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
