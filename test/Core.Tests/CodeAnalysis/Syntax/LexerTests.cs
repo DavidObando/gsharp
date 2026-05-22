@@ -98,6 +98,45 @@ public class LexerTests
         Assert.Equal(int.Parse(text), token.Value);
     }
 
+    [Theory]
+    [InlineData("0x1F", 31)]
+    [InlineData("0X_FF", 255)]
+    [InlineData("0xDEAD_BEEF", unchecked((int)0xDEADBEEFu))]
+    [InlineData("0o17", 15)]
+    [InlineData("0O_77", 63)]
+    [InlineData("0b1010", 10)]
+    [InlineData("0B_1010_1010", 0b10101010)]
+    [InlineData("1_000_000", 1_000_000)]
+    [InlineData("1_2_3", 123)]
+    public void Lexes_NumberLiteral_Variants(string text, int expected)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(expected, token.Value);
+        Assert.Equal(text, token.Text);
+    }
+
+    [Theory]
+    [InlineData("_1")]   // bare leading underscore lexes as identifier, not a number — see Lexes_Identifier
+    [InlineData("1_")]   // trailing _ in a decimal literal is invalid per Go
+    [InlineData("0x_")]  // prefix without digits
+    [InlineData("0b")]   // prefix without digits
+    public void Invalid_NumberLiteral_Reports_Diagnostic(string text)
+    {
+        SyntaxTree.ParseTokens(text, out var diagnostics);
+        if (text == "_1")
+        {
+            // Not actually a number — verify it isn't silently consumed as one.
+            Assert.DoesNotContain(diagnostics, d => d.Message.Contains("number", System.StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            Assert.Contains(diagnostics, d => d.Message.Contains("number", System.StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     [Fact]
     public void Lexes_StringLiteral()
     {

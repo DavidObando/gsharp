@@ -531,21 +531,105 @@ public sealed class Lexer
 
     private void ReadNumber()
     {
-        while (char.IsDigit(Current))
+        // Recognized forms (Go-inspired, with C#-style _ separators):
+        //   decimal   42, 1_000_000
+        //   hex       0x1F, 0X_FF, 0xDEAD_BEEF
+        //   octal     0o17, 0O_77  (Go also allows leading-zero octal; we require the prefix
+        //                            to avoid ambiguity with future float literals.)
+        //   binary    0b1010, 0B_1010_1010
+        // A trailing underscore, a leading underscore in the digit body, or a
+        // prefix with no digits is rejected as an invalid number.
+        var numberStart = position;
+        var radix = 10;
+        var digitsStart = position;
+
+        if (Current == '0' && (Lookahead == 'x' || Lookahead == 'X'))
         {
+            radix = 16;
+            position += 2;
+            digitsStart = position;
+        }
+        else if (Current == '0' && (Lookahead == 'o' || Lookahead == 'O'))
+        {
+            radix = 8;
+            position += 2;
+            digitsStart = position;
+        }
+        else if (Current == '0' && (Lookahead == 'b' || Lookahead == 'B'))
+        {
+            radix = 2;
+            position += 2;
+            digitsStart = position;
+        }
+
+        // Disallow leading underscore in a decimal literal (which is impossible
+        // here because the dispatcher only routes digits → ReadNumber, but kept
+        // explicit for clarity). Underscore IS allowed immediately after a
+        // base prefix per Go's spec (e.g., `0x_FF`).
+        bool sawDigit = false;
+        char last = '\0';
+        while (true)
+        {
+            var c = Current;
+            if (c == '_')
+            {
+                last = c;
+                position++;
+                continue;
+            }
+
+            if (!IsDigitForRadix(c, radix))
+            {
+                break;
+            }
+
+            sawDigit = true;
+            last = c;
             position++;
         }
 
-        var length = position - start;
-        var text = this.text.ToString(start, length);
-        if (!int.TryParse(text, out var value))
+        var length = position - numberStart;
+        var fullText = this.text.ToString(numberStart, length);
+
+        if (!sawDigit || last == '_')
         {
-            var location = new TextLocation(this.text, new TextSpan(start, length));
-            Diagnostics.ReportInvalidNumber(location, text, TypeSymbol.Int);
+            var loc = new TextLocation(this.text, new TextSpan(numberStart, length));
+            Diagnostics.ReportInvalidNumber(loc, fullText, TypeSymbol.Int);
+            this.value = 0;
+            kind = SyntaxKind.NumberToken;
+            return;
         }
 
-        this.value = value;
+        var digitText = this.text.ToString(digitsStart, position - digitsStart).Replace("_", string.Empty);
+
+        int parsed;
+        try
+        {
+            parsed = radix == 10
+                ? int.Parse(digitText, System.Globalization.CultureInfo.InvariantCulture)
+                : System.Convert.ToInt32(digitText, radix);
+        }
+        catch (System.Exception)
+        {
+            var loc = new TextLocation(this.text, new TextSpan(numberStart, length));
+            Diagnostics.ReportInvalidNumber(loc, fullText, TypeSymbol.Int);
+            parsed = 0;
+        }
+
+        this.value = parsed;
         kind = SyntaxKind.NumberToken;
+    }
+
+    private static bool IsDigitForRadix(char c, int radix)
+    {
+        return radix switch
+        {
+            2 => c >= '0' && c <= '1',
+            8 => c >= '0' && c <= '7',
+            10 => c >= '0' && c <= '9',
+            16 => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'),
+            _ => false,
+        };
     }
 
     private void ReadIdentifierOrKeyword()
