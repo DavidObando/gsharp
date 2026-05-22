@@ -444,13 +444,25 @@ public sealed class Binder
             return null;
         }
 
-        var type = LookupType(syntax.Identifier.Text);
-        if (type == null)
+        var element = LookupType(syntax.Identifier.Text);
+        if (element == null)
         {
             Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
+            return null;
         }
 
-        return type;
+        if (!syntax.IsArray)
+        {
+            return element;
+        }
+
+        if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
+        {
+            Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
+            return null;
+        }
+
+        return ArrayTypeSymbol.Get(element, length);
     }
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)
@@ -870,6 +882,12 @@ public sealed class Binder
                 return BindCallExpression((CallExpressionSyntax)syntax);
             case SyntaxKind.AccessorExpression:
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
+            case SyntaxKind.ArrayCreationExpression:
+                return BindArrayCreationExpression((ArrayCreationExpressionSyntax)syntax);
+            case SyntaxKind.IndexExpression:
+                return BindIndexExpression((IndexExpressionSyntax)syntax);
+            case SyntaxKind.IndexAssignmentExpression:
+                return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -1300,6 +1318,77 @@ public sealed class Binder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)
+    {
+        var elementType = LookupType(syntax.ElementTypeIdentifier.Text);
+        if (elementType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
+        {
+            Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (syntax.Elements.Count != length)
+        {
+            Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, syntax.Elements.Count);
+        }
+
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+        foreach (var elementSyntax in syntax.Elements)
+        {
+            elements.Add(BindConversion(elementSyntax, elementType));
+        }
+
+        return new BoundArrayCreationExpression(ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
+    }
+
+    private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
+    {
+        var target = BindExpression(syntax.Target);
+        var index = BindConversion(syntax.Index, TypeSymbol.Int);
+
+        if (target.Type is ArrayTypeSymbol arr)
+        {
+            return new BoundIndexExpression(target, index, arr.ElementType);
+        }
+
+        if (target.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportTypeNotIndexable(syntax.Target.Location, target.Type);
+        }
+
+        return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindIndexAssignmentExpression(IndexAssignmentExpressionSyntax syntax)
+    {
+        var name = syntax.TargetIdentifier.Text;
+        if (scope.TryLookupSymbol(name) is not VariableSymbol variable)
+        {
+            Diagnostics.ReportUndefinedVariable(syntax.TargetIdentifier.Location, name);
+            return new BoundErrorExpression();
+        }
+
+        if (variable.Type is not ArrayTypeSymbol arr)
+        {
+            if (variable.Type != TypeSymbol.Error)
+            {
+                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+            }
+
+            return new BoundErrorExpression();
+        }
+
+        var index = BindConversion(syntax.Index, TypeSymbol.Int);
+        var value = BindConversion(syntax.Value, arr.ElementType);
+        return new BoundIndexAssignmentExpression(variable, index, value, arr.ElementType);
     }
 
     private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)

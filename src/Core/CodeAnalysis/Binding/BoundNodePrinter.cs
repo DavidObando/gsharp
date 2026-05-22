@@ -102,6 +102,15 @@ public static class BoundNodePrinter
             case BoundNodeKind.ImportedInstanceCallExpression:
                 WriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ArrayCreationExpression:
+                WriteArrayCreationExpression((BoundArrayCreationExpression)node, writer);
+                break;
+            case BoundNodeKind.IndexExpression:
+                WriteIndexExpression((BoundIndexExpression)node, writer);
+                break;
+            case BoundNodeKind.IndexAssignmentExpression:
+                WriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -436,5 +445,52 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        writer.WriteNumber(node.ArrayType.Length.ToString());
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteIdentifier(node.ArrayType.ElementType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+
+        var isFirst = true;
+        foreach (var element in node.Elements)
+        {
+            if (isFirst)
+            {
+                isFirst = false;
+            }
+            else
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            element.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteIndexExpression(BoundIndexExpression node, IndentedTextWriter writer)
+    {
+        node.Target.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        node.Index.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+    }
+
+    private static void WriteIndexAssignmentExpression(BoundIndexAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Target.Name);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        node.Index.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
     }
 }

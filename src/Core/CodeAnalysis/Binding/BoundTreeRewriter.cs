@@ -251,6 +251,12 @@ public abstract class BoundTreeRewriter
                 return RewriteImportedCallExpression((BoundImportedCallExpression)node);
             case BoundNodeKind.ImportedInstanceCallExpression:
                 return RewriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
+            case BoundNodeKind.ArrayCreationExpression:
+                return RewriteArrayCreationExpression((BoundArrayCreationExpression)node);
+            case BoundNodeKind.IndexExpression:
+                return RewriteIndexExpression((BoundIndexExpression)node);
+            case BoundNodeKind.IndexAssignmentExpression:
+                return RewriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -471,5 +477,60 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundImportedInstanceCallExpression(newReceiver, node.Method, node.Type, args);
+    }
+
+    /// <summary>Rewrites an array creation expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteArrayCreationExpression(BoundArrayCreationExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            var oldEl = node.Elements[i];
+            var newEl = RewriteExpression(oldEl);
+            if (newEl != oldEl && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Elements.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Elements[j]);
+                }
+            }
+
+            builder?.Add(newEl);
+        }
+
+        return builder == null ? node : new BoundArrayCreationExpression(node.ArrayType, builder.MoveToImmutable());
+    }
+
+    /// <summary>Rewrites an index expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteIndexExpression(BoundIndexExpression node)
+    {
+        var target = RewriteExpression(node.Target);
+        var index = RewriteExpression(node.Index);
+        if (target == node.Target && index == node.Index)
+        {
+            return node;
+        }
+
+        return new BoundIndexExpression(target, index, node.Type);
+    }
+
+    /// <summary>Rewrites an index assignment expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+    {
+        var index = RewriteExpression(node.Index);
+        var value = RewriteExpression(node.Value);
+        if (index == node.Index && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundIndexAssignmentExpression(node.Target, index, value, node.Type);
     }
 }

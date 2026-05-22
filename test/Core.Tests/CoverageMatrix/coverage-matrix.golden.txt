@@ -9,6 +9,7 @@ AmpersandEqualsToken
 AmpersandHatEqualsToken
 AmpersandHatToken
 AmpersandToken
+ArrayCreationExpression
 AssignmentExpression
 BadToken
 BangEqualsToken
@@ -62,6 +63,8 @@ IfKeyword
 IfStatement
 ImportDeclaration
 ImportKeyword
+IndexAssignmentExpression
+IndexExpression
 InterfaceKeyword
 InternalKeyword
 InterpolatedStringExpression
@@ -123,6 +126,7 @@ VariableDeclaration
 WhitespaceToken
 
 [BoundNodeKind]
+ArrayCreationExpression
 AssignmentExpression
 BinaryExpression
 BlockStatement
@@ -137,6 +141,8 @@ GotoStatement
 IfStatement
 ImportedCallExpression
 ImportedInstanceCallExpression
+IndexAssignmentExpression
+IndexExpression
 LabelStatement
 LiteralExpression
 ReturnStatement

@@ -45,6 +45,8 @@ internal sealed class ReflectionMetadataEmitter
 
     private Type coreObjectType;
     private Type coreStringType;
+    private Type coreInt32Type;
+    private Type coreBooleanType;
     private TypeReferenceHandle objectTypeRef;
     private MemberReferenceHandle objectCtorRef;
     private MemberReferenceHandle stringConcatRef;
@@ -100,6 +102,8 @@ internal sealed class ReflectionMetadataEmitter
         //    target framework rather than the gsc host's System.Private.CoreLib.
         this.coreObjectType = this.ResolveCoreType("System.Object", typeof(object));
         this.coreStringType = this.ResolveCoreType("System.String", typeof(string));
+        this.coreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
+        this.coreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
 
@@ -467,6 +471,39 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private EntityHandle GetElementTypeToken(TypeSymbol element)
+    {
+        if (element == TypeSymbol.Int)
+        {
+            return this.GetTypeReference(this.coreInt32Type);
+        }
+
+        if (element == TypeSymbol.Bool)
+        {
+            return this.GetTypeReference(this.coreBooleanType);
+        }
+
+        if (element == TypeSymbol.String)
+        {
+            return this.GetTypeReference(this.coreStringType);
+        }
+
+        if (element is ArrayTypeSymbol nestedArr)
+        {
+            var sigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+            EncodeTypeSymbol(encoder, nestedArr);
+            return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+        }
+
+        if (element.ClrType != null)
+        {
+            return this.GetTypeReference(element.ClrType);
+        }
+
+        throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
+    }
+
     private Type ResolveCoreType(string fullName, Type fallback)
     {
         if (this.references.TryResolveType(fullName, out var t))
@@ -625,6 +662,10 @@ internal sealed class ReflectionMetadataEmitter
         else if (type == TypeSymbol.Void)
         {
             throw new InvalidOperationException("Use ReturnTypeEncoder.Void() for void returns.");
+        }
+        else if (type is ArrayTypeSymbol arr)
+        {
+            EncodeTypeSymbol(encoder.SZArray(), arr.ElementType);
         }
         else
         {
@@ -813,6 +854,25 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundConversionExpression conv:
                     this.EmitConversion(conv);
+                    break;
+                case BoundArrayCreationExpression arr:
+                    this.EmitArrayCreation(arr);
+                    break;
+                case BoundIndexExpression idx:
+                    this.EmitExpression(idx.Target);
+                    this.EmitExpression(idx.Index);
+                    this.EmitLoadElement(idx.Type);
+                    break;
+                case BoundIndexAssignmentExpression ixa:
+                    this.EmitLoadVariable(ixa.Target);
+                    this.EmitExpression(ixa.Index);
+                    this.EmitExpression(ixa.Value);
+                    this.EmitStoreElement(ixa.Type);
+
+                    // Result of an assignment expression is the assigned value.
+                    this.EmitLoadVariable(ixa.Target);
+                    this.EmitExpression(ixa.Index);
+                    this.EmitLoadElement(ixa.Type);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -1023,6 +1083,63 @@ internal sealed class ReflectionMetadataEmitter
                 default:
                     throw new NotSupportedException(
                         $"Literal of CLR type '{literal.Value?.GetType()}' is not yet supported.");
+            }
+        }
+
+        private void EmitArrayCreation(BoundArrayCreationExpression arr)
+        {
+            this.il.LoadConstantI4(arr.ArrayType.Length);
+            this.il.OpCode(ILOpCode.Newarr);
+            this.il.Token(this.outer.GetElementTypeToken(arr.ArrayType.ElementType));
+
+            for (var i = 0; i < arr.Elements.Length; i++)
+            {
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.LoadConstantI4(i);
+                this.EmitExpression(arr.Elements[i]);
+                this.EmitStoreElement(arr.ArrayType.ElementType);
+            }
+        }
+
+        private void EmitLoadElement(TypeSymbol elementType)
+        {
+            if (elementType == TypeSymbol.Int)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_i4);
+            }
+            else if (elementType == TypeSymbol.Bool)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_u1);
+            }
+            else if (elementType == TypeSymbol.String)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_ref);
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Ldelem);
+                this.il.Token(this.outer.GetElementTypeToken(elementType));
+            }
+        }
+
+        private void EmitStoreElement(TypeSymbol elementType)
+        {
+            if (elementType == TypeSymbol.Int)
+            {
+                this.il.OpCode(ILOpCode.Stelem_i4);
+            }
+            else if (elementType == TypeSymbol.Bool)
+            {
+                this.il.OpCode(ILOpCode.Stelem_i1);
+            }
+            else if (elementType == TypeSymbol.String)
+            {
+                this.il.OpCode(ILOpCode.Stelem_ref);
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Stelem);
+                this.il.Token(this.outer.GetElementTypeToken(elementType));
             }
         }
     }

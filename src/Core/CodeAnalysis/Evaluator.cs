@@ -129,6 +129,9 @@ public sealed class Evaluator
                 BoundNodeKind.ConversionExpression => EvaluateConversionExpression((BoundConversionExpression)node),
                 BoundNodeKind.ImportedCallExpression => EvaluateImportedCallExpression((BoundImportedCallExpression)node),
                 BoundNodeKind.ImportedInstanceCallExpression => EvaluateImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node),
+                BoundNodeKind.ArrayCreationExpression => EvaluateArrayCreationExpression((BoundArrayCreationExpression)node),
+                BoundNodeKind.IndexExpression => EvaluateIndexExpression((BoundIndexExpression)node),
+                BoundNodeKind.IndexAssignmentExpression => EvaluateIndexAssignmentExpression((BoundIndexAssignmentExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -160,6 +163,36 @@ public sealed class Evaluator
     {
         var value = EvaluateExpression(a.Expression);
         Assign(a.Variable, value);
+        return value;
+    }
+
+    private object EvaluateArrayCreationExpression(BoundArrayCreationExpression node)
+    {
+        var clrType = node.ArrayType.ElementType.ClrType ?? typeof(object);
+        var array = System.Array.CreateInstance(clrType, node.ArrayType.Length);
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            array.SetValue(EvaluateExpression(node.Elements[i]), i);
+        }
+
+        return array;
+    }
+
+    private object EvaluateIndexExpression(BoundIndexExpression node)
+    {
+        var target = (System.Array)EvaluateExpression(node.Target);
+        var index = (int)EvaluateExpression(node.Index);
+        return target.GetValue(index);
+    }
+
+    private object EvaluateIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+    {
+        var target = (System.Array)(node.Target.Kind == Symbols.SymbolKind.GlobalVariable
+            ? globals[node.Target]
+            : locals.Peek()[node.Target]);
+        var index = (int)EvaluateExpression(node.Index);
+        var value = EvaluateExpression(node.Value);
+        target.SetValue(value, index);
         return value;
     }
 

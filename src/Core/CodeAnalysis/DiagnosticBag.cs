@@ -132,6 +132,40 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the array length is not a valid non-negative integer literal.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="text">The length token text.</param>
+    public void ReportInvalidArrayLength(TextLocation location, string text)
+    {
+        var message = $"Array length '{text}' must be a non-negative integer literal.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the number of array initialisers does not match the declared length.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="expected">The declared length.</param>
+    /// <param name="actual">The provided initialiser count.</param>
+    public void ReportArrayLiteralLengthMismatch(TextLocation location, int expected, int actual)
+    {
+        var message = $"Array literal expects {expected} initialisers but got {actual}.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that indexing was attempted on a non-array expression.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="type">The actual type.</param>
+    public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
+    {
+        var message = $"Type '{type.Name}' is not indexable.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the keyworkd can only be used inside of loops.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

@@ -242,13 +242,23 @@ public class Parser
 
     private TypeClauseSyntax ParseTypeClause()
     {
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            var length = MatchToken(SyntaxKind.NumberToken);
+            var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         return new TypeClauseSyntax(syntaxTree, identifier);
     }
 
     private TypeClauseSyntax ParseOptionalTypeClause()
     {
-        if (Current.Kind != SyntaxKind.IdentifierToken)
+        if (Current.Kind != SyntaxKind.IdentifierToken &&
+            Current.Kind != SyntaxKind.OpenSquareBracketToken)
         {
             return null;
         }
@@ -817,6 +827,27 @@ public class Parser
     private ExpressionSyntax ParseAssignmentExpression()
     {
         if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
+            TryFindMatchingCloseBracketFollowedByEquals(out var equalsOffset))
+        {
+            var identifierToken = NextToken();
+            var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            var index = ParseExpression();
+            var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseAssignmentExpression();
+            _ = equalsOffset;
+            return new IndexAssignmentExpressionSyntax(
+                syntaxTree,
+                identifierToken,
+                openBracket,
+                index,
+                closeBracket,
+                equalsToken,
+                value);
+        }
+
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.EqualsToken)
         {
             var identifierToken = NextToken();
@@ -893,9 +924,87 @@ public class Parser
             case SyntaxKind.InterpolatedStringToken:
                 return ParseInterpolatedStringLiteral();
 
+            case SyntaxKind.OpenSquareBracketToken:
+                return ParseArrayCreationExpression();
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
+        }
+    }
+
+    private ExpressionSyntax ParseArrayCreationExpression()
+    {
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var length = MatchToken(SyntaxKind.NumberToken);
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var elementType = MatchToken(SyntaxKind.IdentifierToken);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var elements = ParseArrayInitializerElements();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new ArrayCreationExpressionSyntax(
+            syntaxTree,
+            openBracket,
+            length,
+            closeBracket,
+            elementType,
+            openBrace,
+            elements,
+            closeBrace);
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseExpression());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private bool TryFindMatchingCloseBracketFollowedByEquals(out int offset)
+    {
+        offset = 0;
+        var depth = 0;
+        for (var i = 1; ; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    if (Peek(i + 1).Kind == SyntaxKind.EqualsToken)
+                    {
+                        offset = i + 1;
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
         }
     }
 
@@ -911,11 +1020,25 @@ public class Parser
             current = ParseNameExpression();
         }
 
-        if (Current.Kind == SyntaxKind.DotToken)
+        while (true)
         {
-            var dotToken = MatchToken(SyntaxKind.DotToken);
-            var rightSide = ParseNameOrCallExpression();
-            current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            if (Current.Kind == SyntaxKind.DotToken)
+            {
+                var dotToken = MatchToken(SyntaxKind.DotToken);
+                var rightSide = ParseNameOrCallExpression();
+                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            }
+            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var index = ParseExpression();
+                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
+            }
+            else
+            {
+                break;
+            }
         }
 
         return current;
