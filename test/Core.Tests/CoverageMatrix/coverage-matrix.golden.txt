@@ -23,6 +23,7 @@ CaseKeyword
 CatchClause
 CatchKeyword
 ChanKeyword
+ClassKeyword
 CloseBraceToken
 CloseParenthesisToken
 CloseSquareBracketToken

@@ -80,6 +80,7 @@ public enum SyntaxKind
     BreakKeyword,
     CaseKeyword,
     ChanKeyword,
+    ClassKeyword,
     ConstKeyword,
     ContinueKeyword,
     DefaultKeyword,

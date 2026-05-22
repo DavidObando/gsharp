@@ -84,11 +84,14 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the optional <c>data</c> contextual keyword. Non-null when this is a <c>data struct</c> (Phase 3.B.2).</summary>
     public SyntaxToken DataKeyword { get; }
 
-    /// <summary>Gets the <c>struct</c> keyword.</summary>
+    /// <summary>Gets the <c>struct</c> or <c>class</c> keyword that marks this aggregate declaration. Inspect <see cref="IsClass"/> to distinguish.</summary>
     public SyntaxToken StructKeyword { get; }
 
     /// <summary>Gets a value indicating whether this struct was declared with the <c>data</c> contextual keyword.</summary>
     public bool IsData => DataKeyword != null;
+
+    /// <summary>Gets a value indicating whether this aggregate was declared with the <c>class</c> keyword (Phase 3.B.3) rather than <c>struct</c>.</summary>
+    public bool IsClass => StructKeyword?.Kind == SyntaxKind.ClassKeyword;
 
     /// <summary>Gets the opening brace.</summary>
     public SyntaxToken OpenBraceToken { get; }

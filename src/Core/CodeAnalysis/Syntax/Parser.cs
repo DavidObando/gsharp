@@ -199,7 +199,7 @@ public class Parser
             dataKeyword = NextToken();
         }
 
-        if (Current.Kind == SyntaxKind.StructKeyword)
+        if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword)
         {
             return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword);
         }
@@ -224,7 +224,18 @@ public class Parser
         SyntaxToken identifier,
         SyntaxToken dataKeyword)
     {
-        var structKeyword = MatchToken(SyntaxKind.StructKeyword);
+        var structOrClassKeyword = Current.Kind == SyntaxKind.ClassKeyword
+            ? MatchToken(SyntaxKind.ClassKeyword)
+            : MatchToken(SyntaxKind.StructKeyword);
+
+        if (dataKeyword != null && structOrClassKeyword.Kind == SyntaxKind.ClassKeyword)
+        {
+            // ADR-0029 limits `data` to `struct`; `data class` is not part of
+            // the Phase 3 design. Diagnose but continue so the rest of the
+            // body parses cleanly.
+            Diagnostics.ReportUnexpectedToken(structOrClassKeyword.Location, SyntaxKind.ClassKeyword, SyntaxKind.StructKeyword);
+        }
+
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
@@ -239,7 +250,7 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, openBrace, fields.ToImmutable(), closeBrace);
+        return new StructDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structOrClassKeyword, openBrace, fields.ToImmutable(), closeBrace);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

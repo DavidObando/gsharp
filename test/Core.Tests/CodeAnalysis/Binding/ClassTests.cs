@@ -1,0 +1,133 @@
+// <copyright file="ClassTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Collections.Generic;
+using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
+using Xunit;
+
+namespace GSharp.Core.Tests.CodeAnalysis.Binding;
+
+/// <summary>
+/// Phase 3.B.3 (sub-step 1) — <c>class</c> declarations as reference-typed
+/// aggregates. Same composite-literal / field-access surface as <c>struct</c>,
+/// but assignment and field writes go through reference semantics: aliases
+/// observe each other's writes. Methods, inheritance, and <c>open</c> /
+/// <c>override</c> land in later sub-steps. Interpreter-only for now.
+/// </summary>
+public class ClassTests
+{
+    [Fact]
+    public void ClassLiteral_ReadFields()
+    {
+        var source = @"
+type Box class {
+    Width int
+    Height int
+}
+
+var b = Box{Width: 3, Height: 4}
+b.Width + b.Height
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void ClassAssignment_HasReferenceSemantics()
+    {
+        var source = @"
+type Box class {
+    Width int
+}
+
+var b = Box{Width: 1}
+var c = b
+c.Width = 99
+b.Width
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void ClassFieldAssignment_MutatesInPlace()
+    {
+        var source = @"
+type Box class {
+    Width int
+}
+
+var b = Box{Width: 5}
+b.Width = 42
+b.Width
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void StructAssignment_StillHasValueSemantics()
+    {
+        // Regression: 3.B.3's IsClass dispatch must not regress struct value-copy.
+        var source = @"
+type Point struct {
+    X int
+}
+
+var p = Point{X: 1}
+var q = p
+q.X = 99
+p.X
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void ClassLiteral_EmptyInitializerZeroes()
+    {
+        var source = @"
+type Box class {
+    Width int
+    Height int
+}
+
+var b = Box{}
+b.Width + b.Height
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void DataClass_Rejected()
+    {
+        // `data class` is intentionally not part of Phase 3 (ADR-0029 limits
+        // `data` to `struct`); diagnose at parse time.
+        var source = @"
+type Foo data class {
+    X int
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    private static EvaluationResult Evaluate(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+    }
+}

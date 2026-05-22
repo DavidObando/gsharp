@@ -334,11 +334,29 @@ public sealed class Evaluator
             : locals.Peek()[node.Receiver];
 
         var sv = current as StructValue ?? new StructValue(node.StructType);
-        var copy = sv.Copy();
-        var value = EvaluateExpression(node.Value);
-        copy.Fields[node.Field.Name] = value;
-        Assign(node.Receiver, copy);
-        return value;
+
+        // Class types are reference types: mutate the existing instance in
+        // place so other references observe the write. Structs preserve
+        // Go-style value semantics by writing to a copy.
+        if (node.StructType.IsClass)
+        {
+            var value = EvaluateExpression(node.Value);
+            sv.Fields[node.Field.Name] = value;
+            if (!ReferenceEquals(sv, current))
+            {
+                Assign(node.Receiver, sv);
+            }
+
+            return value;
+        }
+        else
+        {
+            var copy = sv.Copy();
+            var value = EvaluateExpression(node.Value);
+            copy.Fields[node.Field.Name] = value;
+            Assign(node.Receiver, copy);
+            return value;
+        }
     }
 
     private static object DefaultValue(Symbols.TypeSymbol type)
@@ -566,7 +584,9 @@ public sealed class Evaluator
 
     private void Assign(VariableSymbol variable, object value)
     {
-        if (value is StructValue sv)
+        // Value-typed structs are copied on assignment (Go semantics).
+        // Class types (Phase 3.B.3) are reference types — share the instance.
+        if (value is StructValue sv && !sv.StructType.IsClass)
         {
             value = sv.Copy();
         }

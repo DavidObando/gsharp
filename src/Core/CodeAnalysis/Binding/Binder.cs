@@ -363,7 +363,7 @@ public sealed class Binder
             Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
         }
 
-        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData);
+        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData, syntax.IsClass);
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {

@@ -128,6 +128,8 @@ public static class SyntaxFacts
                 return SyntaxKind.CatchKeyword;
             case "chan":
                 return SyntaxKind.ChanKeyword;
+            case "class":
+                return SyntaxKind.ClassKeyword;
             case "const":
                 return SyntaxKind.ConstKeyword;
             case "continue":
@@ -342,6 +344,8 @@ public static class SyntaxFacts
                 return "catch";
             case SyntaxKind.ChanKeyword:
                 return "chan";
+            case SyntaxKind.ClassKeyword:
+                return "class";
             case SyntaxKind.ConstKeyword:
                 return "const";
             case SyntaxKind.ContinueKeyword:

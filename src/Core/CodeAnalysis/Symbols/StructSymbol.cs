@@ -48,6 +48,28 @@ public sealed class StructSymbol : TypeSymbol
         StructDeclarationSyntax declaration,
         string packageName,
         bool isData)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass)
         : base(name)
     {
         Fields = fields;
@@ -55,6 +77,7 @@ public sealed class StructSymbol : TypeSymbol
         Declaration = declaration;
         PackageName = packageName;
         IsData = isData;
+        IsClass = isClass;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -71,6 +94,9 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
     public bool IsData { get; }
+
+    /// <summary>Gets a value indicating whether this is a <c>class</c> declaration (Phase 3.B.3). Class types are reference types on the CLR; struct types (this flag false) are value types.</summary>
+    public bool IsClass { get; }
 
     /// <summary>Tries to find a field by name.</summary>
     /// <param name="name">The field name.</param>
