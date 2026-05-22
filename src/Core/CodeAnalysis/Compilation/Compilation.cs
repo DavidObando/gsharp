@@ -222,7 +222,6 @@ public class Compilation
     /// the filesystem.
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
-    /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream) => Emit(peStream, refStream: null, assemblyName: null);
 
