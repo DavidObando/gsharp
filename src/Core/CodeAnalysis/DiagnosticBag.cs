@@ -369,6 +369,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>
+    /// Reports that a multi-target assignment or short variable declaration has
+    /// a different number of targets and values.
+    /// </summary>
+    /// <param name="location">The text location of the statement.</param>
+    /// <param name="targetCount">The number of left-hand targets.</param>
+    /// <param name="valueCount">The number of right-hand values.</param>
+    public void ReportMultiAssignmentMismatch(TextLocation location, int targetCount, int valueCount)
+    {
+        var message = $"Multi-assignment has {targetCount} target(s) but {valueCount} value(s).";
+        Report(location, message);
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);

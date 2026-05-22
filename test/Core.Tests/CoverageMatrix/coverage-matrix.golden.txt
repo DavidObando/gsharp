@@ -74,6 +74,7 @@ MapKeyword
 MinusEqualsToken
 MinusMinusToken
 MinusToken
+MultiAssignmentStatement
 NameExpression
 NumberToken
 OpenBraceToken

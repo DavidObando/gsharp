@@ -39,8 +39,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | --- | --- | --- | --- | --- | --- |
 | Block `{ … }` | ✅ | ✅ | ✅ | ✅ | |
 | `var x [T] = e` / `let x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. `let` (since Phase 1.6) is an immutable runtime binding — same binder behavior as `const`. |
-| `x := e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `a, b := …`. |
-| `x = e` | ✅ | ✅ | ✅ | ✅ | Single identifier on LHS. |
+| `x := e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b := 1, 2` declares N variables. Call-form `a, b := f()` still waits on Phase 4 multi-return. |
+| `x = e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b = b, a` evaluates every RHS into a fresh temporary before any assignment lands, matching Go's swap semantics. |
 | `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |
 | `for { }` (infinite) | ✅ | ✅ | ✅ | ✅ | |
 | `for i := lo ... hi { }` | ✅ | ✅ | ✅ | ✅ | GSharp-specific; not Go's `for i := lo; i < hi; i++`. |

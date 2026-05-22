@@ -136,6 +136,7 @@ public enum SyntaxKind
     BreakStatement,
     ContinueStatement,
     ReturnStatement,
+    MultiAssignmentStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -301,6 +301,11 @@ public class Parser
                     return ParseIncrementDecrementStatement();
                 }
 
+                if (LooksLikeMultiAssignment())
+                {
+                    return ParseMultiAssignmentStatement();
+                }
+
                 return ParseExpressionStatement();
         }
     }
@@ -333,6 +338,92 @@ public class Parser
         var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
         var assignment = new AssignmentExpressionSyntax(syntaxTree, identifier, equalsToken, binary);
         return new ExpressionStatementSyntax(syntaxTree, assignment);
+    }
+
+    private bool LooksLikeMultiAssignment()
+    {
+        // Pattern: ident, ident (, ident)* (= | :=) ...
+        if (Current.Kind != SyntaxKind.IdentifierToken ||
+            Peek(1).Kind != SyntaxKind.CommaToken)
+        {
+            return false;
+        }
+
+        int i = 2;
+        while (i < 256)
+        {
+            if (Peek(i).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            var next = Peek(i + 1).Kind;
+            if (next == SyntaxKind.CommaToken)
+            {
+                i += 2;
+                continue;
+            }
+
+            return next == SyntaxKind.EqualsToken || next == SyntaxKind.ColonEqualsToken;
+        }
+
+        return false;
+    }
+
+    private StatementSyntax ParseMultiAssignmentStatement()
+    {
+        var targets = ParseMultiTargetList();
+        SyntaxToken op;
+        if (Current.Kind == SyntaxKind.ColonEqualsToken)
+        {
+            op = MatchToken(SyntaxKind.ColonEqualsToken);
+        }
+        else
+        {
+            op = MatchToken(SyntaxKind.EqualsToken);
+        }
+
+        var values = ParseMultiValueList();
+        return new MultiAssignmentStatementSyntax(syntaxTree, targets, op, values);
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseMultiTargetList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (true)
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            nodesAndSeparators.Add(new NameExpressionSyntax(syntaxTree, identifier));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                continue;
+            }
+
+            break;
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseMultiValueList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (true)
+        {
+            nodesAndSeparators.Add(ParseExpression());
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                continue;
+            }
+
+            break;
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private StatementSyntax ParseVariableDeclaration()

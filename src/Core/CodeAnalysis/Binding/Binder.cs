@@ -377,6 +377,8 @@ public sealed class Binder
                 return BindReturnStatement((ReturnStatementSyntax)syntax);
             case SyntaxKind.ExpressionStatement:
                 return BindExpressionStatement((ExpressionStatementSyntax)syntax);
+            case SyntaxKind.MultiAssignmentStatement:
+                return BindMultiAssignmentStatement((MultiAssignmentStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -454,6 +456,72 @@ public sealed class Binder
 
         var inner = new BoundIfStatement(initCondition, initThen, initElse);
         return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
+    {
+        var targets = syntax.Targets.ToImmutableArray();
+        var values = syntax.Values.ToImmutableArray();
+
+        if (targets.Length != values.Length)
+        {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var isShortDecl = syntax.OperatorToken.Kind == SyntaxKind.ColonEqualsToken;
+
+        if (isShortDecl)
+        {
+            for (var i = 0; i < targets.Length; i++)
+            {
+                var nameExpr = (NameExpressionSyntax)targets[i];
+                var initializer = BindExpression(values[i]);
+                var variable = BindVariableDeclaration(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
+                statements.Add(new BoundVariableDeclaration(variable, initializer));
+            }
+
+            return new BoundBlockStatement(statements.ToImmutable());
+        }
+
+        // Plain assignment: evaluate every RHS into a fresh temp, then assign each temp to its target.
+        // This is the semantics Go specifies for `a, b = b, a` and friends.
+        var temps = ImmutableArray.CreateBuilder<VariableSymbol>(targets.Length);
+        var basePos = syntax.OperatorToken.Position;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var initializer = BindExpression(values[i]);
+            var tempName = $"<>m_{basePos}_{i}";
+            var temp = function == null
+                ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, initializer.Type)
+                : new LocalVariableSymbol(tempName, isReadOnly: true, initializer.Type);
+            scope.TryDeclareVariable(temp);
+            temps.Add(temp);
+            statements.Add(new BoundVariableDeclaration(temp, initializer));
+        }
+
+        for (var i = 0; i < targets.Length; i++)
+        {
+            var nameExpr = (NameExpressionSyntax)targets[i];
+            var name = nameExpr.IdentifierToken.Text;
+            var variable = BindVariableReference(name, nameExpr.IdentifierToken.Location);
+            if (variable == null)
+            {
+                continue;
+            }
+
+            if (variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            }
+
+            var tempRef = new BoundVariableExpression(temps[i]);
+            var converted = BindConversion(values[i].Location, tempRef, variable.Type);
+            statements.Add(new BoundExpressionStatement(new BoundAssignmentExpression(variable, converted)));
+        }
+
+        return new BoundBlockStatement(statements.ToImmutable());
     }
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
