@@ -1,0 +1,5 @@
+<Project>
+  <!-- Samples are deliberately isolated from the repo-wide build conventions
+       (NerdbankGitVersioning, StyleCop, etc.) so they behave like a real end-user
+       consuming Gsharp.NET.Sdk. Do NOT import build/gsharp.build.props here. -->
+</Project>

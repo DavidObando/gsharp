@@ -14,6 +14,15 @@
     <NoPackageAnalysis>true</NoPackageAnalysis>
     <!-- Don't bundle StyleCop into this MSBuild-only project. -->
     <IsPackable>true</IsPackable>
+
+    <!-- This is an MSBuild tool, not a runtime library: the BuildTask DLL belongs
+         under tools/task/ (mirroring peachpie's layout), not under lib/. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+
+    <!-- TFM used to publish the gsc compiler payload into the NuGet. The host
+         dotnet must have a runtime for this TFM installed for the SDK to work. -->
+    <GsharpCompilerPackageTargetFramework>net10.0</GsharpCompilerPackageTargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,13 +34,49 @@
     <!-- Package layout mirrors peachpie's SDK NuGet:
            sdk/Sdk.props, sdk/Sdk.targets
            build/Gsharp.NET.Sdk.props, build/Gsharp.NET.Current.Sdk.targets, build/Gsharp.NET.Core.Sdk.targets
-           tools/task/Gsharp.NET.Sdk.dll  (this assembly)
-           tools/compiler/gsc.dll        (built by src/Compiler) -->
+           tools/task/Gsharp.NET.Sdk.dll  (this assembly, packed by PackGsharpBuildTask)
+           tools/compiler/gsc.dll        (built by src/Compiler, packed by PackGsharpCompiler) -->
     <None Include="Sdk\Sdk.props" Pack="true" PackagePath="Sdk\Sdk.props" />
     <None Include="Sdk\Sdk.targets" Pack="true" PackagePath="Sdk\Sdk.targets" />
     <None Include="build\Gsharp.NET.Sdk.props" Pack="true" PackagePath="build\Gsharp.NET.Sdk.props" />
     <None Include="build\Gsharp.NET.Current.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Current.Sdk.targets" />
     <None Include="build\Gsharp.NET.Core.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Core.Sdk.targets" />
   </ItemGroup>
+
+  <!-- Pack the BuildTask DLL (this assembly's build output) under tools/task/. -->
+  <Target Name="PackGsharpBuildTask" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <ItemGroup>
+      <_GsharpTaskFiles Include="$(OutputPath)Gsharp.NET.Sdk.dll" />
+    </ItemGroup>
+    <Error Condition="!Exists('@(_GsharpTaskFiles)')"
+           Text="Expected Gsharp.NET.Sdk build output not found at @(_GsharpTaskFiles); build this project first." />
+    <ItemGroup>
+      <None Include="@(_GsharpTaskFiles)" Pack="true" PackagePath="tools\task\" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Publish the gsc compiler (and its full closure) into a staging dir, then
+       pack everything under tools/compiler/. We must use Publish (not Build) so
+       the framework-dependent app's full file set lands in one place. -->
+  <Target Name="PackGsharpCompiler" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_GsharpCompilerPublishDir>$(IntermediateOutputPath)gsc-publish\</_GsharpCompilerPublishDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="Exists('$(_GsharpCompilerPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup>
+      <_GsharpCompilerPayload Include="$(_GsharpCompilerPublishDir)**\*" />
+    </ItemGroup>
+    <Error Condition="'@(_GsharpCompilerPayload)' == ''"
+           Text="gsc compiler publish output is empty under '$(_GsharpCompilerPublishDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpCompilerPayload)"
+            Pack="true"
+            PackagePath="tools\compiler\"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
 
 </Project>
