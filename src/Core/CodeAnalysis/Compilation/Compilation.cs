@@ -214,8 +214,9 @@ public class Compilation
     /// the filesystem.
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
+    /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream)
+    public EmitResult Emit(Stream peStream, string assemblyName = null)
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
@@ -232,7 +233,7 @@ public class Compilation
 
         try
         {
-            EmitAssembly(program, peStream, References);
+            EmitAssembly(program, peStream, References, assemblyName);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -244,8 +245,8 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName);
     }
 }

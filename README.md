@@ -33,7 +33,9 @@ The SDK is validated against `net8.0` and `net10.0`; adding additional target fr
 
 | Topic | Doc |
 | --- | --- |
-| Language design (top-level statements, entry-point synthesis, samples) | [`design/Gsharp-design-v0.1.md`](design/Gsharp-design-v0.1.md) |
+| Language design v0.2 (locked design decisions D1–D11, target syntax surface) | [`design/Gsharp-design-v0.2.md`](design/Gsharp-design-v0.2.md) |
+| Language design v0.1 (top-level statements, entry-point synthesis, samples) | [`design/Gsharp-design-v0.1.md`](design/Gsharp-design-v0.1.md) |
+| Architecture Decision Records (D1–D11 and every later phase) | [`docs/adr/`](docs/adr/) |
 | MSBuild SDK + `dotnet new` template usage | [`docs/sdk-usage.md`](docs/sdk-usage.md) |
 | Compiler architecture (syntax → bound → emit), cross-TFM, interpreter vs emit | [`docs/emit-pipeline.md`](docs/emit-pipeline.md) |
 

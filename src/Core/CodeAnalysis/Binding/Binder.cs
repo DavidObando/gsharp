@@ -72,6 +72,30 @@ public sealed class Binder
         var parentScope = CreateParentScope(previous, references);
         var binder = new Binder(parentScope, function: null);
 
+        // Resolve each syntax tree's package declaration to a PackageSymbol.
+        // Trees without a `package X` declaration fall into the implicit
+        // "Default" package; trees that share a textual package name share a
+        // PackageSymbol instance. The set of distinct packages, in first-seen
+        // order, becomes BoundGlobalScope.Packages.
+        var packagesByName = new Dictionary<string, PackageSymbol>(StringComparer.Ordinal);
+        var packagesInOrder = ImmutableArray.CreateBuilder<PackageSymbol>();
+        var packageByTree = new Dictionary<SyntaxTree, PackageSymbol>();
+        foreach (var tree in syntaxTrees)
+        {
+            var packageSyntax = tree.Root.Members.OfType<PackageSyntax>().FirstOrDefault();
+            var packageName = packageSyntax != null
+                ? string.Concat(packageSyntax.IdentifiersWithDots.Select(t => t.Text))
+                : "Default";
+            if (!packagesByName.TryGetValue(packageName, out var packageSymbol))
+            {
+                packageSymbol = new PackageSymbol(packageName, packageSyntax);
+                packagesByName[packageName] = packageSymbol;
+                packagesInOrder.Add(packageSymbol);
+            }
+
+            packageByTree[tree] = packageSymbol;
+        }
+
         var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                  .OfType<ImportSyntax>();
         foreach (var import in importDeclarations)
@@ -83,7 +107,8 @@ public sealed class Binder
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
         {
-            binder.BindFunctionDeclaration(function);
+            var owningPackage = packageByTree[function.SyntaxTree];
+            binder.BindFunctionDeclaration(function, owningPackage);
         }
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -100,7 +125,13 @@ public sealed class Binder
         var functions = binder.scope.GetDeclaredFunctions();
         var variables = binder.scope.GetDeclaredVariables();
 
-        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees);
+        // Entry-point package: the package owning the top-level statements
+        // (if any) or the package owning explicit Main (if any) or, lacking
+        // both, the first declared package. This becomes Package — the
+        // legacy single-package accessor — and the namespace that owns the
+        // synthesized <Main>$ in emit.
+        var entryPointPackage = ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
+        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage);
 
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
@@ -109,8 +140,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        var packageSymbol = new PackageSymbol(name: "Default", declaration: null);
-        return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports, functions, variables, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -158,7 +188,7 @@ public sealed class Binder
             functionBodies[globalScope.EntryPoint] = statement;
         }
 
-        return new BoundProgram(globalScope.Package.Name, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)
@@ -223,7 +253,7 @@ public sealed class Binder
         scope.TryImport(importSymbol);
     }
 
-    private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax)
+    private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
     {
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
 
@@ -246,7 +276,7 @@ public sealed class Binder
 
         var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
 
-        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax);
+        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package);
         if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
@@ -884,19 +914,32 @@ public sealed class Binder
         Binder binder,
         ImmutableArray<FunctionSymbol> functions,
         GlobalStatementSyntax[] globalStatements,
-        ImmutableArray<SyntaxTree> syntaxTrees)
+        ImmutableArray<SyntaxTree> syntaxTrees,
+        PackageSymbol entryPointPackage)
     {
         var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
         var hasTopLevel = globalStatements.Length > 0;
 
         if (hasTopLevel)
         {
-            var treesWithTopLevel = syntaxTrees
+            // Top-level statements must live in exactly one *package*. Multiple
+            // files within the same package may collectively contribute top-level
+            // statements (matching the C# "one Program type per assembly" rule
+            // relaxed to packages).
+            var packagesWithTopLevel = syntaxTrees
                 .Where(st => st.Root.Members.OfType<GlobalStatementSyntax>().Any())
+                .Select(st =>
+                {
+                    var pkgSyntax = st.Root.Members.OfType<PackageSyntax>().FirstOrDefault();
+                    return pkgSyntax != null
+                        ? string.Concat(pkgSyntax.IdentifiersWithDots.Select(t => t.Text))
+                        : "Default";
+                })
+                .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            if (treesWithTopLevel.Length > 1)
+            if (packagesWithTopLevel.Length > 1)
             {
-                foreach (var tree in treesWithTopLevel)
+                foreach (var tree in syntaxTrees.Where(st => st.Root.Members.OfType<GlobalStatementSyntax>().Any()))
                 {
                     var first = tree.Root.Members.OfType<GlobalStatementSyntax>().First();
                     binder.Diagnostics.ReportMultipleTopLevelFiles(first.Statement.Location);
@@ -909,13 +952,13 @@ public sealed class Binder
                     explicitMain.Declaration.Identifier.Location);
             }
 
-            return SynthesizeTopLevelEntryPoint();
+            return SynthesizeTopLevelEntryPoint(entryPointPackage);
         }
 
         return explicitMain;
     }
 
-    private static FunctionSymbol SynthesizeTopLevelEntryPoint()
+    private static FunctionSymbol SynthesizeTopLevelEntryPoint(PackageSymbol package)
     {
         // <Main>$ — Roslyn-style mangled name; not a legal user identifier so it
         // cannot collide with a user-declared function.
@@ -923,6 +966,29 @@ public sealed class Binder
             name: "<Main>$",
             parameters: ImmutableArray<ParameterSymbol>.Empty,
             type: TypeSymbol.Void,
-            declaration: null);
+            declaration: null,
+            package: package);
+    }
+
+    private static PackageSymbol ResolveEntryPointPackage(
+        Dictionary<SyntaxTree, PackageSymbol> packageByTree,
+        GlobalStatementSyntax[] globalStatements,
+        ImmutableArray<FunctionSymbol> functions,
+        ImmutableArray<PackageSymbol>.Builder packagesInOrder)
+    {
+        if (globalStatements.Length > 0)
+        {
+            return packageByTree[globalStatements[0].SyntaxTree];
+        }
+
+        var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
+        if (explicitMain?.Package != null)
+        {
+            return explicitMain.Package;
+        }
+
+        return packagesInOrder.Count > 0
+            ? packagesInOrder[0]
+            : new PackageSymbol("Default", declaration: null);
     }
 }

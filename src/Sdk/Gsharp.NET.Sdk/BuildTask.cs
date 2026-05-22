@@ -85,6 +85,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         {
             $"/out:{Path.Combine(this.OutputPath, this.OutputName)}.dll",
         };
+        if (!string.IsNullOrEmpty(this.OutputName))
+        {
+            args.Add($"/assemblyname:{this.OutputName}");
+        }
+
         if (!string.IsNullOrEmpty(this.OutputType))
         {
             var t = this.OutputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) ? "exe" : "library";
