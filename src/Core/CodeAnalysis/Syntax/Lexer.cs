@@ -364,7 +364,7 @@ public sealed class Lexer
                 ReadWhiteSpace();
                 break;
             default:
-                if (char.IsLetter(Current))
+                if (char.IsLetter(Current) || Current == '_')
                 {
                     ReadIdentifierOrKeyword();
                 }
@@ -550,7 +550,9 @@ public sealed class Lexer
 
     private void ReadIdentifierOrKeyword()
     {
-        while (char.IsLetter(Current))
+        // Identifiers start with a letter or underscore (the caller has verified
+        // the first character) and continue with letters, digits, or underscores.
+        while (char.IsLetterOrDigit(Current) || Current == '_')
         {
             position++;
         }
