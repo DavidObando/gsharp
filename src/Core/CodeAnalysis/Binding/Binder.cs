@@ -76,7 +76,8 @@ public sealed class Binder
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
-                                          .OfType<GlobalStatementSyntax>();
+                                          .OfType<GlobalStatementSyntax>()
+                                          .ToArray();
         foreach (var globalStatement in globalStatements)
         {
             var statement = binder.BindStatement(globalStatement.Statement);
@@ -86,6 +87,9 @@ public sealed class Binder
         var imports = binder.scope.GetDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
         var variables = binder.scope.GetDeclaredVariables();
+
+        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees);
+
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
         if (previous != null)
@@ -94,7 +98,7 @@ public sealed class Binder
         }
 
         var packageSymbol = new PackageSymbol(name: "Default", declaration: null);
-        return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports, functions, variables, statements.ToImmutable());
+        return new BoundGlobalScope(previous, packageSymbol, diagnostics, imports, functions, variables, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -134,7 +138,15 @@ public sealed class Binder
 
         var statement = Lowerer.Lower(new BoundBlockStatement(globalScope.Statements));
 
-        return new BoundProgram(globalScope.Package.Name, diagnostics.ToImmutable(), functionBodies.ToImmutable(), statement);
+        // If the entry point is the synthesized top-level function, its body is
+        // the lowered top-level statements block. Register it under EntryPoint so
+        // the emitter sees a uniform "Functions[EntryPoint]" view.
+        if (globalScope.EntryPoint != null && globalScope.EntryPoint.Declaration == null)
+        {
+            functionBodies[globalScope.EntryPoint] = statement;
+        }
+
+        return new BoundProgram(globalScope.Package.Name, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous)
@@ -849,5 +861,56 @@ public sealed class Binder
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// Picks or synthesizes the entry-point function symbol for the compilation
+    /// per the rules in design/Gsharp-design-v0.1.md (C#-9-style top-level
+    /// statements). Reports diagnostics for ambiguity.
+    /// </summary>
+    private static FunctionSymbol ResolveEntryPoint(
+        Binder binder,
+        ImmutableArray<FunctionSymbol> functions,
+        GlobalStatementSyntax[] globalStatements,
+        ImmutableArray<SyntaxTree> syntaxTrees)
+    {
+        var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
+        var hasTopLevel = globalStatements.Length > 0;
+
+        if (hasTopLevel)
+        {
+            var treesWithTopLevel = syntaxTrees
+                .Where(st => st.Root.Members.OfType<GlobalStatementSyntax>().Any())
+                .ToArray();
+            if (treesWithTopLevel.Length > 1)
+            {
+                foreach (var tree in treesWithTopLevel)
+                {
+                    var first = tree.Root.Members.OfType<GlobalStatementSyntax>().First();
+                    binder.Diagnostics.ReportMultipleTopLevelFiles(first.Statement.Location);
+                }
+            }
+
+            if (explicitMain != null)
+            {
+                binder.Diagnostics.ReportTopLevelStatementsConflictWithMain(
+                    explicitMain.Declaration.Identifier.Location);
+            }
+
+            return SynthesizeTopLevelEntryPoint();
+        }
+
+        return explicitMain;
+    }
+
+    private static FunctionSymbol SynthesizeTopLevelEntryPoint()
+    {
+        // <Main>$ — Roslyn-style mangled name; not a legal user identifier so it
+        // cannot collide with a user-declared function.
+        return new FunctionSymbol(
+            name: "<Main>$",
+            parameters: ImmutableArray<ParameterSymbol>.Empty,
+            type: TypeSymbol.Void,
+            declaration: null);
     }
 }

@@ -347,6 +347,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>
+    /// Reports that top-level statements appear in more than one source file in
+    /// the same compilation, which is not allowed.
+    /// </summary>
+    /// <param name="location">A location in one of the offending files.</param>
+    public void ReportMultipleTopLevelFiles(TextLocation location)
+    {
+        var message = "Only one source file in a compilation may contain top-level statements.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the compilation contains both top-level statements and an
+    /// explicit Main function, which is ambiguous.
+    /// </summary>
+    /// <param name="location">The location of the explicit Main function declaration.</param>
+    public void ReportTopLevelStatementsConflictWithMain(TextLocation location)
+    {
+        var message = "Top-level statements cannot be used together with an explicit Main function.";
+        Report(location, message);
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);
