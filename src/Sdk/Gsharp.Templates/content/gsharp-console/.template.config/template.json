@@ -1,0 +1,26 @@
+{
+    "$schema": "http://json.schemastore.org/template",
+    "author": "GSharp Authors",
+    "classifications": [ "Console", "GSharp" ],
+    "identity": "GSharp.Templates.Console",
+    "name": "GSharp Console Application",
+    "shortName": "gsharp-console",
+    "description": "A GSharp console application that builds with Gsharp.NET.Sdk.",
+    "tags": {
+        "language": "GSharp",
+        "type": "project"
+    },
+    "sourceName": "GsharpConsoleApp",
+    "preferNameDirectory": true,
+    "symbols": {
+        "Framework": {
+            "type": "parameter",
+            "datatype": "choice",
+            "choices": [
+                { "choice": "net10.0", "description": "Target .NET 10.0" }
+            ],
+            "defaultValue": "net10.0",
+            "replaces": "net10.0"
+        }
+    }
+}
