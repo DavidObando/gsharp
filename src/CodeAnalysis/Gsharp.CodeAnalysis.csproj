@@ -1,6 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- Default to true now that Phase 1 has begun. To build without the fork
+         on disk (e.g., a fresh clone before running the src/Roslyn build),
+         pass /p:GsharpRoslynForkAvailable=false to dotnet build/test. -->
+    <GsharpRoslynForkAvailable Condition=" '$(GsharpRoslynForkAvailable)' == '' ">true</GsharpRoslynForkAvailable>
+    <DefineConstants Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(DefineConstants);GSHARP_ROSLYN_FORK_AVAILABLE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup>
     <!--
       Cross-targeting net8.0;net9.0;net10.0 is the Phase 6 goal. For now we
       match the rest of the GSharp solution (net10.0) until GSharp.Core is
@@ -12,23 +20,16 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!--
-      Signing is required so that Gsharp.Microsoft.CodeAnalysis (the Roslyn fork)
-      can grant InternalsVisibleTo to us. The fork inherits Arcade's "Open" key
-      (the standard public-signed Roslyn key); Arcade ships it as part of the
-      Microsoft.DotNet.Arcade.Sdk package so no .snk file ships in our tree.
+      Public-signing with the well-known Microsoft "shared" public key is required
+      so that the Gsharp.Microsoft.CodeAnalysis (Roslyn fork) InternalsVisibleTo
+      attribute (which Arcade emits with that public key) matches our identity.
+      The .snk under build/keys/ contains only the public key blob; private signing
+      is not required for IVT to function.
     -->
     <SignAssembly Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">true</SignAssembly>
     <PublicSign Condition=" '$(GsharpRoslynForkAvailable)' == 'true' and '$(OS)' != 'Windows_NT' ">true</PublicSign>
-    <StrongNameKeyId Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">Open</StrongNameKeyId>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <!-- Set to true once Gsharp.Microsoft.CodeAnalysis NuGet is available
-         (build src/Roslyn per src/Roslyn/README-GSHARP.md and drop the .nupkg into .nugs).
-         The default stays false so the scaffold builds without the fork on disk;
-         Phase 1 will implement the Roslyn-derived members and flip this to true. -->
-    <GsharpRoslynForkAvailable Condition=" '$(GsharpRoslynForkAvailable)' == '' ">false</GsharpRoslynForkAvailable>
-    <DefineConstants Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(DefineConstants);GSHARP_ROSLYN_FORK_AVAILABLE</DefineConstants>
+    <DelaySign Condition=" '$(GsharpRoslynForkAvailable)' == 'true' and '$(OS)' == 'Windows_NT' ">true</DelaySign>
+    <AssemblyOriginatorKeyFile Condition=" '$(GsharpRoslynForkAvailable)' == 'true' ">$(MSBuildThisFileDirectory)..\..\build\keys\MicrosoftShared.PublicKey.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>

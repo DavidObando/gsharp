@@ -4,22 +4,20 @@
 
 #if GSHARP_ROSLYN_FORK_AVAILABLE
 
-using Microsoft.CodeAnalysis;
-
 namespace Gsharp.CodeAnalysis.CommandLine;
 
 /// <summary>
-/// CLI host for <c>gsc</c>. Subclasses Roslyn's <see cref="CommonCompiler"/>
-/// so we get standard /r, /out, /target, /debug, /keyfile handling for free.
+/// CLI host for <c>gsc</c>. Will subclass Roslyn's <c>CommonCompiler</c> in Phase 3.
 /// </summary>
 /// <remarks>
 /// Mirrors <c>Pchp.CodeAnalysis.CommandLine.PhpCompiler</c> from peachpie:
 /// <c>/tmp/peachpie-study/src/Peachpie.CodeAnalysis/CommandLine/PhpCompiler.cs</c>.
 /// </remarks>
-internal abstract class GsharpCompiler : CommonCompiler
+internal abstract class GsharpCompiler
 {
-    // TODO Phase 3: implement constructor wiring sources, refs, response file, build paths.
-    // TODO Phase 3: override CreateCompilation to construct a GsharpCompilation.
+    // TODO Phase 3: extend CommonCompiler; implement constructor wiring sources, refs,
+    // response file, build paths. Override CreateCompilation to construct a
+    // GsharpCompilation. Deferred until Phase 1 emit lands.
 }
 
 #endif

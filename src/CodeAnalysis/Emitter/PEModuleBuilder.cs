@@ -4,7 +4,10 @@
 
 #if GSHARP_ROSLYN_FORK_AVAILABLE
 
+using System.Collections.Generic;
 using Microsoft.Cci;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Emit;
 
 namespace Gsharp.CodeAnalysis.Emitter;
 
@@ -18,9 +21,19 @@ namespace Gsharp.CodeAnalysis.Emitter;
 /// </remarks>
 internal abstract partial class PEModuleBuilder : CommonPEModuleBuilder
 {
+    protected PEModuleBuilder(
+        IEnumerable<ResourceDescription> manifestResources,
+        EmitOptions emitOptions,
+        OutputKind outputKind,
+        ModulePropertiesForSerialization serializationProperties,
+        Microsoft.CodeAnalysis.Compilation compilation)
+        : base(manifestResources, emitOptions, outputKind, serializationProperties, compilation)
+    {
+    }
+
     // TODO Phase 1: enumerate GsharpTypeSymbol instances to expose them as CCI types.
-    // TODO Phase 1: synthesize a top-level <Module> Main entry point that wraps the
-    //   user's `func Main()` (matching design/Gsharp-design-v0.1.md).
+    // TODO Phase 1: synthesize a top-level <Program> type wrapping the BoundProgram
+    //   entry point (matching design/Gsharp-design-v0.1.md).
 }
 
 #endif
