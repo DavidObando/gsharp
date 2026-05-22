@@ -519,6 +519,8 @@ public sealed class Binder
                 return BindParenthesizedExpression((ParenthesizedExpressionSyntax)syntax);
             case SyntaxKind.LiteralExpression:
                 return BindLiteralExpression((LiteralExpressionSyntax)syntax);
+            case SyntaxKind.InterpolatedStringExpression:
+                return BindInterpolatedStringExpression((InterpolatedStringExpressionSyntax)syntax);
             case SyntaxKind.NameExpression:
                 return BindNameExpression((NameExpressionSyntax)syntax);
             case SyntaxKind.AssignmentExpression:
@@ -545,6 +547,80 @@ public sealed class Binder
     {
         var value = syntax.Value ?? 0;
         return new BoundLiteralExpression(value);
+    }
+
+    private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
+    {
+        // Lower `"a $x b ${expr} c"` to a `+`-chain of string-typed sub-
+        // expressions: literal parts become string literals; expression parts
+        // are bound recursively and, when not already string-typed, wrapped in
+        // an instance `.ToString()` call. An empty interpolation collapses to
+        // the empty-string literal.
+        BoundExpression result = null;
+        foreach (var segment in syntax.Segments)
+        {
+            BoundExpression piece;
+            if (segment.IsExpression)
+            {
+                var bound = BindExpression(segment.Expression);
+                if (bound is BoundErrorExpression)
+                {
+                    return bound;
+                }
+
+                piece = ConvertToString(bound, segment.Expression.Location);
+                if (piece is BoundErrorExpression)
+                {
+                    return piece;
+                }
+            }
+            else
+            {
+                piece = new BoundLiteralExpression(segment.Text ?? string.Empty);
+            }
+
+            result = result == null ? piece : Concat(result, piece);
+        }
+
+        return result ?? new BoundLiteralExpression(string.Empty);
+    }
+
+    private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
+    {
+        if (expression.Type == TypeSymbol.String)
+        {
+            return expression;
+        }
+
+        var clrType = expression.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression();
+        }
+
+        // Bind a call to `System.Convert.ToString(<expr.Type>)`. Convert.ToString
+        // is a static overload set covering every primitive (int, long, bool,
+        // double, ...) plus `object`, so it works uniformly without emitter
+        // changes for value-type instance dispatch.
+        var convertType = typeof(System.Convert);
+        var method = convertType.GetMethod("ToString", new[] { clrType })
+            ?? convertType.GetMethod("ToString", new[] { typeof(object) });
+        if (method == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression();
+        }
+
+        var importedClass = new ImportedClassSymbol(convertType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(method.Name, importedClass, method, declaration: null);
+        return new BoundImportedCallExpression(importedFn, ImmutableArray.Create(expression));
+    }
+
+    private static BoundExpression Concat(BoundExpression left, BoundExpression right)
+    {
+        var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
+        return new BoundBinaryExpression(left, op, right);
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)

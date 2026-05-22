@@ -61,6 +61,8 @@ IfStatement
 ImportDeclaration
 ImportKeyword
 InterfaceKeyword
+InterpolatedStringExpression
+InterpolatedStringToken
 LeftArrowToken
 LessOrEqualsToken
 LessToken

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
@@ -530,6 +532,7 @@ public sealed class Lexer
         position++;
 
         var sb = new StringBuilder();
+        List<InterpolationFragment> fragments = null;
         var done = false;
 
         while (!done)
@@ -556,6 +559,86 @@ public sealed class Lexer
                     }
 
                     break;
+                case '$':
+                    // `$$` escapes to a literal `$`. `$ident` and `${expr}`
+                    // open an interpolation segment; bare `$` followed by any
+                    // other character is treated as a literal `$` (forward-
+                    // compatible: future grammar may attach meaning to it).
+                    if (Lookahead == '$')
+                    {
+                        sb.Append('$');
+                        position += 2;
+                        break;
+                    }
+
+                    if (Lookahead == '{')
+                    {
+                        fragments ??= new List<InterpolationFragment>();
+                        if (sb.Length > 0)
+                        {
+                            fragments.Add(InterpolationFragment.FromText(sb.ToString()));
+                            sb.Clear();
+                        }
+
+                        position += 2; // consume '${'
+                        var exprStart = position;
+                        var depth = 1;
+                        while (depth > 0 && Current != '\0' && Current != '\r' && Current != '\n' && Current != '"')
+                        {
+                            if (Current == '{')
+                            {
+                                depth++;
+                            }
+                            else if (Current == '}')
+                            {
+                                depth--;
+                                if (depth == 0)
+                                {
+                                    break;
+                                }
+                            }
+
+                            position++;
+                        }
+
+                        if (depth != 0)
+                        {
+                            var loc = new TextLocation(this.text, new TextSpan(start, 1));
+                            Diagnostics.ReportUnterminatedString(loc);
+                            done = true;
+                            break;
+                        }
+
+                        var exprText = this.text.ToString(exprStart, position - exprStart);
+                        fragments.Add(InterpolationFragment.FromExpression(exprText, exprStart));
+                        position++; // consume '}'
+                        break;
+                    }
+
+                    if (char.IsLetter(Lookahead) || Lookahead == '_')
+                    {
+                        fragments ??= new List<InterpolationFragment>();
+                        if (sb.Length > 0)
+                        {
+                            fragments.Add(InterpolationFragment.FromText(sb.ToString()));
+                            sb.Clear();
+                        }
+
+                        position++; // consume '$'
+                        var idStart = position;
+                        while (char.IsLetterOrDigit(Current) || Current == '_')
+                        {
+                            position++;
+                        }
+
+                        var idText = this.text.ToString(idStart, position - idStart);
+                        fragments.Add(InterpolationFragment.FromExpression(idText, idStart));
+                        break;
+                    }
+
+                    sb.Append('$');
+                    position++;
+                    break;
                 default:
                     sb.Append(Current);
                     position++;
@@ -563,8 +646,21 @@ public sealed class Lexer
             }
         }
 
-        kind = SyntaxKind.StringToken;
-        value = sb.ToString();
+        if (fragments == null)
+        {
+            kind = SyntaxKind.StringToken;
+            value = sb.ToString();
+        }
+        else
+        {
+            if (sb.Length > 0)
+            {
+                fragments.Add(InterpolationFragment.FromText(sb.ToString()));
+            }
+
+            kind = SyntaxKind.InterpolatedStringToken;
+            value = fragments.ToImmutableArray();
+        }
     }
 
     private void ReadWhiteSpace()

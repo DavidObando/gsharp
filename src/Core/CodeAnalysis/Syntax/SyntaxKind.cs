@@ -70,6 +70,7 @@ public enum SyntaxKind
 
     // Built-in type tokens
     StringToken,
+    InterpolatedStringToken,
     NumberToken,
 
     // Identifier tokens
@@ -114,6 +115,7 @@ public enum SyntaxKind
     BinaryExpression,
     ParenthesizedExpression,
     LiteralExpression,
+    InterpolatedStringExpression,
     NameExpression,
     CallExpression,
     AccessorExpression,
