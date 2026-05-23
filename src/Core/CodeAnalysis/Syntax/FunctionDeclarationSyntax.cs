@@ -155,11 +155,50 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken closeParenthesisToken,
         TypeClauseSyntax type,
         BlockStatementSyntax body)
+        : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier: null, functionKeyword, receiverOpenParenthesisToken, receiver, receiverCloseParenthesisToken, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class with an optional <c>async</c> modifier (Phase 5.1 / ADR-0023).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">Optional accessibility modifier.</param>
+    /// <param name="openModifier">Optional <c>open</c> modifier.</param>
+    /// <param name="overrideModifier">Optional <c>override</c> modifier.</param>
+    /// <param name="asyncModifier">Optional <c>async</c> modifier (Phase 5.1).</param>
+    /// <param name="functionKeyword">The func keyword.</param>
+    /// <param name="receiverOpenParenthesisToken">Optional open parenthesis introducing the receiver clause.</param>
+    /// <param name="receiver">Optional receiver parameter.</param>
+    /// <param name="receiverCloseParenthesisToken">Optional close parenthesis terminating the receiver clause.</param>
+    /// <param name="identifier">The function identifier.</param>
+    /// <param name="typeParameterList">Optional generic type-parameter list.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token of the parameter list.</param>
+    /// <param name="parameters">The function's parameters.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token of the parameter list.</param>
+    /// <param name="type">The function's return type.</param>
+    /// <param name="body">The function's body.</param>
+    public FunctionDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier,
+        SyntaxToken asyncModifier,
+        SyntaxToken functionKeyword,
+        SyntaxToken receiverOpenParenthesisToken,
+        ParameterSyntax receiver,
+        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenthesisToken,
+        TypeClauseSyntax type,
+        BlockStatementSyntax body)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
         OpenModifier = openModifier;
         OverrideModifier = overrideModifier;
+        AsyncModifier = asyncModifier;
         FunctionKeyword = functionKeyword;
         ReceiverOpenParenthesisToken = receiverOpenParenthesisToken;
         Receiver = receiver;
@@ -198,6 +237,12 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the optional <c>override</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overriding a base method per ADR-0017. Only meaningful on class methods.</summary>
     public SyntaxToken OverrideModifier { get; }
+
+    /// <summary>Gets the optional <c>async</c> modifier (Phase 5.1 / ADR-0023). When non-null this function is an async function; callers see <c>Task[T]</c> (or <c>Task</c>), and the body may use <c>await</c>.</summary>
+    public SyntaxToken AsyncModifier { get; }
+
+    /// <summary>Gets a value indicating whether this function declares <c>async</c>.</summary>
+    public bool IsAsync => AsyncModifier != null;
 
     /// <summary>Gets a value indicating whether this function is marked <c>open</c>.</summary>
     public bool IsOpen => OpenModifier != null;

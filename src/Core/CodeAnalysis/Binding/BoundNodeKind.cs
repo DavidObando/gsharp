@@ -61,6 +61,8 @@ public enum BoundNodeKind
     ClrPropertyAccessExpression,
     ClrIndexExpression,
     ClrIndexAssignmentExpression,
+    AwaitExpression,
+    GoStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

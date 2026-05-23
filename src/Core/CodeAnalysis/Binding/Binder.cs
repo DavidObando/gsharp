@@ -994,6 +994,7 @@ public sealed class Binder
             var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
             var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
+            function.IsAsync = syntax.IsAsync;
 
             if (syntax.IsExtension)
             {
@@ -1173,6 +1174,8 @@ public sealed class Binder
                 return BindThrowStatement((ThrowStatementSyntax)syntax);
             case SyntaxKind.UsingStatement:
                 return BindUsingStatement((UsingStatementSyntax)syntax);
+            case SyntaxKind.GoStatement:
+                return BindGoStatement((GoStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -1858,6 +1861,28 @@ public sealed class Binder
         return new BoundImportedInstanceCallExpression(receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
     }
 
+    private BoundStatement BindGoStatement(GoStatementSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+
+        if (expression is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(expression);
+        }
+
+        if (expression is not BoundCallExpression and
+            not BoundIndirectCallExpression and
+            not BoundUserInstanceCallExpression and
+            not BoundImportedCallExpression and
+            not BoundImportedInstanceCallExpression)
+        {
+            Diagnostics.ReportGoOperandIsNotACall(syntax.Expression.Location);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        return new BoundGoStatement(expression);
+    }
+
     private TypeSymbol ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
@@ -2225,6 +2250,8 @@ public sealed class Binder
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
             case SyntaxKind.FunctionLiteralExpression:
                 return BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
+            case SyntaxKind.AwaitExpression:
+                return BindAwaitExpression((AwaitExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
@@ -3054,7 +3081,18 @@ public sealed class Binder
         if (substitution != null)
         {
             var returnType = SubstituteType(function.Type, substitution);
+            if (function.IsAsync)
+            {
+                returnType = WrapAsTask(returnType);
+            }
+
             return new BoundCallExpression(function, boundArguments.ToImmutable(), returnType);
+        }
+
+        if (function.IsAsync)
+        {
+            var asyncReturn = WrapAsTask(function.Type);
+            return new BoundCallExpression(function, boundArguments.ToImmutable(), asyncReturn);
         }
 
         return new BoundCallExpression(function, boundArguments.ToImmutable());
@@ -3086,6 +3124,108 @@ public sealed class Binder
         {
             InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
         }
+    }
+
+    private TypeSymbol WrapAsTask(TypeSymbol element)
+    {
+        if (element == TypeSymbol.Error)
+        {
+            return TypeSymbol.Error;
+        }
+
+        if (element == TypeSymbol.Void)
+        {
+            if (scope.References.TryResolveType("System.Threading.Tasks.Task", out var taskType))
+            {
+                return ImportedTypeSymbol.Get(taskType);
+            }
+
+            return element;
+        }
+
+        var clr = element.ClrType;
+        if (clr == null)
+        {
+            // Phase 5.1 limitation (see ADR-0023): wrapping a user-defined
+            // GSharp type as Task[T] requires interop work that is deferred.
+            return element;
+        }
+
+        if (scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var taskOpen))
+        {
+            var closed = taskOpen.MakeGenericType(clr);
+            return ImportedTypeSymbol.Get(closed);
+        }
+
+        return element;
+    }
+
+    private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
+    {
+        element = null;
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        if (clr.FullName == "System.Threading.Tasks.Task")
+        {
+            element = TypeSymbol.Void;
+            return true;
+        }
+
+        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var def = clr.GetGenericTypeDefinition();
+            if (def.FullName == "System.Threading.Tasks.Task`1")
+            {
+                element = TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                return true;
+            }
+        }
+
+        // Walk base chain (e.g. user-derived Task subclasses).
+        for (var t = clr.BaseType; t != null; t = t.BaseType)
+        {
+            if (t.FullName == "System.Threading.Tasks.Task")
+            {
+                element = TypeSymbol.Void;
+                return true;
+            }
+
+            if (t.IsGenericType && !t.IsGenericTypeDefinition && t.GetGenericTypeDefinition().FullName == "System.Threading.Tasks.Task`1")
+            {
+                element = TypeSymbol.FromClrType(t.GetGenericArguments()[0]);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private BoundExpression BindAwaitExpression(AwaitExpressionSyntax syntax)
+    {
+        var operand = BindExpression(syntax.Expression);
+
+        if (function == null || !function.IsAsync)
+        {
+            Diagnostics.ReportAwaitOutsideAsyncFunction(syntax.AwaitKeyword.Location);
+            return new BoundErrorExpression();
+        }
+
+        if (operand is BoundErrorExpression)
+        {
+            return operand;
+        }
+
+        if (!TryGetTaskElementType(operand.Type, out var element))
+        {
+            Diagnostics.ReportTypeIsNotAwaitable(syntax.Expression.Location, operand.Type);
+            return new BoundErrorExpression();
+        }
+
+        return new BoundAwaitExpression(operand, element);
     }
 
     private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)

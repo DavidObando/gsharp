@@ -121,6 +121,10 @@ public static class SyntaxFacts
     {
         switch (text)
         {
+            case "async":
+                return SyntaxKind.AsyncKeyword;
+            case "await":
+                return SyntaxKind.AwaitKeyword;
             case "break":
                 return SyntaxKind.BreakKeyword;
             case "case":
@@ -353,6 +357,10 @@ public static class SyntaxFacts
                 return ">>=";
 
             // keywords
+            case SyntaxKind.AsyncKeyword:
+                return "async";
+            case SyntaxKind.AwaitKeyword:
+                return "await";
             case SyntaxKind.BreakKeyword:
                 return "break";
             case SyntaxKind.CaseKeyword:

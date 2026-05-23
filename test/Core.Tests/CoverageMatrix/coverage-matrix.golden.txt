@@ -11,6 +11,9 @@ AmpersandHatToken
 AmpersandToken
 ArrayCreationExpression
 AssignmentExpression
+AsyncKeyword
+AwaitExpression
+AwaitKeyword
 BadToken
 BangBangToken
 BangEqualsToken
@@ -65,6 +68,7 @@ FunctionDeclaration
 FunctionLiteralExpression
 GlobalStatement
 GoKeyword
+GoStatement
 GotoKeyword
 GreaterOrEqualsToken
 GreaterToken
@@ -164,6 +168,7 @@ WhitespaceToken
 AppendExpression
 ArrayCreationExpression
 AssignmentExpression
+AwaitExpression
 BinaryExpression
 BlockStatement
 CallExpression
@@ -183,6 +188,7 @@ ForEllipsisStatement
 ForInfiniteStatement
 ForRangeStatement
 FunctionLiteralExpression
+GoStatement
 GotoStatement
 IfStatement
 ImportedCallExpression

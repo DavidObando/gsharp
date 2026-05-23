@@ -81,6 +81,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ThrowStatement:
                 WriteThrowStatement((BoundThrowStatement)node, writer);
                 break;
+            case BoundNodeKind.GoStatement:
+                WriteGoStatement((BoundGoStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -176,6 +179,9 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.ClrIndexAssignmentExpression:
                 WriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node, writer);
+                break;
+            case BoundNodeKind.AwaitExpression:
+                WriteAwaitExpression((BoundAwaitExpression)node, writer);
                 break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
@@ -425,6 +431,14 @@ public static class BoundNodePrinter
         writer.WriteLine();
     }
 
+    private static void WriteGoStatement(BoundGoStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.GoKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
+        writer.WriteLine();
+    }
+
     private static void WriteErrorExpression(BoundErrorExpression node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(node.Type.Name);
@@ -522,6 +536,13 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         node.Expression.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAwaitExpression(BoundAwaitExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.AwaitKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
     }
 
     private static void WriteImportedCallExpression(BoundImportedCallExpression node, IndentedTextWriter writer)

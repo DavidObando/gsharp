@@ -341,6 +341,37 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that <c>await</c> appears outside an <c>async</c> function (Phase 5.1 / ADR-0023).
+    /// </summary>
+    /// <param name="location">The text location where the <c>await</c> keyword appears.</param>
+    public void ReportAwaitOutsideAsyncFunction(TextLocation location)
+    {
+        var message = "'await' can only be used inside an 'async func'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the operand of an <c>await</c> expression is not a Task (Phase 5.1 / ADR-0023).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    /// <param name="actualType">The actual type of the operand.</param>
+    public void ReportTypeIsNotAwaitable(TextLocation location, TypeSymbol actualType)
+    {
+        var message = $"Expression of type '{actualType}' cannot be awaited; expected a 'Task' or 'Task[T]'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the operand of a <c>go</c> statement is not a call expression (Phase 5.3 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    public void ReportGoOperandIsNotACall(TextLocation location)
+    {
+        var message = "'go' must be followed by a function or method call.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the function requires a different amount of arguments.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -17,6 +18,7 @@ public sealed class Evaluator
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
     private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
+    private readonly object goLock = new object();
     private Random random;
 
     private object lastValue;
@@ -101,6 +103,10 @@ public sealed class Evaluator
                 case BoundNodeKind.ThrowStatement:
                     EvaluateThrowStatement((BoundThrowStatement)s);
                     break;
+                case BoundNodeKind.GoStatement:
+                    EvaluateGoStatement((BoundGoStatement)s);
+                    index++;
+                    break;
                 default:
                     throw new EvaluatorException($"Unexpected node {s.Kind}", s);
             }
@@ -114,6 +120,32 @@ public sealed class Evaluator
         var value = EvaluateExpression(node.Initializer);
         lastValue = value;
         Assign(node.Variable, value);
+    }
+
+    private void EvaluateGoStatement(BoundGoStatement node)
+    {
+        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run. The interpreter's
+        // evaluation state is single-threaded; serialize body execution with a
+        // monitor on the evaluator so the shared locals/globals stacks remain
+        // consistent. Concurrency in the interpreter is observational
+        // (Task scheduling) rather than parallel.
+        var expression = node.Expression;
+        Task.Run(() =>
+        {
+            try
+            {
+                lock (this.goLock)
+                {
+                    EvaluateExpression(expression);
+                }
+            }
+            catch
+            {
+                // Per ADR-0022 fire-and-forget: unhandled exceptions surface
+                // through TaskScheduler.UnobservedTaskException; the interpreter
+                // discards them rather than crashing the host.
+            }
+        });
     }
 
     private void EvaluateExpressionStatement(BoundExpressionStatement node)
@@ -215,6 +247,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
                 BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
+                BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -790,8 +823,48 @@ public sealed class Evaluator
 
             this.locals.Pop();
 
+            if (node.Function.IsAsync)
+            {
+                return WrapAsyncResult(node.Function.Type, result);
+            }
+
             return result;
         }
+    }
+
+    private static object WrapAsyncResult(TypeSymbol declaredReturn, object value)
+    {
+        if (declaredReturn == TypeSymbol.Void || declaredReturn == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var clr = declaredReturn.ClrType ?? typeof(object);
+        var method = typeof(Task).GetMethod(nameof(Task.FromResult)).MakeGenericMethod(clr);
+        return method.Invoke(null, new[] { value });
+    }
+
+    private object EvaluateAwaitExpression(BoundAwaitExpression node)
+    {
+        var operand = EvaluateExpression(node.Expression);
+        if (operand is not Task task)
+        {
+            throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
+        }
+
+        task.GetAwaiter().GetResult();
+
+        var taskType = task.GetType();
+        if (taskType.IsGenericType)
+        {
+            var resultProperty = taskType.GetProperty("Result");
+            if (resultProperty != null)
+            {
+                return resultProperty.GetValue(task);
+            }
+        }
+
+        return null;
     }
 
     private object EvaluateUserInstanceCallExpression(BoundUserInstanceCallExpression node)

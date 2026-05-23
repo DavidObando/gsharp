@@ -53,8 +53,11 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: discriminant over `int`/`string`/`bool`; each case body is a brace block; binder lowers to a chain of if/else around the bound discriminant. Multiple case values per arm and pattern-matching variants land in Phase 6. |
 | `fallthrough` | ❌ | — | — | — | ADR-0013 rejects Go-style implicit case fallthrough. The keyword remains reserved; the parser emits a diagnostic if it appears. |
 | `defer` | ❌ | — | — | — | Keyword reserved. |
-| `go` (goroutine) | ❌ | — | — | — | Keyword reserved. |
+| `go` (goroutine) | ✅ | ✅ | — | ✅ | Phase 5.3 / ADR-0022 (interpreter). `go <call>` schedules the call on a fire-and-forget `Task.Run`. Only call expressions are accepted as operands. The interpreter serializes body execution with a monitor on the evaluator to keep the shared locals/globals stacks safe; concurrency is observational rather than parallel. Emit deferred. |
 | `select` | ❌ | — | — | — | Keyword reserved. |
+| `async func` / `await e` | ✅ | ✅ | — | ✅ | Phase 5.1+5.2 / ADR-0023 (interpreter). `async` is a `func` modifier; the call-site return type is wrapped as `Task` / `Task[T]`. `await` is an expression that unwraps the awaited element type. The interpreter realizes an async function as `Task.FromResult(body-result)` and `await` blocks via `GetAwaiter().GetResult()`. Emit deferred to Phase 7 (state machine). |
+| `scope { … }` | ❌ | — | — | — | Phase 5.7 — structured concurrency block; not yet wired. |
+| `await for v := range ch` | ❌ | — | — | — | Phase 5.8 — `IAsyncEnumerable[T]` consumption; not yet wired. |
 | `goto` / labels | ❌ | 🟡 | 🟡 | 🟡 | `BoundGotoStatement` / `BoundLabelStatement` exist as **lowering artifacts** for `for`/`if`; not surfaceable from source. |
 | Send statement `ch <- v` / receive `<-ch` | ❌ | — | — | — | |
 | Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |

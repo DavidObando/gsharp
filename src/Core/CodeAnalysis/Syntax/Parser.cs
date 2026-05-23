@@ -158,9 +158,17 @@ public class Parser
             accessibilityModifier = NextToken();
         }
 
+        // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
+        // `func` (with or without an accessibility modifier).
+        SyntaxToken asyncModifier = null;
+        if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        {
+            asyncModifier = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
-            return ParseFunctionDeclaration(accessibilityModifier);
+            return ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
         }
 
         if (Current.Kind == SyntaxKind.TypeKeyword)
@@ -180,6 +188,12 @@ public class Parser
         if (accessibilityModifier != null)
         {
             Diagnostics.ReportAccessibilityModifierNotAllowedHere(accessibilityModifier.Location, accessibilityModifier.Text);
+        }
+
+        if (asyncModifier != null)
+        {
+            // `async` not followed by `func` — surface as an unexpected token.
+            Diagnostics.ReportUnexpectedToken(asyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
         }
 
         return ParseGlobalStatement();
@@ -542,9 +556,12 @@ public class Parser
     }
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
-        => ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null);
+        => ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier: null);
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier)
+        => ParseFunctionDeclaration(accessibilityModifier, openModifier, overrideModifier, asyncModifier: null);
+
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier, SyntaxToken asyncModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
 
@@ -570,7 +587,7 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
     }
 
     private TypeParameterListSyntax ParseOptionalTypeParameterList()
@@ -1004,6 +1021,8 @@ public class Parser
                 return ParseThrowStatement();
             case SyntaxKind.UsingKeyword:
                 return ParseUsingStatement();
+            case SyntaxKind.GoKeyword:
+                return ParseGoStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -1650,6 +1669,13 @@ public class Parser
         return new UsingStatementSyntax(syntaxTree, keyword, decl);
     }
 
+    private StatementSyntax ParseGoStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.GoKeyword);
+        var expression = ParseExpression();
+        return new GoStatementSyntax(syntaxTree, keyword, expression);
+    }
+
     private ExpressionStatementSyntax ParseExpressionStatement()
     {
         var expression = ParseExpression();
@@ -1732,6 +1758,16 @@ public class Parser
             var operatorToken = NextToken();
             var operand = ParseBinaryExpression(unaryOperatorPrecedence);
             left = new UnaryExpressionSyntax(syntaxTree, operatorToken, operand);
+        }
+        else if (Current.Kind == SyntaxKind.AwaitKeyword)
+        {
+            // Phase 5.1 / ADR-0023: `await e` is a prefix expression. Bind at
+            // the same precedence as the established unary slot so it composes
+            // identically with member access and call: `await f()` parses as
+            // `await (f())` and `(await x).Member` requires parens.
+            var awaitKeyword = NextToken();
+            var operand = ParseBinaryExpression(6);
+            left = new AwaitExpressionSyntax(syntaxTree, awaitKeyword, operand);
         }
         else
         {
