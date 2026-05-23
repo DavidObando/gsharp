@@ -12,6 +12,7 @@ AmpersandToken
 ArrayCreationExpression
 AssignmentExpression
 BadToken
+BangBangToken
 BangEqualsToken
 BangToken
 BinaryExpression
@@ -111,6 +112,8 @@ PlusPlusToken
 PlusToken
 PrivateKeyword
 PublicKeyword
+QuestionColonToken
+QuestionDotToken
 QuestionToken
 RangeKeyword
 ReturnKeyword

@@ -1383,6 +1383,16 @@ public class Parser
             left = ParsePrimaryExpression();
         }
 
+        // Phase 3.C.3 / ADR-0020: postfix null-assertion `!!`. We greedily
+        // consume any chain of `!!` tokens immediately following the primary
+        // and wrap them as unary expressions. The binder enforces that the
+        // operand type is nullable (or carries it through harmlessly).
+        while (Current.Kind == SyntaxKind.BangBangToken)
+        {
+            var bangBangToken = NextToken();
+            left = new UnaryExpressionSyntax(syntaxTree, bangBangToken, left);
+        }
+
         while (true)
         {
             var precedence = Current.Kind.GetBinaryOperatorPrecedence();

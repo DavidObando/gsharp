@@ -437,6 +437,13 @@ public sealed class Evaluator
                 return !(bool)operand;
             case BoundUnaryOperatorKind.OnesComplement:
                 return ~(int)operand;
+            case BoundUnaryOperatorKind.NullAssertion:
+                if (operand == null)
+                {
+                    throw new EvaluatorException("nil value !!", u);
+                }
+
+                return operand;
 
             // For now we don't support DereferenceOf or ReferenceOf.
             default:
@@ -446,6 +453,14 @@ public sealed class Evaluator
 
     private object EvaluateBinaryExpression(BoundBinaryExpression b)
     {
+        // Phase 3.C.3 / ADR-0020: null-coalescing must short-circuit so the
+        // right-hand side is only evaluated when the left is nil.
+        if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
+        {
+            var leftValue = EvaluateExpression(b.Left);
+            return leftValue ?? EvaluateExpression(b.Right);
+        }
+
         var left = EvaluateExpression(b.Left);
         var right = EvaluateExpression(b.Right);
 
