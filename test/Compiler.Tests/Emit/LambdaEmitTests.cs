@@ -11,14 +11,18 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Phase 4 emit-parity tests for function literals (Phase 4.7) — emit
-/// commit E1: no-capture lambdas + indirect calls.
+/// commits E1 (no-capture lambdas + indirect calls) and E2 (closures with
+/// snapshot-by-value captured variables).
 /// <para>
 /// Each function literal is lowered to a synthesized static method on the
 /// owning package's <c>&lt;Program&gt;</c> type, and the literal site emits
 /// <c>ldnull / ldftn / newobj Func|Action::.ctor(object, IntPtr)</c>. An
 /// indirect call evaluates the target delegate value and dispatches via
-/// <c>callvirt Invoke</c>. Captures are explicitly not in scope for E1 —
-/// see <see cref="ClosureCaptures_StillUnsupported"/>.
+/// <c>callvirt Invoke</c>. Capture-bearing literals (E2) are lowered into a
+/// synthesized sealed closure class with one field per capture and an
+/// instance <c>Invoke</c> method; the literal site emits
+/// <c>newobj / (dup + load + stfld)* / dup / ldftn / newobj Func|Action::.ctor</c>.
+/// Closure tests live in <see cref="ClosureEmitTests"/>.
 /// </para>
 /// </summary>
 public class LambdaEmitTests
@@ -86,10 +90,11 @@ public class LambdaEmitTests
     }
 
     [Fact]
-    public void ClosureCaptures_StillUnsupported()
+    public void ClosureCaptures_MakeAdder()
     {
-        // Phase 4 emit parity E2 (closures) is not yet implemented.
-        // The emitter must surface a clear diagnostic rather than miscompile.
+        // Phase 4 emit parity E2 (closures): captured outer variable lowered
+        // to a synthesized closure class field via snapshot-by-value at
+        // literal evaluation time. Matches interpreter semantics.
         var source = """
             package P
             import System
@@ -102,44 +107,8 @@ public class LambdaEmitTests
             Console.WriteLine(addN(10))
             """;
 
-        var tempDir = Directory.CreateTempSubdirectory("gs_lambda_emit_neg_").FullName;
-        try
-        {
-            var srcPath = Path.Combine(tempDir, "test.gs");
-            var outPath = Path.Combine(tempDir, "test.dll");
-            File.WriteAllText(srcPath, source);
-
-            using var compileOut = new StringWriter();
-            using var compileErr = new StringWriter();
-            var prevOut = Console.Out;
-            var prevErr = Console.Error;
-            Console.SetOut(compileOut);
-            Console.SetError(compileErr);
-            int compileExit;
-            try
-            {
-                compileExit = Program.Main(new[]
-                {
-                    "/out:" + outPath,
-                    "/target:exe",
-                    "/targetframework:net10.0",
-                    srcPath,
-                });
-            }
-            finally
-            {
-                Console.SetOut(prevOut);
-                Console.SetError(prevErr);
-            }
-
-            Assert.NotEqual(0, compileExit);
-            var combined = compileOut.ToString() + compileErr.ToString();
-            Assert.Contains("captures outer variables", combined);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
+        var output = CompileAndRun(source);
+        Assert.Equal("15\n", output);
     }
 
     private static string CompileAndRun(string source)
