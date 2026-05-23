@@ -28,6 +28,30 @@ public sealed class BoundProgram
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
         FunctionSymbol entryPoint,
         BoundBlockStatement statement)
+        : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, ImmutableArray<StructSymbol>.Empty)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundProgram"/> class.
+    /// </summary>
+    /// <param name="entryPointPackage">The entry-point package; its name is exposed via <see cref="PackageName"/> for back-compat.</param>
+    /// <param name="packages">All distinct packages in this program, in declaration order.</param>
+    /// <param name="diagnostics">The diagnostics.</param>
+    /// <param name="functions">The functions. Each <see cref="FunctionSymbol"/> key carries its owning package via <see cref="FunctionSymbol.Package"/>.</param>
+    /// <param name="entryPoint">The entry-point function, or null if the compilation is a library.</param>
+    /// <param name="statement">The statements.</param>
+    /// <param name="structs">User-defined struct types declared in this program, grouped by declaring package.</param>
+    /// <param name="interfaces">User-defined interface types declared in this program (Phase 3.B.4).</param>
+    public BoundProgram(
+        PackageSymbol entryPointPackage,
+        ImmutableArray<PackageSymbol> packages,
+        ImmutableArray<Diagnostic> diagnostics,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
+        FunctionSymbol entryPoint,
+        BoundBlockStatement statement,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces)
     {
         EntryPointPackage = entryPointPackage;
         Packages = packages;
@@ -35,6 +59,30 @@ public sealed class BoundProgram
         Functions = functions;
         EntryPoint = entryPoint;
         Statement = statement;
+        Structs = structs;
+        Interfaces = interfaces;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundProgram"/> class.
+    /// </summary>
+    /// <param name="entryPointPackage">The entry-point package; its name is exposed via <see cref="PackageName"/> for back-compat.</param>
+    /// <param name="packages">All distinct packages in this program, in declaration order.</param>
+    /// <param name="diagnostics">The diagnostics.</param>
+    /// <param name="functions">The functions. Each <see cref="FunctionSymbol"/> key carries its owning package via <see cref="FunctionSymbol.Package"/>.</param>
+    /// <param name="entryPoint">The entry-point function, or null if the compilation is a library.</param>
+    /// <param name="statement">The statements.</param>
+    /// <param name="structs">User-defined struct types declared in this program, grouped by declaring package.</param>
+    public BoundProgram(
+        PackageSymbol entryPointPackage,
+        ImmutableArray<PackageSymbol> packages,
+        ImmutableArray<Diagnostic> diagnostics,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
+        FunctionSymbol entryPoint,
+        BoundBlockStatement statement,
+        ImmutableArray<StructSymbol> structs)
+        : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, structs, ImmutableArray<InterfaceSymbol>.Empty)
+    {
     }
 
     /// <summary>
@@ -80,4 +128,15 @@ public sealed class BoundProgram
     /// Gets the statements.
     /// </summary>
     public BoundBlockStatement Statement { get; }
+
+    /// <summary>
+    /// Gets the user-defined struct types declared in this program.
+    /// Each struct carries its declaring package via <see cref="StructSymbol.PackageName"/>.
+    /// </summary>
+    public ImmutableArray<StructSymbol> Structs { get; }
+
+    /// <summary>
+    /// Gets the user-defined interface types declared in this program (Phase 3.B.4).
+    /// </summary>
+    public ImmutableArray<InterfaceSymbol> Interfaces { get; }
 }

@@ -236,6 +236,18 @@ public sealed class Lowerer : BoundTreeRewriter
                     stack.Push(s);
                 }
             }
+            else if (current is BoundTryStatement t)
+            {
+                var flatTry = Flatten(t.TryBlock);
+                var flatCatches = ImmutableArray.CreateBuilder<BoundCatchClause>();
+                foreach (var clause in t.CatchClauses)
+                {
+                    flatCatches.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, Flatten(clause.Body)));
+                }
+
+                var flatFinally = t.FinallyBlock == null ? null : (BoundStatement)Flatten(t.FinallyBlock);
+                builder.Add(new BoundTryStatement(flatTry, flatCatches.ToImmutable(), flatFinally));
+            }
             else
             {
                 builder.Add(current);

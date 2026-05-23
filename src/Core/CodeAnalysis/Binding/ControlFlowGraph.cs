@@ -273,6 +273,12 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ExpressionStatement:
                         statements.Add(statement);
                         break;
+                    case BoundNodeKind.TryStatement:
+                    case BoundNodeKind.ThrowStatement:
+                        // Treat exception-flow constructs as opaque statements; precise
+                        // CFG modeling of catch/finally edges is deferred to a later phase.
+                        statements.Add(statement);
+                        break;
                     default:
                         throw new Exception($"Unexpected statement: {statement.Kind}");
                 }
@@ -370,11 +376,17 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.VariableDeclaration:
                         case BoundNodeKind.LabelStatement:
                         case BoundNodeKind.ExpressionStatement:
+                        case BoundNodeKind.TryStatement:
                             if (isLastStatementInBlock)
                             {
                                 Connect(current, next);
                             }
 
+                            break;
+                        case BoundNodeKind.ThrowStatement:
+                            // Throws transfer control to a catch handler or unwind out
+                            // of the function; treat as terminator.
+                            Connect(current, end);
                             break;
                         default:
                             throw new Exception($"Unexpected statement: {statement.Kind}");

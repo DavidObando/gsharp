@@ -121,6 +121,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a <c>data struct</c> was declared with no fields (ADR-0029).
+    /// </summary>
+    /// <param name="location">The text location of the struct identifier.</param>
+    /// <param name="name">The struct name.</param>
+    public void ReportEmptyDataStruct(TextLocation location, string name)
+    {
+        var message = $"'data struct {name}' requires at least one field; use 'struct' instead.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that a type doesn't exist.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
@@ -129,6 +140,71 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         var message = $"Type '{name}' doesn't exist.";
         Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the array length is not a valid non-negative integer literal.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="text">The length token text.</param>
+    public void ReportInvalidArrayLength(TextLocation location, string text)
+    {
+        var message = $"Array length '{text}' must be a non-negative integer literal.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the number of array initialisers does not match the declared length.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="expected">The declared length.</param>
+    /// <param name="actual">The provided initialiser count.</param>
+    public void ReportArrayLiteralLengthMismatch(TextLocation location, int expected, int actual)
+    {
+        var message = $"Array literal expects {expected} initialisers but got {actual}.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that indexing was attempted on a non-array expression.
+    /// </summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="type">The actual type.</param>
+    public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
+    {
+        var message = $"Type '{type.Name}' is not indexable.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that a built-in intrinsic was applied to an unsupported argument type.
+    /// </summary>
+    /// <param name="location">The text location of the offending argument.</param>
+    /// <param name="name">The intrinsic name.</param>
+    /// <param name="type">The actual argument type.</param>
+    public void ReportIntrinsicArgumentType(TextLocation location, string name, TypeSymbol type)
+    {
+        var message = $"Built-in '{name}' cannot be applied to a value of type '{type.Name}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that a 'try' statement has neither catch nor finally clauses.
+    /// </summary>
+    /// <param name="location">The text location of the 'try' keyword.</param>
+    public void ReportTryWithoutCatchOrFinally(TextLocation location)
+    {
+        Report(location, "A 'try' statement requires at least one catch or finally clause.");
+    }
+
+    /// <summary>
+    /// Reports that a type used in a 'using' declaration does not implement IDisposable.
+    /// </summary>
+    /// <param name="location">The text location of the using keyword.</param>
+    /// <param name="type">The non-disposable type.</param>
+    public void ReportTypeNotDisposable(TextLocation location, TypeSymbol type)
+    {
+        Report(location, $"Type '{type.Name}' cannot be used in a 'using' statement because it does not provide a public Dispose() method.");
     }
 
     /// <summary>
@@ -434,6 +510,75 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         var message = $"Accessibility modifier '{modifier}' is not allowed here. It is only valid on top-level 'func', 'type', 'var', 'let' and 'const' declarations.";
         Report(location, message);
+    }
+
+    /// <summary>Reports an attempt to subclass a sealed (non-<c>open</c>) class. Phase 3.B.3 sub-step 3 / ADR-0017.</summary>
+    /// <param name="location">The text location of the base-type identifier.</param>
+    /// <param name="baseTypeName">The base type name.</param>
+    public void ReportBaseClassNotOpen(TextLocation location, string baseTypeName)
+    {
+        Report(location, $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
+    }
+
+    /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="baseTypeName">The base type name.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportMissingOverride(TextLocation location, string baseTypeName, string methodName)
+    {
+        Report(location, $"Method '{baseTypeName}.{methodName}' is overridable; add 'override' to redefine it.");
+    }
+
+    /// <summary>Reports an <c>override</c> method that does not match any open base method. ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportNoBaseMethodToOverride(TextLocation location, string methodName)
+    {
+        Report(location, $"Method '{methodName}' is marked 'override' but no matching open base method was found.");
+    }
+
+    /// <summary>Reports an <c>override</c> targeting a method that is not <c>open</c> (sealed override). ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportOverrideOfSealedMethod(TextLocation location, string methodName)
+    {
+        Report(location, $"Method '{methodName}' cannot override the base method because the base method is not open.");
+    }
+
+    /// <summary>Reports a signature mismatch between an <c>override</c> method and its base method.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportOverrideSignatureMismatch(TextLocation location, string methodName)
+    {
+        Report(location, $"Override of method '{methodName}' must match the base method's parameter types and return type.");
+    }
+
+    /// <summary>Reports an interface method declared with a body (ADR-0018: Phase 3 interfaces are signature-only).</summary>
+    /// <param name="location">The text location of the offending method identifier.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
+    {
+        Report(location, $"Interface method '{methodName}' may not have a body in this version of GSharp; see ADR-0018.");
+    }
+
+    /// <summary>Reports a class that fails to implement an interface method.</summary>
+    /// <param name="location">The text location of the class identifier.</param>
+    /// <param name="className">The implementing class.</param>
+    /// <param name="interfaceName">The interface name.</param>
+    /// <param name="methodName">The missing method.</param>
+    public void ReportInterfaceMethodNotImplemented(TextLocation location, string className, string interfaceName, string methodName)
+    {
+        Report(location, $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
+    }
+
+    /// <summary>Phase 3.B.5: reports a class that implements a sealed interface declared in a different package.</summary>
+    /// <param name="location">The text location of the implementing class identifier.</param>
+    /// <param name="className">The implementing class.</param>
+    /// <param name="interfaceName">The sealed interface name.</param>
+    /// <param name="interfacePackage">The package owning the sealed interface.</param>
+    public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
+    {
+        Report(location, $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
     }
 
     private void Report(TextLocation location, string message)

@@ -72,6 +72,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.ExpressionStatement:
                 WriteExpressionStatement((BoundExpressionStatement)node, writer);
                 break;
+            case BoundNodeKind.TryStatement:
+                WriteTryStatement((BoundTryStatement)node, writer);
+                break;
+            case BoundNodeKind.ThrowStatement:
+                WriteThrowStatement((BoundThrowStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -101,6 +107,42 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.ImportedInstanceCallExpression:
                 WriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node, writer);
+                break;
+            case BoundNodeKind.ArrayCreationExpression:
+                WriteArrayCreationExpression((BoundArrayCreationExpression)node, writer);
+                break;
+            case BoundNodeKind.IndexExpression:
+                WriteIndexExpression((BoundIndexExpression)node, writer);
+                break;
+            case BoundNodeKind.IndexAssignmentExpression:
+                WriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node, writer);
+                break;
+            case BoundNodeKind.LenExpression:
+                WriteIntrinsicCall("len", ((BoundLenExpression)node).Operand, writer);
+                break;
+            case BoundNodeKind.CapExpression:
+                WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
+                break;
+            case BoundNodeKind.AppendExpression:
+                WriteAppendExpression((BoundAppendExpression)node, writer);
+                break;
+            case BoundNodeKind.StructLiteralExpression:
+                WriteStructLiteralExpression((BoundStructLiteralExpression)node, writer);
+                break;
+            case BoundNodeKind.ConstructorCallExpression:
+                WriteConstructorCallExpression((BoundConstructorCallExpression)node, writer);
+                break;
+            case BoundNodeKind.UserInstanceCallExpression:
+                WriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node, writer);
+                break;
+            case BoundNodeKind.FieldAccessExpression:
+                WriteFieldAccessExpression((BoundFieldAccessExpression)node, writer);
+                break;
+            case BoundNodeKind.FieldAssignmentExpression:
+                WriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node, writer);
+                break;
+            case BoundNodeKind.NullConditionalAccessExpression:
+                WriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node, writer);
                 break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
@@ -293,6 +335,41 @@ public static class BoundNodePrinter
         writer.WriteLine();
     }
 
+    private static void WriteTryStatement(BoundTryStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.TryKeyword);
+        writer.WriteSpace();
+        node.TryBlock.WriteTo(writer);
+
+        foreach (var clause in node.CatchClauses)
+        {
+            writer.WriteKeyword(SyntaxKind.CatchKeyword);
+            writer.WriteSpace();
+            writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+            writer.WriteIdentifier(clause.Variable.Name);
+            writer.WriteSpace();
+            writer.WriteIdentifier(clause.ExceptionType.Name);
+            writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+            writer.WriteSpace();
+            clause.Body.WriteTo(writer);
+        }
+
+        if (node.FinallyBlock != null)
+        {
+            writer.WriteKeyword(SyntaxKind.FinallyKeyword);
+            writer.WriteSpace();
+            node.FinallyBlock.WriteTo(writer);
+        }
+    }
+
+    private static void WriteThrowStatement(BoundThrowStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.ThrowKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
+        writer.WriteLine();
+    }
+
     private static void WriteErrorExpression(BoundErrorExpression node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(node.Type.Name);
@@ -300,6 +377,12 @@ public static class BoundNodePrinter
 
     private static void WriteLiteralExpression(BoundLiteralExpression node, IndentedTextWriter writer)
     {
+        if (node.Type == TypeSymbol.Null)
+        {
+            writer.WriteKeyword(SyntaxKind.NilKeyword);
+            return;
+        }
+
         var value = node.Value.ToString();
 
         if (node.Type == TypeSymbol.Bool)
@@ -436,5 +519,160 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol arr)
+        {
+            writer.WriteNumber(arr.Length.ToString());
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteIdentifier(node.ElementType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+
+        var isFirst = true;
+        foreach (var element in node.Elements)
+        {
+            if (isFirst)
+            {
+                isFirst = false;
+            }
+            else
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            element.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteIndexExpression(BoundIndexExpression node, IndentedTextWriter writer)
+    {
+        node.Target.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        node.Index.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+    }
+
+    private static void WriteIndexAssignmentExpression(BoundIndexAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Target.Name);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        node.Index.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
+    }
+
+    private static void WriteIntrinsicCall(string name, BoundExpression operand, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        operand.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAppendExpression(BoundAppendExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("append");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        node.Slice.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CommaToken);
+        writer.WriteSpace();
+        node.Element.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteStructLiteralExpression(BoundStructLiteralExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        for (var i = 0; i < node.Initializers.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            var init = node.Initializers[i];
+            writer.WriteIdentifier(init.Field.Name);
+            writer.WritePunctuation(SyntaxKind.ColonToken);
+            writer.WriteSpace();
+            init.Value.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteConstructorCallExpression(BoundConstructorCallExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteUserInstanceCallExpression(BoundUserInstanceCallExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Method.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteFieldAccessExpression(BoundFieldAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Field.Name);
+    }
+
+    private static void WriteFieldAssignmentExpression(BoundFieldAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Receiver.Name);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Field.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
+    }
+
+    private static void WriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.QuestionDotToken);
+        node.WhenNotNull.WriteTo(writer);
     }
 }

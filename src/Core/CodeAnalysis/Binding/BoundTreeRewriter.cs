@@ -41,6 +41,10 @@ public abstract class BoundTreeRewriter
                 return RewriteReturnStatement((BoundReturnStatement)node);
             case BoundNodeKind.ExpressionStatement:
                 return RewriteExpressionStatement((BoundExpressionStatement)node);
+            case BoundNodeKind.TryStatement:
+                return RewriteTryStatement((BoundTryStatement)node);
+            case BoundNodeKind.ThrowStatement:
+                return RewriteThrowStatement((BoundThrowStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -223,6 +227,57 @@ public abstract class BoundTreeRewriter
     }
 
     /// <summary>
+    /// Rewrites a try statement.
+    /// </summary>
+    /// <param name="node">The try statement to rewrite.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewriteTryStatement(BoundTryStatement node)
+    {
+        var tryBlock = RewriteStatement(node.TryBlock);
+
+        var rewrittenClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
+        var clausesChanged = false;
+        foreach (var clause in node.CatchClauses)
+        {
+            var body = RewriteStatement(clause.Body);
+            if (body == clause.Body)
+            {
+                rewrittenClauses.Add(clause);
+            }
+            else
+            {
+                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+                clausesChanged = true;
+            }
+        }
+
+        var finallyBlock = node.FinallyBlock == null ? null : RewriteStatement(node.FinallyBlock);
+
+        if (tryBlock == node.TryBlock && !clausesChanged && finallyBlock == node.FinallyBlock)
+        {
+            return node;
+        }
+
+        return new BoundTryStatement(tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
+    }
+
+    /// <summary>
+    /// Rewrites a throw statement.
+    /// </summary>
+    /// <param name="node">The throw statement to rewrite.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewriteThrowStatement(BoundThrowStatement node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundThrowStatement(expression);
+    }
+
+    /// <summary>
     /// Rewrites an expression.
     /// </summary>
     /// <param name="node">The expression to rewrite.</param>
@@ -251,6 +306,30 @@ public abstract class BoundTreeRewriter
                 return RewriteImportedCallExpression((BoundImportedCallExpression)node);
             case BoundNodeKind.ImportedInstanceCallExpression:
                 return RewriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
+            case BoundNodeKind.ArrayCreationExpression:
+                return RewriteArrayCreationExpression((BoundArrayCreationExpression)node);
+            case BoundNodeKind.IndexExpression:
+                return RewriteIndexExpression((BoundIndexExpression)node);
+            case BoundNodeKind.IndexAssignmentExpression:
+                return RewriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node);
+            case BoundNodeKind.LenExpression:
+                return RewriteLenExpression((BoundLenExpression)node);
+            case BoundNodeKind.CapExpression:
+                return RewriteCapExpression((BoundCapExpression)node);
+            case BoundNodeKind.AppendExpression:
+                return RewriteAppendExpression((BoundAppendExpression)node);
+            case BoundNodeKind.StructLiteralExpression:
+                return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
+            case BoundNodeKind.ConstructorCallExpression:
+                return RewriteConstructorCallExpression((BoundConstructorCallExpression)node);
+            case BoundNodeKind.UserInstanceCallExpression:
+                return RewriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node);
+            case BoundNodeKind.FieldAccessExpression:
+                return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
+            case BoundNodeKind.FieldAssignmentExpression:
+                return RewriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node);
+            case BoundNodeKind.NullConditionalAccessExpression:
+                return RewriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -471,5 +550,216 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundImportedInstanceCallExpression(newReceiver, node.Method, node.Type, args);
+    }
+
+    /// <summary>Rewrites an array creation expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteArrayCreationExpression(BoundArrayCreationExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            var oldEl = node.Elements[i];
+            var newEl = RewriteExpression(oldEl);
+            if (newEl != oldEl && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Elements.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Elements[j]);
+                }
+            }
+
+            builder?.Add(newEl);
+        }
+
+        return builder == null ? node : new BoundArrayCreationExpression(node.ContainerType, builder.MoveToImmutable());
+    }
+
+    /// <summary>Rewrites an index expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteIndexExpression(BoundIndexExpression node)
+    {
+        var target = RewriteExpression(node.Target);
+        var index = RewriteExpression(node.Index);
+        if (target == node.Target && index == node.Index)
+        {
+            return node;
+        }
+
+        return new BoundIndexExpression(target, index, node.Type);
+    }
+
+    /// <summary>Rewrites an index assignment expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+    {
+        var index = RewriteExpression(node.Index);
+        var value = RewriteExpression(node.Value);
+        if (index == node.Index && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundIndexAssignmentExpression(node.Target, index, value, node.Type);
+    }
+
+    /// <summary>Rewrites a <c>len(x)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteLenExpression(BoundLenExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        return operand == node.Operand ? node : new BoundLenExpression(operand);
+    }
+
+    /// <summary>Rewrites a <c>cap(x)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteCapExpression(BoundCapExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        return operand == node.Operand ? node : new BoundCapExpression(operand);
+    }
+
+    /// <summary>Rewrites an <c>append(s, e)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteAppendExpression(BoundAppendExpression node)
+    {
+        var slice = RewriteExpression(node.Slice);
+        var element = RewriteExpression(node.Element);
+        if (slice == node.Slice && element == node.Element)
+        {
+            return node;
+        }
+
+        return new BoundAppendExpression(slice, element, node.SliceType);
+    }
+
+    /// <summary>Rewrites a struct composite literal.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteStructLiteralExpression(BoundStructLiteralExpression node)
+    {
+        ImmutableArray<BoundFieldInitializer>.Builder builder = null;
+        for (var i = 0; i < node.Initializers.Length; i++)
+        {
+            var init = node.Initializers[i];
+            var newValue = RewriteExpression(init.Value);
+            if (newValue != init.Value && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundFieldInitializer>(node.Initializers.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Initializers[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newValue == init.Value ? init : new BoundFieldInitializer(init.Field, newValue));
+            }
+        }
+
+        return builder == null ? node : new BoundStructLiteralExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a class primary-constructor call.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteConstructorCallExpression(BoundConstructorCallExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        return builder == null ? node : new BoundConstructorCallExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites an instance-method call on a user-defined class.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        if (receiver == node.Receiver && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundUserInstanceCallExpression(receiver, node.Method, builder?.ToImmutable() ?? node.Arguments);
+    }
+
+    /// <summary>Rewrites a field read.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        return receiver == node.Receiver ? node : new BoundFieldAccessExpression(receiver, node.StructType, node.Field);
+    }
+
+    /// <summary>Rewrites a field assignment.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+    {
+        var value = RewriteExpression(node.Value);
+        return value == node.Value ? node : new BoundFieldAssignmentExpression(node.Receiver, node.StructType, node.Field, value);
+    }
+
+    /// <summary>Rewrites a null-conditional access expression (Phase 3.C.3b).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        var whenNotNull = RewriteExpression(node.WhenNotNull);
+        if (receiver == node.Receiver && whenNotNull == node.WhenNotNull)
+        {
+            return node;
+        }
+
+        return new BoundNullConditionalAccessExpression(receiver, node.Capture, whenNotNull, node.Type);
     }
 }

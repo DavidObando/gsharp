@@ -24,6 +24,8 @@ public enum BoundNodeKind
     ConditionalGotoStatement,
     ReturnStatement,
     ExpressionStatement,
+    TryStatement,
+    ThrowStatement,
 
     // Expressions
     ErrorExpression,
@@ -36,6 +38,18 @@ public enum BoundNodeKind
     ConversionExpression,
     ImportedCallExpression,
     ImportedInstanceCallExpression,
+    ArrayCreationExpression,
+    IndexExpression,
+    IndexAssignmentExpression,
+    LenExpression,
+    CapExpression,
+    AppendExpression,
+    StructLiteralExpression,
+    ConstructorCallExpression,
+    UserInstanceCallExpression,
+    FieldAccessExpression,
+    FieldAssignmentExpression,
+    NullConditionalAccessExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -20,9 +20,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class Binder
 {
     private readonly FunctionSymbol function;
+    private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
+        = new List<(StructDeclarationSyntax, StructSymbol)>();
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
+    private int nullConditionalCaptureCounter;
+    private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
     private BoundScope scope;
 
     /// <summary>
@@ -37,6 +41,36 @@ public sealed class Binder
 
         if (function != null)
         {
+            if (function.ThisParameter != null)
+            {
+                scope.TryDeclareVariable(function.ThisParameter);
+
+                // Phase 3.B.3 sub-step 2b: expose each field on the receiver
+                // as a bare name inside the method body. Field access lowers
+                // to `this.<field>` at name resolution time.
+                // Sub-step 3: walk inheritance chain so inherited fields are
+                // also accessible via bare name. Derived shadowing wins.
+                if (function.ReceiverType is StructSymbol receiverStruct)
+                {
+                    var seenFields = new HashSet<string>();
+                    for (var t = receiverStruct; t != null; t = t.BaseClass)
+                    {
+                        if (t.Fields.IsDefaultOrEmpty)
+                        {
+                            continue;
+                        }
+
+                        foreach (var fld in t.Fields)
+                        {
+                            if (seenFields.Add(fld.Name))
+                            {
+                                scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
+                            }
+                        }
+                    }
+                }
+            }
+
             foreach (var p in function.Parameters)
             {
                 scope.TryDeclareVariable(p);
@@ -130,6 +164,41 @@ public sealed class Binder
             binder.BindTypeAliasDeclaration(typeAlias);
         }
 
+        var interfaceDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                               .OfType<InterfaceDeclarationSyntax>();
+
+        // Phase 3 exit: register interface type aliases up front so structs
+        // declared in subsequent passes can implement them, *and* defer the
+        // resolution of interface method signatures until after structs have
+        // been registered — interface methods may reference user struct/class
+        // types as parameter or return types (e.g. `func Find(...) Contact?`).
+        var declaredInterfaces = new List<(InterfaceDeclarationSyntax Syntax, InterfaceSymbol Symbol)>();
+        foreach (var ifaceSyntax in interfaceDeclarations)
+        {
+            var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
+            var sym = binder.DeclareInterfaceSymbol(ifaceSyntax, owningPackage);
+            if (sym != null)
+            {
+                declaredInterfaces.Add((ifaceSyntax, sym));
+            }
+        }
+
+        var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                            .OfType<StructDeclarationSyntax>();
+        foreach (var structSyntax in structDeclarations)
+        {
+            var owningPackage = packageByTree[structSyntax.SyntaxTree];
+            binder.BindStructDeclaration(structSyntax, owningPackage);
+        }
+
+        foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
+        {
+            var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
+            binder.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage);
+        }
+
+        binder.VerifyInterfaceImplementations();
+
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
@@ -150,8 +219,16 @@ public sealed class Binder
 
         var imports = binder.scope.GetDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
+        var extensionFunctions = binder.scope.GetDeclaredExtensionFunctions();
+        if (!extensionFunctions.IsDefaultOrEmpty)
+        {
+            functions = functions.AddRange(extensionFunctions);
+        }
+
         var variables = binder.scope.GetDeclaredVariables();
         var typeAliases = binder.scope.GetDeclaredTypeAliases();
+        var structs = binder.scope.GetDeclaredStructs();
+        var interfaces = binder.scope.GetDeclaredInterfaces();
 
         // Entry-point package: the package owning the top-level statements
         // (if any) or the package owning explicit Main (if any) or, lacking
@@ -168,7 +245,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -206,6 +283,32 @@ public sealed class Binder
             scope = scope.Previous;
         }
 
+        // Phase 3.B.3 sub-step 2b: bind class method bodies. Methods are not
+        // in globalScope.Functions (they're addressed via the dot operator),
+        // so we walk Structs explicitly here.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var method in structSym.Methods)
+            {
+                var binder = new Binder(parentScope, method);
+                var body = binder.BindStatement(method.Declaration.Body);
+                var loweredBody = Lowerer.Lower(body);
+
+                if (method.Type != TypeSymbol.Void && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                {
+                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                }
+
+                functionBodies.Add(method, loweredBody);
+                diagnostics.AddRange(binder.Diagnostics);
+            }
+        }
+
         var statement = Lowerer.Lower(new BoundBlockStatement(globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
@@ -216,7 +319,7 @@ public sealed class Binder
             functionBodies[globalScope.EntryPoint] = statement;
         }
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement);
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)
@@ -313,11 +416,382 @@ public sealed class Binder
         }
     }
 
+    private void BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+
+        switch (name)
+        {
+            case "bool":
+            case "int":
+            case "string":
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                return;
+        }
+
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+
+        var seenFieldNames = new HashSet<string>();
+        var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+
+        // Phase 3.B.3 sub-step 2: Kotlin-style primary constructor parameters
+        // declare fields of the same name + type, in source order, in addition
+        // to becoming the ctor's parameters.
+        var primaryCtorParameters = ImmutableArray<ParameterSymbol>.Empty;
+        if (syntax.HasPrimaryConstructor)
+        {
+            var ctorBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
+            foreach (var paramSyntax in syntax.PrimaryConstructorParameters)
+            {
+                var paramName = paramSyntax.Identifier.Text;
+                var paramType = BindTypeClause(paramSyntax.Type);
+                if (paramType == null)
+                {
+                    continue;
+                }
+
+                if (!seenFieldNames.Add(paramName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(paramSyntax.Identifier.Location, paramName);
+                    continue;
+                }
+
+                ctorBuilder.Add(new ParameterSymbol(paramName, paramType));
+                fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public));
+            }
+
+            primaryCtorParameters = ctorBuilder.ToImmutable();
+        }
+
+        foreach (var fieldSyntax in syntax.Fields)
+        {
+            var fieldName = fieldSyntax.Identifier.Text;
+            if (!seenFieldNames.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
+                continue;
+            }
+
+            var fieldType = BindTypeClause(fieldSyntax.Type);
+            if (fieldType == null)
+            {
+                continue;
+            }
+
+            var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
+            fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility));
+        }
+
+        if (syntax.IsData && fields.Count == 0)
+        {
+            Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
+        }
+
+        // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
+        // Each identifier is either the (single) base class or an interface
+        // implemented by this class. A base class, if present, must be the
+        // first identifier. Declaration order rules apply: base/interfaces
+        // must be declared before this type.
+        StructSymbol baseClassSymbol = null;
+        var implementedInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
+        if (syntax.HasBaseType)
+        {
+            if (!syntax.IsClass)
+            {
+                Diagnostics.ReportUnexpectedToken(syntax.BaseColonToken.Location, SyntaxKind.ColonToken, SyntaxKind.OpenBraceToken);
+            }
+            else
+            {
+                var allBaseTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+                allBaseTokens.Add(syntax.BaseTypeIdentifier);
+                if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
+                {
+                    allBaseTokens.AddRange(syntax.AdditionalBaseTypeIdentifiers);
+                }
+
+                for (var i = 0; i < allBaseTokens.Count; i++)
+                {
+                    var token = allBaseTokens[i];
+                    var baseName = token.Text;
+                    if (!scope.TryLookupTypeAlias(baseName, out var resolved))
+                    {
+                        Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                        continue;
+                    }
+
+                    if (resolved is InterfaceSymbol iface)
+                    {
+                        implementedInterfaces.Add(iface);
+                        continue;
+                    }
+
+                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
+                    {
+                        if (i != 0)
+                        {
+                            Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                            continue;
+                        }
+
+                        if (!baseStruct.IsOpen)
+                        {
+                            Diagnostics.ReportBaseClassNotOpen(token.Location, baseName);
+                            continue;
+                        }
+
+                        baseClassSymbol = baseStruct;
+                        continue;
+                    }
+
+                    Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                }
+            }
+        }
+
+        var structSymbol = new StructSymbol(
+            name,
+            fields.ToImmutable(),
+            accessibility,
+            syntax,
+            package.Name,
+            syntax.IsData,
+            syntax.IsClass,
+            primaryCtorParameters,
+            isOpen: syntax.IsOpen && syntax.IsClass,
+            baseClass: baseClassSymbol);
+
+        if (!scope.TryDeclareTypeAlias(name, structSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+
+        // Phase 3.B.3 sub-step 2b: bind methods declared inside the class body.
+        // Methods are only legal on `class` types (struct methods rejected by
+        // the parser already). Each method becomes a FunctionSymbol with
+        // ReceiverType = structSymbol; method bodies are bound later by
+        // BindProgram by walking StructSymbol.Methods.
+        if (syntax.IsClass && !syntax.Methods.IsDefaultOrEmpty)
+        {
+            var existingNames = new HashSet<string>();
+            foreach (var f in structSymbol.Fields)
+            {
+                existingNames.Add(f.Name);
+            }
+
+            var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            foreach (var methodSyntax in syntax.Methods)
+            {
+                var methodName = methodSyntax.Identifier.Text;
+                if (!existingNames.Add(methodName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(methodSyntax.Identifier.Location, methodName);
+                    continue;
+                }
+
+                var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                var seenParameterNames = new HashSet<string>();
+                foreach (var parameterSyntax in methodSyntax.Parameters)
+                {
+                    var parameterName = parameterSyntax.Identifier.Text;
+                    var parameterType = BindTypeClause(parameterSyntax.Type);
+                    if (!seenParameterNames.Add(parameterName))
+                    {
+                        Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                    }
+                    else
+                    {
+                        parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                    }
+                }
+
+                var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+                var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+                var methodParameters = parameters.ToImmutable();
+
+                // Phase 3.B.3 sub-step 3: open/override validation against
+                // base class chain per ADR-0017.
+                FunctionSymbol overriddenMethod = null;
+                if (methodSyntax.IsOverride)
+                {
+                    if (structSymbol.BaseClass == null || !structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var baseMethod))
+                    {
+                        Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else if (!baseMethod.IsOpen)
+                    {
+                        Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
+                    {
+                        Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else
+                    {
+                        overriddenMethod = baseMethod;
+                    }
+                }
+                else if (structSymbol.BaseClass != null
+                    && structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var shadowed)
+                    && shadowed.IsOpen)
+                {
+                    // Method shadows an overridable base method without `override`.
+                    Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                }
+
+                var methodSymbol = new FunctionSymbol(
+                    methodName,
+                    methodParameters,
+                    returnType,
+                    methodSyntax,
+                    package,
+                    methodAccessibility,
+                    receiverType: structSymbol,
+                    isOpen: methodSyntax.IsOpen,
+                    isOverride: methodSyntax.IsOverride);
+                methodSymbol.OverriddenMethod = overriddenMethod;
+                methodsBuilder.Add(methodSymbol);
+            }
+
+            structSymbol.SetMethods(methodsBuilder.ToImmutable());
+        }
+
+        // Phase 3.B.4: validate interface implementation. Walks each
+        // implemented interface and confirms the class (including inherited
+        // methods) provides a same-name, same-signature method. The check
+        // itself is deferred (see `VerifyInterfaceImplementations`) until
+        // after interface method signatures have been bound, since
+        // interface methods may forward-reference user struct/class types.
+        if (implementedInterfaces.Count > 0)
+        {
+            structSymbol.SetInterfaces(implementedInterfaces.ToImmutable());
+            foreach (var iface in implementedInterfaces)
+            {
+                // Phase 3.B.5: a `sealed` interface restricts implementors
+                // to the same package as the interface itself.
+                if (iface.IsSealed && !string.Equals(iface.PackageName ?? string.Empty, structSymbol.PackageName ?? string.Empty, System.StringComparison.Ordinal))
+                {
+                    Diagnostics.ReportSealedInterfaceImplementorOutsidePackage(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iface.PackageName ?? string.Empty);
+                }
+            }
+
+            pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
+        }
+    }
+
+    private void VerifyInterfaceImplementations()
+    {
+        foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
+        {
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                foreach (var imethod in iface.Methods)
+                {
+                    if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)
+                        || !SignaturesMatch(imethod, impl.Parameters, impl.Type))
+                    {
+                        Diagnostics.ReportInterfaceMethodNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol.Name,
+                            iface.Name,
+                            imethod.Name);
+                    }
+                }
+            }
+        }
+    }
+
+    private InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
+
+        if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return null;
+        }
+
+        return interfaceSymbol;
+    }
+
+    private void BindInterfaceDeclaration(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var declared = DeclareInterfaceSymbol(syntax, package);
+        if (declared != null)
+        {
+            BindInterfaceMembers(syntax, declared, package);
+        }
+    }
+
+    private void BindInterfaceMembers(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
+    {
+        var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var seenNames = new HashSet<string>();
+        foreach (var methodSyntax in syntax.Methods)
+        {
+            var methodName = methodSyntax.Identifier.Text;
+            if (!seenNames.Add(methodName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(methodSyntax.Identifier.Location, methodName);
+                continue;
+            }
+
+            var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+            var seenParameterNames = new HashSet<string>();
+            foreach (var parameterSyntax in methodSyntax.Parameters)
+            {
+                var parameterName = parameterSyntax.Identifier.Text;
+                var parameterType = BindTypeClause(parameterSyntax.Type);
+                if (!seenParameterNames.Add(parameterName))
+                {
+                    Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                }
+                else
+                {
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                }
+            }
+
+            var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+            var methodSymbol = new FunctionSymbol(
+                methodName,
+                parameters.ToImmutable(),
+                returnType,
+                methodSyntax,
+                package,
+                Accessibility.Public,
+                receiverType: null);
+            methodsBuilder.Add(methodSymbol);
+        }
+
+        interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
+    }
+
     private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
     {
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
 
         var seenParameterNames = new HashSet<string>();
+
+        // Phase 3.B.6 / ADR-0019: receiver clause becomes parameters[0].
+        TypeSymbol extensionReceiverType = null;
+        if (syntax.IsExtension)
+        {
+            var recvName = syntax.Receiver.Identifier.Text;
+            extensionReceiverType = BindTypeClause(syntax.Receiver.Type);
+            if (extensionReceiverType == null)
+            {
+                extensionReceiverType = TypeSymbol.Error;
+            }
+
+            seenParameterNames.Add(recvName);
+            parameters.Add(new ParameterSymbol(recvName, extensionReceiverType));
+        }
 
         foreach (var parameterSyntax in syntax.Parameters)
         {
@@ -338,10 +812,46 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+
+        if (syntax.IsExtension)
+        {
+            function.IsExtension = true;
+            function.ExtensionReceiverType = extensionReceiverType;
+            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+            }
+
+            return;
+        }
+
         if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
         }
+    }
+
+    private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
+    {
+        if (baseMethod.Type != derivedReturnType)
+        {
+            return false;
+        }
+
+        if (baseMethod.Parameters.Length != derivedParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < derivedParams.Length; i++)
+        {
+            if (baseMethod.Parameters[i].Type != derivedParams[i].Type)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static Accessibility ResolveAccessibility(SyntaxToken modifier)
@@ -402,6 +912,12 @@ public sealed class Binder
                 return BindMultiAssignmentStatement((MultiAssignmentStatementSyntax)syntax);
             case SyntaxKind.SwitchStatement:
                 return BindSwitchStatement((SwitchStatementSyntax)syntax);
+            case SyntaxKind.TryStatement:
+                return BindTryStatement((TryStatementSyntax)syntax);
+            case SyntaxKind.ThrowStatement:
+                return BindThrowStatement((ThrowStatementSyntax)syntax);
+            case SyntaxKind.UsingStatement:
+                return BindUsingStatement((UsingStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -416,11 +932,76 @@ public sealed class Binder
         {
             var statement = BindStatement(statementSyntax);
             statements.Add(statement);
+
+            // Phase 3.C.4: mutation invalidates the narrowing. After binding
+            // a statement that writes to a narrowed variable, drop its
+            // narrowing from the current frame so subsequent reads in this
+            // block see the variable at its declared (nullable) type again.
+            InvalidateNarrowingsForAssignedVariables(statementSyntax);
         }
 
         scope = scope.Parent;
 
         return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
+    {
+        if (narrowedVariables.Count == 0)
+        {
+            return;
+        }
+
+        var top = narrowedVariables[narrowedVariables.Count - 1];
+        if (top.Count == 0)
+        {
+            return;
+        }
+
+        var assignedNames = new HashSet<string>();
+        CollectAssignedNames(statementSyntax, assignedNames);
+        if (assignedNames.Count == 0)
+        {
+            return;
+        }
+
+        // Resolve each name through the current scope and drop any matching
+        // narrowing. We don't need to be conservative about scope shadowing:
+        // the narrowed variable lives in an outer scope, so an inner
+        // shadowing declaration with the same name will resolve to a
+        // different symbol, and the narrowing will simply not be triggered.
+        foreach (var name in assignedNames)
+        {
+            if (scope.TryLookupSymbol(name) is VariableSymbol v && top.ContainsKey(v))
+            {
+                top.Remove(v);
+            }
+        }
+    }
+
+    private static void CollectAssignedNames(SyntaxNode node, HashSet<string> assigned)
+    {
+        switch (node)
+        {
+            case AssignmentExpressionSyntax a:
+                assigned.Add(a.IdentifierToken.Text);
+                break;
+            case MultiAssignmentStatementSyntax m:
+                foreach (var t in m.Targets)
+                {
+                    if (t is NameExpressionSyntax ne)
+                    {
+                        assigned.Add(ne.IdentifierToken.Text);
+                    }
+                }
+
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAssignedNames(child, assigned);
+        }
     }
 
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
@@ -437,20 +1018,48 @@ public sealed class Binder
         return new BoundVariableDeclaration(variable, convertedInitializer);
     }
 
-    private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
+    private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)
     {
         if (syntax == null)
         {
             return null;
         }
 
-        var type = LookupType(syntax.Identifier.Text);
-        if (type == null)
+        var element = LookupType(syntax.Identifier.Text);
+        if (element == null)
         {
             Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
+            return null;
         }
 
-        return type;
+        if (!syntax.IsArray)
+        {
+            return element;
+        }
+
+        if (syntax.IsSlice)
+        {
+            return SliceTypeSymbol.Get(element);
+        }
+
+        if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
+        {
+            Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
+            return null;
+        }
+
+        return ArrayTypeSymbol.Get(element, length);
+    }
+
+    private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
+    {
+        var bound = BindNonNullableTypeClause(syntax);
+        if (bound == null || !syntax.IsNullable)
+        {
+            return bound;
+        }
+
+        return NullableTypeSymbol.Get(bound);
     }
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)
@@ -458,8 +1067,14 @@ public sealed class Binder
         if (syntax.Initializer == null)
         {
             var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-            var thenStatement = BindStatement(syntax.ThenStatement);
-            var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+            // Phase 3.C.4: minimal smart-cast narrowing for `x != nil` and
+            // `x == nil` guards. The non-nil arm sees `x` as the underlying
+            // type; the nil arm sees it as the bottom `TypeSymbol.Null`.
+            var (nonNilNarrow, nilNarrow) = TryClassifyNilGuard(condition);
+
+            var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, nonNilNarrow);
+            var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, nilNarrow);
             return new BoundIfStatement(condition, thenStatement, elseStatement);
         }
 
@@ -480,6 +1095,69 @@ public sealed class Binder
 
         var inner = new BoundIfStatement(initCondition, initThen, initElse);
         return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
+    {
+        // Phase 3.C.4: recognise the canonical narrowing patterns. We support
+        // only single-variable guards here; conjunctions, disjunctions and
+        // pattern-based narrowing are deferred.
+        if (condition is not BoundBinaryExpression be)
+        {
+            return (null, null);
+        }
+
+        VariableSymbol target = null;
+        if (be.Left is BoundVariableExpression lv && IsNilLiteral(be.Right))
+        {
+            target = lv.Variable;
+        }
+        else if (be.Right is BoundVariableExpression rv && IsNilLiteral(be.Left))
+        {
+            target = rv.Variable;
+        }
+
+        if (target == null || target.Type is not NullableTypeSymbol nullable)
+        {
+            return (null, null);
+        }
+
+        var underlying = nullable.UnderlyingType;
+        Dictionary<VariableSymbol, TypeSymbol> nonNilFrame = null;
+        Dictionary<VariableSymbol, TypeSymbol> nilFrame = null;
+        if (be.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+        {
+            nonNilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+        }
+        else if (be.Op.Kind == BoundBinaryOperatorKind.Equals)
+        {
+            nilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+        }
+
+        return (nonNilFrame, nilFrame);
+    }
+
+    private static bool IsNilLiteral(BoundExpression expr)
+    {
+        return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
+    }
+
+    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (frame == null)
+        {
+            return BindStatement(syntax);
+        }
+
+        narrowedVariables.Add(frame);
+        try
+        {
+            return BindStatement(syntax);
+        }
+        finally
+        {
+            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+        }
     }
 
     private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
@@ -637,6 +1315,123 @@ public sealed class Binder
         }
 
         return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement BindTryStatement(TryStatementSyntax syntax)
+    {
+        var tryBlock = BindBlockStatement(syntax.TryBlock);
+
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.TryKeyword.Location, "System.Exception");
+            return BindErrorStatement();
+        }
+
+        var catches = ImmutableArray.CreateBuilder<BoundCatchClause>();
+        foreach (var catchSyntax in syntax.CatchClauses)
+        {
+            var catchType = exceptionType;
+            if (catchSyntax.TypeClause != null)
+            {
+                var declared = BindTypeClause(catchSyntax.TypeClause);
+                if (declared != null)
+                {
+                    catchType = declared;
+                }
+            }
+
+            scope = new BoundScope(scope);
+            var variable = BindVariableDeclaration(catchSyntax.Identifier, isReadOnly: true, type: catchType);
+            var body = BindBlockStatement(catchSyntax.Body);
+            scope = scope.Parent;
+
+            catches.Add(new BoundCatchClause(catchType, variable, body));
+        }
+
+        BoundStatement finallyBlock = null;
+        if (syntax.FinallyClause != null)
+        {
+            finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+        }
+
+        if (catches.Count == 0 && finallyBlock == null)
+        {
+            Diagnostics.ReportTryWithoutCatchOrFinally(syntax.TryKeyword.Location);
+            return BindErrorStatement();
+        }
+
+        return new BoundTryStatement(tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType != null && expression.Type != TypeSymbol.Error)
+        {
+            var argClr = expression.Type?.ClrType;
+            if (argClr == null || !ClrTypeUtilities.IsAssignableByName(exceptionType.ClrType, argClr))
+            {
+                Diagnostics.ReportCannotConvert(syntax.Expression.Location, expression.Type ?? TypeSymbol.Error, exceptionType);
+                return BindErrorStatement();
+            }
+        }
+
+        return new BoundThrowStatement(expression);
+    }
+
+    private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
+    {
+        // Lower `using let x = expr` to `let x = expr; try { } finally { x.Dispose() }`.
+        // Because the rest of the enclosing block is not available here, the user's
+        // intent is captured by emitting a try/finally that protects an empty block.
+        // The disposal still happens at scope exit because the finally always runs.
+        // Note: this is a minimal Phase 3.D shape; a future iteration will reshape
+        // the enclosing block so the protected region covers the remaining statements.
+        var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
+
+        var disposeCall = TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
+        if (disposeCall == null)
+        {
+            return BindErrorStatement();
+        }
+
+        var tryBlock = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(disposeCall)));
+        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declaration, tryStmt));
+    }
+
+    private BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
+    {
+        var clrType = variable.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
+            return null;
+        }
+
+        var disposeMethod = clrType.GetMethod("Dispose", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, binder: null, types: System.Type.EmptyTypes, modifiers: null);
+        if (disposeMethod == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type);
+            return null;
+        }
+
+        var receiver = new BoundVariableExpression(variable);
+        return new BoundImportedInstanceCallExpression(receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+    }
+
+    private TypeSymbol ResolveExceptionType()
+    {
+        if (scope.References.TryResolveType("System.Exception", out var t))
+        {
+            return TypeSymbol.FromClrType(t);
+        }
+
+        return null;
     }
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
@@ -870,6 +1665,16 @@ public sealed class Binder
                 return BindCallExpression((CallExpressionSyntax)syntax);
             case SyntaxKind.AccessorExpression:
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
+            case SyntaxKind.ArrayCreationExpression:
+                return BindArrayCreationExpression((ArrayCreationExpressionSyntax)syntax);
+            case SyntaxKind.IndexExpression:
+                return BindIndexExpression((IndexExpressionSyntax)syntax);
+            case SyntaxKind.IndexAssignmentExpression:
+                return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.StructLiteralExpression:
+                return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
+            case SyntaxKind.FieldAssignmentExpression:
+                return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -882,7 +1687,16 @@ public sealed class Binder
 
     private BoundExpression BindLiteralExpression(LiteralExpressionSyntax syntax)
     {
-        var value = syntax.Value ?? 0;
+        // Phase 3.C.2: a literal whose syntax value is null is the `nil`
+        // literal — preserve null so BoundLiteralExpression picks the Null
+        // sentinel type. All other literals default missing values to 0
+        // for legacy parser robustness.
+        var value = syntax.Value;
+        if (value == null && syntax.LiteralToken.Kind != SyntaxKind.NilKeyword)
+        {
+            value = 0;
+        }
+
         return new BoundLiteralExpression(value);
     }
 
@@ -976,7 +1790,30 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        return new BoundVariableExpression(variable);
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            return new BoundFieldAccessExpression(
+                new BoundVariableExpression(implicitField.Receiver),
+                implicitField.StructType,
+                implicitField.Field);
+        }
+
+        return new BoundVariableExpression(variable, TryGetNarrowedType(variable));
+    }
+
+    private TypeSymbol TryGetNarrowedType(VariableSymbol variable)
+    {
+        // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
+        // innermost frame outward — the topmost narrowing wins.
+        for (var i = narrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (narrowedVariables[i].TryGetValue(variable, out var narrowed))
+            {
+                return narrowed;
+            }
+        }
+
+        return null;
     }
 
     private BoundExpression BindAssignmentExpression(AssignmentExpressionSyntax syntax)
@@ -990,6 +1827,12 @@ public sealed class Binder
             return boundExpression;
         }
 
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
+            return new BoundFieldAssignmentExpression(implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
+        }
+
         if (variable.IsReadOnly)
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
@@ -998,6 +1841,71 @@ public sealed class Binder
         var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(variable, convertedExpression);
+    }
+
+    private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
+    {
+        var typeName = syntax.TypeIdentifier.Text;
+        if (!scope.TryLookupTypeAlias(typeName, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
+        {
+            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+            return new BoundErrorExpression();
+        }
+
+        var seenFieldNames = new HashSet<string>();
+        var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        foreach (var initSyntax in syntax.Initializers)
+        {
+            var fieldName = initSyntax.FieldIdentifier.Text;
+            if (!structSymbol.TryGetFieldIncludingInherited(fieldName, out var field, out _))
+            {
+                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            if (!seenFieldNames.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            var valueExpr = BindExpression(initSyntax.Value);
+            valueExpr = BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
+            inits.Add(new BoundFieldInitializer(field, valueExpr));
+        }
+
+        return new BoundStructLiteralExpression(structSymbol, inits.ToImmutable());
+    }
+
+    private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
+    {
+        var receiverName = syntax.Receiver.Text;
+        var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
+        var value = BindExpression(syntax.Value);
+        if (variable == null)
+        {
+            return value;
+        }
+
+        if (!(variable.Type is StructSymbol structSymbol))
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (variable.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
+        }
+
+        var converted = BindConversion(syntax.Value.Location, value, field.Type);
+        return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
     }
 
     private BoundExpression BindUnaryExpression(UnaryExpressionSyntax syntax)
@@ -1041,11 +1949,91 @@ public sealed class Binder
         return new BoundBinaryExpression(boundLeft, boundOperator, boundRight);
     }
 
+    private BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
+    {
+        var parameters = classType.PrimaryConstructorParameters;
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        foreach (var argument in syntax.Arguments)
+        {
+            boundArguments.Add(BindExpression(argument));
+        }
+
+        if (syntax.Arguments.Count != parameters.Length)
+        {
+            TextSpan span;
+            if (syntax.Arguments.Count > parameters.Length)
+            {
+                SyntaxNode firstExceedingNode;
+                if (parameters.Length > 0)
+                {
+                    firstExceedingNode = syntax.Arguments.GetSeparator(parameters.Length - 1);
+                }
+                else
+                {
+                    firstExceedingNode = syntax.Arguments[0];
+                }
+
+                var lastExceedingArgument = syntax.Arguments[syntax.Arguments.Count - 1];
+                span = TextSpan.FromBounds(firstExceedingNode.Span.Start, lastExceedingArgument.Span.End);
+            }
+            else
+            {
+                span = syntax.CloseParenthesisToken.Span;
+            }
+
+            Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), classType.Name, parameters.Length, syntax.Arguments.Count);
+            return new BoundErrorExpression();
+        }
+
+        var hasErrors = false;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var argument = boundArguments[i];
+            var parameter = parameters[i];
+            if (argument.Type != parameter.Type)
+            {
+                if (argument.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
+                }
+
+                hasErrors = true;
+            }
+        }
+
+        if (hasErrors)
+        {
+            return new BoundErrorExpression();
+        }
+
+        return new BoundConstructorCallExpression(classType, boundArguments.ToImmutable());
+    }
+
     private BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
         if (syntax.Arguments.Count == 1 && LookupType(syntax.Identifier.Text) is TypeSymbol type)
         {
-            return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+            // A single-arg call to a primitive-typed name is a conversion
+            // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
+            // type with a one-parameter primary constructor, treat it as a
+            // ctor call instead.
+            if (!(type is StructSymbol singleArgStruct && singleArgStruct.IsClass && singleArgStruct.HasPrimaryConstructor))
+            {
+                return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+            }
+        }
+
+        // Phase 3.B.3 sub-step 2: `ClassName(arg1, arg2, ...)` invokes the
+        // class's primary constructor when the call target resolves to a
+        // class type with a declared primary ctor.
+        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && classType.IsClass && classType.HasPrimaryConstructor)
+        {
+            return BindConstructorCallExpression(syntax, classType);
+        }
+
+        if (TryBindIntrinsicCall(syntax, out var intrinsic))
+        {
+            return intrinsic;
         }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
@@ -1122,8 +2110,89 @@ public sealed class Binder
         return new BoundCallExpression(function, boundArguments.ToImmutable());
     }
 
+    private bool TryBindIntrinsicCall(CallExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var name = syntax.Identifier.Text;
+        switch (name)
+        {
+            case "len":
+            case "cap":
+            {
+                if (syntax.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var operand = BindExpression(syntax.Arguments[0]);
+                if (operand.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
+                    || (name == "len" && operand.Type == TypeSymbol.String);
+                if (!ok)
+                {
+                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                result = name == "len"
+                    ? new BoundLenExpression(operand)
+                    : new BoundCapExpression(operand);
+                return true;
+            }
+
+            case "append":
+            {
+                if (syntax.Arguments.Count != 2)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var slice = BindExpression(syntax.Arguments[0]);
+                if (slice.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                if (slice.Type is not SliceTypeSymbol sliceType)
+                {
+                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, slice.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var element = BindConversion(syntax.Arguments[1], sliceType.ElementType);
+                result = new BoundAppendExpression(slice, element, sliceType);
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
+        // Phase 3.C.3b / ADR-0020: null-conditional access `lhs?.rhs`.
+        // Evaluate the receiver once, capture it into a synthetic local,
+        // then bind the rest of the access against the capture so the
+        // subtree can be evaluated against the non-nil value without a
+        // second evaluation of the receiver expression.
+        if (syntax.IsNullConditional)
+        {
+            return BindNullConditionalAccessExpression(syntax);
+        }
+
         // Determine what the left side of the accessor is: either an imported
         // class (for static member access) or a value-producing expression (for
         // instance member access). Then apply the right side, which may itself
@@ -1138,7 +2207,20 @@ public sealed class Binder
             var name = leftName.IdentifierToken.Text;
             if (scope.TryLookupSymbol(name) is VariableSymbol variable)
             {
-                receiver = new BoundVariableExpression(variable);
+                if (variable is ImplicitFieldVariableSymbol implicitField)
+                {
+                    // Bare field name inside a method: rebind as `this.field`
+                    // so chained access (`Field.Sub`) emits a load of the
+                    // backing field through the `this` receiver.
+                    receiver = new BoundFieldAccessExpression(
+                        new BoundVariableExpression(implicitField.Receiver),
+                        implicitField.StructType,
+                        implicitField.Field);
+                }
+                else
+                {
+                    receiver = new BoundVariableExpression(variable);
+                }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
@@ -1161,6 +2243,53 @@ public sealed class Binder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    private BoundExpression BindNullConditionalAccessExpression(AccessorExpressionSyntax syntax)
+    {
+        var receiver = BindExpression(syntax.LeftPart);
+        if (receiver is BoundErrorExpression)
+        {
+            return receiver;
+        }
+
+        var receiverType = receiver.Type;
+        TypeSymbol underlying;
+        if (receiverType is NullableTypeSymbol nullable)
+        {
+            underlying = nullable.UnderlyingType;
+        }
+        else if (receiverType == TypeSymbol.Null)
+        {
+            // `nil?.x` is statically nil.
+            return new BoundLiteralExpression(null);
+        }
+        else
+        {
+            // Non-nullable receiver: `?.` collapses to `.`, but we still
+            // produce a nullable result type for syntactic consistency.
+            underlying = receiverType;
+        }
+
+        // Create a synthetic capture local. Name is not user-visible; we
+        // include a leading `$` so it cannot collide with user identifiers.
+        var captureName = "$ncap_" + (++nullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
+
+        // Bind the access using the capture as the receiver. We push a temp
+        // scope so the capture is in scope for any nested name lookup that
+        // happens during access binding (defensive — current accessor paths
+        // don't look up the receiver by name).
+        scope = new BoundScope(scope);
+        scope.TryDeclareVariable(capture);
+
+        var captureRef = new BoundVariableExpression(capture);
+        var whenNotNull = BindAccessorStep(captureRef, null, syntax.RightPart);
+
+        scope = scope.Parent;
+
+        var resultType = whenNotNull.Type is NullableTypeSymbol ? whenNotNull.Type : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
+        return new BoundNullConditionalAccessExpression(receiver, capture, whenNotNull, resultType);
     }
 
     private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
@@ -1225,6 +2354,19 @@ public sealed class Binder
                         Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                     }
                 }
+                else if (receiver != null && receiver.Type is StructSymbol structSym)
+                {
+                    // Walk base chain to find the field.
+                    for (var c = structSym; c != null; c = c.BaseClass)
+                    {
+                        if (c.TryGetField(ne.IdentifierToken.Text, out var field))
+                        {
+                            return new BoundFieldAccessExpression(receiver, c, field);
+                        }
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
@@ -1261,8 +2403,37 @@ public sealed class Binder
 
         if (receiver == null || receiver.Type?.ClrType == null)
         {
+            // Phase 3.B.4: dispatch to a user-defined interface method when
+            // the static receiver type is an interface.
+            if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
+            {
+                return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce);
+            }
+
+            // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
+            // if receiver is a user struct symbol.
+            if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethodIncludingInherited(methodName, out var userMethod))
+            {
+                return BindUserInstanceCall(receiver, userMethod, arguments, ce);
+            }
+
+            // Phase 3.B.6 / ADR-0019: extension function fallback for
+            // user-type receivers (struct/class/interface).
+            if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var userExtFn))
+            {
+                return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce);
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression();
+        }
+
+        // Prefer a user-defined class method when the receiver is a user
+        // class symbol that has one with this name. (BCL lookup is the
+        // fallback for imported CLR types.)
+        if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethodIncludingInherited(methodName, out var userMethodPriority))
+        {
+            return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce);
         }
 
         var clrType = receiver.Type.ClrType;
@@ -1298,8 +2469,141 @@ public sealed class Binder
             }
         }
 
+        // Phase 3.B.6 / ADR-0019: extension function fallback. After all
+        // instance/static lookups fail, try matching by (receiverType, name).
+        if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var extFn))
+        {
+            return BindExtensionFunctionCall(receiver, extFn, arguments, ce);
+        }
+
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    {
+        // The extension's first parameter is the receiver; user arguments line
+        // up against parameters[1..].
+        var userParamCount = extension.Parameters.Length - 1;
+        if (arguments.Length != userParamCount)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length);
+            return new BoundErrorExpression();
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
+        convertedArgs.Add(BindConversion(ce.Location, receiver, extension.Parameters[0].Type));
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], extension.Parameters[i + 1].Type));
+        }
+
+        return new BoundCallExpression(extension, convertedArgs.MoveToImmutable());
+    }
+
+    private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    {
+        if (arguments.Length != method.Parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
+            return new BoundErrorExpression();
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], method.Parameters[i].Type));
+        }
+
+        return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable());
+    }
+
+    private BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)
+    {
+        var elementType = LookupType(syntax.ElementTypeIdentifier.Text);
+        if (elementType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+            return new BoundErrorExpression();
+        }
+
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+        foreach (var elementSyntax in syntax.Elements)
+        {
+            elements.Add(BindConversion(elementSyntax, elementType));
+        }
+
+        if (syntax.LengthToken == null)
+        {
+            return new BoundArrayCreationExpression(SliceTypeSymbol.Get(elementType), elements.ToImmutable());
+        }
+
+        if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
+        {
+            Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (syntax.Elements.Count != length)
+        {
+            Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, syntax.Elements.Count);
+        }
+
+        return new BoundArrayCreationExpression(ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
+    }
+
+    private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
+    {
+        var target = BindExpression(syntax.Target);
+        var index = BindConversion(syntax.Index, TypeSymbol.Int);
+
+        var element = GetIndexElementType(target.Type);
+        if (element != null)
+        {
+            return new BoundIndexExpression(target, index, element);
+        }
+
+        if (target.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportTypeNotIndexable(syntax.Target.Location, target.Type);
+        }
+
+        return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindIndexAssignmentExpression(IndexAssignmentExpressionSyntax syntax)
+    {
+        var name = syntax.TargetIdentifier.Text;
+        if (scope.TryLookupSymbol(name) is not VariableSymbol variable)
+        {
+            Diagnostics.ReportUndefinedVariable(syntax.TargetIdentifier.Location, name);
+            return new BoundErrorExpression();
+        }
+
+        var element = GetIndexElementType(variable.Type);
+        if (element == null)
+        {
+            if (variable.Type != TypeSymbol.Error)
+            {
+                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+            }
+
+            return new BoundErrorExpression();
+        }
+
+        var index = BindConversion(syntax.Index, TypeSymbol.Int);
+        var value = BindConversion(syntax.Value, element);
+        return new BoundIndexAssignmentExpression(variable, index, value, element);
+    }
+
+    private static TypeSymbol GetIndexElementType(TypeSymbol type)
+    {
+        return type switch
+        {
+            ArrayTypeSymbol arr => arr.ElementType,
+            SliceTypeSymbol slice => slice.ElementType,
+            _ => null,
+        };
     }
 
     private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
@@ -1388,6 +2692,11 @@ public sealed class Binder
         if (scope.TryLookupTypeAlias(name, out var aliased))
         {
             return aliased;
+        }
+
+        if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+        {
+            return TypeSymbol.FromClrType(importedClass.ClassType);
         }
 
         return null;

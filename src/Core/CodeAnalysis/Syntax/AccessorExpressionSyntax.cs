@@ -26,10 +26,17 @@ public sealed class AccessorExpressionSyntax : ExpressionSyntax
         LeftPart = leftPart;
         DotToken = dotToken;
         RightPart = rightPart;
+        IsNullConditional = dotToken.Kind == SyntaxKind.QuestionDotToken;
     }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.AccessorExpression;
+
+    /// <summary>
+    /// Gets a value indicating whether this accessor uses the
+    /// null-conditional form (<c>?.</c>) introduced in Phase 3.C.3b.
+    /// </summary>
+    public bool IsNullConditional { get; }
 
     /// <summary>
     /// Gets the left part.

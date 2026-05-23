@@ -110,6 +110,53 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
+        if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
+        {
+            if (syntaxKind == SyntaxKind.EqualsEqualsToken)
+            {
+                return new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, ls, ls, TypeSymbol.Bool);
+            }
+
+            if (syntaxKind == SyntaxKind.BangEqualsToken)
+            {
+                return new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, ls, ls, TypeSymbol.Bool);
+            }
+        }
+
+        // Phase 3.C.2 / ADR-0020: == and != against nil for any nullable type.
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+            (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)))
+        {
+            var kind = syntaxKind == SyntaxKind.EqualsEqualsToken ? BoundBinaryOperatorKind.Equals : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
+        }
+
+        // Phase 3.C.3 / ADR-0020: null-coalescing `?:` returns the left if
+        // non-nil, otherwise the right. Type is the underlying of the left
+        // side (when the right is the same underlying or is itself nullable
+        // with that underlying).
+        if (syntaxKind == SyntaxKind.QuestionColonToken)
+        {
+            TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
+            TypeSymbol rightUnderlying = rightType is NullableTypeSymbol rightNullable ? rightNullable.UnderlyingType : rightType;
+            if (leftType == TypeSymbol.Null)
+            {
+                return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, rightType);
+            }
+
+            if (leftUnderlying == rightUnderlying)
+            {
+                var result = rightType is NullableTypeSymbol ? (TypeSymbol)NullableTypeSymbol.Get(leftUnderlying) : leftUnderlying;
+                return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, result);
+            }
+        }
+
         return null;
+    }
+
+    private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)
+    {
+        return nullCandidate == TypeSymbol.Null && (nullableOrUnderlying is NullableTypeSymbol || nullableOrUnderlying == TypeSymbol.Null);
     }
 }

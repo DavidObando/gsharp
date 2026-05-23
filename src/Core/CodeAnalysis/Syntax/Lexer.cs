@@ -281,9 +281,32 @@ public sealed class Lexer
                     kind = SyntaxKind.BangEqualsToken;
                     position++;
                 }
+                else if (Current == '!')
+                {
+                    kind = SyntaxKind.BangBangToken;
+                    position++;
+                }
                 else
                 {
                     kind = SyntaxKind.BangToken;
+                }
+
+                break;
+            case '?':
+                position++;
+                if (Current == '.')
+                {
+                    kind = SyntaxKind.QuestionDotToken;
+                    position++;
+                }
+                else if (Current == ':')
+                {
+                    kind = SyntaxKind.QuestionColonToken;
+                    position++;
+                }
+                else
+                {
+                    kind = SyntaxKind.QuestionToken;
                 }
 
                 break;

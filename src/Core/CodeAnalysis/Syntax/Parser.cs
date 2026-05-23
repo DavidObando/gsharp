@@ -189,13 +189,302 @@ public class Parser
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // `data` is a context-sensitive keyword (ADR-0029): only acts as the
+        // data-struct marker when followed directly by `struct`. Elsewhere it
+        // is an ordinary identifier.
+        SyntaxToken dataKeyword = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && Peek(1).Kind == SyntaxKind.StructKeyword)
+        {
+            dataKeyword = NextToken();
+        }
+
+        // Phase 3.B.3 sub-step 3: optional `open` modifier on a class
+        // declaration. Per ADR-0017, plain `class` is sealed; `open class`
+        // can be subclassed. `open` before `struct` is diagnosed in the
+        // struct parser (structs cannot be subclassed in CLR).
+        SyntaxToken openModifier = null;
+        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword))
+        {
+            openModifier = NextToken();
+        }
+
+        // Phase 3.B.5: optional `sealed` modifier on an interface declaration.
+        // `sealed interface` restricts implementors to the same package
+        // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
+        SyntaxToken sealedModifier = null;
+        if (Current.Kind == SyntaxKind.SealedKeyword && Peek(1).Kind == SyntaxKind.InterfaceKeyword)
+        {
+            sealedModifier = NextToken();
+        }
+
+        if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword)
+        {
+            if (sealedModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
+            }
+
+            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
+        }
+
+        if (Current.Kind == SyntaxKind.InterfaceKeyword)
+        {
+            if (openModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.InterfaceKeyword);
+            }
+
+            if (dataKeyword != null)
+            {
+                Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+            }
+
+            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, sealedModifier);
+        }
+
+        if (sealedModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.InterfaceKeyword);
+        }
+
+        if (openModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+        }
+
+        if (dataKeyword != null)
+        {
+            // We already consumed `data` but the next token wasn't `struct`.
+            // This path is unreachable given the lookahead above, but keeps
+            // the parser deterministic if peek state ever drifts.
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.StructKeyword);
+        }
+
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
         return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
     }
 
-    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
+    private StructDeclarationSyntax ParseStructDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken openModifier)
+    {
+        var structOrClassKeyword = Current.Kind == SyntaxKind.ClassKeyword
+            ? MatchToken(SyntaxKind.ClassKeyword)
+            : MatchToken(SyntaxKind.StructKeyword);
+
+        if (dataKeyword != null && structOrClassKeyword.Kind == SyntaxKind.ClassKeyword)
+        {
+            // ADR-0029 limits `data` to `struct`; `data class` is not part of
+            // the Phase 3 design. Diagnose but continue so the rest of the
+            // body parses cleanly.
+            Diagnostics.ReportUnexpectedToken(structOrClassKeyword.Location, SyntaxKind.ClassKeyword, SyntaxKind.StructKeyword);
+        }
+
+        if (openModifier != null && structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+        {
+            // ADR-0017: `open` is only meaningful on a `class` (structs are
+            // value types and cannot be subclassed).
+            Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.ClassKeyword);
+        }
+
+        // Phase 3.B.3 sub-step 2: optional Kotlin-style primary constructor
+        // parameter list `(name Type, name Type, ...)` directly after the
+        // `class` keyword. Each parameter becomes both a ctor argument and a
+        // public field of the same name. Only valid for classes; structs are
+        // constructed exclusively via composite literals.
+        SyntaxToken primaryCtorOpenParen = null;
+        SyntaxToken primaryCtorCloseParen = null;
+        SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
+            }
+
+            primaryCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            primaryCtorParameters = ParseParameterList();
+            primaryCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
+        // Phase 3.B.3 sub-step 3: optional base clause `: Base`.
+        // Phase 3.B.4 extends this to `: Base, IFoo, IBar` — a comma-separated
+        // list. The binder classifies each identifier as either the base class
+        // (at most one, must come first) or an implemented interface.
+        SyntaxToken baseColon = null;
+        SyntaxToken baseTypeIdentifier = null;
+        var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
+            }
+
+            baseColon = MatchToken(SyntaxKind.ColonToken);
+            baseTypeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+
+            while (Current.Kind == SyntaxKind.CommaToken)
+            {
+                NextToken();
+                var next = MatchToken(SyntaxKind.IdentifierToken);
+                additionalBaseIdentifiers.Add(next);
+            }
+        }
+
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            // Phase 3.B.3 sub-step 2b: method declarations inside the body.
+            // Use the existing `func Name(args) Ret { body }` parser; the
+            // method has no explicit receiver clause — the receiver is the
+            // enclosing class. Struct types reject methods (diagnose+skip).
+            SyntaxToken memberAccessibility = null;
+            if (Current.Kind == SyntaxKind.PublicKeyword ||
+                Current.Kind == SyntaxKind.InternalKeyword ||
+                Current.Kind == SyntaxKind.PrivateKeyword)
+            {
+                // Accessibility modifier may be followed by an optional
+                // `open`/`override` and then `func`.
+                var ahead = 1;
+                while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
+                {
+                    ahead++;
+                }
+
+                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword)
+                {
+                    memberAccessibility = NextToken();
+                }
+            }
+
+            // Phase 3.B.3 sub-step 3: parse optional `open` / `override`
+            // modifiers (any order) before the method's `func` keyword.
+            SyntaxToken memberOpenModifier = null;
+            SyntaxToken memberOverrideModifier = null;
+            while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
+            {
+                if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
+                {
+                    memberOpenModifier = NextToken();
+                }
+                else if (Current.Kind == SyntaxKind.OverrideKeyword && memberOverrideModifier == null)
+                {
+                    memberOverrideModifier = NextToken();
+                }
+                else
+                {
+                    // Duplicate modifier — diagnose by consuming and reporting.
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                    NextToken();
+                }
+            }
+
+            if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                methods.Add(method);
+            }
+            else
+            {
+                if (memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
+                }
+
+                fields.Add(ParseFieldDeclaration());
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new StructDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword,
+            identifier,
+            dataKeyword,
+            openModifier,
+            structOrClassKeyword,
+            primaryCtorOpenParen,
+            primaryCtorParameters,
+            primaryCtorCloseParen,
+            baseColon,
+            baseTypeIdentifier,
+            additionalBaseIdentifiers.ToImmutable(),
+            openBrace,
+            fields.ToImmutable(),
+            methods.ToImmutable(),
+            closeBrace);
+    }
+
+    private InterfaceDeclarationSyntax ParseInterfaceDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken sealedModifier)
+    {
+        var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            // Per ADR-0018, interface members are method signatures only.
+            // No accessibility / open / override modifiers are accepted.
+            if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                methods.Add(ParseInterfaceMethodSignature());
+            }
+            else
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                NextToken();
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new InterfaceDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword,
+            identifier,
+            sealedModifier,
+            interfaceKeyword,
+            openBrace,
+            methods.ToImmutable(),
+            closeBrace);
+    }
+
+    private FunctionDeclarationSyntax ParseInterfaceMethodSignature()
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -203,8 +492,133 @@ public class Parser
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
+
+        // ADR-0018: interface methods carry no body. Diagnose if one appears,
+        // then consume it so the rest of the body parses cleanly.
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            Diagnostics.ReportInterfaceMethodHasBody(identifier.Location, identifier.Text);
+            ParseBlockStatement();
+        }
+
+        return new FunctionDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier: null,
+            openModifier: null,
+            overrideModifier: null,
+            functionKeyword,
+            identifier,
+            openParenthesisToken,
+            parameters,
+            closeParenthesisToken,
+            type,
+            body: null);
+    }
+
+    private FieldDeclarationSyntax ParseFieldDeclaration()
+    {
+        SyntaxToken fieldAccessibility = null;
+        if (Current.Kind == SyntaxKind.PublicKeyword ||
+            Current.Kind == SyntaxKind.InternalKeyword ||
+            Current.Kind == SyntaxKind.PrivateKeyword)
+        {
+            fieldAccessibility = NextToken();
+        }
+
+        var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var fieldType = ParseTypeClause();
+        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, fieldIdentifier, fieldType);
+    }
+
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
+        => ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null);
+
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier)
+    {
+        var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
+
+        SyntaxToken receiverOpenParen = null;
+        ParameterSyntax receiver = null;
+        SyntaxToken receiverCloseParen = null;
+
+        // Phase 3.B.6 / ADR-0019: optional Go-style receiver clause
+        // `func ( recv RecvType ) Name(...)`. We only consume it when the
+        // tokens unambiguously look like a receiver: open paren, identifier,
+        // a type clause, close paren, followed by an identifier (the name).
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeReceiverClause())
+        {
+            receiverOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            receiver = ParseParameter();
+            receiverCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+    }
+
+    private bool LooksLikeReceiverClause()
+    {
+        // Expecting: '(' ident <type-clause> ')' ident '('
+        // type-clause is either a single identifier or '[' [number] ']' ident.
+        if (Peek(0).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var ahead = 2;
+        if (Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            ahead++;
+            if (Peek(ahead).Kind == SyntaxKind.NumberToken)
+            {
+                ahead++;
+            }
+
+            if (Peek(ahead).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            ahead++;
+            if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            ahead++;
+        }
+        else if (Peek(ahead).Kind == SyntaxKind.IdentifierToken)
+        {
+            ahead++;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken)
+        {
+            return false;
+        }
+
+        ahead++;
+        if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        ahead++;
+        return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken;
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()
@@ -242,13 +656,30 @@ public class Parser
 
     private TypeClauseSyntax ParseTypeClause()
     {
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            SyntaxToken length = null;
+            if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                length = MatchToken(SyntaxKind.NumberToken);
+            }
+
+            var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            var arrayQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+            return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier, arrayQuestion);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        return new TypeClauseSyntax(syntaxTree, identifier);
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, identifier, question);
     }
 
     private TypeClauseSyntax ParseOptionalTypeClause()
     {
-        if (Current.Kind != SyntaxKind.IdentifierToken)
+        if (Current.Kind != SyntaxKind.IdentifierToken &&
+            Current.Kind != SyntaxKind.OpenSquareBracketToken)
         {
             return null;
         }
@@ -311,6 +742,12 @@ public class Parser
                 return ParseSwitchStatement();
             case SyntaxKind.FallthroughKeyword:
                 return ParseFallthroughStatement();
+            case SyntaxKind.TryKeyword:
+                return ParseTryStatement();
+            case SyntaxKind.ThrowKeyword:
+                return ParseThrowStatement();
+            case SyntaxKind.UsingKeyword:
+                return ParseUsingStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -803,6 +1240,61 @@ public class Parser
         return new ExpressionStatementSyntax(syntaxTree, new LiteralExpressionSyntax(syntaxTree, keyword, value: 0));
     }
 
+    private StatementSyntax ParseTryStatement()
+    {
+        var tryKeyword = MatchToken(SyntaxKind.TryKeyword);
+        var tryBlock = ParseBlockStatement();
+
+        var catchClauses = ImmutableArray.CreateBuilder<CatchClauseSyntax>();
+        while (Current.Kind == SyntaxKind.CatchKeyword)
+        {
+            catchClauses.Add(ParseCatchClause());
+        }
+
+        FinallyClauseSyntax finallyClause = null;
+        if (Current.Kind == SyntaxKind.FinallyKeyword)
+        {
+            var finallyKeyword = NextToken();
+            var body = ParseBlockStatement();
+            finallyClause = new FinallyClauseSyntax(syntaxTree, finallyKeyword, body);
+        }
+
+        return new TryStatementSyntax(syntaxTree, tryKeyword, tryBlock, catchClauses.ToImmutable(), finallyClause);
+    }
+
+    private CatchClauseSyntax ParseCatchClause()
+    {
+        var catchKeyword = MatchToken(SyntaxKind.CatchKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeClause = ParseOptionalTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var body = ParseBlockStatement();
+        return new CatchClauseSyntax(syntaxTree, catchKeyword, openParen, identifier, typeClause, closeParen, body);
+    }
+
+    private StatementSyntax ParseThrowStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ThrowKeyword);
+        var expression = ParseExpression();
+        return new ThrowStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseUsingStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.UsingKeyword);
+        if (Current.Kind != SyntaxKind.LetKeyword &&
+            Current.Kind != SyntaxKind.VarKeyword &&
+            Current.Kind != SyntaxKind.ConstKeyword)
+        {
+            // Force the expected keyword diagnostic by matching `let`.
+            MatchToken(SyntaxKind.LetKeyword);
+        }
+
+        var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
+        return new UsingStatementSyntax(syntaxTree, keyword, decl);
+    }
+
     private ExpressionStatementSyntax ParseExpressionStatement()
     {
         var expression = ParseExpression();
@@ -816,6 +1308,40 @@ public class Parser
 
     private ExpressionSyntax ParseAssignmentExpression()
     {
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.OpenSquareBracketToken &&
+            TryFindMatchingCloseBracketFollowedByEquals(out var equalsOffset))
+        {
+            var identifierToken = NextToken();
+            var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            var index = ParseExpression();
+            var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseAssignmentExpression();
+            _ = equalsOffset;
+            return new IndexAssignmentExpressionSyntax(
+                syntaxTree,
+                identifierToken,
+                openBracket,
+                index,
+                closeBracket,
+                equalsToken,
+                value);
+        }
+
+        if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.DotToken &&
+            Peek(2).Kind == SyntaxKind.IdentifierToken &&
+            Peek(3).Kind == SyntaxKind.EqualsToken)
+        {
+            var identifierToken = NextToken();
+            var dotToken = MatchToken(SyntaxKind.DotToken);
+            var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseAssignmentExpression();
+            return new FieldAssignmentExpressionSyntax(syntaxTree, identifierToken, dotToken, fieldIdentifier, equalsToken, value);
+        }
+
         if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
             Peek(1).Kind == SyntaxKind.EqualsToken)
         {
@@ -857,6 +1383,16 @@ public class Parser
             left = ParsePrimaryExpression();
         }
 
+        // Phase 3.C.3 / ADR-0020: postfix null-assertion `!!`. We greedily
+        // consume any chain of `!!` tokens immediately following the primary
+        // and wrap them as unary expressions. The binder enforces that the
+        // operand type is nullable (or carries it through harmlessly).
+        while (Current.Kind == SyntaxKind.BangBangToken)
+        {
+            var bangBangToken = NextToken();
+            left = new UnaryExpressionSyntax(syntaxTree, bangBangToken, left);
+        }
+
         while (true)
         {
             var precedence = Current.Kind.GetBinaryOperatorPrecedence();
@@ -884,6 +1420,9 @@ public class Parser
             case SyntaxKind.TrueKeyword:
                 return ParseBooleanLiteral();
 
+            case SyntaxKind.NilKeyword:
+                return ParseNilLiteral();
+
             case SyntaxKind.NumberToken:
                 return ParseNumberLiteral();
 
@@ -893,9 +1432,92 @@ public class Parser
             case SyntaxKind.InterpolatedStringToken:
                 return ParseInterpolatedStringLiteral();
 
+            case SyntaxKind.OpenSquareBracketToken:
+                return ParseArrayCreationExpression();
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
+        }
+    }
+
+    private ExpressionSyntax ParseArrayCreationExpression()
+    {
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        SyntaxToken length = null;
+        if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
+        {
+            length = MatchToken(SyntaxKind.NumberToken);
+        }
+
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var elementType = MatchToken(SyntaxKind.IdentifierToken);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var elements = ParseArrayInitializerElements();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new ArrayCreationExpressionSyntax(
+            syntaxTree,
+            openBracket,
+            length,
+            closeBracket,
+            elementType,
+            openBrace,
+            elements,
+            closeBrace);
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseExpression());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private bool TryFindMatchingCloseBracketFollowedByEquals(out int offset)
+    {
+        offset = 0;
+        var depth = 0;
+        for (var i = 1; ; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    if (Peek(i + 1).Kind == SyntaxKind.EqualsToken)
+                    {
+                        offset = i + 1;
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
         }
     }
 
@@ -906,16 +1528,36 @@ public class Parser
         {
             current = ParseCallExpression();
         }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.OpenBraceToken
+            && IsStructLiteralFollowingBrace(2))
+        {
+            current = ParseStructLiteralExpression();
+        }
         else
         {
             current = ParseNameExpression();
         }
 
-        if (Current.Kind == SyntaxKind.DotToken)
+        while (true)
         {
-            var dotToken = MatchToken(SyntaxKind.DotToken);
-            var rightSide = ParseNameOrCallExpression();
-            current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
+            {
+                var dotToken = NextToken();
+                var rightSide = ParseNameOrCallExpression();
+                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            }
+            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var index = ParseExpression();
+                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
+            }
+            else
+            {
+                break;
+            }
         }
 
         return current;
@@ -962,6 +1604,59 @@ public class Parser
         return new NameExpressionSyntax(syntaxTree, identifierToken);
     }
 
+    private bool IsStructLiteralFollowingBrace(int braceOffsetPlusOne)
+    {
+        // braceOffsetPlusOne is the offset of the token AFTER the '{'. A struct
+        // literal is either empty (`}`) or starts with `Identifier :` (a field init).
+        var k0 = Peek(braceOffsetPlusOne).Kind;
+        if (k0 == SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        if (k0 == SyntaxKind.IdentifierToken && Peek(braceOffsetPlusOne + 1).Kind == SyntaxKind.ColonToken)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private ExpressionSyntax ParseStructLiteralExpression()
+    {
+        var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseFieldInitializer());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        var initializers = new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
+        return new StructLiteralExpressionSyntax(syntaxTree, typeIdentifier, openBrace, initializers, closeBrace);
+    }
+
+    private FieldInitializerSyntax ParseFieldInitializer()
+    {
+        var fieldId = MatchToken(SyntaxKind.IdentifierToken);
+        var colon = MatchToken(SyntaxKind.ColonToken);
+        var value = ParseExpression();
+        return new FieldInitializerSyntax(syntaxTree, fieldId, colon, value);
+    }
+
     private ExpressionSyntax ParseParenthesizedExpression()
     {
         var left = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -975,6 +1670,12 @@ public class Parser
         var isTrue = Current.Kind == SyntaxKind.TrueKeyword;
         var keywordToken = isTrue ? MatchToken(SyntaxKind.TrueKeyword) : MatchToken(SyntaxKind.FalseKeyword);
         return new LiteralExpressionSyntax(syntaxTree, keywordToken, isTrue);
+    }
+
+    private ExpressionSyntax ParseNilLiteral()
+    {
+        var keywordToken = MatchToken(SyntaxKind.NilKeyword);
+        return new LiteralExpressionSyntax(syntaxTree, keywordToken, null);
     }
 
     private ExpressionSyntax ParseNumberLiteral()

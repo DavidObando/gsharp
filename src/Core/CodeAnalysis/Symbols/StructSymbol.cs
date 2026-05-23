@@ -1,0 +1,286 @@
+// <copyright file="StructSymbol.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Syntax;
+
+namespace GSharp.Core.CodeAnalysis.Symbols;
+
+/// <summary>
+/// Represents a user-defined struct type (Phase 3.B.1). Structs are CLR value
+/// types with public-by-default fields and no methods of their own. Methods are
+/// added via extension functions in a later sub-phase.
+/// </summary>
+public sealed class StructSymbol : TypeSymbol
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The struct type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The struct's CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the struct lives in.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName)
+        : this(name, fields, accessibility, declaration, packageName, isData: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The struct type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The struct's CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the struct lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
+    /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds to a field of the same name; empty when the type has no explicit primary constructor (default parameterless ctor).</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters, isOpen: false, baseClass: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations.</param>
+    /// <param name="isClass">True for <c>class</c> declarations.</param>
+    /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters.</param>
+    /// <param name="isOpen">True when this class was declared with the <c>open</c> modifier (Phase 3.B.3 sub-step 3 / ADR-0017). Always false for structs.</param>
+    /// <param name="baseClass">The base class symbol (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters,
+        bool isOpen,
+        StructSymbol baseClass)
+        : base(name)
+    {
+        Fields = fields;
+        Accessibility = accessibility;
+        Declaration = declaration;
+        PackageName = packageName;
+        IsData = isData;
+        IsClass = isClass;
+        PrimaryConstructorParameters = primaryConstructorParameters;
+        IsOpen = isOpen;
+        BaseClass = baseClass;
+        Interfaces = ImmutableArray<InterfaceSymbol>.Empty;
+    }
+
+    /// <summary>Gets the field declarations in source order.</summary>
+    public ImmutableArray<FieldSymbol> Fields { get; }
+
+    /// <summary>Gets the struct CLR accessibility.</summary>
+    public Accessibility Accessibility { get; }
+
+    /// <summary>Gets the declaring syntax node.</summary>
+    public StructDeclarationSyntax Declaration { get; }
+
+    /// <summary>Gets the package the struct lives in.</summary>
+    public string PackageName { get; }
+
+    /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
+    public bool IsData { get; }
+
+    /// <summary>Gets a value indicating whether this is a <c>class</c> declaration (Phase 3.B.3). Class types are reference types on the CLR; struct types (this flag false) are value types.</summary>
+    public bool IsClass { get; }
+
+    /// <summary>Gets the Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds 1:1 to a field of the same name and type on this class; empty when no primary constructor was declared (default parameterless ctor).</summary>
+    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters { get; }
+
+    /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
+    public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
+
+    /// <summary>Gets a value indicating whether this class was declared <c>open</c> (Phase 3.B.3 sub-step 3 / ADR-0017). Required for subclassing.</summary>
+    public bool IsOpen { get; }
+
+    /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
+    public StructSymbol BaseClass { get; }
+
+    /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
+    public ImmutableArray<InterfaceSymbol> Interfaces { get; private set; }
+
+    /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
+    public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
+    /// <param name="interfaces">The interfaces this class implements directly.</param>
+    public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
+    {
+        Interfaces = interfaces;
+    }
+
+    /// <summary>Sets <see cref="Methods"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
+    /// <param name="methods">The bound method symbols owned by this class.</param>
+    public void SetMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        Methods = methods;
+    }
+
+    /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetInheritedMethod(string name, out FunctionSymbol method)
+    {
+        for (var c = this.BaseClass; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetMethod(name, out method))
+            {
+                return true;
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /// <summary>Looks up a method by name on this class or any ancestor (this-first).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetMethodIncludingInherited(string name, out FunctionSymbol method)
+    {
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetMethod(name, out method))
+            {
+                return true;
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /// <summary>Tries to find a method by name on this class.</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetMethod(string name, out FunctionSymbol method)
+    {
+        if (!Methods.IsDefaultOrEmpty)
+        {
+            foreach (var m in Methods)
+            {
+                if (m.Name == name)
+                {
+                    method = m;
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /// <summary>Tries to find a field by name.</summary>
+    /// <param name="name">The field name.</param>
+    /// <param name="field">The found field on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetField(string name, out FieldSymbol field)
+    {
+        foreach (var f in Fields)
+        {
+            if (f.Name == name)
+            {
+                field = f;
+                return true;
+            }
+        }
+
+        field = null;
+        return false;
+    }
+
+    /// <summary>Looks up a field by name on this class or any ancestor (this-first). Phase 3.B.3 sub-step 3.</summary>
+    /// <param name="name">The field name.</param>
+    /// <param name="field">The found field on success.</param>
+    /// <param name="declaringType">The class that actually declares the field.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetFieldIncludingInherited(string name, out FieldSymbol field, out StructSymbol declaringType)
+    {
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetField(name, out field))
+            {
+                declaringType = c;
+                return true;
+            }
+        }
+
+        field = null;
+        declaringType = null;
+        return false;
+    }
+}

@@ -1,0 +1,62 @@
+// <copyright file="BoundNullConditionalAccessExpression.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// Phase 3.C.3b / ADR-0020: bound representation of the null-conditional
+/// member access operator <c>?.</c>.
+///
+/// The evaluator:
+///   1. evaluates <see cref="Receiver"/> exactly once;
+///   2. if the value is nil, the whole expression evaluates to nil without
+///      touching <see cref="WhenNotNull"/>;
+///   3. otherwise it assigns the receiver value to <see cref="Capture"/>
+///      in the current scope and evaluates <see cref="WhenNotNull"/>, whose
+///      receiver reference IS <see cref="Capture"/>. This guarantees the
+///      original receiver expression is evaluated exactly once, even when
+///      it has side-effects.
+/// </summary>
+public sealed class BoundNullConditionalAccessExpression : BoundExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the
+    /// <see cref="BoundNullConditionalAccessExpression"/> class.
+    /// </summary>
+    /// <param name="receiver">The nullable receiver expression.</param>
+    /// <param name="capture">The synthetic local that the receiver value
+    /// is captured into for the duration of <see cref="WhenNotNull"/>.</param>
+    /// <param name="whenNotNull">The bound access expression, built with
+    /// <paramref name="capture"/> standing in for the receiver.</param>
+    /// <param name="type">The result type — always a
+    /// <see cref="NullableTypeSymbol"/>.</param>
+    public BoundNullConditionalAccessExpression(
+        BoundExpression receiver,
+        VariableSymbol capture,
+        BoundExpression whenNotNull,
+        TypeSymbol type)
+    {
+        Receiver = receiver;
+        Capture = capture;
+        WhenNotNull = whenNotNull;
+        Type = type;
+    }
+
+    /// <inheritdoc/>
+    public override BoundNodeKind Kind => BoundNodeKind.NullConditionalAccessExpression;
+
+    /// <inheritdoc/>
+    public override TypeSymbol Type { get; }
+
+    /// <summary>Gets the nullable receiver expression.</summary>
+    public BoundExpression Receiver { get; }
+
+    /// <summary>Gets the synthetic capture variable.</summary>
+    public VariableSymbol Capture { get; }
+
+    /// <summary>Gets the access expression evaluated when the receiver is non-nil.</summary>
+    public BoundExpression WhenNotNull { get; }
+}

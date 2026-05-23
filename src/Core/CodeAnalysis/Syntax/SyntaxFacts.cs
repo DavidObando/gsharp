@@ -74,6 +74,7 @@ public static class SyntaxFacts
                 return 2;
 
             case SyntaxKind.PipePipeToken:               // logical or
+            case SyntaxKind.QuestionColonToken:          // Phase 3.C.3 / ADR-0020: null-coalescing
                 return 1;
 
             default:
@@ -124,8 +125,12 @@ public static class SyntaxFacts
                 return SyntaxKind.BreakKeyword;
             case "case":
                 return SyntaxKind.CaseKeyword;
+            case "catch":
+                return SyntaxKind.CatchKeyword;
             case "chan":
                 return SyntaxKind.ChanKeyword;
+            case "class":
+                return SyntaxKind.ClassKeyword;
             case "const":
                 return SyntaxKind.ConstKeyword;
             case "continue":
@@ -140,6 +145,8 @@ public static class SyntaxFacts
                 return SyntaxKind.FalseKeyword;
             case "fallthrough":
                 return SyntaxKind.FallthroughKeyword;
+            case "finally":
+                return SyntaxKind.FinallyKeyword;
             case "for":
                 return SyntaxKind.ForKeyword;
             case "func":
@@ -160,6 +167,12 @@ public static class SyntaxFacts
                 return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
+            case "nil":
+                return SyntaxKind.NilKeyword;
+            case "open":
+                return SyntaxKind.OpenKeyword;
+            case "override":
+                return SyntaxKind.OverrideKeyword;
             case "package":
                 return SyntaxKind.PackageKeyword;
             case "private":
@@ -170,16 +183,24 @@ public static class SyntaxFacts
                 return SyntaxKind.RangeKeyword;
             case "return":
                 return SyntaxKind.ReturnKeyword;
+            case "sealed":
+                return SyntaxKind.SealedKeyword;
             case "select":
                 return SyntaxKind.SelectKeyword;
             case "struct":
                 return SyntaxKind.StructKeyword;
             case "switch":
                 return SyntaxKind.SwitchKeyword;
+            case "throw":
+                return SyntaxKind.ThrowKeyword;
             case "true":
                 return SyntaxKind.TrueKeyword;
+            case "try":
+                return SyntaxKind.TryKeyword;
             case "type":
                 return SyntaxKind.TypeKeyword;
+            case "using":
+                return SyntaxKind.UsingKeyword;
             case "var":
                 return SyntaxKind.VarKeyword;
             default:
@@ -304,6 +325,14 @@ public static class SyntaxFacts
                 return "!";
             case SyntaxKind.BangEqualsToken:
                 return "!=";
+            case SyntaxKind.BangBangToken:
+                return "!!";
+            case SyntaxKind.QuestionToken:
+                return "?";
+            case SyntaxKind.QuestionDotToken:
+                return "?.";
+            case SyntaxKind.QuestionColonToken:
+                return "?:";
             case SyntaxKind.LessToken:
                 return "<";
             case SyntaxKind.LessOrEqualsToken:
@@ -328,8 +357,12 @@ public static class SyntaxFacts
                 return "break";
             case SyntaxKind.CaseKeyword:
                 return "case";
+            case SyntaxKind.CatchKeyword:
+                return "catch";
             case SyntaxKind.ChanKeyword:
                 return "chan";
+            case SyntaxKind.ClassKeyword:
+                return "class";
             case SyntaxKind.ConstKeyword:
                 return "const";
             case SyntaxKind.ContinueKeyword:
@@ -344,6 +377,8 @@ public static class SyntaxFacts
                 return "false";
             case SyntaxKind.FallthroughKeyword:
                 return "fallthrough";
+            case SyntaxKind.FinallyKeyword:
+                return "finally";
             case SyntaxKind.ForKeyword:
                 return "for";
             case SyntaxKind.FuncKeyword:
@@ -364,6 +399,12 @@ public static class SyntaxFacts
                 return "let";
             case SyntaxKind.MapKeyword:
                 return "map";
+            case SyntaxKind.OpenKeyword:
+                return "open";
+            case SyntaxKind.NilKeyword:
+                return "nil";
+            case SyntaxKind.OverrideKeyword:
+                return "override";
             case SyntaxKind.PackageKeyword:
                 return "package";
             case SyntaxKind.PrivateKeyword:
@@ -374,16 +415,24 @@ public static class SyntaxFacts
                 return "range";
             case SyntaxKind.ReturnKeyword:
                 return "return";
+            case SyntaxKind.SealedKeyword:
+                return "sealed";
             case SyntaxKind.SelectKeyword:
                 return "select";
             case SyntaxKind.StructKeyword:
                 return "struct";
             case SyntaxKind.SwitchKeyword:
                 return "switch";
+            case SyntaxKind.ThrowKeyword:
+                return "throw";
             case SyntaxKind.TrueKeyword:
                 return "true";
+            case SyntaxKind.TryKeyword:
+                return "try";
             case SyntaxKind.TypeKeyword:
                 return "type";
+            case SyntaxKind.UsingKeyword:
+                return "using";
             case SyntaxKind.VarKeyword:
                 return "var";
             default:

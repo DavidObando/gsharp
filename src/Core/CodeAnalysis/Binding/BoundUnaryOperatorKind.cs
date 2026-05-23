@@ -38,4 +38,11 @@ public enum BoundUnaryOperatorKind
     /// Used when the AmpersandToken is used as a unary operator.
     /// </summary>
     ReferenceOf,
+
+    /// <summary>
+    /// Used when the BangBangToken (Phase 3.C.3 / ADR-0020) is used as the
+    /// postfix null-assertion operator. Unwraps a nullable to its underlying
+    /// type; throws at runtime when the value is nil.
+    /// </summary>
+    NullAssertion,
 }

@@ -103,4 +103,11 @@ public enum BoundBinaryOperatorKind
     /// Used when a PipePipeToken is used as a binary operator.
     /// </summary>
     LogicalOr,
+
+    /// <summary>
+    /// Used when a QuestionColonToken (Phase 3.C.3 / ADR-0020) is used as the
+    /// null-coalescing (Elvis) binary operator. Evaluates the left operand;
+    /// if non-nil, returns it; otherwise evaluates and returns the right.
+    /// </summary>
+    NullCoalesce,
 }
