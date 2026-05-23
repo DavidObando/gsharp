@@ -883,11 +883,76 @@ public sealed class Binder
         {
             var statement = BindStatement(statementSyntax);
             statements.Add(statement);
+
+            // Phase 3.C.4: mutation invalidates the narrowing. After binding
+            // a statement that writes to a narrowed variable, drop its
+            // narrowing from the current frame so subsequent reads in this
+            // block see the variable at its declared (nullable) type again.
+            InvalidateNarrowingsForAssignedVariables(statementSyntax);
         }
 
         scope = scope.Parent;
 
         return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
+    {
+        if (narrowedVariables.Count == 0)
+        {
+            return;
+        }
+
+        var top = narrowedVariables[narrowedVariables.Count - 1];
+        if (top.Count == 0)
+        {
+            return;
+        }
+
+        var assignedNames = new HashSet<string>();
+        CollectAssignedNames(statementSyntax, assignedNames);
+        if (assignedNames.Count == 0)
+        {
+            return;
+        }
+
+        // Resolve each name through the current scope and drop any matching
+        // narrowing. We don't need to be conservative about scope shadowing:
+        // the narrowed variable lives in an outer scope, so an inner
+        // shadowing declaration with the same name will resolve to a
+        // different symbol, and the narrowing will simply not be triggered.
+        foreach (var name in assignedNames)
+        {
+            if (scope.TryLookupSymbol(name) is VariableSymbol v && top.ContainsKey(v))
+            {
+                top.Remove(v);
+            }
+        }
+    }
+
+    private static void CollectAssignedNames(SyntaxNode node, HashSet<string> assigned)
+    {
+        switch (node)
+        {
+            case AssignmentExpressionSyntax a:
+                assigned.Add(a.IdentifierToken.Text);
+                break;
+            case MultiAssignmentStatementSyntax m:
+                foreach (var t in m.Targets)
+                {
+                    if (t is NameExpressionSyntax ne)
+                    {
+                        assigned.Add(ne.IdentifierToken.Text);
+                    }
+                }
+
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAssignedNames(child, assigned);
+        }
     }
 
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)

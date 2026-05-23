@@ -83,6 +83,42 @@ var z int = x
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Mutation_InvalidatesNarrowing()
+    {
+        // After `x = nil` inside the then-arm, the narrowing must be
+        // dropped so the next read sees the declared nullable type and the
+        // unsafe `var t int = x` is rejected.
+        var source = @"
+var x int? = 5
+if x != nil {
+    x = nil
+    var t int = x
+}
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Narrowing_AvailableBeforeMutation()
+    {
+        // The narrowing should still be in effect for statements that
+        // precede the invalidating assignment.
+        var source = @"
+var x int? = 5
+var y int = 0
+if x != nil {
+    y = x
+    x = nil
+}
+y
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
