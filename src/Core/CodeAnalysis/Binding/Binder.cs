@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -2684,6 +2685,17 @@ public sealed class Binder
 
     private BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
+        // Phase 4-exit: prefer CLR class instantiation over the single-arg
+        // conversion-call hijack below, so that `StringBuilder(16)` resolves
+        // to a CLR ctor rather than `BindConversion(int → StringBuilder)`.
+        // Also handles closed-generic imports (`List[int]()`,
+        // `Dictionary[string, int]()`). Interpreter-only — resolves a
+        // ConstructorInfo and emits BoundClrConstructorCallExpression.
+        if (TryBindClrConstructorCall(syntax, out var clrCtorCall))
+        {
+            return clrCtorCall;
+        }
+
         if (syntax.Arguments.Count == 1 && LookupType(syntax.Identifier.Text) is TypeSymbol type)
         {
             // A single-arg call to a primitive-typed name is a conversion
@@ -3131,6 +3143,112 @@ public sealed class Binder
             default:
                 return false;
         }
+    }
+
+    private bool TryBindClrConstructorCall(CallExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var name = syntax.Identifier.Text;
+
+        System.Type clrType = null;
+        if (syntax.TypeArgumentList != null)
+        {
+            // `List[int]()`, `Dictionary[string, int]()`, etc. Resolve the open
+            // generic via imports (mangled `Name`N`) and construct the closed
+            // type via Type.MakeGenericType.
+            if (!scope.TryLookupImportedGenericClass(name, syntax.TypeArgumentList.Arguments.Count, out var openType))
+            {
+                return false;
+            }
+
+            var clrArgs = new System.Type[syntax.TypeArgumentList.Arguments.Count];
+            for (var i = 0; i < syntax.TypeArgumentList.Arguments.Count; i++)
+            {
+                var ta = BindTypeClause(syntax.TypeArgumentList.Arguments[i]);
+                if (ta?.ClrType == null)
+                {
+                    return false;
+                }
+
+                clrArgs[i] = ta.ClrType;
+            }
+
+            try
+            {
+                clrType = openType.MakeGenericType(clrArgs);
+            }
+            catch (System.ArgumentException)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if (!scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+            {
+                return false;
+            }
+
+            if (importedClass.ClassType.IsGenericTypeDefinition)
+            {
+                // User wrote `List(...)` without `[T]`; can't construct an open generic.
+                return false;
+            }
+
+            clrType = importedClass.ClassType;
+        }
+
+        if (clrType.IsAbstract || clrType.IsInterface)
+        {
+            return false;
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            boundArguments.Add(BindExpression(syntax.Arguments[i]));
+        }
+
+        // Pick a constructor by arity + argument-type assignability. Mirrors
+        // the matching loop in ImportedClassSymbol.TryLookupFunction.
+        ConstructorInfo bestCtor = null;
+        foreach (var ctor in clrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var parameters = ctor.GetParameters();
+            if (parameters.Length != boundArguments.Count)
+            {
+                continue;
+            }
+
+            var matches = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argType = boundArguments[i].Type?.ClrType;
+                if (argType == null || !ClrTypeUtilities.IsAssignableByName(parameters[i].ParameterType, argType))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                bestCtor = ctor;
+                break;
+            }
+        }
+
+        if (bestCtor == null)
+        {
+            return false;
+        }
+
+        result = new BoundClrConstructorCallExpression(
+            clrType,
+            bestCtor,
+            boundArguments.MoveToImmutable(),
+            TypeSymbol.FromClrType(clrType));
+        return true;
     }
 
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)

@@ -156,6 +156,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.IndirectCallExpression:
                 WriteIndirectCallExpression((BoundIndirectCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ClrConstructorCallExpression:
+                WriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -628,6 +631,24 @@ public static class BoundNodePrinter
     private static void WriteConstructorCallExpression(BoundConstructorCallExpression node, IndentedTextWriter writer)
     {
         writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteClrConstructorCallExpression(BoundClrConstructorCallExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.ClrType.Name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         for (var i = 0; i < node.Arguments.Length; i++)
         {

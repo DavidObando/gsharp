@@ -209,6 +209,7 @@ public sealed class Evaluator
                 BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
                 BoundNodeKind.FunctionLiteralExpression => EvaluateFunctionLiteralExpression((BoundFunctionLiteralExpression)node),
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
+                BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -444,6 +445,17 @@ public sealed class Evaluator
         }
 
         return sv;
+    }
+
+    private object EvaluateClrConstructorCallExpression(BoundClrConstructorCallExpression node)
+    {
+        var args = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            args[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        return node.Constructor.Invoke(args);
     }
 
     private object EvaluateFieldAccessExpression(BoundFieldAccessExpression node)
