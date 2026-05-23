@@ -19,6 +19,7 @@ public sealed class BoundScope
     private Dictionary<string, Symbol> symbols;
     private List<ImportSymbol> imports;
     private Dictionary<string, TypeSymbol> typeAliases;
+    private List<FunctionSymbol> extensionFunctions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundScope"/> class.
@@ -85,6 +86,63 @@ public sealed class BoundScope
     /// <returns>Whether the function was declared or not.</returns>
     public bool TryDeclareFunction(FunctionSymbol function)
         => TryDeclareSymbol(function);
+
+    /// <summary>
+    /// Tries to declare an extension function (Phase 3.B.6 / ADR-0019). Extension
+    /// functions live outside the normal symbol table because their identity is
+    /// the pair (receiverType, name): two extensions with the same name but
+    /// different receivers are legal.
+    /// </summary>
+    /// <param name="function">The extension function symbol. Must have <see cref="FunctionSymbol.IsExtension"/> set.</param>
+    /// <returns>True if the extension was registered; false if an identical (receiver, name) pair already exists in this scope.</returns>
+    public bool TryDeclareExtensionFunction(FunctionSymbol function)
+    {
+        if (extensionFunctions == null)
+        {
+            extensionFunctions = new List<FunctionSymbol>();
+        }
+
+        foreach (var existing in extensionFunctions)
+        {
+            if (existing.Name == function.Name && existing.ExtensionReceiverType == function.ExtensionReceiverType)
+            {
+                return false;
+            }
+        }
+
+        extensionFunctions.Add(function);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to look up an extension function by receiver type and name (walks parent scopes).
+    /// </summary>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <param name="name">The method name at the call site.</param>
+    /// <param name="function">The matching extension function, when found.</param>
+    /// <returns>True when an extension function matches.</returns>
+    public bool TryLookupExtensionFunction(TypeSymbol receiverType, string name, out FunctionSymbol function)
+    {
+        function = null;
+        if (extensionFunctions != null)
+        {
+            foreach (var ext in extensionFunctions)
+            {
+                if (ext.Name == name && ext.ExtensionReceiverType == receiverType)
+                {
+                    function = ext;
+                    return true;
+                }
+            }
+        }
+
+        return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
+    }
+
+    /// <summary>Gets the extension functions declared in this scope (Phase 3.B.6).</summary>
+    /// <returns>An immutable array of extension functions.</returns>
+    public ImmutableArray<FunctionSymbol> GetDeclaredExtensionFunctions()
+        => extensionFunctions?.ToImmutableArray() ?? ImmutableArray<FunctionSymbol>.Empty;
 
     /// <summary>
     /// Tries to look up a symbol by its name in this scope.

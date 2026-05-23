@@ -536,13 +536,89 @@ public class Parser
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
+
+        SyntaxToken receiverOpenParen = null;
+        ParameterSyntax receiver = null;
+        SyntaxToken receiverCloseParen = null;
+
+        // Phase 3.B.6 / ADR-0019: optional Go-style receiver clause
+        // `func ( recv RecvType ) Name(...)`. We only consume it when the
+        // tokens unambiguously look like a receiver: open paren, identifier,
+        // a type clause, close paren, followed by an identifier (the name).
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeReceiverClause())
+        {
+            receiverOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            receiver = ParseParameter();
+            receiverCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+    }
+
+    private bool LooksLikeReceiverClause()
+    {
+        // Expecting: '(' ident <type-clause> ')' ident '('
+        // type-clause is either a single identifier or '[' [number] ']' ident.
+        if (Peek(0).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var ahead = 2;
+        if (Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            ahead++;
+            if (Peek(ahead).Kind == SyntaxKind.NumberToken)
+            {
+                ahead++;
+            }
+
+            if (Peek(ahead).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            ahead++;
+            if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            ahead++;
+        }
+        else if (Peek(ahead).Kind == SyntaxKind.IdentifierToken)
+        {
+            ahead++;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken)
+        {
+            return false;
+        }
+
+        ahead++;
+        if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        ahead++;
+        return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken;
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()

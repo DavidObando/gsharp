@@ -85,12 +85,49 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken closeParenthesisToken,
         TypeClauseSyntax type,
         BlockStatementSyntax body)
+        : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParenthesisToken: null, receiver: null, receiverCloseParenthesisToken: null, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class with an optional Go-style receiver clause (Phase 3.B.6, ADR-0019).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">Optional accessibility modifier.</param>
+    /// <param name="openModifier">Optional <c>open</c> modifier.</param>
+    /// <param name="overrideModifier">Optional <c>override</c> modifier.</param>
+    /// <param name="functionKeyword">The func keyword.</param>
+    /// <param name="receiverOpenParenthesisToken">Optional open parenthesis introducing the receiver clause.</param>
+    /// <param name="receiver">Optional receiver parameter (Phase 3.B.6 extension function).</param>
+    /// <param name="receiverCloseParenthesisToken">Optional close parenthesis terminating the receiver clause.</param>
+    /// <param name="identifier">The function identifier.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token of the parameter list.</param>
+    /// <param name="parameters">The function's parameters.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token of the parameter list.</param>
+    /// <param name="type">The function's return type.</param>
+    /// <param name="body">The function's body.</param>
+    public FunctionDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier,
+        SyntaxToken functionKeyword,
+        SyntaxToken receiverOpenParenthesisToken,
+        ParameterSyntax receiver,
+        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken identifier,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenthesisToken,
+        TypeClauseSyntax type,
+        BlockStatementSyntax body)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
         OpenModifier = openModifier;
         OverrideModifier = overrideModifier;
         FunctionKeyword = functionKeyword;
+        ReceiverOpenParenthesisToken = receiverOpenParenthesisToken;
+        Receiver = receiver;
+        ReceiverCloseParenthesisToken = receiverCloseParenthesisToken;
         Identifier = identifier;
         OpenParenthesisToken = openParenthesisToken;
         Parameters = parameters;
@@ -98,6 +135,18 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         Type = type;
         Body = body;
     }
+
+    /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
+    public SyntaxToken ReceiverOpenParenthesisToken { get; }
+
+    /// <summary>Gets the optional receiver parameter that turns this function into an extension function (Phase 3.B.6, ADR-0019). <c>null</c> for ordinary free functions and class methods.</summary>
+    public ParameterSyntax Receiver { get; }
+
+    /// <summary>Gets the optional close parenthesis terminating the receiver clause (Phase 3.B.6).</summary>
+    public SyntaxToken ReceiverCloseParenthesisToken { get; }
+
+    /// <summary>Gets a value indicating whether this declaration carries a Go-style receiver clause (Phase 3.B.6 extension function).</summary>
+    public bool IsExtension => Receiver != null;
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.FunctionDeclaration;

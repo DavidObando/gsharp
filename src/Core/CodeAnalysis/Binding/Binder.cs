@@ -196,6 +196,12 @@ public sealed class Binder
 
         var imports = binder.scope.GetDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
+        var extensionFunctions = binder.scope.GetDeclaredExtensionFunctions();
+        if (!extensionFunctions.IsDefaultOrEmpty)
+        {
+            functions = functions.AddRange(extensionFunctions);
+        }
+
         var variables = binder.scope.GetDeclaredVariables();
         var typeAliases = binder.scope.GetDeclaredTypeAliases();
         var structs = binder.scope.GetDeclaredStructs();
@@ -721,6 +727,21 @@ public sealed class Binder
 
         var seenParameterNames = new HashSet<string>();
 
+        // Phase 3.B.6 / ADR-0019: receiver clause becomes parameters[0].
+        TypeSymbol extensionReceiverType = null;
+        if (syntax.IsExtension)
+        {
+            var recvName = syntax.Receiver.Identifier.Text;
+            extensionReceiverType = BindTypeClause(syntax.Receiver.Type);
+            if (extensionReceiverType == null)
+            {
+                extensionReceiverType = TypeSymbol.Error;
+            }
+
+            seenParameterNames.Add(recvName);
+            parameters.Add(new ParameterSymbol(recvName, extensionReceiverType));
+        }
+
         foreach (var parameterSyntax in syntax.Parameters)
         {
             var parameterName = parameterSyntax.Identifier.Text;
@@ -740,6 +761,19 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+
+        if (syntax.IsExtension)
+        {
+            function.IsExtension = true;
+            function.ExtensionReceiverType = extensionReceiverType;
+            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+            }
+
+            return;
+        }
+
         if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
@@ -2093,6 +2127,13 @@ public sealed class Binder
                 return BindUserInstanceCall(receiver, userMethod, arguments, ce);
             }
 
+            // Phase 3.B.6 / ADR-0019: extension function fallback for
+            // user-type receivers (struct/class/interface).
+            if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var userExtFn))
+            {
+                return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce);
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression();
         }
@@ -2138,8 +2179,36 @@ public sealed class Binder
             }
         }
 
+        // Phase 3.B.6 / ADR-0019: extension function fallback. After all
+        // instance/static lookups fail, try matching by (receiverType, name).
+        if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var extFn))
+        {
+            return BindExtensionFunctionCall(receiver, extFn, arguments, ce);
+        }
+
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    {
+        // The extension's first parameter is the receiver; user arguments line
+        // up against parameters[1..].
+        var userParamCount = extension.Parameters.Length - 1;
+        if (arguments.Length != userParamCount)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length);
+            return new BoundErrorExpression();
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
+        convertedArgs.Add(BindConversion(ce.Location, receiver, extension.Parameters[0].Type));
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], extension.Parameters[i + 1].Type));
+        }
+
+        return new BoundCallExpression(extension, convertedArgs.MoveToImmutable());
     }
 
     private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)

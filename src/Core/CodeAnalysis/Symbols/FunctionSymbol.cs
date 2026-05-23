@@ -163,4 +163,10 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
     public FunctionSymbol OverriddenMethod { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether this function is an extension function (Phase 3.B.6, ADR-0019). When true, the function's first parameter is the receiver and call sites <c>x.Foo(args)</c> bind to <c>Foo(x, args)</c>.</summary>
+    public bool IsExtension { get; set; }
+
+    /// <summary>Gets or sets the receiver type for an extension function (Phase 3.B.6). <c>null</c> when <see cref="IsExtension"/> is false.</summary>
+    public TypeSymbol ExtensionReceiverType { get; set; }
 }
