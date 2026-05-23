@@ -4,6 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -105,6 +108,10 @@ public sealed class Evaluator
                     break;
                 case BoundNodeKind.GoStatement:
                     EvaluateGoStatement((BoundGoStatement)s);
+                    index++;
+                    break;
+                case BoundNodeKind.ChannelSendStatement:
+                    EvaluateChannelSendStatement((BoundChannelSendStatement)s);
                     index++;
                     break;
                 default:
@@ -248,6 +255,9 @@ public sealed class Evaluator
                 BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
                 BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
+                BoundNodeKind.MakeChannelExpression => EvaluateMakeChannelExpression((BoundMakeChannelExpression)node),
+                BoundNodeKind.ChannelReceiveExpression => EvaluateChannelReceiveExpression((BoundChannelReceiveExpression)node),
+                BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -864,6 +874,91 @@ public sealed class Evaluator
             }
         }
 
+        return null;
+    }
+
+    private object EvaluateMakeChannelExpression(BoundMakeChannelExpression node)
+    {
+        // Phase 5.4 / ADR-0022: `make(chan T)` → Channel.CreateUnbounded<T>();
+        // `make(chan T, capacity)` → Channel.CreateBounded<T>(new BoundedChannelOptions(capacity)).
+        var elementClr = node.ChannelType.ElementType.ClrType ?? typeof(object);
+        if (node.Capacity == null)
+        {
+            var unbounded = typeof(Channel)
+                .GetMethod(nameof(Channel.CreateUnbounded), BindingFlags.Public | BindingFlags.Static, Type.EmptyTypes);
+            return unbounded.MakeGenericMethod(elementClr).Invoke(null, null);
+        }
+
+        var capacity = (int)EvaluateExpression(node.Capacity);
+        var options = new BoundedChannelOptions(capacity);
+        var bounded = typeof(Channel)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .First(m => m.Name == nameof(Channel.CreateBounded)
+                && m.IsGenericMethodDefinition
+                && m.GetParameters().Length == 1
+                && m.GetParameters()[0].ParameterType == typeof(BoundedChannelOptions));
+        return bounded.MakeGenericMethod(elementClr).Invoke(null, new object[] { options });
+    }
+
+    private void EvaluateChannelSendStatement(BoundChannelSendStatement node)
+    {
+        // Phase 5.5 / ADR-0022: synchronous send. Writes a value into the
+        // channel's Writer, blocking the current thread until the write
+        // completes. Inside an `async` context we still block here in the
+        // interpreter; the async-aware lowering is documented in ADR-0022
+        // and lands with the emit pass.
+        var channel = EvaluateExpression(node.Channel);
+        if (channel == null)
+        {
+            throw new EvaluatorException("'<-' send on a nil channel.", node);
+        }
+
+        var value = EvaluateExpression(node.Value);
+        var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
+        var writeAsync = writer.GetType().GetMethod("WriteAsync", new[] { writer.GetType().GenericTypeArguments[0], typeof(System.Threading.CancellationToken) });
+        var task = (System.Threading.Tasks.ValueTask)writeAsync.Invoke(writer, new[] { value, System.Threading.CancellationToken.None });
+        task.AsTask().GetAwaiter().GetResult();
+    }
+
+    private object EvaluateChannelReceiveExpression(BoundChannelReceiveExpression node)
+    {
+        // Phase 5.5 / ADR-0022: synchronous receive. Reads a value from the
+        // channel's Reader, blocking until one arrives. If the channel is
+        // closed and drained, return the element type's default value
+        // (matches Go's `v := <-closedCh` behaviour at the surface).
+        var channel = EvaluateExpression(node.Channel);
+        if (channel == null)
+        {
+            throw new EvaluatorException("'<-' receive on a nil channel.", node);
+        }
+
+        var reader = channel.GetType().GetProperty("Reader").GetValue(channel);
+        var elementType = reader.GetType().GenericTypeArguments[0];
+        var readAsync = reader.GetType().GetMethod("ReadAsync", new[] { typeof(System.Threading.CancellationToken) });
+        var valueTask = readAsync.Invoke(reader, new object[] { System.Threading.CancellationToken.None });
+        var asTask = valueTask.GetType().GetMethod("AsTask").Invoke(valueTask, null);
+        try
+        {
+            ((Task)asTask).GetAwaiter().GetResult();
+        }
+        catch (ChannelClosedException)
+        {
+            return elementType.IsValueType ? Activator.CreateInstance(elementType) : null;
+        }
+
+        return ((Task)asTask).GetType().GetProperty("Result").GetValue(asTask);
+    }
+
+    private object EvaluateChannelCloseExpression(BoundChannelCloseExpression node)
+    {
+        var channel = EvaluateExpression(node.Channel);
+        if (channel == null)
+        {
+            return null;
+        }
+
+        var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
+        writer.GetType().GetMethod("Complete", new[] { typeof(Exception) }).Invoke(writer, new object[] { null });
         return null;
     }
 

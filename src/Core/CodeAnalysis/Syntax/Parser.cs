@@ -810,6 +810,11 @@ public class Parser
             return ParseMapTypeClause();
         }
 
+        if (Current.Kind == SyntaxKind.ChanKeyword)
+        {
+            return ParseChanTypeClause();
+        }
+
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
@@ -909,6 +914,15 @@ public class Parser
         var valueType = ParseTypeClause();
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
         return new TypeClauseSyntax(syntaxTree, mapKeyword, openBracket, keyType, closeBracket, valueType, question);
+    }
+
+    private TypeClauseSyntax ParseChanTypeClause()
+    {
+        // Phase 5.4 / ADR-0022: channel type clause `chan T` with optional trailing `?`.
+        var chanKeyword = MatchToken(SyntaxKind.ChanKeyword);
+        var elementType = ParseTypeClause();
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return new TypeClauseSyntax(syntaxTree, chanKeyword, elementType, question);
     }
 
     private TypeClauseSyntax ParseFunctionTypeClause()
@@ -1044,7 +1058,7 @@ public class Parser
                     return ParseMultiAssignmentStatement();
                 }
 
-                return ParseExpressionStatement();
+                return ParseExpressionOrChannelSendStatement();
         }
     }
 
@@ -1682,6 +1696,20 @@ public class Parser
         return new ExpressionStatementSyntax(syntaxTree, expression);
     }
 
+    private StatementSyntax ParseExpressionOrChannelSendStatement()
+    {
+        var expression = ParseExpression();
+        if (Current.Kind == SyntaxKind.LeftArrowToken)
+        {
+            // Phase 5.5 / ADR-0022: `ch <- v` is a statement, not an expression.
+            var arrow = NextToken();
+            var value = ParseExpression();
+            return new ChannelSendStatementSyntax(syntaxTree, expression, arrow, value);
+        }
+
+        return new ExpressionStatementSyntax(syntaxTree, expression);
+    }
+
     private ExpressionSyntax ParseExpression()
     {
         return ParseAssignmentExpression();
@@ -1969,7 +1997,15 @@ public class Parser
     private ExpressionSyntax ParseNameOrCallExpression()
     {
         ExpressionSyntax current;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "make"
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(2).Kind == SyntaxKind.ChanKeyword)
+        {
+            // Phase 5.4 / ADR-0022: contextual `make(chan T)` / `make(chan T, capacity)`.
+            current = ParseMakeChannelExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             current = ParseCallExpression();
         }
@@ -2180,6 +2216,24 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, openParenthesisToken, arguments, closeParenthesisToken);
+    }
+
+    private ExpressionSyntax ParseMakeChannelExpression()
+    {
+        // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
+        var makeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var channelType = ParseChanTypeClause();
+        SyntaxToken comma = null;
+        ExpressionSyntax capacity = null;
+        if (Current.Kind == SyntaxKind.CommaToken)
+        {
+            comma = MatchToken(SyntaxKind.CommaToken);
+            capacity = ParseExpression();
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new MakeChannelExpressionSyntax(syntaxTree, makeIdentifier, openParen, channelType, comma, capacity, closeParen);
     }
 
     // Phase 4.9: Kotlin-style trailing-lambda call syntax. When a call's

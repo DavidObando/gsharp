@@ -63,6 +63,10 @@ public enum BoundNodeKind
     ClrIndexAssignmentExpression,
     AwaitExpression,
     GoStatement,
+    MakeChannelExpression,
+    ChannelReceiveExpression,
+    ChannelSendStatement,
+    ChannelCloseExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -49,6 +49,8 @@ public abstract class BoundTreeRewriter
                 return RewriteThrowStatement((BoundThrowStatement)node);
             case BoundNodeKind.GoStatement:
                 return RewriteGoStatement((BoundGoStatement)node);
+            case BoundNodeKind.ChannelSendStatement:
+                return RewriteChannelSendStatement((BoundChannelSendStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -373,6 +375,12 @@ public abstract class BoundTreeRewriter
                 return RewriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node);
             case BoundNodeKind.AwaitExpression:
                 return RewriteAwaitExpression((BoundAwaitExpression)node);
+            case BoundNodeKind.MakeChannelExpression:
+                return RewriteMakeChannelExpression((BoundMakeChannelExpression)node);
+            case BoundNodeKind.ChannelReceiveExpression:
+                return RewriteChannelReceiveExpression((BoundChannelReceiveExpression)node);
+            case BoundNodeKind.ChannelCloseExpression:
+                return RewriteChannelCloseExpression((BoundChannelCloseExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -539,6 +547,68 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundGoStatement(expression);
+    }
+
+    /// <summary>Rewrites a bound channel-send statement (Phase 5.5).</summary>
+    /// <param name="node">The channel-send statement to rewrite.</param>
+    /// <returns>The rewritten channel-send statement.</returns>
+    protected virtual BoundStatement RewriteChannelSendStatement(BoundChannelSendStatement node)
+    {
+        var channel = RewriteExpression(node.Channel);
+        var value = RewriteExpression(node.Value);
+        if (channel == node.Channel && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundChannelSendStatement(channel, value);
+    }
+
+    /// <summary>Rewrites a bound make-channel expression (Phase 5.4).</summary>
+    /// <param name="node">The make-channel expression to rewrite.</param>
+    /// <returns>The rewritten make-channel expression.</returns>
+    protected virtual BoundExpression RewriteMakeChannelExpression(BoundMakeChannelExpression node)
+    {
+        if (node.Capacity == null)
+        {
+            return node;
+        }
+
+        var capacity = RewriteExpression(node.Capacity);
+        if (capacity == node.Capacity)
+        {
+            return node;
+        }
+
+        return new BoundMakeChannelExpression(node.ChannelType, capacity);
+    }
+
+    /// <summary>Rewrites a bound channel-receive expression (Phase 5.5).</summary>
+    /// <param name="node">The channel-receive expression to rewrite.</param>
+    /// <returns>The rewritten channel-receive expression.</returns>
+    protected virtual BoundExpression RewriteChannelReceiveExpression(BoundChannelReceiveExpression node)
+    {
+        var channel = RewriteExpression(node.Channel);
+        if (channel == node.Channel)
+        {
+            return node;
+        }
+
+        return new BoundChannelReceiveExpression(channel, node.Type);
+    }
+
+    /// <summary>Rewrites a bound channel-close expression (Phase 5.4).</summary>
+    /// <param name="node">The channel-close expression to rewrite.</param>
+    /// <returns>The rewritten channel-close expression.</returns>
+    protected virtual BoundExpression RewriteChannelCloseExpression(BoundChannelCloseExpression node)
+    {
+        var channel = RewriteExpression(node.Channel);
+        if (channel == node.Channel)
+        {
+            return node;
+        }
+
+        return new BoundChannelCloseExpression(channel);
     }
 
     /// <summary>
