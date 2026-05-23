@@ -18,7 +18,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<string, FunctionTypeSymbol> Cache = new ConcurrentDictionary<string, FunctionTypeSymbol>();
 
     private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
-        : base(name)
+        : base(name, BuildClrType(parameterTypes, returnType))
     {
         ParameterTypes = parameterTypes;
         ReturnType = returnType;
@@ -60,5 +60,66 @@ public sealed class FunctionTypeSymbol : TypeSymbol
 
         var name = sb.ToString();
         return Cache.GetOrAdd(name, n => new FunctionTypeSymbol(n, parameterTypes, returnType ?? TypeSymbol.Void));
+    }
+
+    private static System.Type BuildClrType(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    {
+        // Phase 4 emit parity (E): map func(T1, ..., Tn) R to the matching
+        // System.Func<T1, ..., Tn, R> shape (or System.Action<...> when R
+        // is void). Higher arities (>16 args) have no shipped delegate
+        // shape and return a null ClrType, keeping the type
+        // interpreter-only on the emit side.
+        var paramClr = new System.Type[parameterTypes.Length];
+        for (var i = 0; i < parameterTypes.Length; i++)
+        {
+            var pt = parameterTypes[i]?.ClrType;
+            if (pt == null)
+            {
+                return null;
+            }
+
+            paramClr[i] = pt;
+        }
+
+        bool isVoid = returnType == null || returnType == TypeSymbol.Void;
+        if (isVoid)
+        {
+            switch (paramClr.Length)
+            {
+                case 0: return typeof(System.Action);
+                case 1: return typeof(System.Action<>).MakeGenericType(paramClr);
+                case 2: return typeof(System.Action<,>).MakeGenericType(paramClr);
+                case 3: return typeof(System.Action<,,>).MakeGenericType(paramClr);
+                case 4: return typeof(System.Action<,,,>).MakeGenericType(paramClr);
+                case 5: return typeof(System.Action<,,,,>).MakeGenericType(paramClr);
+                case 6: return typeof(System.Action<,,,,,>).MakeGenericType(paramClr);
+                case 7: return typeof(System.Action<,,,,,,>).MakeGenericType(paramClr);
+                case 8: return typeof(System.Action<,,,,,,,>).MakeGenericType(paramClr);
+                default: return null;
+            }
+        }
+
+        var retClr = returnType.ClrType;
+        if (retClr == null)
+        {
+            return null;
+        }
+
+        var args = new System.Type[paramClr.Length + 1];
+        System.Array.Copy(paramClr, args, paramClr.Length);
+        args[paramClr.Length] = retClr;
+        switch (paramClr.Length)
+        {
+            case 0: return typeof(System.Func<>).MakeGenericType(args);
+            case 1: return typeof(System.Func<,>).MakeGenericType(args);
+            case 2: return typeof(System.Func<,,>).MakeGenericType(args);
+            case 3: return typeof(System.Func<,,,>).MakeGenericType(args);
+            case 4: return typeof(System.Func<,,,,>).MakeGenericType(args);
+            case 5: return typeof(System.Func<,,,,,>).MakeGenericType(args);
+            case 6: return typeof(System.Func<,,,,,,>).MakeGenericType(args);
+            case 7: return typeof(System.Func<,,,,,,,>).MakeGenericType(args);
+            case 8: return typeof(System.Func<,,,,,,,,>).MakeGenericType(args);
+            default: return null;
+        }
     }
 }
