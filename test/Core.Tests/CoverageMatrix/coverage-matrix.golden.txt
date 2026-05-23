@@ -173,6 +173,7 @@ StructLiteralExpression
 ThrowStatement
 TryStatement
 UnaryExpression
+UserInstanceCallExpression
 VariableDeclaration
 VariableExpression
 

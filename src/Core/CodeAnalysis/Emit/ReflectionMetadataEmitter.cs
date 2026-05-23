@@ -48,6 +48,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
+    // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
+    private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -158,6 +161,7 @@ internal sealed class ReflectionMetadataEmitter
         // default ctor row, and the methods are emitted in this row order.
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
+        var classMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
         int methodRow = 1;
         foreach (var c in classes)
         {
@@ -165,6 +169,14 @@ internal sealed class ReflectionMetadataEmitter
             if (c.HasPrimaryConstructor)
             {
                 classPrimaryCtorRows[c] = methodRow++;
+            }
+
+            if (!c.Methods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.Methods)
+                {
+                    classMethodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
             }
         }
 
@@ -212,6 +224,13 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var kvp in this.program.Functions)
         {
             if (kvp.Key == this.program.EntryPoint)
+            {
+                continue;
+            }
+
+            // Class instance methods are owned by their class TypeDef, not by
+            // a package's <Program> container.
+            if (kvp.Key.IsInstanceMethod)
             {
                 continue;
             }
@@ -266,6 +285,16 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var primaryHandle = this.EmitClassPrimaryConstructor(c);
                 this.classPrimaryCtorHandles[c] = primaryHandle;
+            }
+
+            if (!c.Methods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.Methods)
+                {
+                    var body = this.program.Functions[m];
+                    var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                    this.methodHandles[m] = emittedHandle;
+                }
             }
         }
 
@@ -589,10 +618,20 @@ internal sealed class ReflectionMetadataEmitter
             CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, il);
 
             // Parameters → arg indices.
+            // For instance methods, IL slot 0 is the implicit `this`, so user
+            // parameters shift up by one. Both the synthesized `ThisParameter`
+            // (slot 0) and the user parameters are registered so emit sites
+            // can resolve either.
             var parameters = new Dictionary<ParameterSymbol, int>();
+            int paramSlotShift = function.IsInstanceMethod ? 1 : 0;
+            if (function.IsInstanceMethod)
+            {
+                parameters[function.ThisParameter] = 0;
+            }
+
             for (var i = 0; i < function.Parameters.Length; i++)
             {
-                parameters[function.Parameters[i]] = i;
+                parameters[function.Parameters[i]] = i + paramSlotShift;
             }
 
             StandaloneSignatureHandle localsSignature = default;
@@ -621,7 +660,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: function.IsInstanceMethod)
             .Parameters(
                 function.Parameters.Length,
                 r => EncodeReturnSymbol(r, function.Type),
@@ -641,8 +680,21 @@ internal sealed class ReflectionMetadataEmitter
             ? MethodAttributes.Public
             : ToMethodVisibility(function.Accessibility);
 
+        // Instance methods omit MethodAttributes.Static; emit them as Virtual
+        // so callers can use `callvirt` for null-check safety (sub-step 3 will
+        // introduce true polymorphism).
+        var methodAttrs = visibility | MethodAttributes.HideBySig;
+        if (function.IsInstanceMethod)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
+        else
+        {
+            methodAttrs |= MethodAttributes.Static;
+        }
+
         var handle = this.metadata.AddMethodDefinition(
-            attributes: visibility | MethodAttributes.Static | MethodAttributes.HideBySig,
+            attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString(methodName),
             signature: this.metadata.GetOrAddBlob(sigBlob),
@@ -776,6 +828,21 @@ internal sealed class ReflectionMetadataEmitter
             case BoundImportedInstanceCallExpression iic:
                 WalkForStructLiterals(iic.Receiver, sink);
                 foreach (var arg in iic.Arguments)
+                {
+                    WalkForStructLiterals(arg, sink);
+                }
+
+                break;
+            case BoundUserInstanceCallExpression uic:
+                WalkForStructLiterals(uic.Receiver, sink);
+                foreach (var arg in uic.Arguments)
+                {
+                    WalkForStructLiterals(arg, sink);
+                }
+
+                break;
+            case BoundConstructorCallExpression cce:
+                foreach (var arg in cce.Arguments)
                 {
                     WalkForStructLiterals(arg, sink);
                 }
@@ -1555,6 +1622,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundConstructorCallExpression ctorCall:
                     this.EmitConstructorCall(ctorCall);
                     break;
+                case BoundUserInstanceCallExpression uic:
+                    this.EmitUserInstanceCall(uic);
+                    break;
                 case BoundFieldAccessExpression fa:
                     this.EmitFieldAccess(fa);
                     break;
@@ -2011,6 +2081,24 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(ctorHandle);
+        }
+
+        private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
+        {
+            if (!this.outer.methodHandles.TryGetValue(call.Method, out var methodHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Instance method '{call.Method.Name}' on '{call.Method.ReceiverType?.Name}' has no emitted handle.");
+            }
+
+            this.EmitExpression(call.Receiver);
+            foreach (var arg in call.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(methodHandle);
         }
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)

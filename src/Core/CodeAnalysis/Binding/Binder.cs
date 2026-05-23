@@ -37,6 +37,22 @@ public sealed class Binder
 
         if (function != null)
         {
+            if (function.ThisParameter != null)
+            {
+                scope.TryDeclareVariable(function.ThisParameter);
+
+                // Phase 3.B.3 sub-step 2b: expose each field on the receiver
+                // as a bare name inside the method body. Field access lowers
+                // to `this.<field>` at name resolution time.
+                if (function.ReceiverType != null && !function.ReceiverType.Fields.IsDefaultOrEmpty)
+                {
+                    foreach (var fld in function.ReceiverType.Fields)
+                    {
+                        scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, function.ReceiverType, fld));
+                    }
+                }
+            }
+
             foreach (var p in function.Parameters)
             {
                 scope.TryDeclareVariable(p);
@@ -213,6 +229,32 @@ public sealed class Binder
             }
 
             scope = scope.Previous;
+        }
+
+        // Phase 3.B.3 sub-step 2b: bind class method bodies. Methods are not
+        // in globalScope.Functions (they're addressed via the dot operator),
+        // so we walk Structs explicitly here.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var method in structSym.Methods)
+            {
+                var binder = new Binder(parentScope, method);
+                var body = binder.BindStatement(method.Declaration.Body);
+                var loweredBody = Lowerer.Lower(body);
+
+                if (method.Type != TypeSymbol.Void && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                {
+                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                }
+
+                functionBodies.Add(method, loweredBody);
+                diagnostics.AddRange(binder.Diagnostics);
+            }
         }
 
         var statement = Lowerer.Lower(new BoundBlockStatement(globalScope.Statements));
@@ -398,6 +440,61 @@ public sealed class Binder
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+
+        // Phase 3.B.3 sub-step 2b: bind methods declared inside the class body.
+        // Methods are only legal on `class` types (struct methods rejected by
+        // the parser already). Each method becomes a FunctionSymbol with
+        // ReceiverType = structSymbol; method bodies are bound later by
+        // BindProgram by walking StructSymbol.Methods.
+        if (syntax.IsClass && !syntax.Methods.IsDefaultOrEmpty)
+        {
+            var existingNames = new HashSet<string>();
+            foreach (var f in structSymbol.Fields)
+            {
+                existingNames.Add(f.Name);
+            }
+
+            var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            foreach (var methodSyntax in syntax.Methods)
+            {
+                var methodName = methodSyntax.Identifier.Text;
+                if (!existingNames.Add(methodName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(methodSyntax.Identifier.Location, methodName);
+                    continue;
+                }
+
+                var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                var seenParameterNames = new HashSet<string>();
+                foreach (var parameterSyntax in methodSyntax.Parameters)
+                {
+                    var parameterName = parameterSyntax.Identifier.Text;
+                    var parameterType = BindTypeClause(parameterSyntax.Type);
+                    if (!seenParameterNames.Add(parameterName))
+                    {
+                        Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                    }
+                    else
+                    {
+                        parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                    }
+                }
+
+                var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+                var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+                var methodSymbol = new FunctionSymbol(
+                    methodName,
+                    parameters.ToImmutable(),
+                    returnType,
+                    methodSyntax,
+                    package,
+                    methodAccessibility,
+                    receiverType: structSymbol);
+                methodsBuilder.Add(methodSymbol);
+            }
+
+            structSymbol.SetMethods(methodsBuilder.ToImmutable());
         }
     }
 
@@ -1214,6 +1311,14 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            return new BoundFieldAccessExpression(
+                new BoundVariableExpression(implicitField.Receiver),
+                implicitField.StructType,
+                implicitField.Field);
+        }
+
         return new BoundVariableExpression(variable);
     }
 
@@ -1226,6 +1331,12 @@ public sealed class Binder
         if (variable == null)
         {
             return boundExpression;
+        }
+
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
+            return new BoundFieldAssignmentExpression(implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
         }
 
         if (variable.IsReadOnly)
@@ -1724,8 +1835,23 @@ public sealed class Binder
 
         if (receiver == null || receiver.Type?.ClrType == null)
         {
+            // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
+            // if receiver is a user struct symbol.
+            if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethod(methodName, out var userMethod))
+            {
+                return BindUserInstanceCall(receiver, userMethod, arguments, ce);
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression();
+        }
+
+        // Prefer a user-defined class method when the receiver is a user
+        // class symbol that has one with this name. (BCL lookup is the
+        // fallback for imported CLR types.)
+        if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethod(methodName, out var userMethodPriority))
+        {
+            return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce);
         }
 
         var clrType = receiver.Type.ClrType;
@@ -1763,6 +1889,23 @@ public sealed class Binder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression();
+    }
+
+    private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    {
+        if (arguments.Length != method.Parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
+            return new BoundErrorExpression();
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], method.Parameters[i].Type));
+        }
+
+        return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable());
     }
 
     private BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)

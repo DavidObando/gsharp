@@ -89,6 +89,40 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, openBraceToken, fields, ImmutableArray<FunctionDeclarationSyntax>.Empty, closeBraceToken)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The aggregate identifier.</param>
+    /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
+    /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
+    /// <param name="primaryConstructorParameters">The primary constructor parameter list (empty when no primary constructor is declared).</param>
+    /// <param name="primaryConstructorCloseParen">The optional closing paren of the primary constructor.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="fields">The body field declarations.</param>
+    /// <param name="methods">The method declarations in the body (classes only, Phase 3.B.3 sub-step 2b).</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public StructDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken structKeyword,
+        SyntaxToken primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
+        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FieldDeclarationSyntax> fields,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -101,6 +135,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         PrimaryConstructorCloseParenthesisToken = primaryConstructorCloseParen;
         OpenBraceToken = openBraceToken;
         Fields = fields;
+        Methods = methods;
         CloseBraceToken = closeBraceToken;
     }
 
@@ -145,6 +180,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the field declarations.</summary>
     public ImmutableArray<FieldDeclarationSyntax> Fields { get; }
+
+    /// <summary>Gets the method declarations declared inside the body (Phase 3.B.3 sub-step 2b — classes only). Empty for struct types and for bodyless declarations.</summary>
+    public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }

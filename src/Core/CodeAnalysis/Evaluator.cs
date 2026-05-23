@@ -201,6 +201,7 @@ public sealed class Evaluator
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
                 BoundNodeKind.ConstructorCallExpression => EvaluateConstructorCallExpression((BoundConstructorCallExpression)node),
+                BoundNodeKind.UserInstanceCallExpression => EvaluateUserInstanceCallExpression((BoundUserInstanceCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
@@ -555,6 +556,30 @@ public sealed class Evaluator
 
             return result;
         }
+    }
+
+    private object EvaluateUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+    {
+        var receiverValue = EvaluateExpression(node.Receiver);
+
+        var frame = new Dictionary<VariableSymbol, object>
+        {
+            [node.Method.ThisParameter] = receiverValue,
+        };
+
+        for (int i = 0; i < node.Arguments.Length; i++)
+        {
+            var parameter = node.Method.Parameters[i];
+            var value = EvaluateExpression(node.Arguments[i]);
+            frame.Add(parameter, value);
+        }
+
+        locals.Push(frame);
+        var statement = program.Functions[node.Method];
+        var result = EvaluateStatement(statement);
+        locals.Pop();
+
+        return result;
     }
 
     private object EvaluateConversionExpression(BoundConversionExpression node)

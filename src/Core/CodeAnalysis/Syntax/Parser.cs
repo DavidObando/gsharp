@@ -259,10 +259,41 @@ public class Parser
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
-            fields.Add(ParseFieldDeclaration());
+
+            // Phase 3.B.3 sub-step 2b: method declarations inside the body.
+            // Use the existing `func Name(args) Ret { body }` parser; the
+            // method has no explicit receiver clause — the receiver is the
+            // enclosing class. Struct types reject methods (diagnose+skip).
+            SyntaxToken memberAccessibility = null;
+            if (Current.Kind == SyntaxKind.PublicKeyword ||
+                Current.Kind == SyntaxKind.InternalKeyword ||
+                Current.Kind == SyntaxKind.PrivateKeyword)
+            {
+                if (Peek(1).Kind == SyntaxKind.FuncKeyword)
+                {
+                    memberAccessibility = NextToken();
+                }
+            }
+
+            if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility);
+                methods.Add(method);
+            }
+            else
+            {
+                fields.Add(ParseFieldDeclaration());
+            }
+
             if (Current == startToken)
             {
                 NextToken();
@@ -282,6 +313,7 @@ public class Parser
             primaryCtorCloseParen,
             openBrace,
             fields.ToImmutable(),
+            methods.ToImmutable(),
             closeBrace);
     }
 

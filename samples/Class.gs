@@ -35,3 +35,22 @@ Console.WriteLine(v.X + v.Y)
 v.X = 100
 Console.WriteLine(v.X + v.Y)
 
+// Phase 3.B.3 (2b/3): methods inside the class body with implicit `this`.
+// Bare `X` inside `Sum`/`Scale` resolves to `this.X` (field access). The
+// method dispatch is virtual under the hood (callvirt) for null safety.
+type Pt class(X int, Y int) {
+    func Sum() int {
+        return X + Y
+    }
+
+    func Scale(factor int) {
+        X = X * factor
+        Y = Y * factor
+    }
+}
+
+var pt = Pt(3, 4)
+Console.WriteLine(pt.Sum())
+pt.Scale(10)
+Console.WriteLine(pt.Sum())
+

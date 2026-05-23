@@ -46,6 +46,7 @@ public enum BoundNodeKind
     AppendExpression,
     StructLiteralExpression,
     ConstructorCallExpression,
+    UserInstanceCallExpression,
     FieldAccessExpression,
     FieldAssignmentExpression,
 }

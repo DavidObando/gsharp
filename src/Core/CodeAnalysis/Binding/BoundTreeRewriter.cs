@@ -322,6 +322,8 @@ public abstract class BoundTreeRewriter
                 return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
             case BoundNodeKind.ConstructorCallExpression:
                 return RewriteConstructorCallExpression((BoundConstructorCallExpression)node);
+            case BoundNodeKind.UserInstanceCallExpression:
+                return RewriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node);
             case BoundNodeKind.FieldAccessExpression:
                 return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
             case BoundNodeKind.FieldAssignmentExpression:
@@ -690,6 +692,40 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundConstructorCallExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites an instance-method call on a user-defined class.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        if (receiver == node.Receiver && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundUserInstanceCallExpression(receiver, node.Method, builder?.ToImmutable() ?? node.Arguments);
     }
 
     /// <summary>Rewrites a field read.</summary>

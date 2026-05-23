@@ -200,6 +200,110 @@ type Point class(X int, Y int) {
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Method_CallReturnsValue_UsingImplicitThis()
+    {
+        // Phase 3.B.3 sub-step 2b: bare `X` / `Y` inside `Sum` resolve to
+        // `this.X` / `this.Y`.
+        var source = @"
+type Pt class(X int, Y int) {
+    func Sum() int {
+        return X + Y
+    }
+}
+var p = Pt(3, 4)
+p.Sum()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void Method_MutatesReceiverViaImplicitFieldAssignment()
+    {
+        var source = @"
+type Pt class(X int, Y int) {
+    func Scale(f int) {
+        X = X * f
+        Y = Y * f
+    }
+}
+var p = Pt(2, 3)
+p.Scale(10)
+p.X + p.Y
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(50, result.Value);
+    }
+
+    [Fact]
+    public void Method_TakesAndUsesArguments()
+    {
+        var source = @"
+type Vec class(X int) {
+    func Add(n int) int {
+        return X + n
+    }
+}
+var v = Vec(5)
+v.Add(7)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void Method_WrongArgCount_Diagnoses()
+    {
+        var source = @"
+type Pt class(X int) {
+    func Inc() int {
+        return X + 1
+    }
+}
+var p = Pt(1)
+p.Inc(99)
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Method_NameCollidesWithField_Diagnoses()
+    {
+        var source = @"
+type Pt class(X int) {
+    func X() int {
+        return 0
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Method_OnStruct_Diagnoses()
+    {
+        // Methods are class-only in 3.B.3 sub-step 2b.
+        var source = @"
+type Pt struct {
+    X int
+
+    func Sum() int {
+        return X
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

@@ -129,6 +129,38 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
     public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
 
+    /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
+    public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>Sets <see cref="Methods"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
+    /// <param name="methods">The bound method symbols owned by this class.</param>
+    public void SetMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        Methods = methods;
+    }
+
+    /// <summary>Tries to find a method by name on this class.</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetMethod(string name, out FunctionSymbol method)
+    {
+        if (!Methods.IsDefaultOrEmpty)
+        {
+            foreach (var m in Methods)
+            {
+                if (m.Name == name)
+                {
+                    method = m;
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
     /// <summary>Tries to find a field by name.</summary>
     /// <param name="name">The field name.</param>
     /// <param name="field">The found field on success.</param>
