@@ -18,6 +18,38 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The interface identifier.</param>
+    /// <param name="sealedKeyword">The optional <c>sealed</c> contextual keyword (Phase 3.B.5). Non-null restricts implementors to the same package.</param>
+    /// <param name="interfaceKeyword">The <c>interface</c> keyword.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="methods">The method signatures declared inside the interface body.</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public InterfaceDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken sealedKeyword,
+        SyntaxToken interfaceKeyword,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
+        : base(syntaxTree)
+    {
+        AccessibilityModifier = accessibilityModifier;
+        TypeKeyword = typeKeyword;
+        Identifier = identifier;
+        SealedKeyword = sealedKeyword;
+        InterfaceKeyword = interfaceKeyword;
+        OpenBraceToken = openBraceToken;
+        Methods = methods;
+        CloseBraceToken = closeBraceToken;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class without a sealed modifier (back-compat overload).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The interface identifier.</param>
     /// <param name="interfaceKeyword">The <c>interface</c> keyword.</param>
     /// <param name="openBraceToken">The opening brace of the body.</param>
     /// <param name="methods">The method signatures declared inside the interface body.</param>
@@ -31,15 +63,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
-        : base(syntaxTree)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, sealedKeyword: null, interfaceKeyword, openBraceToken, methods, closeBraceToken)
     {
-        AccessibilityModifier = accessibilityModifier;
-        TypeKeyword = typeKeyword;
-        Identifier = identifier;
-        InterfaceKeyword = interfaceKeyword;
-        OpenBraceToken = openBraceToken;
-        Methods = methods;
-        CloseBraceToken = closeBraceToken;
     }
 
     /// <inheritdoc/>
@@ -53,6 +78,12 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the interface identifier.</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>Gets the optional <c>sealed</c> contextual keyword (Phase 3.B.5). Non-null marks this as a closed hierarchy whose implementors must live in the same package.</summary>
+    public SyntaxToken SealedKeyword { get; }
+
+    /// <summary>Gets a value indicating whether this interface was declared <c>sealed</c> (Phase 3.B.5).</summary>
+    public bool IsSealed => SealedKeyword != null;
 
     /// <summary>Gets the <c>interface</c> keyword.</summary>
     public SyntaxToken InterfaceKeyword { get; }

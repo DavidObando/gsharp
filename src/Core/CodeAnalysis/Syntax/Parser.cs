@@ -209,8 +209,22 @@ public class Parser
             openModifier = NextToken();
         }
 
+        // Phase 3.B.5: optional `sealed` modifier on an interface declaration.
+        // `sealed interface` restricts implementors to the same package
+        // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
+        SyntaxToken sealedModifier = null;
+        if (Current.Kind == SyntaxKind.SealedKeyword && Peek(1).Kind == SyntaxKind.InterfaceKeyword)
+        {
+            sealedModifier = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword)
         {
+            if (sealedModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
+            }
+
             return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
         }
 
@@ -226,7 +240,12 @@ public class Parser
                 Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
             }
 
-            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier);
+            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, sealedModifier);
+        }
+
+        if (sealedModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.InterfaceKeyword);
         }
 
         if (openModifier != null)
@@ -423,7 +442,8 @@ public class Parser
     private InterfaceDeclarationSyntax ParseInterfaceDeclaration(
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
-        SyntaxToken identifier)
+        SyntaxToken identifier,
+        SyntaxToken sealedModifier)
     {
         var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -457,6 +477,7 @@ public class Parser
             accessibilityModifier,
             typeKeyword,
             identifier,
+            sealedModifier,
             interfaceKeyword,
             openBrace,
             methods.ToImmutable(),

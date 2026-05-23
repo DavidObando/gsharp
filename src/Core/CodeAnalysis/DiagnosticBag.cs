@@ -571,6 +571,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
     }
 
+    /// <summary>Phase 3.B.5: reports a class that implements a sealed interface declared in a different package.</summary>
+    /// <param name="location">The text location of the implementing class identifier.</param>
+    /// <param name="className">The implementing class.</param>
+    /// <param name="interfaceName">The sealed interface name.</param>
+    /// <param name="interfacePackage">The package owning the sealed interface.</param>
+    public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
+    {
+        Report(location, $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);

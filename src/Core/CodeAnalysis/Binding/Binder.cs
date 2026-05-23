@@ -634,6 +634,17 @@ public sealed class Binder
             structSymbol.SetInterfaces(implementedInterfaces.ToImmutable());
             foreach (var iface in implementedInterfaces)
             {
+                // Phase 3.B.5: a `sealed` interface restricts implementors
+                // to the same package as the interface itself.
+                if (iface.IsSealed && !string.Equals(iface.PackageName ?? string.Empty, structSymbol.PackageName ?? string.Empty, System.StringComparison.Ordinal))
+                {
+                    Diagnostics.ReportSealedInterfaceImplementorOutsidePackage(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iface.PackageName ?? string.Empty);
+                }
+
                 foreach (var imethod in iface.Methods)
                 {
                     if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)

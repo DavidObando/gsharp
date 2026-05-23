@@ -113,6 +113,7 @@ PublicKeyword
 RangeKeyword
 ReturnKeyword
 ReturnStatement
+SealedKeyword
 SelectKeyword
 SemicolonToken
 ShiftLeftEqualsToken

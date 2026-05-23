@@ -105,6 +105,7 @@ public enum SyntaxKind
     PublicKeyword,
     RangeKeyword,
     ReturnKeyword,
+    SealedKeyword,
     SelectKeyword,
     StructKeyword,
     SwitchKeyword,

@@ -180,6 +180,8 @@ public static class SyntaxFacts
                 return SyntaxKind.RangeKeyword;
             case "return":
                 return SyntaxKind.ReturnKeyword;
+            case "sealed":
+                return SyntaxKind.SealedKeyword;
             case "select":
                 return SyntaxKind.SelectKeyword;
             case "struct":
@@ -400,6 +402,8 @@ public static class SyntaxFacts
                 return "range";
             case SyntaxKind.ReturnKeyword:
                 return "return";
+            case SyntaxKind.SealedKeyword:
+                return "sealed";
             case SyntaxKind.SelectKeyword:
                 return "select";
             case SyntaxKind.StructKeyword:

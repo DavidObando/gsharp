@@ -42,6 +42,9 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the package this interface lives in.</summary>
     public string PackageName { get; }
 
+    /// <summary>Gets a value indicating whether this interface was declared <c>sealed</c> (Phase 3.B.5). All implementors must live in the same package; binder-enforced.</summary>
+    public bool IsSealed => Declaration?.IsSealed ?? false;
+
     /// <summary>Gets the abstract method signatures declared on this interface. Populated by the binder via <see cref="SetMethods"/>.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; }
 

@@ -129,6 +129,60 @@ b.Area()
         Assert.Equal(50, result.Value);
     }
 
+    [Fact]
+    public void SealedInterface_SamePackage_Implementor_Works()
+    {
+        var source = @"
+package GSharp.Tests.Sealed
+type IResult sealed interface {
+    func Ok() bool
+}
+
+type Success class : IResult {
+    func Ok() bool { return true }
+}
+
+var s = Success{}
+s.Ok()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void SealedInterface_BodyOnMember_StillDiagnoses()
+    {
+        var source = @"
+type IBad sealed interface {
+    func F() int { return 0 }
+}
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void SealedInterface_DifferentPackage_Implementor_Diagnoses()
+    {
+        var t1 = SyntaxTree.Parse(SourceText.From(@"
+package GSharp.Tests.Sealed.A
+public type IResult sealed interface {
+    func Ok() bool
+}
+"));
+        var t2 = SyntaxTree.Parse(SourceText.From(@"
+package GSharp.Tests.Sealed.B
+import GSharp.Tests.Sealed.A
+type Success class : IResult {
+    func Ok() bool { return true }
+}
+"));
+        var compilation = new Compilation(t1, t2);
+        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed interface"));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
