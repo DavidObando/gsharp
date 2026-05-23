@@ -758,6 +758,15 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
+        // Phase 4.1 follow-up: generic-function IL emission lands in 4.1b.
+        // For now throw a clear error at emit time so source that runs under
+        // the interpreter is not silently miscompiled.
+        if (function.IsGeneric)
+        {
+            throw new NotSupportedException(
+                $"Generic function '{function.Name}' cannot yet be lowered to IL (Phase 4.1b will add CLR generic-method emission). Run under the interpreter for now.");
+        }
+
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {

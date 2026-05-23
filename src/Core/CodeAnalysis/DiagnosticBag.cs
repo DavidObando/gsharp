@@ -353,6 +353,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports a generic call whose explicit type-argument list has the wrong arity (Phase 4.1 / ADR-0020).</summary>
+    /// <param name="location">The text location of the type-argument list.</param>
+    /// <param name="name">The callee name.</param>
+    /// <param name="expectedCount">The expected number of type arguments.</param>
+    /// <param name="actualCount">The actual number of type arguments.</param>
+    public void ReportWrongTypeArgumentCount(TextLocation location, string name, int expectedCount, int actualCount)
+    {
+        Report(location, $"Generic function '{name}' requires {expectedCount} type arguments but was given {actualCount}.");
+    }
+
+    /// <summary>Reports a generic call whose type arguments could not be inferred from the value arguments (Phase 4.1 / ADR-0020).</summary>
+    /// <param name="location">The text location of the call.</param>
+    /// <param name="name">The callee name.</param>
+    /// <param name="typeParameterName">The unresolved type-parameter name.</param>
+    public void ReportTypeArgumentInferenceFailed(TextLocation location, string name, string typeParameterName)
+    {
+        Report(location, $"Cannot infer type argument '{typeParameterName}' for generic function '{name}'; supply it explicitly via '[{typeParameterName}]'.");
+    }
+
     /// <summary>
     /// Reports that the parameter requires a value of a different type.
     /// </summary>

@@ -27,6 +27,7 @@ public sealed class Binder
     private int labelCounter;
     private int nullConditionalCaptureCounter;
     private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
+    private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
 
     /// <summary>
@@ -74,6 +75,18 @@ public sealed class Binder
             foreach (var p in function.Parameters)
             {
                 scope.TryDeclareVariable(p);
+            }
+
+            // Phase 4.1 / ADR-0020: expose declared generic type parameters
+            // when binding the function body so that `T` resolves inside the
+            // body to the TypeParameterSymbol.
+            if (function.IsGeneric)
+            {
+                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>(function.TypeParameters.Length);
+                foreach (var tp in function.TypeParameters)
+                {
+                    currentTypeParameters[tp.Name] = tp;
+                }
             }
         }
     }
@@ -778,57 +791,127 @@ public sealed class Binder
 
         var seenParameterNames = new HashSet<string>();
 
-        // Phase 3.B.6 / ADR-0019: receiver clause becomes parameters[0].
-        TypeSymbol extensionReceiverType = null;
-        if (syntax.IsExtension)
+        // Phase 4.1 / ADR-0020: bind generic type parameters first so that
+        // BindTypeClause can find them when binding parameter / return types.
+        var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+        var previousTypeParameters = currentTypeParameters;
+        if (!typeParameters.IsDefaultOrEmpty)
         {
-            var recvName = syntax.Receiver.Identifier.Text;
-            extensionReceiverType = BindTypeClause(syntax.Receiver.Type);
-            if (extensionReceiverType == null)
+            currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            foreach (var tp in typeParameters)
             {
-                extensionReceiverType = TypeSymbol.Error;
-            }
-
-            seenParameterNames.Add(recvName);
-            parameters.Add(new ParameterSymbol(recvName, extensionReceiverType));
-        }
-
-        foreach (var parameterSyntax in syntax.Parameters)
-        {
-            var parameterName = parameterSyntax.Identifier.Text;
-            var parameterType = BindTypeClause(parameterSyntax.Type);
-            if (!seenParameterNames.Add(parameterName))
-            {
-                Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
-            }
-            else
-            {
-                var parameter = new ParameterSymbol(parameterName, parameterType);
-                parameters.Add(parameter);
+                currentTypeParameters[tp.Name] = tp;
             }
         }
 
-        var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
-
-        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
-        var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
-
-        if (syntax.IsExtension)
+        try
         {
-            function.IsExtension = true;
-            function.ExtensionReceiverType = extensionReceiverType;
-            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+            // Phase 3.B.6 / ADR-0019: receiver clause becomes parameters[0].
+            TypeSymbol extensionReceiverType = null;
+            if (syntax.IsExtension)
+            {
+                var recvName = syntax.Receiver.Identifier.Text;
+                extensionReceiverType = BindTypeClause(syntax.Receiver.Type);
+                if (extensionReceiverType == null)
+                {
+                    extensionReceiverType = TypeSymbol.Error;
+                }
+
+                seenParameterNames.Add(recvName);
+                parameters.Add(new ParameterSymbol(recvName, extensionReceiverType));
+            }
+
+            foreach (var parameterSyntax in syntax.Parameters)
+            {
+                var parameterName = parameterSyntax.Identifier.Text;
+                var parameterType = BindTypeClause(parameterSyntax.Type);
+                if (!seenParameterNames.Add(parameterName))
+                {
+                    Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                }
+                else
+                {
+                    var parameter = new ParameterSymbol(parameterName, parameterType);
+                    parameters.Add(parameter);
+                }
+            }
+
+            var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
+
+            var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+            var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+            function.TypeParameters = typeParameters;
+
+            if (syntax.IsExtension)
+            {
+                function.IsExtension = true;
+                function.ExtensionReceiverType = extensionReceiverType;
+                if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+                }
+
+                return;
+            }
+
+            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
             }
-
-            return;
         }
-
-        if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
+        finally
         {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+            currentTypeParameters = previousTypeParameters;
         }
+    }
+
+    private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
+    {
+        if (syntax == null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>(syntax.Parameters.Count);
+        var seen = new HashSet<string>();
+        for (var i = 0; i < syntax.Parameters.Count; i++)
+        {
+            var p = syntax.Parameters[i];
+            var name = p.Identifier.Text;
+            if (!seen.Add(name))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(p.Identifier.Location, name);
+            }
+
+            var constraint = TypeParameterConstraint.Any;
+            if (p.Constraint != null)
+            {
+                switch (p.Constraint.Text)
+                {
+                    case "any":
+                        constraint = TypeParameterConstraint.Any;
+                        break;
+                    case "comparable":
+                        // Phase 4.2 will enforce this; for Phase 4.1 we accept the
+                        // syntactic constraint but treat it as `any` for binding.
+                        constraint = TypeParameterConstraint.Comparable;
+                        break;
+                    default:
+                        Diagnostics.ReportUndefinedType(p.Constraint.Location, p.Constraint.Text);
+                        break;
+                }
+            }
+
+            var variance = TypeParameterVariance.None;
+            if (p.VarianceModifier != null)
+            {
+                variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
+            }
+
+            builder.Add(new TypeParameterSymbol(name, i, constraint, variance));
+        }
+
+        return builder.MoveToImmutable();
     }
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
@@ -2086,16 +2169,64 @@ public sealed class Binder
         }
 
         bool hasErrors = false;
+
+        // Phase 4.1 / ADR-0020: if the callee is generic, build the type
+        // substitution either from the explicit `[T1, T2]` list at the call
+        // site or by left-to-right inference from argument types matched
+        // against parameter types.
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        if (function.IsGeneric)
+        {
+            substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            if (syntax.TypeArgumentList != null)
+            {
+                var explicitArgs = syntax.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != function.TypeParameters.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, function.Name, function.TypeParameters.Length, explicitArgs.Count);
+                    return new BoundErrorExpression();
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression();
+                    }
+
+                    substitution[function.TypeParameters[i]] = ta;
+                }
+            }
+            else
+            {
+                for (var i = 0; i < function.Parameters.Length && i < boundArguments.Count; i++)
+                {
+                    InferTypeArguments(function.Parameters[i].Type, boundArguments[i].Type, substitution);
+                }
+
+                foreach (var tp in function.TypeParameters)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, function.Name, tp.Name);
+                        return new BoundErrorExpression();
+                    }
+                }
+            }
+        }
+
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
+            var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
 
-            if (argument.Type != parameter.Type)
+            if (argument.Type != expectedType && !(substitution != null && parameter.Type is TypeParameterSymbol))
             {
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, argument.Type);
                 }
 
                 hasErrors = true;
@@ -2107,7 +2238,69 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        if (substitution != null)
+        {
+            var returnType = SubstituteType(function.Type, substitution);
+            return new BoundCallExpression(function, boundArguments.ToImmutable(), returnType);
+        }
+
         return new BoundCallExpression(function, boundArguments.ToImmutable());
+    }
+
+    private static void InferTypeArguments(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (parameterType is TypeParameterSymbol tp)
+        {
+            // First seen value wins. Cross-arg consistency is verified later
+            // by the post-substitution argument-type check.
+            if (!substitution.ContainsKey(tp))
+            {
+                substitution[tp] = argumentType;
+            }
+
+            return;
+        }
+
+        if (parameterType is NullableTypeSymbol pn && argumentType is NullableTypeSymbol an)
+        {
+            InferTypeArguments(pn.UnderlyingType, an.UnderlyingType, substitution);
+        }
+        else if (parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym)
+        {
+            InferTypeArguments(ps.ElementType, asym.ElementType, substitution);
+        }
+        else if (parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa)
+        {
+            InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
+        }
+    }
+
+    private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (type is TypeParameterSymbol tp)
+        {
+            return substitution.TryGetValue(tp, out var concrete) ? concrete : type;
+        }
+
+        if (type is NullableTypeSymbol n)
+        {
+            var inner = SubstituteType(n.UnderlyingType, substitution);
+            return ReferenceEquals(inner, n.UnderlyingType) ? type : NullableTypeSymbol.Get(inner);
+        }
+
+        if (type is SliceTypeSymbol s)
+        {
+            var inner = SubstituteType(s.ElementType, substitution);
+            return ReferenceEquals(inner, s.ElementType) ? type : SliceTypeSymbol.Get(inner);
+        }
+
+        if (type is ArrayTypeSymbol a)
+        {
+            var inner = SubstituteType(a.ElementType, substitution);
+            return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        return type;
     }
 
     private bool TryBindIntrinsicCall(CallExpressionSyntax syntax, out BoundExpression result)
@@ -2679,6 +2872,13 @@ public sealed class Binder
 
     private TypeSymbol LookupType(string name)
     {
+        // Phase 4.1 / ADR-0020: a generic function's type parameters shadow
+        // outer type names while we are binding its signature and body.
+        if (currentTypeParameters != null && currentTypeParameters.TryGetValue(name, out var tp))
+        {
+            return tp;
+        }
+
         switch (name)
         {
             case "bool":

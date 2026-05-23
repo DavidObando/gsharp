@@ -553,12 +553,102 @@ public class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeParameterList = ParseOptionalTypeParameterList();
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+    }
+
+    private TypeParameterListSyntax ParseOptionalTypeParameterList()
+    {
+        // Phase 4.1 / ADR-0020: a generic type-parameter list `[T any, U any]`
+        // appears immediately after the declared name of func/class/struct/
+        // data struct/interface. The token following the name is unambiguously
+        // either `[` (TPs) or `(` / `{` / type clause (no TPs).
+        if (Current.Kind != SyntaxKind.OpenSquareBracketToken || !LooksLikeTypeParameterList())
+        {
+            return null;
+        }
+
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        var parseNext = true;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeParameter());
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        return new TypeParameterListSyntax(syntaxTree, openBracket, new SeparatedSyntaxList<TypeParameterSyntax>(nodesAndSeparators.ToImmutable()), closeBracket);
+    }
+
+    private bool LooksLikeTypeParameterList()
+    {
+        // We are positioned at `[`. A type parameter list looks like
+        // `[ Ident (Ident)? ( , ... )* ]`. Crucially the *first* token after `[`
+        // is an identifier (not a number, ']', or another '['). That alone is
+        // enough to disambiguate against `[]T` (slice) and `[N]T` (array shape)
+        // which appear in type positions, not after declaration names anyway.
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        // Also reject the corner case `[ Ident ]` where the bracketed segment
+        // is followed by a token that would make it look like a type clause
+        // (e.g. `[ Ident ] Ident` -> slice/array shape used somewhere we
+        // shouldn't be). At a declaration header the follow-set after the TP
+        // list is `(`, so we just look for that.
+        var ahead = 2;
+        while (Peek(ahead).Kind == SyntaxKind.IdentifierToken)
+        {
+            ahead++;
+        }
+
+        if (Peek(ahead).Kind == SyntaxKind.CommaToken)
+        {
+            return true;
+        }
+
+        if (Peek(ahead).Kind == SyntaxKind.CloseSquareBracketToken && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private TypeParameterSyntax ParseTypeParameter()
+    {
+        SyntaxToken variance = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && (Current.Text == "in" || Current.Text == "out") && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            variance = NextToken();
+        }
+
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        SyntaxToken constraint = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken)
+        {
+            constraint = NextToken();
+        }
+
+        return new TypeParameterSyntax(syntaxTree, variance, identifier, constraint);
     }
 
     private bool LooksLikeReceiverClause()
@@ -1529,6 +1619,12 @@ public class Parser
             current = ParseCallExpression();
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+            && LooksLikeGenericCallSite(1))
+        {
+            current = ParseGenericCallExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
             && IsStructLiteralFollowingBrace(2))
         {
@@ -1561,6 +1657,150 @@ public class Parser
         }
 
         return current;
+    }
+
+    // Phase 4.1 / ADR-0020: bounded-lookahead disambiguation between
+    // `name [ expr ]` (indexing) and `name [ TypeClause, ... ] ( args )`
+    // (generic instantiation followed by call). `bracketOffset` is the
+    // offset of the `[` token relative to Current.
+    private bool LooksLikeGenericCallSite(int bracketOffset)
+    {
+        if (Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return false;
+        }
+
+        var pos = bracketOffset + 1;
+        if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            if (!TryScanTypeClause(ref pos))
+            {
+                return false;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CommaToken)
+            {
+                pos++;
+                continue;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                pos++;
+                break;
+            }
+
+            return false;
+        }
+
+        // Follow-set per ADR-0020: '(' (call), '{' (composite literal), '.' (member access).
+        var nextKind = Peek(pos).Kind;
+        return nextKind == SyntaxKind.OpenParenthesisToken
+            || nextKind == SyntaxKind.OpenBraceToken
+            || nextKind == SyntaxKind.DotToken;
+    }
+
+    private bool TryScanTypeClause(ref int pos)
+    {
+        // Optional leading bracketed segment: '[' ']' or '[' Number ']' for slice/array shapes.
+        if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            pos++;
+            if (Peek(pos).Kind == SyntaxKind.NumberToken)
+            {
+                pos++;
+            }
+
+            if (Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            pos++;
+        }
+
+        if (Peek(pos).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        pos++;
+
+        // Nested type-argument list, e.g. `List[int]`.
+        if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            pos++;
+            while (true)
+            {
+                if (!TryScanTypeClause(ref pos))
+                {
+                    return false;
+                }
+
+                if (Peek(pos).Kind == SyntaxKind.CommaToken)
+                {
+                    pos++;
+                    continue;
+                }
+
+                if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+                {
+                    pos++;
+                    break;
+                }
+
+                return false;
+            }
+        }
+
+        // Optional trailing `?` for nullables.
+        if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+        {
+            pos++;
+        }
+
+        return true;
+    }
+
+    private ExpressionSyntax ParseGenericCallExpression()
+    {
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeArguments = ParseTypeArgumentList();
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var arguments = ParseArguments();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, arguments, closeParen);
+    }
+
+    private TypeArgumentListSyntax ParseTypeArgumentList()
+    {
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        var parseNext = true;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        return new TypeArgumentListSyntax(syntaxTree, openBracket, new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()), closeBracket);
     }
 
     private ExpressionSyntax ParseCallExpression()

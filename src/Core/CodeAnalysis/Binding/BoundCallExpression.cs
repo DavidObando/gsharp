@@ -18,16 +18,26 @@ public sealed class BoundCallExpression : BoundExpression
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
     public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments)
+        : this(function, arguments, returnType: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundCallExpression"/> class with an explicit (substituted) return type for generic-call sites (Phase 4.1 / ADR-0020).</summary>
+    /// <param name="function">The function symbol.</param>
+    /// <param name="arguments">The provided arguments.</param>
+    /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
+    public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
     {
         Function = function;
         Arguments = arguments;
+        ReturnType = returnType;
     }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.CallExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => Function.Type;
+    public override TypeSymbol Type => ReturnType ?? Function.Type;
 
     /// <summary>
     /// Gets the function symbol.
@@ -38,4 +48,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// Gets the provided arguments.
     /// </summary>
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    /// <summary>Gets the call-site (post-substitution) return type for generic-function calls, or <c>null</c> for non-generic calls. Phase 4.1 / ADR-0020.</summary>
+    public TypeSymbol ReturnType { get; }
 }
