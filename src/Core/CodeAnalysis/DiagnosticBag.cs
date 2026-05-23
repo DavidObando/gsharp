@@ -372,6 +372,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, $"Cannot infer type argument '{typeParameterName}' for generic function '{name}'; supply it explicitly via '[{typeParameterName}]'.");
     }
 
+    /// <summary>Reports a generic call whose type argument does not satisfy the declared constraint (Phase 4.2 / ADR-0020).</summary>
+    /// <param name="location">The text location of the offending type argument or call.</param>
+    /// <param name="typeParameterName">The type-parameter name (e.g. <c>T</c>).</param>
+    /// <param name="typeArgument">The supplied type argument.</param>
+    /// <param name="constraintDescription">A human-readable description of the constraint (e.g. <c>comparable</c>).</param>
+    public void ReportTypeArgumentDoesNotSatisfyConstraint(TextLocation location, string typeParameterName, TypeSymbol typeArgument, string constraintDescription)
+    {
+        Report(location, $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
+    }
+
     /// <summary>
     /// Reports that the parameter requires a value of a different type.
     /// </summary>

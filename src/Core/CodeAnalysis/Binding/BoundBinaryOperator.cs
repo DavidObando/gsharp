@@ -110,6 +110,19 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
+        // Allowed only when both operands are the SAME type-parameter symbol whose
+        // constraint is `Comparable`. (`any` falls through to "operator undefined".)
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+            && leftType is TypeParameterSymbol ltp && ltp == rightType
+            && ltp.Constraint == TypeParameterConstraint.Comparable)
+        {
+            var cmpKind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                ? BoundBinaryOperatorKind.Equals
+                : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool);
+        }
+
         // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
         if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
         {

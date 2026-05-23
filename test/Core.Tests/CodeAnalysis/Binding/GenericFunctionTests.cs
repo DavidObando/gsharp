@@ -91,6 +91,64 @@ Echo(""abc"")
         Assert.Equal("abc", result.Value);
     }
 
+    [Fact]
+    public void GenericComparable_EqualsOperator_OnInt_Works()
+    {
+        var source = @"
+func Eq[T comparable](a T, b T) bool { return a == b }
+Eq(3, 3)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void GenericComparable_NotEqualsOperator_OnString_Works()
+    {
+        var source = @"
+func Neq[T comparable](a T, b T) bool { return a != b }
+Neq(""hi"", ""bye"")
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void GenericAny_EqualsOperator_RejectedByBinder()
+    {
+        var source = @"
+func Eq[T any](a T, b T) bool { return a == b }
+Eq(3, 3)
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void GenericComparable_NonComparableTypeArg_Diagnoses()
+    {
+        // Slices are not comparable.
+        var source = @"
+func Eq[T comparable](a T, b T) bool { return a == b }
+Eq[[]int]([]int{1}, []int{1})
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void GenericComparable_InferredNonComparableTypeArg_Diagnoses()
+    {
+        var source = @"
+func Eq[T comparable](a T, b T) bool { return a == b }
+Eq([]int{1}, []int{2})
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

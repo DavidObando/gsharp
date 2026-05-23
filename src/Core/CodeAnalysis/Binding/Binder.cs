@@ -2214,6 +2214,21 @@ public sealed class Binder
                     }
                 }
             }
+
+            // Phase 4.2 / ADR-0020: each substituted type argument must satisfy
+            // its type parameter's declared constraint.
+            var constraintLocation = syntax.TypeArgumentList != null
+                ? syntax.TypeArgumentList.Location
+                : syntax.Identifier.Location;
+            foreach (var tp in function.TypeParameters)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp.Constraint))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp.Constraint));
+                    return new BoundErrorExpression();
+                }
+            }
         }
 
         for (var i = 0; i < syntax.Arguments.Count; i++)
@@ -2301,6 +2316,61 @@ public sealed class Binder
         }
 
         return type;
+    }
+
+    // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
+    // type parameter. `Any` accepts anything; `Comparable` accepts the same set of types
+    // for which `BoundBinaryOperator.Bind` returns a `==`/`!=` operator: int, string,
+    // bool, data-structs, nullable variants of those, plus another `comparable` type
+    // parameter (so a comparable T can be passed to another comparable U).
+    private static bool SatisfiesConstraint(TypeSymbol typeArgument, TypeParameterConstraint constraint)
+    {
+        if (constraint == TypeParameterConstraint.Any)
+        {
+            return true;
+        }
+
+        if (constraint == TypeParameterConstraint.Comparable)
+        {
+            return IsComparable(typeArgument);
+        }
+
+        return true;
+    }
+
+    private static bool IsComparable(TypeSymbol type)
+    {
+        if (type == TypeSymbol.Int || type == TypeSymbol.String || type == TypeSymbol.Bool)
+        {
+            return true;
+        }
+
+        if (type is NullableTypeSymbol n)
+        {
+            return IsComparable(n.UnderlyingType);
+        }
+
+        if (type is StructSymbol s && s.IsData)
+        {
+            return true;
+        }
+
+        if (type is TypeParameterSymbol tp)
+        {
+            return tp.Constraint == TypeParameterConstraint.Comparable;
+        }
+
+        return false;
+    }
+
+    private static string DescribeConstraint(TypeParameterConstraint constraint)
+    {
+        return constraint switch
+        {
+            TypeParameterConstraint.Any => "any",
+            TypeParameterConstraint.Comparable => "comparable",
+            _ => constraint.ToString().ToLowerInvariant(),
+        };
     }
 
     private bool TryBindIntrinsicCall(CallExpressionSyntax syntax, out BoundExpression result)
