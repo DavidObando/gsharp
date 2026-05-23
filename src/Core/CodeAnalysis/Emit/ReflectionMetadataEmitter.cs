@@ -2205,6 +2205,12 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundClrIndexAssignmentExpression clrIdxAsn:
                     this.EmitClrIndexAssignment(clrIdxAsn);
                     break;
+                case BoundTupleLiteralExpression tupleLit:
+                    this.EmitTupleLiteral(tupleLit);
+                    break;
+                case BoundTupleElementAccessExpression tupleAcc:
+                    this.EmitTupleElementAccess(tupleAcc);
+                    break;
                 default:
                     throw new NotSupportedException(
                         $"Bound expression kind '{expression.Kind}' is not yet supported by the emitter.");
@@ -3007,6 +3013,63 @@ internal sealed class ReflectionMetadataEmitter
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public getter.");
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
+        }
+
+        private void EmitTupleLiteral(BoundTupleLiteralExpression tuple)
+        {
+            // Phase 4.5 emit parity: `(e1, e2, ...)` lowers to
+            // `newobj ValueTuple<T1, T2, ...>::.ctor(T1, T2, ...)`. The CLR
+            // backing type is set by TupleTypeSymbol.BuildClrType for arities
+            // 2–7; higher arities have a null ClrType and are interpreter-only.
+            var clrType = tuple.TupleType.ClrType
+                ?? throw new NotSupportedException(
+                    $"Tuple of arity {tuple.TupleType.Arity} has no CLR backing type; emit not supported.");
+
+            ConstructorInfo ctor = null;
+            foreach (var c in clrType.GetConstructors())
+            {
+                if (c.GetParameters().Length == tuple.Elements.Length)
+                {
+                    ctor = c;
+                    break;
+                }
+            }
+
+            if (ctor == null)
+            {
+                throw new InvalidOperationException(
+                    $"ValueTuple type '{clrType.FullName}' has no constructor of arity {tuple.Elements.Length}.");
+            }
+
+            foreach (var elem in tuple.Elements)
+            {
+                this.EmitExpression(elem);
+            }
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctor));
+        }
+
+        private void EmitTupleElementAccess(BoundTupleElementAccessExpression access)
+        {
+            // Phase 4.5 emit parity: `t.ItemN`. ValueTuple<...> exposes the
+            // elements as public *fields* (Item1..Item7), not properties, so
+            // the access is a plain `ldfld`. Both struct-on-stack and
+            // managed-pointer receivers are valid operands for ldfld; the
+            // common cases (locals/params/temps) go through
+            // EmitInstanceReceiver to prefer the address form.
+            var clrType = access.TupleType.ClrType
+                ?? throw new NotSupportedException(
+                    $"Tuple of arity {access.TupleType.Arity} has no CLR backing type; emit not supported.");
+
+            var fieldName = "Item" + (access.Index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var field = clrType.GetField(fieldName)
+                ?? throw new InvalidOperationException(
+                    $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
+
+            this.EmitInstanceReceiver(access.Receiver);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(this.outer.GetFieldReference(field));
         }
 
         private void EmitInstanceReceiver(BoundExpression receiver)
