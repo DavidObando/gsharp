@@ -84,3 +84,20 @@ Console.WriteLine(dog.Speak())
 var unknown = Animal{Kind: "mystery"}
 Console.WriteLine(unknown.Speak())
 
+// Phase 3.B.4: interfaces — signature-only contracts (ADR-0018). A class
+// implements one or more interfaces via the `:` clause (after the optional
+// base class). Calls through an interface-typed receiver dispatch to the
+// runtime type's implementation.
+type IShape interface {
+    func Area() int
+}
+
+type Square class(Side int) : IShape {
+    func Area() int {
+        return Side * Side
+    }
+}
+
+var sq = Square(4)
+Console.WriteLine(sq.Area())
+

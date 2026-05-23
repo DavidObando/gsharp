@@ -234,6 +234,15 @@ public sealed class BoundScope
             ? ImmutableArray<StructSymbol>.Empty
             : typeAliases.Values.OfType<StructSymbol>().ToImmutableArray();
 
+    /// <summary>
+    /// Gets the set of declared user-defined interface types in this scope chain (Phase 3.B.4).
+    /// </summary>
+    /// <returns>The interfaces in declaration order.</returns>
+    public ImmutableArray<InterfaceSymbol> GetDeclaredInterfaces()
+        => typeAliases == null
+            ? ImmutableArray<InterfaceSymbol>.Empty
+            : typeAliases.Values.OfType<InterfaceSymbol>().ToImmutableArray();
+
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {

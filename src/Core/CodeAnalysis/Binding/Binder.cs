@@ -199,6 +199,7 @@ public sealed class Binder
         var variables = binder.scope.GetDeclaredVariables();
         var typeAliases = binder.scope.GetDeclaredTypeAliases();
         var structs = binder.scope.GetDeclaredStructs();
+        var interfaces = binder.scope.GetDeclaredInterfaces();
 
         // Entry-point package: the package owning the top-level statements
         // (if any) or the package owning explicit Main (if any) or, lacking
@@ -215,7 +216,7 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, entryPoint, statements.ToImmutable());
+        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, entryPoint, statements.ToImmutable());
     }
 
     /// <summary>
@@ -289,7 +290,7 @@ public sealed class Binder
             functionBodies[globalScope.EntryPoint] = statement;
         }
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs);
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)

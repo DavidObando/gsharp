@@ -48,6 +48,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
+    // Phase 3.B.4: user-defined interface TypeDefs.
+    private readonly Dictionary<InterfaceSymbol, TypeDefinitionHandle> interfaceTypeDefs = new Dictionary<InterfaceSymbol, TypeDefinitionHandle>();
+
     // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
@@ -135,12 +138,14 @@ internal sealed class ReflectionMetadataEmitter
         var allAggregates = this.program.Structs;
         var classes = allAggregates.Where(s => s.IsClass).ToList();
         var structs = allAggregates.Where(s => !s.IsClass).ToList();
+        var interfaces = this.program.Interfaces;
 
-        // TypeDef row order: <Module>, classes (each owns a ctor row), structs
-        // (no methods of their own — yet), <Program>s. Field-row planning is
-        // independent of methods so we walk allAggregates in their original
-        // order; the methodList re-planning is what requires classes before
-        // structs (non-decreasing methodList rule per ECMA-335).
+        // TypeDef row order: <Module>, interfaces (each owns abstract method
+        // rows), classes (each owns a ctor row + methods), structs (no methods
+        // of their own — yet), <Program>s. Field-row planning is independent
+        // of methods so we walk allAggregates in their original order; the
+        // methodList re-planning is what requires interfaces before classes
+        // before structs (non-decreasing methodList rule per ECMA-335).
         int nextFieldRow = 1;
         var structFirstFieldRow = new Dictionary<StructSymbol, int>();
         foreach (var s in allAggregates)
@@ -153,7 +158,22 @@ internal sealed class ReflectionMetadataEmitter
         var moduleFirstFieldRow = allAggregates.IsDefaultOrEmpty ? 1 : 1;
         var programFirstFieldRow = totalStructFields + 1;
 
-        // Plan method rows for class ctors first. Each class always owns a
+        // Phase 3.B.4: plan method rows for interface abstract methods FIRST.
+        // Interface TypeDefs sit between <Module> and the class TypeDefs in
+        // row order so their methodList pointer (= first abstract method) is
+        // strictly less than the first class ctor row.
+        int methodRow = 1;
+        var interfaceFirstMethodRow = new Dictionary<InterfaceSymbol, int>();
+        foreach (var i in interfaces)
+        {
+            interfaceFirstMethodRow[i] = methodRow;
+            foreach (var m in i.Methods)
+            {
+                this.methodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+            }
+        }
+
+        // Plan method rows for class ctors next. Each class always owns a
         // parameterless default ctor (so `Foo{}` composite literal continues
         // to work) and, when a primary constructor was declared, a second
         // parameterized ctor immediately after it. Rows are non-decreasing
@@ -162,7 +182,6 @@ internal sealed class ReflectionMetadataEmitter
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
         var classMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-        int methodRow = 1;
         foreach (var c in classes)
         {
             classCtorRows[c] = methodRow++;
@@ -191,13 +210,41 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
 
-        // 2b. Emit class TypeDefs first (so methodLists stay non-decreasing),
-        // then struct TypeDefs. Class TypeDefs' methodList points at the
-        // class's preassigned ctor row; struct TypeDefs point past the last
-        // class ctor (they own zero methods today).
+        // 2a. Phase 3.B.4: Emit interface TypeDefs + their abstract method
+        // rows. Interfaces have no fields and only abstract method bodies, so
+        // they are the simplest TypeDefs to emit. Their methodList points at
+        // the first of their reserved abstract method rows.
+        foreach (var i in interfaces)
+        {
+            this.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
+            foreach (var m in i.Methods)
+            {
+                this.EmitAbstractMethod(m);
+            }
+        }
+
+        // 2b. Emit class TypeDefs (so methodLists stay non-decreasing), then
+        // struct TypeDefs. Class TypeDefs' methodList points at the class's
+        // preassigned ctor row; struct TypeDefs point past the last class
+        // ctor (they own zero methods today).
         foreach (var c in classes)
         {
             this.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+
+            // Phase 3.B.4: emit InterfaceImpl rows for each user-defined
+            // interface implemented by this class. The metadata API requires
+            // interfaces to be added in numerical order per class, which we
+            // get for free by walking structSym.Interfaces in source order.
+            if (!c.Interfaces.IsDefaultOrEmpty)
+            {
+                foreach (var iface in c.Interfaces)
+                {
+                    if (this.interfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
+                    {
+                        this.metadata.AddInterfaceImplementation(this.structTypeDefs[c], ifaceHandle);
+                    }
+                }
+            }
         }
 
         foreach (var s in structs)
@@ -491,6 +538,62 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.structTypeDefs[structSym] = handle2;
+    }
+
+    /// <summary>
+    /// Phase 3.B.4: emits a TypeDef row for a user-defined interface. Carries
+    /// <c>TypeAttributes.Interface | Abstract | Public</c>, no fields, and a
+    /// methodList pointing at its preassigned first abstract-method row.
+    /// </summary>
+    /// <param name="ifaceSym">The interface symbol.</param>
+    /// <param name="firstMethodRow">The preassigned first method row.</param>
+    /// <param name="firstFieldRow">The first field row for the next aggregate (interfaces own no fields, so this is forwarded as their fieldList).</param>
+    private void EmitInterfaceTypeDef(InterfaceSymbol ifaceSym, int firstMethodRow, int firstFieldRow)
+    {
+        var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
+            | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
+            | MapTypeAccessibility(ifaceSym.Accessibility);
+        var handle = this.metadata.AddTypeDefinition(
+            attributes: typeAttrs,
+            @namespace: this.metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
+            name: this.metadata.GetOrAddString(ifaceSym.Name),
+            baseType: default(EntityHandle),
+            fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
+            methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
+        this.interfaceTypeDefs[ifaceSym] = handle;
+    }
+
+    /// <summary>
+    /// Phase 3.B.4: emits an abstract method definition for an interface
+    /// member. Carries <c>Public | Virtual | Abstract | NewSlot | HideBySig</c>
+    /// and no body (bodyOffset = -1).
+    /// </summary>
+    /// <param name="method">The interface method symbol.</param>
+    private void EmitAbstractMethod(FunctionSymbol method)
+    {
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                method.Parameters.Length,
+                r => EncodeReturnSymbol(r, method.Type),
+                ps =>
+                {
+                    foreach (var p in method.Parameters)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+            | MethodAttributes.Virtual | MethodAttributes.Abstract
+            | MethodAttributes.NewSlot;
+        this.metadata.AddMethodDefinition(
+            attributes: attrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(method.Name),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: -1,
+            parameterList: MetadataTokens.ParameterHandle(1));
     }
 
     /// <summary>
