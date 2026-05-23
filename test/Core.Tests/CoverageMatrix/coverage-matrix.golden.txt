@@ -166,6 +166,9 @@ BlockStatement
 CallExpression
 CapExpression
 ClrConstructorCallExpression
+ClrIndexAssignmentExpression
+ClrIndexExpression
+ClrPropertyAccessExpression
 ConditionalGotoStatement
 ConstructorCallExpression
 ConversionExpression

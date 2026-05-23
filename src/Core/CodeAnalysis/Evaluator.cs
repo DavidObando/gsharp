@@ -210,6 +210,9 @@ public sealed class Evaluator
                 BoundNodeKind.FunctionLiteralExpression => EvaluateFunctionLiteralExpression((BoundFunctionLiteralExpression)node),
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
+                BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
+                BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
+                BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -456,6 +459,46 @@ public sealed class Evaluator
         }
 
         return node.Constructor.Invoke(args);
+    }
+
+    private object EvaluateClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+    {
+        var receiver = EvaluateExpression(node.Receiver);
+        return node.Member switch
+        {
+            System.Reflection.PropertyInfo p => p.GetValue(receiver),
+            System.Reflection.FieldInfo f => f.GetValue(receiver),
+            _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
+        };
+    }
+
+    private object EvaluateClrIndexExpression(BoundClrIndexExpression node)
+    {
+        var target = EvaluateExpression(node.Target);
+        var args = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            args[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        return node.Indexer.GetValue(target, args);
+    }
+
+    private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+    {
+        var target = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
+            ? globals[node.Target]
+            : locals.Peek()[node.Target];
+
+        var args = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            args[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        var value = EvaluateExpression(node.Value);
+        node.Indexer.SetValue(target, value, args);
+        return value;
     }
 
     private object EvaluateFieldAccessExpression(BoundFieldAccessExpression node)

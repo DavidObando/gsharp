@@ -55,6 +55,9 @@ public enum BoundNodeKind
     FunctionLiteralExpression,
     IndirectCallExpression,
     ClrConstructorCallExpression,
+    ClrPropertyAccessExpression,
+    ClrIndexExpression,
+    ClrIndexAssignmentExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
