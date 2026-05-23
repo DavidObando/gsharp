@@ -76,6 +76,11 @@ public sealed class Conversion
         // operator (Phase 3.C.3) and is not implicit here.
         if (to is NullableTypeSymbol toNullable)
         {
+            if (from == TypeSymbol.Null)
+            {
+                return Conversion.Implicit;
+            }
+
             if (from is NullableTypeSymbol fromNullable)
             {
                 return fromNullable.UnderlyingType == toNullable.UnderlyingType ? Conversion.Identity : Conversion.None;
@@ -85,6 +90,12 @@ public sealed class Conversion
             {
                 return Conversion.Implicit;
             }
+        }
+
+        // Phase 3.C.2: nil literal is never assignable to a non-nullable type.
+        if (from == TypeSymbol.Null && !(to is NullableTypeSymbol))
+        {
+            return Conversion.None;
         }
 
         if (from == TypeSymbol.Bool || from == TypeSymbol.Int)

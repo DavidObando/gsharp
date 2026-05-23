@@ -1502,7 +1502,16 @@ public sealed class Binder
 
     private BoundExpression BindLiteralExpression(LiteralExpressionSyntax syntax)
     {
-        var value = syntax.Value ?? 0;
+        // Phase 3.C.2: a literal whose syntax value is null is the `nil`
+        // literal — preserve null so BoundLiteralExpression picks the Null
+        // sentinel type. All other literals default missing values to 0
+        // for legacy parser robustness.
+        var value = syntax.Value;
+        if (value == null && syntax.LiteralToken.Kind != SyntaxKind.NilKeyword)
+        {
+            value = 0;
+        }
+
         return new BoundLiteralExpression(value);
     }
 

@@ -36,6 +36,9 @@ public class TypeSymbol : Symbol
     /// </summary>
     public static readonly TypeSymbol Void = new TypeSymbol("void", typeof(void));
 
+    /// <summary>The static type of the <c>nil</c> literal (Phase 3.C.2 / ADR-0020). Implicitly convertible to any <see cref="NullableTypeSymbol"/>; not assignable to a non-nullable type.</summary>
+    public static readonly TypeSymbol Null = new TypeSymbol("nil");
+
     private protected TypeSymbol(string name)
         : base(name)
     {

@@ -99,6 +99,7 @@ public enum SyntaxKind
     InternalKeyword,
     LetKeyword,
     MapKeyword,
+    NilKeyword,
     OpenKeyword,
     OverrideKeyword,
     PackageKeyword,

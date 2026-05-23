@@ -1410,6 +1410,9 @@ public class Parser
             case SyntaxKind.TrueKeyword:
                 return ParseBooleanLiteral();
 
+            case SyntaxKind.NilKeyword:
+                return ParseNilLiteral();
+
             case SyntaxKind.NumberToken:
                 return ParseNumberLiteral();
 
@@ -1657,6 +1660,12 @@ public class Parser
         var isTrue = Current.Kind == SyntaxKind.TrueKeyword;
         var keywordToken = isTrue ? MatchToken(SyntaxKind.TrueKeyword) : MatchToken(SyntaxKind.FalseKeyword);
         return new LiteralExpressionSyntax(syntaxTree, keywordToken, isTrue);
+    }
+
+    private ExpressionSyntax ParseNilLiteral()
+    {
+        var keywordToken = MatchToken(SyntaxKind.NilKeyword);
+        return new LiteralExpressionSyntax(syntaxTree, keywordToken, null);
     }
 
     private ExpressionSyntax ParseNumberLiteral()

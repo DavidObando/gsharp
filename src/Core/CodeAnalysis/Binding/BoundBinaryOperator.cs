@@ -124,6 +124,19 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // Phase 3.C.2 / ADR-0020: == and != against nil for any nullable type.
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
+            (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)))
+        {
+            var kind = syntaxKind == SyntaxKind.EqualsEqualsToken ? BoundBinaryOperatorKind.Equals : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
+        }
+
         return null;
+    }
+
+    private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)
+    {
+        return nullCandidate == TypeSymbol.Null && (nullableOrUnderlying is NullableTypeSymbol || nullableOrUnderlying == TypeSymbol.Null);
     }
 }

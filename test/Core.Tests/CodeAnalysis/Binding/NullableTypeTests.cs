@@ -60,6 +60,27 @@ type X struct {
         Assert.Empty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Nil_AssignedToNullable_Binds()
+    {
+        var source = @"
+var x int? = nil
+x == nil
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Nil_AssignedToNonNullable_Diagnoses()
+    {
+        var source = @"
+var x int = nil
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

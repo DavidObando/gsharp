@@ -374,6 +374,12 @@ public static class BoundNodePrinter
 
     private static void WriteLiteralExpression(BoundLiteralExpression node, IndentedTextWriter writer)
     {
+        if (node.Type == TypeSymbol.Null)
+        {
+            writer.WriteKeyword(SyntaxKind.NilKeyword);
+            return;
+        }
+
         var value = node.Value.ToString();
 
         if (node.Type == TypeSymbol.Bool)

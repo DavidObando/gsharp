@@ -166,6 +166,8 @@ public static class SyntaxFacts
                 return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
+            case "nil":
+                return SyntaxKind.NilKeyword;
             case "open":
                 return SyntaxKind.OpenKeyword;
             case "override":
@@ -392,6 +394,8 @@ public static class SyntaxFacts
                 return "map";
             case SyntaxKind.OpenKeyword:
                 return "open";
+            case SyntaxKind.NilKeyword:
+                return "nil";
             case SyntaxKind.OverrideKeyword:
                 return "override";
             case SyntaxKind.PackageKeyword:
