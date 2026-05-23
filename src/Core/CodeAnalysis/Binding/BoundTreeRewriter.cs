@@ -328,6 +328,8 @@ public abstract class BoundTreeRewriter
                 return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
             case BoundNodeKind.FieldAssignmentExpression:
                 return RewriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node);
+            case BoundNodeKind.NullConditionalAccessExpression:
+                return RewriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -744,5 +746,20 @@ public abstract class BoundTreeRewriter
     {
         var value = RewriteExpression(node.Value);
         return value == node.Value ? node : new BoundFieldAssignmentExpression(node.Receiver, node.StructType, node.Field, value);
+    }
+
+    /// <summary>Rewrites a null-conditional access expression (Phase 3.C.3b).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        var whenNotNull = RewriteExpression(node.WhenNotNull);
+        if (receiver == node.Receiver && whenNotNull == node.WhenNotNull)
+        {
+            return node;
+        }
+
+        return new BoundNullConditionalAccessExpression(receiver, node.Capture, whenNotNull, node.Type);
     }
 }

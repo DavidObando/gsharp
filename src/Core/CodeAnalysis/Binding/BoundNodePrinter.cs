@@ -141,6 +141,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.FieldAssignmentExpression:
                 WriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node, writer);
                 break;
+            case BoundNodeKind.NullConditionalAccessExpression:
+                WriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -664,5 +667,12 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.EqualsToken);
         writer.WriteSpace();
         node.Value.WriteTo(writer);
+    }
+
+    private static void WriteNullConditionalAccessExpression(BoundNullConditionalAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.QuestionDotToken);
+        node.WhenNotNull.WriteTo(writer);
     }
 }

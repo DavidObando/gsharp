@@ -49,6 +49,7 @@ public enum BoundNodeKind
     UserInstanceCallExpression,
     FieldAccessExpression,
     FieldAssignmentExpression,
+    NullConditionalAccessExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

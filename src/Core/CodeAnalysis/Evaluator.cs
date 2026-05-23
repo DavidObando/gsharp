@@ -204,6 +204,7 @@ public sealed class Evaluator
                 BoundNodeKind.UserInstanceCallExpression => EvaluateUserInstanceCallExpression((BoundUserInstanceCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
+                BoundNodeKind.NullConditionalAccessExpression => EvaluateNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -694,6 +695,30 @@ public sealed class Evaluator
         }
 
         return node.Method.Invoke(receiver, locals);
+    }
+
+    private object EvaluateNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+    {
+        // Phase 3.C.3b: evaluate the receiver exactly once; nil short-circuits
+        // the whole subtree to nil. Otherwise, bind the value to the synthetic
+        // capture local so the access subtree resolves to the receiver value
+        // without re-evaluating it.
+        var receiver = EvaluateExpression(node.Receiver);
+        if (receiver == null)
+        {
+            return null;
+        }
+
+        var locals = this.locals.Peek();
+        locals[node.Capture] = receiver;
+        try
+        {
+            return EvaluateExpression(node.WhenNotNull);
+        }
+        finally
+        {
+            locals.Remove(node.Capture);
+        }
     }
 
     private void Assign(VariableSymbol variable, object value)

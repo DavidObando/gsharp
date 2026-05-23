@@ -177,6 +177,7 @@ IndexExpression
 LabelStatement
 LenExpression
 LiteralExpression
+NullConditionalAccessExpression
 ReturnStatement
 StructLiteralExpression
 ThrowStatement

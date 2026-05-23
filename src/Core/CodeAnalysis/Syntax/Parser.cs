@@ -1541,9 +1541,9 @@ public class Parser
 
         while (true)
         {
-            if (Current.Kind == SyntaxKind.DotToken)
+            if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
             {
-                var dotToken = MatchToken(SyntaxKind.DotToken);
+                var dotToken = NextToken();
                 var rightSide = ParseNameOrCallExpression();
                 current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
             }

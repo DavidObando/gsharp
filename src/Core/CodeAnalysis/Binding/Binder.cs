@@ -23,6 +23,7 @@ public sealed class Binder
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
+    private int nullConditionalCaptureCounter;
     private BoundScope scope;
 
     /// <summary>
@@ -1983,6 +1984,16 @@ public sealed class Binder
 
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
+        // Phase 3.C.3b / ADR-0020: null-conditional access `lhs?.rhs`.
+        // Evaluate the receiver once, capture it into a synthetic local,
+        // then bind the rest of the access against the capture so the
+        // subtree can be evaluated against the non-nil value without a
+        // second evaluation of the receiver expression.
+        if (syntax.IsNullConditional)
+        {
+            return BindNullConditionalAccessExpression(syntax);
+        }
+
         // Determine what the left side of the accessor is: either an imported
         // class (for static member access) or a value-producing expression (for
         // instance member access). Then apply the right side, which may itself
@@ -2020,6 +2031,53 @@ public sealed class Binder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    private BoundExpression BindNullConditionalAccessExpression(AccessorExpressionSyntax syntax)
+    {
+        var receiver = BindExpression(syntax.LeftPart);
+        if (receiver is BoundErrorExpression)
+        {
+            return receiver;
+        }
+
+        var receiverType = receiver.Type;
+        TypeSymbol underlying;
+        if (receiverType is NullableTypeSymbol nullable)
+        {
+            underlying = nullable.UnderlyingType;
+        }
+        else if (receiverType == TypeSymbol.Null)
+        {
+            // `nil?.x` is statically nil.
+            return new BoundLiteralExpression(null);
+        }
+        else
+        {
+            // Non-nullable receiver: `?.` collapses to `.`, but we still
+            // produce a nullable result type for syntactic consistency.
+            underlying = receiverType;
+        }
+
+        // Create a synthetic capture local. Name is not user-visible; we
+        // include a leading `$` so it cannot collide with user identifiers.
+        var captureName = "$ncap_" + (++nullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
+
+        // Bind the access using the capture as the receiver. We push a temp
+        // scope so the capture is in scope for any nested name lookup that
+        // happens during access binding (defensive — current accessor paths
+        // don't look up the receiver by name).
+        scope = new BoundScope(scope);
+        scope.TryDeclareVariable(capture);
+
+        var captureRef = new BoundVariableExpression(capture);
+        var whenNotNull = BindAccessorStep(captureRef, null, syntax.RightPart);
+
+        scope = scope.Parent;
+
+        var resultType = whenNotNull.Type is NullableTypeSymbol ? whenNotNull.Type : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
+        return new BoundNullConditionalAccessExpression(receiver, capture, whenNotNull, resultType);
     }
 
     private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
