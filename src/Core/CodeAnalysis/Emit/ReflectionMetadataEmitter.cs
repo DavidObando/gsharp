@@ -879,7 +879,8 @@ internal sealed class ReflectionMetadataEmitter
             var localTypes = new List<TypeSymbol>();
             var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
             var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, il);
+            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, il);
 
             // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -911,7 +912,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -1003,6 +1004,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundLabel, LabelHandle> labels,
         Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
+        Dictionary<BoundIndexExpression, int> mapIndexSlots,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -1040,6 +1042,16 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(literal.StructType);
             structLiteralSlots[literal] = slot;
+        }
+
+        // Phase 3.A.4 emit: each map index READ lowers to a Dictionary.TryGetValue
+        // pattern that needs a V-typed scratch local for the out parameter so that
+        // missing keys yield the Go zero value (matching the interpreter).
+        foreach (var idx in CollectMapIndexReads(body))
+        {
+            var slot = localTypes.Count;
+            localTypes.Add(idx.Type);
+            mapIndexSlots[idx] = slot;
         }
     }
 
@@ -1431,6 +1443,13 @@ internal sealed class ReflectionMetadataEmitter
         var list = new List<BoundAppendExpression>();
         WalkForAppends(node, list);
         return list;
+    }
+
+    private static IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)
+    {
+        var sink = new List<BoundIndexExpression>();
+        new MapIndexReadCollector(sink).RewriteStatement((BoundStatement)root);
+        return sink;
     }
 
     private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
@@ -1911,7 +1930,16 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     foreach (var p in openMethod.GetParameters())
                     {
-                        this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                        var paramType = p.ParameterType;
+                        if (paramType.IsByRef)
+                        {
+                            // out / ref parameters: encode as managed pointer to the element type.
+                            this.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
+                        }
+                        else
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(), paramType);
+                        }
                     }
                 });
 
@@ -2479,6 +2507,26 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class MapIndexReadCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundIndexExpression> sink;
+
+        public MapIndexReadCollector(List<BoundIndexExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteIndexExpression(BoundIndexExpression node)
+        {
+            if (node.Target.Type is MapTypeSymbol)
+            {
+                this.sink.Add(node);
+            }
+
+            return base.RewriteIndexExpression(node);
+        }
+    }
+
     /// <summary>
     /// Walks bound statements and emits IL into a single instruction encoder.
     /// </summary>
@@ -2491,6 +2539,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundLabel, LabelHandle> labels;
         private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
         private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
+        private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -2499,7 +2548,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<ParameterSymbol, int> parameters,
             Dictionary<BoundLabel, LabelHandle> labels,
             Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
-            Dictionary<BoundStructLiteralExpression, int> structLiteralSlots)
+            Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
+            Dictionary<BoundIndexExpression, int> mapIndexSlots)
         {
             this.outer = outer;
             this.il = il;
@@ -2508,6 +2558,7 @@ internal sealed class ReflectionMetadataEmitter
             this.labels = labels;
             this.appendSlots = appendSlots;
             this.structLiteralSlots = structLiteralSlots;
+            this.mapIndexSlots = mapIndexSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -2656,20 +2707,36 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitArrayCreation(arr);
                     break;
                 case BoundIndexExpression idx:
-                    this.EmitExpression(idx.Target);
-                    this.EmitExpression(idx.Index);
-                    this.EmitLoadElement(idx.Type);
+                    if (idx.Target.Type is MapTypeSymbol)
+                    {
+                        this.EmitMapIndexRead(idx);
+                    }
+                    else
+                    {
+                        this.EmitExpression(idx.Target);
+                        this.EmitExpression(idx.Index);
+                        this.EmitLoadElement(idx.Type);
+                    }
+
                     break;
                 case BoundIndexAssignmentExpression ixa:
-                    this.EmitLoadVariable(ixa.Target);
-                    this.EmitExpression(ixa.Index);
-                    this.EmitExpression(ixa.Value);
-                    this.EmitStoreElement(ixa.Type);
+                    if (ixa.Target.Type is MapTypeSymbol)
+                    {
+                        this.EmitMapIndexAssignment(ixa);
+                    }
+                    else
+                    {
+                        this.EmitLoadVariable(ixa.Target);
+                        this.EmitExpression(ixa.Index);
+                        this.EmitExpression(ixa.Value);
+                        this.EmitStoreElement(ixa.Type);
 
-                    // Result of an assignment expression is the assigned value.
-                    this.EmitLoadVariable(ixa.Target);
-                    this.EmitExpression(ixa.Index);
-                    this.EmitLoadElement(ixa.Type);
+                        // Result of an assignment expression is the assigned value.
+                        this.EmitLoadVariable(ixa.Target);
+                        this.EmitExpression(ixa.Index);
+                        this.EmitLoadElement(ixa.Type);
+                    }
+
                     break;
                 case BoundLenExpression len:
                     this.EmitLen(len);
@@ -2723,6 +2790,12 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundIndirectCallExpression indirect:
                     this.EmitIndirectCall(indirect);
+                    break;
+                case BoundMapLiteralExpression mapLit:
+                    this.EmitMapLiteral(mapLit);
+                    break;
+                case BoundMapDeleteExpression mapDel:
+                    this.EmitMapDelete(mapDel);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -3193,6 +3266,16 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.il.Call(this.outer.GetStringLengthReference());
             }
+            else if (len.Operand.Type is MapTypeSymbol mapType)
+            {
+                // Phase 3.A.4 emit: `len(m)` -> `callvirt Dictionary<K,V>.get_Count`.
+                var dictType = mapType.ClrType;
+                var getCount = dictType.GetMethod("get_Count")
+                    ?? throw new InvalidOperationException(
+                        $"Dictionary type '{dictType.FullName}' has no get_Count method.");
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(this.outer.GetMethodReference(getCount));
+            }
             else
             {
                 this.il.OpCode(ILOpCode.Ldlen);
@@ -3290,6 +3373,109 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(methodHandle);
+        }
+
+        private void EmitMapLiteral(BoundMapLiteralExpression literal)
+        {
+            // Phase 3.A.4 emit: `map[K]V{k1: v1, ...}` lowers to
+            // `newobj Dictionary<K,V>::.ctor()` then a (dup; key; value; callvirt set_Item)
+            // sequence per entry. Using set_Item rather than Add so duplicate keys
+            // overwrite (matching Go semantics; ParseMapEntries does not dedup).
+            var dictType = literal.MapType.ClrType;
+            var ctor = dictType.GetConstructor(Type.EmptyTypes)
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no parameterless constructor.");
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctor));
+
+            if (literal.Entries.Length == 0)
+            {
+                return;
+            }
+
+            var setItem = dictType.GetMethod("set_Item")
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no set_Item method.");
+            var setItemRef = this.outer.GetMethodReference(setItem);
+
+            foreach (var entry in literal.Entries)
+            {
+                this.il.OpCode(ILOpCode.Dup);
+                this.EmitExpression(entry.Key);
+                this.EmitExpression(entry.Value);
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(setItemRef);
+            }
+        }
+
+        private void EmitMapDelete(BoundMapDeleteExpression del)
+        {
+            // Phase 3.A.4 emit: `delete(m, k)` lowers to `callvirt Dictionary<K,V>::Remove(K)`
+            // and pops the returned bool — `delete` is typed as void.
+            var mapType = (MapTypeSymbol)del.Map.Type;
+            var dictType = mapType.ClrType;
+            var remove = dictType.GetMethod("Remove", new[] { mapType.KeyType.ClrType })
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no Remove(K) method.");
+
+            this.EmitExpression(del.Map);
+            this.EmitExpression(del.Key);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(remove));
+            this.il.OpCode(ILOpCode.Pop);
+        }
+
+        private void EmitMapIndexRead(BoundIndexExpression idx)
+        {
+            // Phase 3.A.4 emit: `m[k]` lowers to `Dictionary<K,V>::TryGetValue(K, out V)`
+            // — we then pop the returned bool and load the out value. TryGetValue
+            // zero-initialises the out parameter when the key is missing, matching
+            // the interpreter's Go zero-value semantics rather than throwing as
+            // `get_Item` would.
+            var mapType = (MapTypeSymbol)idx.Target.Type;
+            var dictType = mapType.ClrType;
+            var tryGet = dictType.GetMethod(
+                "TryGetValue",
+                new[] { mapType.KeyType.ClrType, mapType.ValueType.ClrType.MakeByRefType() })
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no TryGetValue(K, out V) method.");
+
+            var slot = this.mapIndexSlots[idx];
+            this.EmitExpression(idx.Target);
+            this.EmitExpression(idx.Index);
+            this.il.LoadLocalAddress(slot);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(tryGet));
+            this.il.OpCode(ILOpCode.Pop);
+            this.il.LoadLocal(slot);
+        }
+
+        private void EmitMapIndexAssignment(BoundIndexAssignmentExpression ixa)
+        {
+            // Phase 3.A.4 emit: `m[k] = v` lowers to `Dictionary<K,V>::set_Item(K, V)`.
+            // The expression result is the assigned value, so re-read via get_Item
+            // after the store — set_Item is void and we don't have a scratch slot
+            // for v here. The re-read uses get_Item (not TryGetValue) because the
+            // key is guaranteed to be present after the set.
+            var mapType = (MapTypeSymbol)ixa.Target.Type;
+            var dictType = mapType.ClrType;
+            var setItem = dictType.GetMethod("set_Item")
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no set_Item method.");
+            var getItem = dictType.GetMethod("get_Item")
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no get_Item method.");
+
+            this.EmitLoadVariable(ixa.Target);
+            this.EmitExpression(ixa.Index);
+            this.EmitExpression(ixa.Value);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(setItem));
+
+            this.EmitLoadVariable(ixa.Target);
+            this.EmitExpression(ixa.Index);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getItem));
         }
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)
