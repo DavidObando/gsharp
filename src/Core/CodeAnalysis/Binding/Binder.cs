@@ -20,6 +20,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class Binder
 {
     private readonly FunctionSymbol function;
+    private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
+        = new List<(StructDeclarationSyntax, StructSymbol)>();
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
@@ -164,10 +166,21 @@ public sealed class Binder
 
         var interfaceDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                                .OfType<InterfaceDeclarationSyntax>();
+
+        // Phase 3 exit: register interface type aliases up front so structs
+        // declared in subsequent passes can implement them, *and* defer the
+        // resolution of interface method signatures until after structs have
+        // been registered — interface methods may reference user struct/class
+        // types as parameter or return types (e.g. `func Find(...) Contact?`).
+        var declaredInterfaces = new List<(InterfaceDeclarationSyntax Syntax, InterfaceSymbol Symbol)>();
         foreach (var ifaceSyntax in interfaceDeclarations)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
-            binder.BindInterfaceDeclaration(ifaceSyntax, owningPackage);
+            var sym = binder.DeclareInterfaceSymbol(ifaceSyntax, owningPackage);
+            if (sym != null)
+            {
+                declaredInterfaces.Add((ifaceSyntax, sym));
+            }
         }
 
         var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -177,6 +190,14 @@ public sealed class Binder
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             binder.BindStructDeclaration(structSyntax, owningPackage);
         }
+
+        foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
+        {
+            var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
+            binder.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage);
+        }
+
+        binder.VerifyInterfaceImplementations();
 
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
@@ -636,7 +657,10 @@ public sealed class Binder
 
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
-        // methods) provides a same-name, same-signature method.
+        // methods) provides a same-name, same-signature method. The check
+        // itself is deferred (see `VerifyInterfaceImplementations`) until
+        // after interface method signatures have been bound, since
+        // interface methods may forward-reference user struct/class types.
         if (implementedInterfaces.Count > 0)
         {
             structSymbol.SetInterfaces(implementedInterfaces.ToImmutable());
@@ -652,7 +676,18 @@ public sealed class Binder
                         iface.Name,
                         iface.PackageName ?? string.Empty);
                 }
+            }
 
+            pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
+        }
+    }
+
+    private void VerifyInterfaceImplementations()
+    {
+        foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
+        {
+            foreach (var iface in structSymbol.Interfaces)
+            {
                 foreach (var imethod in iface.Methods)
                 {
                     if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)
@@ -669,7 +704,7 @@ public sealed class Binder
         }
     }
 
-    private void BindInterfaceDeclaration(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    private InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
@@ -678,9 +713,23 @@ public sealed class Binder
         if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-            return;
+            return null;
         }
 
+        return interfaceSymbol;
+    }
+
+    private void BindInterfaceDeclaration(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var declared = DeclareInterfaceSymbol(syntax, package);
+        if (declared != null)
+        {
+            BindInterfaceMembers(syntax, declared, package);
+        }
+    }
+
+    private void BindInterfaceMembers(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
+    {
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var seenNames = new HashSet<string>();
         foreach (var methodSyntax in syntax.Methods)
@@ -2158,7 +2207,20 @@ public sealed class Binder
             var name = leftName.IdentifierToken.Text;
             if (scope.TryLookupSymbol(name) is VariableSymbol variable)
             {
-                receiver = new BoundVariableExpression(variable);
+                if (variable is ImplicitFieldVariableSymbol implicitField)
+                {
+                    // Bare field name inside a method: rebind as `this.field`
+                    // so chained access (`Field.Sub`) emits a load of the
+                    // backing field through the `this` receiver.
+                    receiver = new BoundFieldAccessExpression(
+                        new BoundVariableExpression(implicitField.Receiver),
+                        implicitField.StructType,
+                        implicitField.Field);
+                }
+                else
+                {
+                    receiver = new BoundVariableExpression(variable);
+                }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))

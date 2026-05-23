@@ -66,6 +66,7 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
     private MemberReferenceHandle objectStaticEqualsRef;
+    private MemberReferenceHandle nullRefExceptionCtorRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -897,6 +898,17 @@ internal sealed class ReflectionMetadataEmitter
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
 
+        // Phase 3.C.3b: each `?.` access introduces a synthetic capture
+        // local in the bound tree; pre-allocate a slot for it.
+        foreach (var nc in CollectNullConditionalCaptures(body))
+        {
+            if (!locals.ContainsKey(nc.Capture))
+            {
+                locals[nc.Capture] = localTypes.Count;
+                localTypes.Add(nc.Capture.Type);
+            }
+        }
+
         foreach (var append in CollectAppends(body))
         {
             var srcSlot = localTypes.Count;
@@ -1271,6 +1283,122 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private static IEnumerable<BoundNullConditionalAccessExpression> CollectNullConditionalCaptures(BoundNode node)
+    {
+        var list = new List<BoundNullConditionalAccessExpression>();
+        WalkForNullConditional(node, list);
+        return list;
+    }
+
+    private static void WalkForNullConditional(BoundNode node, List<BoundNullConditionalAccessExpression> sink)
+    {
+        switch (node)
+        {
+            case BoundNullConditionalAccessExpression nc:
+                sink.Add(nc);
+                WalkForNullConditional(nc.Receiver, sink);
+                WalkForNullConditional(nc.WhenNotNull, sink);
+                break;
+            case BoundBlockStatement blk:
+                foreach (var s in blk.Statements)
+                {
+                    WalkForNullConditional(s, sink);
+                }
+
+                break;
+            case BoundExpressionStatement es:
+                WalkForNullConditional(es.Expression, sink);
+                break;
+            case BoundVariableDeclaration vd:
+                WalkForNullConditional(vd.Initializer, sink);
+                break;
+            case BoundIfStatement ifs:
+                WalkForNullConditional(ifs.Condition, sink);
+                WalkForNullConditional(ifs.ThenStatement, sink);
+                if (ifs.ElseStatement != null)
+                {
+                    WalkForNullConditional(ifs.ElseStatement, sink);
+                }
+
+                break;
+            case BoundReturnStatement rs:
+                if (rs.Expression != null)
+                {
+                    WalkForNullConditional(rs.Expression, sink);
+                }
+
+                break;
+            case BoundConditionalGotoStatement cg:
+                WalkForNullConditional(cg.Condition, sink);
+                break;
+            case BoundThrowStatement th:
+                WalkForNullConditional(th.Expression, sink);
+                break;
+            case BoundTryStatement t:
+                WalkForNullConditional(t.TryBlock, sink);
+                foreach (var clause in t.CatchClauses)
+                {
+                    WalkForNullConditional(clause.Body, sink);
+                }
+
+                if (t.FinallyBlock != null)
+                {
+                    WalkForNullConditional(t.FinallyBlock, sink);
+                }
+
+                break;
+            case BoundAssignmentExpression a:
+                WalkForNullConditional(a.Expression, sink);
+                break;
+            case BoundUnaryExpression u:
+                WalkForNullConditional(u.Operand, sink);
+                break;
+            case BoundBinaryExpression b:
+                WalkForNullConditional(b.Left, sink);
+                WalkForNullConditional(b.Right, sink);
+                break;
+            case BoundCallExpression c:
+                foreach (var arg in c.Arguments)
+                {
+                    WalkForNullConditional(arg, sink);
+                }
+
+                break;
+            case BoundImportedCallExpression ic:
+                foreach (var arg in ic.Arguments)
+                {
+                    WalkForNullConditional(arg, sink);
+                }
+
+                break;
+            case BoundImportedInstanceCallExpression iic:
+                WalkForNullConditional(iic.Receiver, sink);
+                foreach (var arg in iic.Arguments)
+                {
+                    WalkForNullConditional(arg, sink);
+                }
+
+                break;
+            case BoundUserInstanceCallExpression uic:
+                WalkForNullConditional(uic.Receiver, sink);
+                foreach (var arg in uic.Arguments)
+                {
+                    WalkForNullConditional(arg, sink);
+                }
+
+                break;
+            case BoundConversionExpression conv:
+                WalkForNullConditional(conv.Expression, sink);
+                break;
+            case BoundFieldAccessExpression fa:
+                WalkForNullConditional(fa.Receiver, sink);
+                break;
+            case BoundFieldAssignmentExpression fas:
+                WalkForNullConditional(fas.Value, sink);
+                break;
+        }
+    }
+
     private EntityHandle GetElementTypeToken(TypeSymbol element)
     {
         if (element == TypeSymbol.Int)
@@ -1320,6 +1448,27 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return fallback;
+    }
+
+    private MemberReferenceHandle GetNullReferenceExceptionCtorRef()
+    {
+        // System.NullReferenceException::.ctor() — used to back the `!!`
+        // operator's runtime check when its operand is null.
+        if (!this.nullRefExceptionCtorRef.IsNil)
+        {
+            return this.nullRefExceptionCtorRef;
+        }
+
+        var nreType = this.ResolveCoreType("System.NullReferenceException", typeof(NullReferenceException));
+        var nreTypeRef = this.GetTypeReference(nreType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+        this.nullRefExceptionCtorRef = this.metadata.AddMemberReference(
+            parent: nreTypeRef,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.nullRefExceptionCtorRef;
     }
 
     private MemberReferenceHandle GetStringLengthReference()
@@ -1507,6 +1656,27 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
+        // Phase 3 exit: `T?` for reference types is metadata-only (same CLR
+        // signature as `T`). For value types it lowers to `Nullable<T>`.
+        if (type is NullableTypeSymbol nullable)
+        {
+            var inner = nullable.UnderlyingType;
+            if (inner is StructSymbol nestedStruct && !nestedStruct.IsClass)
+            {
+                throw new NotSupportedException(
+                    $"Nullable value-type signatures for '{inner.Name}?' are not yet supported by the emitter.");
+            }
+
+            if (inner == TypeSymbol.Int || inner == TypeSymbol.Bool || (inner?.ClrType != null && inner.ClrType.IsValueType))
+            {
+                throw new NotSupportedException(
+                    $"Nullable value-type signatures for '{inner?.Name}?' are not yet supported by the emitter.");
+            }
+
+            EncodeTypeSymbol(encoder, inner);
+            return;
+        }
+
         if (type == TypeSymbol.Bool)
         {
             encoder.Boolean();
@@ -1796,6 +1966,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundFieldAssignmentExpression fas:
                     this.EmitFieldAssignment(fas);
                     break;
+                case BoundNullConditionalAccessExpression nc:
+                    this.EmitNullConditionalAccess(nc);
+                    break;
                 default:
                     throw new NotSupportedException(
                         $"Bound expression kind '{expression.Kind}' is not yet supported by the emitter.");
@@ -1808,6 +1981,26 @@ internal sealed class ReflectionMetadataEmitter
             var from = conv.Expression.Type;
             var to = conv.Type;
             if (from == to)
+            {
+                return;
+            }
+
+            // Phase 3.C.2 / ADR-0020: `nil` flows into any nullable or
+            // reference-typed slot; the IL value is already ldnull.
+            if (from == TypeSymbol.Null && (to is NullableTypeSymbol || (to is StructSymbol ts && ts.IsClass)))
+            {
+                return;
+            }
+
+            // Phase 3 exit: widening to a nullable reference type (`T` -> `T?`)
+            // is metadata-only because reference nullability shares the CLR
+            // representation. The same applies to narrowing back via `!!`.
+            if (to is NullableTypeSymbol toNullable && IsReferenceCompatible(from, toNullable.UnderlyingType))
+            {
+                return;
+            }
+
+            if (from is NullableTypeSymbol fromNullable && IsReferenceCompatible(fromNullable.UnderlyingType, to))
             {
                 return;
             }
@@ -1832,8 +2025,47 @@ internal sealed class ReflectionMetadataEmitter
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
         }
 
+        private static bool IsReferenceCompatible(TypeSymbol a, TypeSymbol b)
+        {
+            if (a == b)
+            {
+                return true;
+            }
+
+            if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
+            {
+                for (var c = aClass; c != null; c = c.BaseClass)
+                {
+                    if (c == bClass)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private void EmitUnary(BoundUnaryExpression u)
         {
+            // Phase 3.C.3: `!!` is a runtime null-assertion. Emit a check
+            // ahead of the operand load so we don't accidentally take a
+            // dependency on stack tracking inside the operand.
+            if (u.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
+            {
+                this.EmitExpression(u.Operand);
+                this.il.OpCode(ILOpCode.Dup);
+                var nonNull = this.il.DefineLabel();
+                this.il.Branch(ILOpCode.Brtrue, nonNull);
+                this.il.OpCode(ILOpCode.Pop);
+                var nreCtor = this.outer.GetNullReferenceExceptionCtorRef();
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(nreCtor);
+                this.il.OpCode(ILOpCode.Throw);
+                this.il.MarkLabel(nonNull);
+                return;
+            }
+
             this.EmitExpression(u.Operand);
             switch (u.Op.Kind)
             {
@@ -1857,6 +2089,19 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitBinary(BoundBinaryExpression b)
         {
+            // Phase 3.C.3: `?:` (NullCoalesce). Short-circuit on the left.
+            if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
+            {
+                this.EmitExpression(b.Left);
+                this.il.OpCode(ILOpCode.Dup);
+                var done = this.il.DefineLabel();
+                this.il.Branch(ILOpCode.Brtrue, done);
+                this.il.OpCode(ILOpCode.Pop);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(done);
+                return;
+            }
+
             // String concatenation / equality go through BCL helpers.
             if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
             {
@@ -2015,6 +2260,15 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLiteral(BoundLiteralExpression literal)
         {
+            // Phase 3.C.2 / ADR-0020: the nil literal is modeled as a null
+            // BoundLiteralExpression.Value; on reference-type or nullable
+            // targets it emits as ldnull.
+            if (literal.Value is null)
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                return;
+            }
+
             switch (literal.Value)
             {
                 case string s:
@@ -2358,6 +2612,26 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
+        }
+
+        private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)
+        {
+            // Phase 3.C.3b / ADR-0020: evaluate the receiver once into a
+            // synthetic capture local. If the captured value is null, leave
+            // null on the stack and skip the access; otherwise evaluate the
+            // access sub-tree, which references the capture local in place
+            // of the original receiver.
+            this.EmitExpression(nc.Receiver);
+            this.EmitStoreVariable(nc.Capture);
+            this.EmitLoadVariable(nc.Capture);
+            var end = this.il.DefineLabel();
+            var nonNull = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brtrue, nonNull);
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.Branch(ILOpCode.Br, end);
+            this.il.MarkLabel(nonNull);
+            this.EmitExpression(nc.WhenNotNull);
+            this.il.MarkLabel(end);
         }
 
         private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
