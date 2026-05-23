@@ -74,6 +74,11 @@ public abstract class SyntaxNode
             else if (typeof(SeparatedSyntaxList).IsAssignableFrom(property.PropertyType))
             {
                 var separatedSyntaxList = (SeparatedSyntaxList)property.GetValue(this);
+                if (separatedSyntaxList == null)
+                {
+                    continue;
+                }
+
                 foreach (var child in separatedSyntaxList.GetWithSeparators())
                 {
                     yield return child;

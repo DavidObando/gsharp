@@ -144,6 +144,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.NullConditionalAccessExpression:
                 WriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node, writer);
                 break;
+            case BoundNodeKind.TupleLiteralExpression:
+                WriteTupleLiteralExpression((BoundTupleLiteralExpression)node, writer);
+                break;
+            case BoundNodeKind.TupleElementAccessExpression:
+                WriteTupleElementAccessExpression((BoundTupleElementAccessExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -674,5 +680,29 @@ public static class BoundNodePrinter
         node.Receiver.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.QuestionDotToken);
         node.WhenNotNull.WriteTo(writer);
+    }
+
+    private static void WriteTupleLiteralExpression(BoundTupleLiteralExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Elements[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteTupleElementAccessExpression(BoundTupleElementAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier($"Item{node.Index + 1}");
     }
 }

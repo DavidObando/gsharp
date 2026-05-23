@@ -141,6 +141,8 @@ ThrowStatement
 TrueKeyword
 TryKeyword
 TryStatement
+TupleDeconstructionStatement
+TupleLiteralExpression
 TypeAliasDeclaration
 TypeArgumentList
 TypeClause
@@ -185,6 +187,8 @@ ReturnStatement
 StructLiteralExpression
 ThrowStatement
 TryStatement
+TupleElementAccessExpression
+TupleLiteralExpression
 UnaryExpression
 UserInstanceCallExpression
 VariableDeclaration
