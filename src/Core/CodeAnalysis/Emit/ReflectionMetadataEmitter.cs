@@ -1541,10 +1541,26 @@ internal sealed class ReflectionMetadataEmitter
             return existing;
         }
 
-        var asmRef = this.GetAssemblyReference(type.Assembly);
+        // Nested types: resolution scope is the TypeRef of the declaring type,
+        // namespace is empty, name is the short name only. Works for the
+        // open generic definition of a nested generic type as well (Reflection
+        // treats Dictionary`2+Enumerator as nested under Dictionary`2).
+        EntityHandle resolutionScope;
+        StringHandle @namespace;
+        if (type.IsNested && type.DeclaringType is Type declaring)
+        {
+            resolutionScope = this.GetTypeReference(declaring);
+            @namespace = default;
+        }
+        else
+        {
+            resolutionScope = this.GetAssemblyReference(type.Assembly);
+            @namespace = this.metadata.GetOrAddString(type.Namespace ?? string.Empty);
+        }
+
         var handle = this.metadata.AddTypeReference(
-            resolutionScope: asmRef,
-            @namespace: this.metadata.GetOrAddString(type.Namespace ?? string.Empty),
+            resolutionScope: resolutionScope,
+            @namespace: @namespace,
             name: this.metadata.GetOrAddString(type.Name));
         this.typeRefs[type] = handle;
         return handle;
@@ -2118,7 +2134,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.Call(this.outer.GetMethodReference(impCall.Function.Method));
                     break;
                 case BoundImportedInstanceCallExpression instCall:
-                    this.EmitExpression(instCall.Receiver);
+                    this.EmitInstanceReceiver(instCall.Receiver);
                     foreach (var arg in instCall.Arguments)
                     {
                         this.EmitExpression(arg);
@@ -2922,7 +2938,8 @@ internal sealed class ReflectionMetadataEmitter
             // receiver. Properties dispatch to their `get_X` accessor;
             // fields use `ldfld`. Generic-instantiated declaring types are
             // handled by `GetMethodReference` / `GetFieldReference`.
-            this.EmitExpression(access.Receiver);
+            this.EmitInstanceReceiver(access.Receiver);
+            var receiverIsValueType = access.Receiver.Type?.ClrType?.IsValueType == true;
             switch (access.Member)
             {
                 case PropertyInfo property:
@@ -2930,7 +2947,7 @@ internal sealed class ReflectionMetadataEmitter
                         ?? throw new InvalidOperationException(
                             $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
                     var getterRef = this.outer.GetMethodReference(getter);
-                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(getterRef);
                     break;
                 case FieldInfo field:
@@ -2947,7 +2964,7 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitClrIndex(BoundClrIndexExpression idx)
         {
             // Phase 4 emit parity: indexer read. `d[k]` -> `callvirt get_Item(k)`.
-            this.EmitExpression(idx.Target);
+            this.EmitInstanceReceiver(idx.Target);
             foreach (var arg in idx.Arguments)
             {
                 this.EmitExpression(arg);
@@ -2956,7 +2973,8 @@ internal sealed class ReflectionMetadataEmitter
             var getter = idx.Indexer.GetGetMethod(nonPublic: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
-            this.il.OpCode(ILOpCode.Callvirt);
+            var receiverIsValueType = idx.Target.Type?.ClrType?.IsValueType == true;
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
         }
 
@@ -2989,6 +3007,24 @@ internal sealed class ReflectionMetadataEmitter
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public getter.");
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
+        }
+
+        private void EmitInstanceReceiver(BoundExpression receiver)
+        {
+            // Value-type receivers need a managed pointer (the implicit `this`
+            // of an instance method on a value type is a `ref` parameter). For
+            // the common case where the receiver is a local/parameter, we can
+            // emit `ldloca`/`ldarga`. Other shapes are not yet exercised by the
+            // emit pipeline.
+            var clrType = receiver.Type?.ClrType;
+            if (clrType != null && clrType.IsValueType
+                && receiver is BoundVariableExpression bve
+                && this.TryLoadVariableAddress(bve.Variable))
+            {
+                return;
+            }
+
+            this.EmitExpression(receiver);
         }
 
         private bool TryLoadVariableAddress(VariableSymbol variable)
