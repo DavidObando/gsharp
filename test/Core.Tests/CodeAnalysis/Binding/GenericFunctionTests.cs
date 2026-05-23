@@ -149,6 +149,58 @@ Eq([]int{1}, []int{2})
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void GenericInterfaceConstraint_Dispatch_OnImplementor_Works()
+    {
+        var source = @"
+type IShape sealed interface {
+    func Area() int
+}
+
+type Square class : IShape {
+    func Area() int { return 9 }
+}
+
+func AreaOf[T IShape](x T) int { return x.Area() }
+AreaOf(Square{})
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(9, result.Value);
+    }
+
+    [Fact]
+    public void GenericInterfaceConstraint_NonImplementor_Diagnoses()
+    {
+        var source = @"
+type IShape sealed interface {
+    func Area() int
+}
+
+type NotAShape class {}
+
+func AreaOf[T IShape](x T) int { return x.Area() }
+AreaOf[NotAShape](NotAShape{})
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void GenericConstraint_OnNonSealedInterface_Diagnoses()
+    {
+        var source = @"
+type IShape interface {
+    func Area() int
+}
+
+func AreaOf[T IShape](x T) int { return x.Area() }
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed"));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

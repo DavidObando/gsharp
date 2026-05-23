@@ -17,12 +17,14 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <param name="ordinal">The zero-based position of this parameter in its declaring list.</param>
     /// <param name="constraint">The constraint kind (Phase 4.1: only <see cref="TypeParameterConstraint.Any"/>; Phase 4.2 widens this).</param>
     /// <param name="variance">The variance modifier (Phase 4.3 / ADR-0021).</param>
-    public TypeParameterSymbol(string name, int ordinal, TypeParameterConstraint constraint, TypeParameterVariance variance)
+    /// <param name="interfaceConstraint">Optional sealed-interface constraint (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface and the enum <paramref name="constraint"/> is set to <see cref="TypeParameterConstraint.Any"/> (the interface bound subsumes <c>any</c>).</param>
+    public TypeParameterSymbol(string name, int ordinal, TypeParameterConstraint constraint, TypeParameterVariance variance, InterfaceSymbol interfaceConstraint = null)
         : base(name)
     {
         Ordinal = ordinal;
         Constraint = constraint;
         Variance = variance;
+        InterfaceConstraint = interfaceConstraint;
     }
 
     /// <summary>Gets the zero-based ordinal of this type parameter in its declaring list.</summary>
@@ -33,4 +35,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
 
     /// <summary>Gets the variance modifier (Phase 4.3 / ADR-0021).</summary>
     public TypeParameterVariance Variance { get; }
+
+    /// <summary>Gets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface.</summary>
+    public InterfaceSymbol InterfaceConstraint { get; }
 }

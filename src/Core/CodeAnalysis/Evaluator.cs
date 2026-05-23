@@ -592,35 +592,35 @@ public sealed class Evaluator
         // Phase 3.B.3 sub-step 3: virtual dispatch. If the receiver's runtime
         // type overrides the statically-bound method, route to the override.
         var method = node.Method;
-        if (receiverValue is StructValue sv && sv.StructType != null)
+
+        // Phase 3.B.4 + Phase 4.2b: an interface method (or a generic
+        // type-parameter's interface-constrained method) has a null
+        // ThisParameter / ReceiverType. Resolve the concrete implementation
+        // by looking up the method by name on the runtime struct type.
+        if (method.ThisParameter == null && receiverValue is StructValue ifaceSv && ifaceSv.StructType != null)
         {
-            // Phase 3.B.4: when the static receiver is an interface, dispatch
-            // to the runtime type's implementation (most-derived wins).
-            if (method.ReceiverType is InterfaceSymbol)
+            for (var t = ifaceSv.StructType; t != null; t = t.BaseClass)
             {
-                for (var t = sv.StructType; t != null; t = t.BaseClass)
+                if (t.TryGetMethod(method.Name, out var implMethod))
                 {
-                    if (t.TryGetMethod(method.Name, out var implMethod))
-                    {
-                        method = implMethod;
-                        break;
-                    }
+                    method = implMethod;
+                    break;
                 }
             }
-            else
+        }
+        else if (receiverValue is StructValue sv && sv.StructType != null)
+        {
+            for (var t = sv.StructType; t != null; t = t.BaseClass)
             {
-                for (var t = sv.StructType; t != null; t = t.BaseClass)
+                if (t == method.ReceiverType)
                 {
-                    if (t == method.ReceiverType)
-                    {
-                        break;
-                    }
+                    break;
+                }
 
-                    if (t.TryGetMethod(method.Name, out var overrideMethod) && overrideMethod.IsOverride)
-                    {
-                        method = overrideMethod;
-                        break;
-                    }
+                if (t.TryGetMethod(method.Name, out var overrideMethod) && overrideMethod.IsOverride)
+                {
+                    method = overrideMethod;
+                    break;
                 }
             }
         }

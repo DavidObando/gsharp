@@ -884,6 +884,7 @@ public sealed class Binder
             }
 
             var constraint = TypeParameterConstraint.Any;
+            InterfaceSymbol interfaceConstraint = null;
             if (p.Constraint != null)
             {
                 switch (p.Constraint.Text)
@@ -892,12 +893,28 @@ public sealed class Binder
                         constraint = TypeParameterConstraint.Any;
                         break;
                     case "comparable":
-                        // Phase 4.2 will enforce this; for Phase 4.1 we accept the
-                        // syntactic constraint but treat it as `any` for binding.
                         constraint = TypeParameterConstraint.Comparable;
                         break;
                     default:
-                        Diagnostics.ReportUndefinedType(p.Constraint.Location, p.Constraint.Text);
+                        // Phase 4.2b / ADR-0020: a non-keyword constraint is treated as a
+                        // sealed-interface bound. The interface must exist and be sealed
+                        // (since open interfaces could be implemented by unknown future
+                        // types, defeating the binder's purpose).
+                        var resolved = LookupType(p.Constraint.Text);
+                        if (resolved is InterfaceSymbol iface)
+                        {
+                            if (!iface.IsSealed)
+                            {
+                                Diagnostics.ReportInterfaceConstraintNotSealed(p.Constraint.Location, iface.Name);
+                            }
+
+                            interfaceConstraint = iface;
+                        }
+                        else
+                        {
+                            Diagnostics.ReportUndefinedType(p.Constraint.Location, p.Constraint.Text);
+                        }
+
                         break;
                 }
             }
@@ -908,7 +925,7 @@ public sealed class Binder
                 variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
             }
 
-            builder.Add(new TypeParameterSymbol(name, i, constraint, variance));
+            builder.Add(new TypeParameterSymbol(name, i, constraint, variance, interfaceConstraint));
         }
 
         return builder.MoveToImmutable();
@@ -2223,9 +2240,9 @@ public sealed class Binder
             foreach (var tp in function.TypeParameters)
             {
                 var typeArg = substitution[tp];
-                if (!SatisfiesConstraint(typeArg, tp.Constraint))
+                if (!SatisfiesConstraint(typeArg, tp))
                 {
-                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp.Constraint));
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
                     return new BoundErrorExpression();
                 }
             }
@@ -2319,23 +2336,50 @@ public sealed class Binder
     }
 
     // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
-    // type parameter. `Any` accepts anything; `Comparable` accepts the same set of types
-    // for which `BoundBinaryOperator.Bind` returns a `==`/`!=` operator: int, string,
-    // bool, data-structs, nullable variants of those, plus another `comparable` type
-    // parameter (so a comparable T can be passed to another comparable U).
-    private static bool SatisfiesConstraint(TypeSymbol typeArgument, TypeParameterConstraint constraint)
+    // type parameter. Both the enum constraint and the optional sealed-interface bound
+    // must hold.
+    private static bool SatisfiesConstraint(TypeSymbol typeArgument, TypeParameterSymbol tp)
     {
-        if (constraint == TypeParameterConstraint.Any)
+        if (tp.InterfaceConstraint != null)
+        {
+            if (!ImplementsInterface(typeArgument, tp.InterfaceConstraint))
+            {
+                return false;
+            }
+        }
+
+        if (tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ImplementsInterface(TypeSymbol typeArgument, InterfaceSymbol iface)
+    {
+        if (typeArgument is StructSymbol s)
+        {
+            foreach (var implemented in s.Interfaces)
+            {
+                if (implemented == iface)
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (typeArgument is InterfaceSymbol i && i == iface)
         {
             return true;
         }
 
-        if (constraint == TypeParameterConstraint.Comparable)
+        if (typeArgument is TypeParameterSymbol tp && tp.InterfaceConstraint == iface)
         {
-            return IsComparable(typeArgument);
+            return true;
         }
 
-        return true;
+        return false;
     }
 
     private static bool IsComparable(TypeSymbol type)
@@ -2363,13 +2407,18 @@ public sealed class Binder
         return false;
     }
 
-    private static string DescribeConstraint(TypeParameterConstraint constraint)
+    private static string DescribeConstraint(TypeParameterSymbol tp)
     {
-        return constraint switch
+        if (tp.InterfaceConstraint != null)
+        {
+            return tp.InterfaceConstraint.Name;
+        }
+
+        return tp.Constraint switch
         {
             TypeParameterConstraint.Any => "any",
             TypeParameterConstraint.Comparable => "comparable",
-            _ => constraint.ToString().ToLowerInvariant(),
+            _ => tp.Constraint.ToString().ToLowerInvariant(),
         };
     }
 
@@ -2671,6 +2720,15 @@ public sealed class Binder
             if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
             {
                 return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce);
+            }
+
+            // Phase 4.2b / ADR-0020: dispatch through a type parameter's
+            // sealed-interface constraint, just as if the receiver were
+            // typed as the interface itself.
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null
+                && tpRecv.InterfaceConstraint.TryGetMethod(methodName, out var tpIfaceMethod))
+            {
+                return BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce);
             }
 
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
