@@ -194,6 +194,8 @@ public sealed class Evaluator
                 BoundNodeKind.ImportedCallExpression => EvaluateImportedCallExpression((BoundImportedCallExpression)node),
                 BoundNodeKind.ImportedInstanceCallExpression => EvaluateImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node),
                 BoundNodeKind.ArrayCreationExpression => EvaluateArrayCreationExpression((BoundArrayCreationExpression)node),
+                BoundNodeKind.MapLiteralExpression => EvaluateMapLiteralExpression((BoundMapLiteralExpression)node),
+                BoundNodeKind.MapDeleteExpression => EvaluateMapDeleteExpression((BoundMapDeleteExpression)node),
                 BoundNodeKind.IndexExpression => EvaluateIndexExpression((BoundIndexExpression)node),
                 BoundNodeKind.IndexAssignmentExpression => EvaluateIndexAssignmentExpression((BoundIndexAssignmentExpression)node),
                 BoundNodeKind.LenExpression => EvaluateLenExpression((BoundLenExpression)node),
@@ -259,22 +261,77 @@ public sealed class Evaluator
         return array;
     }
 
+    private object EvaluateMapLiteralExpression(BoundMapLiteralExpression node)
+    {
+        var keyClr = node.MapType.KeyType.ClrType ?? typeof(object);
+        var valClr = node.MapType.ValueType.ClrType ?? typeof(object);
+        var dictType = typeof(System.Collections.Generic.Dictionary<,>).MakeGenericType(keyClr, valClr);
+        var dict = (System.Collections.IDictionary)System.Activator.CreateInstance(dictType);
+        foreach (var entry in node.Entries)
+        {
+            var k = EvaluateExpression(entry.Key);
+            var v = EvaluateExpression(entry.Value);
+            dict[k] = v;
+        }
+
+        return dict;
+    }
+
+    private object EvaluateMapDeleteExpression(BoundMapDeleteExpression node)
+    {
+        var dict = (System.Collections.IDictionary)EvaluateExpression(node.Map);
+        var key = EvaluateExpression(node.Key);
+        if (dict.Contains(key))
+        {
+            dict.Remove(key);
+        }
+
+        return null;
+    }
+
     private object EvaluateIndexExpression(BoundIndexExpression node)
     {
-        var target = (System.Array)EvaluateExpression(node.Target);
+        var target = EvaluateExpression(node.Target);
+
+        // Phase 3.A.4: map indexing — return the value, or the Go-style
+        // zero value when the key is missing (V?-shaped semantics are
+        // deferred to a follow-up that pairs with the two-result form).
+        if (node.Target.Type is MapTypeSymbol mapType && target is System.Collections.IDictionary dict)
+        {
+            var key = EvaluateExpression(node.Index);
+            if (dict.Contains(key))
+            {
+                return dict[key];
+            }
+
+            return DefaultValue(mapType.ValueType);
+        }
+
+        var arr = (System.Array)target;
         var index = (int)EvaluateExpression(node.Index);
-        return target.GetValue(index);
+        return arr.GetValue(index);
     }
 
     private object EvaluateIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
-        var target = (System.Array)(node.Target.Kind == Symbols.SymbolKind.GlobalVariable
+        var targetValue = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
             ? globals[node.Target]
-            : locals.Peek()[node.Target]);
-        var index = (int)EvaluateExpression(node.Index);
-        var value = EvaluateExpression(node.Value);
-        target.SetValue(value, index);
-        return value;
+            : locals.Peek()[node.Target];
+
+        // Phase 3.A.4: map indexed assignment `m[k] = v`.
+        if (node.Target.Type is MapTypeSymbol && targetValue is System.Collections.IDictionary dict)
+        {
+            var key = EvaluateExpression(node.Index);
+            var value = EvaluateExpression(node.Value);
+            dict[key] = value;
+            return value;
+        }
+
+        var arr = (System.Array)targetValue;
+        var idx = (int)EvaluateExpression(node.Index);
+        var v = EvaluateExpression(node.Value);
+        arr.SetValue(v, idx);
+        return v;
     }
 
     private object EvaluateLenExpression(BoundLenExpression node)
@@ -284,6 +341,7 @@ public sealed class Evaluator
         {
             string s => s.Length,
             System.Array a => a.Length,
+            System.Collections.IDictionary d => d.Count,
             _ => throw new EvaluatorException($"len: unsupported operand of CLR type '{v?.GetType()}'.", node),
         };
     }

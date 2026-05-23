@@ -1367,6 +1367,19 @@ public sealed class Binder
             return TupleTypeSymbol.Get(elements.MoveToImmutable());
         }
 
+        if (syntax.IsMap)
+        {
+            // Phase 3.A.4: map type clause `map[K]V`.
+            var keyType = BindTypeClause(syntax.MapKeyType);
+            var valueType = BindTypeClause(syntax.MapValueType);
+            if (keyType == null || valueType == null)
+            {
+                return null;
+            }
+
+            return MapTypeSymbol.Get(keyType, valueType);
+        }
+
         // Phase 4.4 / ADR-0020: if the type clause carries a type-argument list,
         // first try to resolve the identifier as an open generic CLR type via
         // imports (mangled name `Name`N`). This lets users write `List[int]` or
@@ -2200,6 +2213,8 @@ public sealed class Binder
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
             case SyntaxKind.ArrayCreationExpression:
                 return BindArrayCreationExpression((ArrayCreationExpressionSyntax)syntax);
+            case SyntaxKind.MapCreationExpression:
+                return BindMapCreationExpression((MapCreationExpressionSyntax)syntax);
             case SyntaxKind.IndexExpression:
                 return BindIndexExpression((IndexExpressionSyntax)syntax);
             case SyntaxKind.IndexAssignmentExpression:
@@ -3212,7 +3227,7 @@ public sealed class Binder
                 }
 
                 var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
-                    || (name == "len" && operand.Type == TypeSymbol.String);
+                    || (name == "len" && (operand.Type == TypeSymbol.String || operand.Type is MapTypeSymbol));
                 if (!ok)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);
@@ -3251,6 +3266,35 @@ public sealed class Binder
 
                 var element = BindConversion(syntax.Arguments[1], sliceType.ElementType);
                 result = new BoundAppendExpression(slice, element, sliceType);
+                return true;
+            }
+
+            case "delete":
+            {
+                // Phase 3.A.4: `delete(m, k)` removes key `k` from map `m`.
+                if (syntax.Arguments.Count != 2)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var mapExpr = BindExpression(syntax.Arguments[0]);
+                if (mapExpr.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                if (mapExpr.Type is not MapTypeSymbol mapType)
+                {
+                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, mapExpr.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var keyExpr = BindConversion(syntax.Arguments[1], mapType.KeyType);
+                result = new BoundMapDeleteExpression(mapExpr, keyExpr);
                 return true;
             }
 
@@ -3823,9 +3867,46 @@ public sealed class Binder
         return new BoundArrayCreationExpression(ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
     }
 
+    private BoundExpression BindMapCreationExpression(MapCreationExpressionSyntax syntax)
+    {
+        // Phase 3.A.4: bind `map[K]V{k1: v1, k2: v2, …}`.
+        var mapType = BindTypeClause(syntax.TypeClause);
+        if (mapType == null)
+        {
+            return new BoundErrorExpression();
+        }
+
+        if (mapType is not MapTypeSymbol mts)
+        {
+            // Defensive — the parser only produces a map type clause here.
+            Diagnostics.ReportUndefinedType(syntax.TypeClause.Location, mapType.Name);
+            return new BoundErrorExpression();
+        }
+
+        var entries = ImmutableArray.CreateBuilder<BoundMapEntry>(syntax.Entries.Count);
+        foreach (var entrySyntax in syntax.Entries)
+        {
+            var key = BindConversion(entrySyntax.Key, mts.KeyType);
+            var value = BindConversion(entrySyntax.Value, mts.ValueType);
+            entries.Add(new BoundMapEntry(key, value));
+        }
+
+        return new BoundMapLiteralExpression(mts, entries.ToImmutable());
+    }
+
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
     {
         var target = BindExpression(syntax.Target);
+
+        // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
+        // The Go convention "zero value if missing" applies at evaluation;
+        // the bound representation reuses BoundIndexExpression with the
+        // element type set to V.
+        if (target.Type is MapTypeSymbol mapType)
+        {
+            var key = BindConversion(syntax.Index, mapType.KeyType);
+            return new BoundIndexExpression(target, key, mapType.ValueType);
+        }
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
@@ -3866,6 +3947,15 @@ public sealed class Binder
             var index = BindConversion(syntax.Index, TypeSymbol.Int);
             var value = BindConversion(syntax.Value, element);
             return new BoundIndexAssignmentExpression(variable, index, value, element);
+        }
+
+        // Phase 3.A.4: map indexed assignment `m[k] = v` — key bound to K,
+        // value bound to V.
+        if (variable.Type is MapTypeSymbol mapType)
+        {
+            var keyExpr = BindConversion(syntax.Index, mapType.KeyType);
+            var valExpr = BindConversion(syntax.Value, mapType.ValueType);
+            return new BoundIndexAssignmentExpression(variable, keyExpr, valExpr, mapType.ValueType);
         }
 
         // Phase 4 exit: CLR indexer write on an imported reference type

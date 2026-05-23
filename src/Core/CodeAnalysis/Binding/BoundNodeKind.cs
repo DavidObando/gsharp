@@ -40,6 +40,8 @@ public enum BoundNodeKind
     ImportedCallExpression,
     ImportedInstanceCallExpression,
     ArrayCreationExpression,
+    MapLiteralExpression,
+    MapDeleteExpression,
     IndexExpression,
     IndexAssignmentExpression,
     LenExpression,

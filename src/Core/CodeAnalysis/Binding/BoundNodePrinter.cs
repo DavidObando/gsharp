@@ -114,6 +114,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.ArrayCreationExpression:
                 WriteArrayCreationExpression((BoundArrayCreationExpression)node, writer);
                 break;
+            case BoundNodeKind.MapLiteralExpression:
+                WriteMapLiteralExpression((BoundMapLiteralExpression)node, writer);
+                break;
+            case BoundNodeKind.MapDeleteExpression:
+                WriteMapDeleteExpression((BoundMapDeleteExpression)node, writer);
+                break;
             case BoundNodeKind.IndexExpression:
                 WriteIndexExpression((BoundIndexExpression)node, writer);
                 break;
@@ -637,6 +643,38 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.CommaToken);
         writer.WriteSpace();
         node.Element.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteMapLiteralExpression(BoundMapLiteralExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.MapType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        for (var i = 0; i < node.Entries.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Entries[i].Key.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.ColonToken);
+            writer.WriteSpace();
+            node.Entries[i].Value.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteMapDeleteExpression(BoundMapDeleteExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("delete");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        node.Map.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CommaToken);
+        writer.WriteSpace();
+        node.Key.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 

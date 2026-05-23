@@ -327,6 +327,10 @@ public abstract class BoundTreeRewriter
                 return RewriteImportedInstanceCallExpression((BoundImportedInstanceCallExpression)node);
             case BoundNodeKind.ArrayCreationExpression:
                 return RewriteArrayCreationExpression((BoundArrayCreationExpression)node);
+            case BoundNodeKind.MapLiteralExpression:
+                return RewriteMapLiteralExpression((BoundMapLiteralExpression)node);
+            case BoundNodeKind.MapDeleteExpression:
+                return RewriteMapDeleteExpression((BoundMapDeleteExpression)node);
             case BoundNodeKind.IndexExpression:
                 return RewriteIndexExpression((BoundIndexExpression)node);
             case BoundNodeKind.IndexAssignmentExpression:
@@ -610,6 +614,49 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundArrayCreationExpression(node.ContainerType, builder.MoveToImmutable());
+    }
+
+    /// <summary>Rewrites a map literal expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteMapLiteralExpression(BoundMapLiteralExpression node)
+    {
+        ImmutableArray<BoundMapEntry>.Builder builder = null;
+        for (var i = 0; i < node.Entries.Length; i++)
+        {
+            var oldEntry = node.Entries[i];
+            var newKey = RewriteExpression(oldEntry.Key);
+            var newValue = RewriteExpression(oldEntry.Value);
+            if ((newKey != oldEntry.Key || newValue != oldEntry.Value) && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundMapEntry>(node.Entries.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Entries[j]);
+                }
+            }
+
+            builder?.Add(newKey == oldEntry.Key && newValue == oldEntry.Value
+                ? oldEntry
+                : new BoundMapEntry(newKey, newValue));
+        }
+
+        return builder == null ? node : new BoundMapLiteralExpression(node.MapType, builder.MoveToImmutable());
+    }
+
+    /// <summary>Rewrites a <c>delete(m, k)</c> expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteMapDeleteExpression(BoundMapDeleteExpression node)
+    {
+        var map = RewriteExpression(node.Map);
+        var key = RewriteExpression(node.Key);
+        if (map == node.Map && key == node.Key)
+        {
+            return node;
+        }
+
+        return new BoundMapDeleteExpression(map, key);
     }
 
     /// <summary>Rewrites an index expression.</summary>

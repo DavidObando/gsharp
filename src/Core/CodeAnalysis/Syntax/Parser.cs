@@ -788,6 +788,11 @@ public class Parser
             return ParseTupleTypeClause();
         }
 
+        if (Current.Kind == SyntaxKind.MapKeyword)
+        {
+            return ParseMapTypeClause();
+        }
+
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
@@ -877,6 +882,18 @@ public class Parser
             question);
     }
 
+    private TypeClauseSyntax ParseMapTypeClause()
+    {
+        // Phase 3.A.4: map type clause `map[K]V` with optional trailing `?`.
+        var mapKeyword = MatchToken(SyntaxKind.MapKeyword);
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var keyType = ParseTypeClause();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var valueType = ParseTypeClause();
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return new TypeClauseSyntax(syntaxTree, mapKeyword, openBracket, keyType, closeBracket, valueType, question);
+    }
+
     private TypeClauseSyntax ParseFunctionTypeClause()
     {
         // Phase 4.7: function type clause `func(T1, T2, ...) R?`. The return
@@ -917,7 +934,8 @@ public class Parser
         if (Current.Kind != SyntaxKind.IdentifierToken &&
             Current.Kind != SyntaxKind.OpenSquareBracketToken &&
             Current.Kind != SyntaxKind.OpenParenthesisToken &&
-            Current.Kind != SyntaxKind.FuncKeyword)
+            Current.Kind != SyntaxKind.FuncKeyword &&
+            Current.Kind != SyntaxKind.MapKeyword)
         {
             return null;
         }
@@ -1772,6 +1790,9 @@ public class Parser
             case SyntaxKind.OpenSquareBracketToken:
                 return ParseArrayCreationExpression();
 
+            case SyntaxKind.MapKeyword:
+                return ParseMapCreationExpression();
+
             case SyntaxKind.FuncKeyword:
                 return ParseFunctionLiteralExpression();
 
@@ -1791,6 +1812,42 @@ public class Parser
         var returnType = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
         return new FunctionLiteralExpressionSyntax(syntaxTree, funcKeyword, openParen, parameters, closeParen, returnType, body);
+    }
+
+    private ExpressionSyntax ParseMapCreationExpression()
+    {
+        // Phase 3.A.4: map literal `map[K]V{k1: v1, k2: v2, …}`.
+        var typeClause = ParseMapTypeClause();
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var entries = ParseMapEntries();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new MapCreationExpressionSyntax(syntaxTree, typeClause, openBrace, entries, closeBrace);
+    }
+
+    private SeparatedSyntaxList<MapEntrySyntax> ParseMapEntries()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var key = ParseExpression();
+            var colon = MatchToken(SyntaxKind.ColonToken);
+            var value = ParseExpression();
+            nodesAndSeparators.Add(new MapEntrySyntax(syntaxTree, key, colon, value));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<MapEntrySyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private ExpressionSyntax ParseArrayCreationExpression()
