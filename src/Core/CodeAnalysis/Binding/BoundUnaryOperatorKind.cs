@@ -40,7 +40,7 @@ public enum BoundUnaryOperatorKind
     ReferenceOf,
 
     /// <summary>
-    /// Used when the BangBangToken (Phase 3.C.3 / ADR-0020) is used as the
+    /// Used when the BangBangToken (Phase 3.C.3 / ADR-0001) is used as the
     /// postfix null-assertion operator. Unwraps a nullable to its underlying
     /// type; throws at runtime when the value is nil.
     /// </summary>

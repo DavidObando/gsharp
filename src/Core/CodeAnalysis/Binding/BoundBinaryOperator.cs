@@ -110,6 +110,19 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
+        // Allowed only when both operands are the SAME type-parameter symbol whose
+        // constraint is `Comparable`. (`any` falls through to "operator undefined".)
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+            && leftType is TypeParameterSymbol ltp && ltp == rightType
+            && ltp.Constraint == TypeParameterConstraint.Comparable)
+        {
+            var cmpKind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                ? BoundBinaryOperatorKind.Equals
+                : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool);
+        }
+
         // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
         if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
         {
@@ -124,7 +137,7 @@ public sealed class BoundBinaryOperator
             }
         }
 
-        // Phase 3.C.2 / ADR-0020: == and != against nil for any nullable type.
+        // Phase 3.C.2 / ADR-0001: == and != against nil for any nullable type.
         if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
             (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)))
         {
@@ -132,7 +145,7 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
         }
 
-        // Phase 3.C.3 / ADR-0020: null-coalescing `?:` returns the left if
+        // Phase 3.C.3 / ADR-0001: null-coalescing `?:` returns the left if
         // non-nil, otherwise the right. Type is the underlying of the left
         // side (when the right is the same underlying or is itself nullable
         // with that underlying).

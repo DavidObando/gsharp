@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -14,6 +16,8 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class StructSymbol : TypeSymbol
 {
+    private static readonly ConcurrentDictionary<(StructSymbol Def, string ArgsKey), StructSymbol> ConstructedCache = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
     /// </summary>
@@ -134,6 +138,7 @@ public sealed class StructSymbol : TypeSymbol
         IsOpen = isOpen;
         BaseClass = baseClass;
         Interfaces = ImmutableArray<InterfaceSymbol>.Empty;
+        Definition = this;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -172,6 +177,18 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
 
+    /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
+    public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
+
+    /// <summary>Gets the type arguments when this is a constructed instance of a generic definition (Phase 4.3 / ADR-0020). Empty for generic definitions and for non-generic types.</summary>
+    public ImmutableArray<TypeSymbol> TypeArguments { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+
+    /// <summary>Gets a value indicating whether this is a generic definition (has type parameters and no type arguments).</summary>
+    public bool IsGenericDefinition => !TypeParameters.IsDefaultOrEmpty && TypeArguments.IsDefaultOrEmpty;
+
+    /// <summary>Gets the original generic definition when this is a constructed instance; otherwise <c>this</c>.</summary>
+    public StructSymbol Definition { get; private set; }
+
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
     /// <param name="interfaces">The interfaces this class implements directly.</param>
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
@@ -184,6 +201,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3 / ADR-0020). Intended to be called once by the binder during <c>BindStructDeclaration</c> before any constructed instance is materialized.</summary>
+    /// <param name="typeParameters">The bound type parameters in declared order.</param>
+    public void SetTypeParameters(ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        TypeParameters = typeParameters;
     }
 
     /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>
@@ -282,5 +306,109 @@ public sealed class StructSymbol : TypeSymbol
         field = null;
         declaringType = null;
         return false;
+    }
+
+    /// <summary>
+    /// Constructs a closed instance of a generic definition with the supplied type arguments
+    /// (Phase 4.3 / ADR-0020). Field types are substituted; identity is cached so two calls
+    /// with the same definition + arguments return the SAME <see cref="StructSymbol"/>
+    /// reference (preserving reference-equality semantics on TypeSymbol).
+    /// </summary>
+    /// <param name="definition">The generic definition to instantiate. Must have <see cref="IsGenericDefinition"/> true; otherwise returned unchanged.</param>
+    /// <param name="typeArguments">The type arguments. Length must match <see cref="TypeParameters"/>.</param>
+    /// <returns>A constructed <see cref="StructSymbol"/> whose <see cref="Definition"/> is the original.</returns>
+    public static StructSymbol Construct(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (definition == null || !definition.IsGenericDefinition)
+        {
+            return definition;
+        }
+
+        var key = BuildArgsKey(typeArguments);
+        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
+    }
+
+    private static string BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var parts = new string[typeArguments.Length];
+        for (var i = 0; i < typeArguments.Length; i++)
+        {
+            parts[i] = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(typeArguments[i]).ToString();
+        }
+
+        return string.Join(",", parts);
+    }
+
+    private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
+        for (var i = 0; i < definition.TypeParameters.Length; i++)
+        {
+            subst[definition.TypeParameters[i]] = typeArguments[i];
+        }
+
+        var substitutedFields = ImmutableArray.CreateBuilder<FieldSymbol>(definition.Fields.Length);
+        foreach (var f in definition.Fields)
+        {
+            substitutedFields.Add(new FieldSymbol(f.Name, SubstituteTypeForConstruction(f.Type, subst), f.Accessibility));
+        }
+
+        var substitutedPrimary = ImmutableArray<ParameterSymbol>.Empty;
+        if (!definition.PrimaryConstructorParameters.IsDefaultOrEmpty)
+        {
+            var b = ImmutableArray.CreateBuilder<ParameterSymbol>(definition.PrimaryConstructorParameters.Length);
+            foreach (var p in definition.PrimaryConstructorParameters)
+            {
+                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst)));
+            }
+
+            substitutedPrimary = b.MoveToImmutable();
+        }
+
+        var constructed = new StructSymbol(
+            definition.Name,
+            substitutedFields.MoveToImmutable(),
+            definition.Accessibility,
+            definition.Declaration,
+            definition.PackageName,
+            definition.IsData,
+            definition.IsClass,
+            substitutedPrimary,
+            definition.IsOpen,
+            definition.BaseClass);
+
+        constructed.Definition = definition;
+        constructed.TypeArguments = typeArguments;
+        constructed.SetInterfaces(definition.Interfaces);
+        constructed.SetMethods(definition.Methods);
+        return constructed;
+    }
+
+    private static TypeSymbol SubstituteTypeForConstruction(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)
+    {
+        if (type is TypeParameterSymbol tp)
+        {
+            return subst.TryGetValue(tp, out var concrete) ? concrete : type;
+        }
+
+        if (type is NullableTypeSymbol n)
+        {
+            var inner = SubstituteTypeForConstruction(n.UnderlyingType, subst);
+            return ReferenceEquals(inner, n.UnderlyingType) ? type : NullableTypeSymbol.Get(inner);
+        }
+
+        if (type is SliceTypeSymbol s)
+        {
+            var inner = SubstituteTypeForConstruction(s.ElementType, subst);
+            return ReferenceEquals(inner, s.ElementType) ? type : SliceTypeSymbol.Get(inner);
+        }
+
+        if (type is ArrayTypeSymbol a)
+        {
+            var inner = SubstituteTypeForConstruction(a.ElementType, subst);
+            return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        return type;
     }
 }

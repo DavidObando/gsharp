@@ -119,6 +119,42 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken closeParenthesisToken,
         TypeClauseSyntax type,
         BlockStatementSyntax body)
+        : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParenthesisToken, receiver, receiverCloseParenthesisToken, identifier, typeParameterList: null, openParenthesisToken, parameters, closeParenthesisToken, type, body)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class with an optional generic type-parameter list (Phase 4.1 / ADR-0020).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">Optional accessibility modifier.</param>
+    /// <param name="openModifier">Optional <c>open</c> modifier.</param>
+    /// <param name="overrideModifier">Optional <c>override</c> modifier.</param>
+    /// <param name="functionKeyword">The func keyword.</param>
+    /// <param name="receiverOpenParenthesisToken">Optional open parenthesis introducing the receiver clause.</param>
+    /// <param name="receiver">Optional receiver parameter.</param>
+    /// <param name="receiverCloseParenthesisToken">Optional close parenthesis terminating the receiver clause.</param>
+    /// <param name="identifier">The function identifier.</param>
+    /// <param name="typeParameterList">Optional generic type-parameter list <c>[T any, U any]</c> (Phase 4.1).</param>
+    /// <param name="openParenthesisToken">The open parenthesis token of the parameter list.</param>
+    /// <param name="parameters">The function's parameters.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token of the parameter list.</param>
+    /// <param name="type">The function's return type.</param>
+    /// <param name="body">The function's body.</param>
+    public FunctionDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier,
+        SyntaxToken functionKeyword,
+        SyntaxToken receiverOpenParenthesisToken,
+        ParameterSyntax receiver,
+        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenthesisToken,
+        TypeClauseSyntax type,
+        BlockStatementSyntax body)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -129,6 +165,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         Receiver = receiver;
         ReceiverCloseParenthesisToken = receiverCloseParenthesisToken;
         Identifier = identifier;
+        TypeParameterList = typeParameterList;
         OpenParenthesisToken = openParenthesisToken;
         Parameters = parameters;
         CloseParenthesisToken = closeParenthesisToken;
@@ -177,6 +214,12 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// Gets the function identifier.
     /// </summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>Gets the optional generic type-parameter list (e.g. <c>[T any, U any]</c>); <c>null</c> for non-generic functions. Phase 4.1 / ADR-0020.</summary>
+    public TypeParameterListSyntax TypeParameterList { get; }
+
+    /// <summary>Gets a value indicating whether this function declares one or more type parameters (Phase 4.1).</summary>
+    public bool IsGeneric => TypeParameterList != null;
 
     /// <summary>
     /// Gets the open parenthesis token.

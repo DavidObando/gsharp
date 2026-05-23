@@ -142,8 +142,11 @@ TrueKeyword
 TryKeyword
 TryStatement
 TypeAliasDeclaration
+TypeArgumentList
 TypeClause
 TypeKeyword
+TypeParameter
+TypeParameterList
 UnaryExpression
 UsingKeyword
 UsingStatement

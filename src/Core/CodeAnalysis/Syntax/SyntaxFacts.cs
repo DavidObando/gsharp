@@ -74,7 +74,7 @@ public static class SyntaxFacts
                 return 2;
 
             case SyntaxKind.PipePipeToken:               // logical or
-            case SyntaxKind.QuestionColonToken:          // Phase 3.C.3 / ADR-0020: null-coalescing
+            case SyntaxKind.QuestionColonToken:          // Phase 3.C.3 / ADR-0001: null-coalescing
                 return 1;
 
             default:

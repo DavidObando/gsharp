@@ -288,4 +288,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>type Box[T any] class { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
+    public TypeParameterListSyntax TypeParameterList { get; set; }
 }

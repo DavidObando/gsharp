@@ -169,4 +169,10 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets or sets the receiver type for an extension function (Phase 3.B.6). <c>null</c> when <see cref="IsExtension"/> is false.</summary>
     public TypeSymbol ExtensionReceiverType { get; set; }
+
+    /// <summary>Gets or sets the generic type parameters declared on this function (Phase 4.1 / ADR-0020). Empty for non-generic functions.</summary>
+    public ImmutableArray<TypeParameterSymbol> TypeParameters { get; set; } = ImmutableArray<TypeParameterSymbol>.Empty;
+
+    /// <summary>Gets a value indicating whether this function declares one or more type parameters (Phase 4.1).</summary>
+    public bool IsGeneric => !TypeParameters.IsDefaultOrEmpty;
 }

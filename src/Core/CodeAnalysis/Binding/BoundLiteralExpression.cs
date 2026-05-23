@@ -22,7 +22,7 @@ public sealed class BoundLiteralExpression : BoundExpression
 
         if (value == null)
         {
-            // Phase 3.C.2 / ADR-0020: the nil literal carries the special
+            // Phase 3.C.2 / ADR-0001: the nil literal carries the special
             // TypeSymbol.Null sentinel until conversion or smart-cast pins it
             // to a concrete nullable type.
             Type = TypeSymbol.Null;

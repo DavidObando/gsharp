@@ -469,6 +469,16 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
+        // Phase 4.3a (interpreter-only): generic type definitions are not yet
+        // emitted to IL. The interpreter substitutes type parameters at bind
+        // time, but CLR generic IL emission is deferred. ADR-0020 tracks the
+        // remaining 4.1b/4.3a-emit work.
+        if (structSym.IsGenericDefinition || !structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            throw new System.NotSupportedException(
+                $"Emitting generic types (here: '{structSym.Name}') is not yet supported. Use the interpreter for generic-type programs until the CLR generic emit pass lands.");
+        }
+
         // Emit field definitions in source order. Each field's signature is a
         // FieldSig encoding the GSharp type symbol.
         FieldDefinitionHandle firstField = default;
@@ -758,6 +768,15 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
+        // Phase 4.1 follow-up: generic-function IL emission lands in 4.1b.
+        // For now throw a clear error at emit time so source that runs under
+        // the interpreter is not silently miscompiled.
+        if (function.IsGeneric)
+        {
+            throw new NotSupportedException(
+                $"Generic function '{function.Name}' cannot yet be lowered to IL (Phase 4.1b will add CLR generic-method emission). Run under the interpreter for now.");
+        }
+
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
@@ -1985,7 +2004,7 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            // Phase 3.C.2 / ADR-0020: `nil` flows into any nullable or
+            // Phase 3.C.2 / ADR-0001: `nil` flows into any nullable or
             // reference-typed slot; the IL value is already ldnull.
             if (from == TypeSymbol.Null && (to is NullableTypeSymbol || (to is StructSymbol ts && ts.IsClass)))
             {
@@ -2260,7 +2279,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLiteral(BoundLiteralExpression literal)
         {
-            // Phase 3.C.2 / ADR-0020: the nil literal is modeled as a null
+            // Phase 3.C.2 / ADR-0001: the nil literal is modeled as a null
             // BoundLiteralExpression.Value; on reference-type or nullable
             // targets it emits as ldnull.
             if (literal.Value is null)
@@ -2616,7 +2635,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)
         {
-            // Phase 3.C.3b / ADR-0020: evaluate the receiver once into a
+            // Phase 3.C.3b / ADR-0001: evaluate the receiver once into a
             // synthetic capture local. If the captured value is null, leave
             // null on the stack and skip the access; otherwise evaluate the
             // access sub-tree, which references the capture local in place

@@ -15,7 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.LanguageConformance;
 
 /// <summary>
-/// Phase 3 exit / ADR-0020: cross-feature integration test for the
+/// Phase 3 exit / ADR-0001: cross-feature integration test for the
 /// `samples/AddressBook.gs` sample. The same sample is also run through the
 /// emit backend by `Compiler.Tests`' SampleConformanceTests; this test
 /// guarantees the interpreter produces the same observable stdout.
