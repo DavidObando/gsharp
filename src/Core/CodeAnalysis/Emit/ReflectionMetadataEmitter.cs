@@ -57,6 +57,13 @@ internal sealed class ReflectionMetadataEmitter
     // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
+    // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
+    // Populated by a pre-pass walker over every user function/entry body.
+    // Each lambda's synthetic FunctionSymbol is registered alongside user
+    // functions in functionsByPackage so it gets a MethodDef row, and its
+    // body is emitted via the same EmitFunction path.
+    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -299,6 +306,35 @@ internal sealed class ReflectionMetadataEmitter
 
         var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
 
+        // Phase 4 emit parity (E1): discover all function literals so they get
+        // MethodDef rows and bodies emitted. Walk every user function body
+        // (including class methods), then attach lambdas to the entry-point
+        // package's <Program> container. Bail on closures — captured-variable
+        // support is a follow-up (closure-class synthesis).
+        var lambdas = this.CollectFunctionLiterals();
+        var lambdaHostPackage = entryPointPackage ?? packages[0];
+        if (lambdas.Count > 0)
+        {
+            if (!functionsByPackage.TryGetValue(lambdaHostPackage, out var hostBucket))
+            {
+                hostBucket = new List<FunctionSymbol>();
+                functionsByPackage[lambdaHostPackage] = hostBucket;
+                packages = packages.Add(lambdaHostPackage);
+            }
+
+            foreach (var literal in lambdas)
+            {
+                if (literal.CapturedVariables.Length > 0)
+                {
+                    throw new NotSupportedException(
+                        $"Function literal '{literal.Function.Name}' captures outer variables ({string.Join(", ", literal.CapturedVariables.Select(v => v.Name))}); closure emit is not yet supported (Phase 4 emit parity E2). Run under the interpreter for now.");
+                }
+
+                this.lambdaBodies[literal.Function] = literal.Body;
+                hostBucket.Add(literal.Function);
+            }
+        }
+
         // Plan method rows AND remember each package's ctor row (the methodList
         // pointer on its <Program> TypeDef). Pre-assign function handles so
         // call sites can be encoded before bodies are written. Class default
@@ -355,7 +391,11 @@ internal sealed class ReflectionMetadataEmitter
 
             foreach (var fn in functionsByPackage[pkg])
             {
-                var body = this.program.Functions[fn];
+                if (!this.program.Functions.TryGetValue(fn, out var body))
+                {
+                    body = this.lambdaBodies[fn];
+                }
+
                 this.EmitFunction(fn, body, isEntryPoint: false);
             }
 
@@ -964,6 +1004,24 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return list;
+    }
+
+    // Phase 4 emit parity (E1): walk every user function body to collect all
+    // BoundFunctionLiteralExpression nodes. Class instance method bodies are
+    // included too. The collector uses BoundTreeRewriter so it reaches every
+    // expression position; the base rewriter does not descend into the lambda's
+    // body (separate lexical scope), so we recurse on Body explicitly to find
+    // nested lambdas.
+    private List<BoundFunctionLiteralExpression> CollectFunctionLiterals()
+    {
+        var sink = new List<BoundFunctionLiteralExpression>();
+        var collector = new LambdaCollector(sink);
+        foreach (var kvp in this.program.Functions)
+        {
+            collector.RewriteStatement(kvp.Value);
+        }
+
+        return sink;
     }
 
     private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
@@ -1946,6 +2004,12 @@ internal sealed class ReflectionMetadataEmitter
             case "System.Object":
                 encoder.Object();
                 break;
+            case "System.IntPtr":
+                encoder.IntPtr();
+                break;
+            case "System.UIntPtr":
+                encoder.UIntPtr();
+                break;
             default:
                 if (type == null)
                 {
@@ -1998,6 +2062,79 @@ internal sealed class ReflectionMetadataEmitter
         else
         {
             this.EncodeClrType(encoder.Type(), type);
+        }
+    }
+
+    // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
+    // GSharp function type. The default ClrType on FunctionTypeSymbol uses
+    // host-runtime `typeof(Func<,>)` (which lives in System.Private.CoreLib);
+    // the emitter must instead reference the *target* framework's
+    // System.Func / System.Action so the produced TypeRef binds to the right
+    // assembly. Type arguments are resolved through references too so
+    // signature encoding stays consistent end-to-end.
+    private Type ResolveDelegateClrType(FunctionTypeSymbol fnType)
+    {
+        bool isVoid = fnType.ReturnType == null || fnType.ReturnType == TypeSymbol.Void;
+        int arity = fnType.ParameterTypes.Length;
+
+        if (isVoid && arity == 0)
+        {
+            return this.references.GetCoreType("System.Action");
+        }
+
+        var typeName = isVoid
+            ? "System.Action`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var openDef = this.references.GetCoreType(typeName);
+
+        var args = new Type[arity + (isVoid ? 0 : 1)];
+        for (int i = 0; i < arity; i++)
+        {
+            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType);
+        }
+
+        if (!isVoid)
+        {
+            args[arity] = this.MapToReferenceClrType(fnType.ReturnType.ClrType);
+        }
+
+        return openDef.MakeGenericType(args);
+    }
+
+    // Map a host-runtime Type onto the MetadataLoadContext type from the
+    // emitter's references when an equivalent exists. Returns the input
+    // unchanged when no mapping is found — non-primitive host types whose
+    // FullName isn't resolvable will keep their original identity (and may
+    // still encode fine via EncodeClrType's primitive matching).
+    private Type MapToReferenceClrType(Type hostType)
+    {
+        if (hostType == null)
+        {
+            return null;
+        }
+
+        if (this.references.TryResolveType(hostType.FullName ?? hostType.Name, out var mapped))
+        {
+            return mapped;
+        }
+
+        return hostType;
+    }
+
+    private sealed class LambdaCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundFunctionLiteralExpression> sink;
+
+        public LambdaCollector(List<BoundFunctionLiteralExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            this.sink.Add(node);
+            this.RewriteStatement(node.Body);
+            return node;
         }
     }
 
@@ -2210,6 +2347,12 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundTupleElementAccessExpression tupleAcc:
                     this.EmitTupleElementAccess(tupleAcc);
+                    break;
+                case BoundFunctionLiteralExpression literal:
+                    this.EmitFunctionLiteral(literal);
+                    break;
+                case BoundIndirectCallExpression indirect:
+                    this.EmitIndirectCall(indirect);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -3070,6 +3213,64 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitInstanceReceiver(access.Receiver);
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(this.outer.GetFieldReference(field));
+        }
+
+        // Phase 4 emit parity (E1): function literal `func(x int) int { return x+1 }`
+        // with no captured variables lowers to:
+        //
+        //   ldnull                            ; the `this` argument of the delegate
+        //   ldftn  <synthesizedStaticMethod>  ; pushes the IntPtr for the body
+        //   newobj Func<int,int>::.ctor(object, IntPtr)
+        //
+        // The synthesized method was registered earlier by CollectFunctionLiterals
+        // and assigned a MethodDef row via functionHandles. The delegate's
+        // constructor is looked up off literal.FunctionType.ClrType — every
+        // Func<>/Action<> shipped by the BCL exposes the single canonical
+        // `(object, IntPtr)` ctor.
+        private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
+        {
+            if (literal.CapturedVariables.Length > 0)
+            {
+                throw new NotSupportedException(
+                    $"Function literal '{literal.Function.Name}' captures outer variables; closure emit is not yet supported.");
+            }
+
+            if (!this.outer.functionHandles.TryGetValue(literal.Function, out var methodHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
+            }
+
+            var delegateType = this.outer.ResolveDelegateClrType(literal.FunctionType);
+            var delegateCtor = delegateType.GetConstructors()[0];
+
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ldftn);
+            this.il.Token(methodHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
+
+        // Phase 4 emit parity (E1): indirect call through a func-typed value.
+        // Evaluates the target (pushes the delegate on the stack), evaluates
+        // each argument, then calls the delegate's `Invoke` method via
+        // `callvirt`.
+        private void EmitIndirectCall(BoundIndirectCallExpression call)
+        {
+            this.EmitExpression(call.Target);
+            foreach (var arg in call.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            var delegateType = this.outer.ResolveDelegateClrType(call.FunctionType);
+
+            var invoke = delegateType.GetMethod("Invoke")
+                ?? throw new InvalidOperationException(
+                    $"Delegate type '{delegateType.FullName}' has no Invoke method.");
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(invoke));
         }
 
         private void EmitInstanceReceiver(BoundExpression receiver)
