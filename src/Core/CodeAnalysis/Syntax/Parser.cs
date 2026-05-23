@@ -667,11 +667,13 @@ public class Parser
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
-            return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier);
+            var arrayQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+            return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier, arrayQuestion);
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        return new TypeClauseSyntax(syntaxTree, identifier);
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, identifier, question);
     }
 
     private TypeClauseSyntax ParseOptionalTypeClause()

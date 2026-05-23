@@ -902,7 +902,7 @@ public sealed class Binder
         return new BoundVariableDeclaration(variable, convertedInitializer);
     }
 
-    private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
+    private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)
     {
         if (syntax == null)
         {
@@ -933,6 +933,17 @@ public sealed class Binder
         }
 
         return ArrayTypeSymbol.Get(element, length);
+    }
+
+    private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
+    {
+        var bound = BindNonNullableTypeClause(syntax);
+        if (bound == null || !syntax.IsNullable)
+        {
+            return bound;
+        }
+
+        return NullableTypeSymbol.Get(bound);
     }
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)

@@ -644,6 +644,12 @@ public sealed class Evaluator
         {
             return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
         }
+        else if (node.Type is NullableTypeSymbol)
+        {
+            // Phase 3.C.1: nullability is a bind-time annotation; the runtime
+            // representation is identical to the underlying type.
+            return value;
+        }
         else
         {
             throw new EvaluatorException($"Unexpected type {node.Type}", node);

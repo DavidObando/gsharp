@@ -58,6 +58,7 @@ public enum SyntaxKind
     EqualsEqualsToken,
     BangToken,
     BangEqualsToken,
+    QuestionToken,
     LessToken,
     LessOrEqualsToken,
     LeftArrowToken,

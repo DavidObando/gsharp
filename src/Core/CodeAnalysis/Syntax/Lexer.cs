@@ -287,6 +287,10 @@ public sealed class Lexer
                 }
 
                 break;
+            case '?':
+                kind = SyntaxKind.QuestionToken;
+                position++;
+                break;
             case '<':
                 position++;
                 if (Current == '=')

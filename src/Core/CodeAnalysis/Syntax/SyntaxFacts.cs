@@ -322,6 +322,8 @@ public static class SyntaxFacts
                 return "!";
             case SyntaxKind.BangEqualsToken:
                 return "!=";
+            case SyntaxKind.QuestionToken:
+                return "?";
             case SyntaxKind.LessToken:
                 return "<";
             case SyntaxKind.LessOrEqualsToken:
