@@ -108,6 +108,32 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a map type <c>map[K]V?</c> (Phase 3.A.4).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="mapKeyword">The <c>map</c> keyword.</param>
+    /// <param name="mapOpenBracketToken">The <c>[</c> introducing the key type.</param>
+    /// <param name="mapKeyType">The key type clause.</param>
+    /// <param name="mapCloseBracketToken">The <c>]</c> closing the key type.</param>
+    /// <param name="mapValueType">The value type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken mapKeyword,
+        SyntaxToken mapOpenBracketToken,
+        TypeClauseSyntax mapKeyType,
+        SyntaxToken mapCloseBracketToken,
+        TypeClauseSyntax mapValueType,
+        SyntaxToken questionToken)
+        : base(syntaxTree)
+    {
+        MapKeyword = mapKeyword;
+        MapOpenBracketToken = mapOpenBracketToken;
+        MapKeyType = mapKeyType;
+        MapCloseBracketToken = mapCloseBracketToken;
+        MapValueType = mapValueType;
+        QuestionToken = questionToken;
+    }
+
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a function type <c>func(T1, T2, ...) R?</c> (Phase 4.7).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="funcKeyword">The <c>func</c> keyword.</param>
@@ -196,4 +222,22 @@ public sealed class TypeClauseSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this clause carries a type-argument list <c>Foo[T1, T2]</c> (Phase 4.3c).</summary>
     public bool HasTypeArguments => TypeArgumentOpenBracketToken != null;
+
+    /// <summary>Gets the <c>map</c> keyword for map types, or <c>null</c>.</summary>
+    public SyntaxToken MapKeyword { get; }
+
+    /// <summary>Gets the <c>[</c> opening the map key type, or <c>null</c>.</summary>
+    public SyntaxToken MapOpenBracketToken { get; }
+
+    /// <summary>Gets the map key type clause, or <c>null</c>.</summary>
+    public TypeClauseSyntax MapKeyType { get; }
+
+    /// <summary>Gets the <c>]</c> closing the map key type, or <c>null</c>.</summary>
+    public SyntaxToken MapCloseBracketToken { get; }
+
+    /// <summary>Gets the map value type clause, or <c>null</c>.</summary>
+    public TypeClauseSyntax MapValueType { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K]V</c> (Phase 3.A.4).</summary>
+    public bool IsMap => MapKeyword != null;
 }

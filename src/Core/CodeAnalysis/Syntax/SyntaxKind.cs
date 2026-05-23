@@ -135,6 +135,8 @@ public enum SyntaxKind
     CallExpression,
     AccessorExpression,
     ArrayCreationExpression,
+    MapCreationExpression,
+    MapEntry,
     IndexExpression,
     IndexAssignmentExpression,
     PackageDeclaration,

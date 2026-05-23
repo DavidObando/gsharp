@@ -87,6 +87,8 @@ LessOrEqualsToken
 LessToken
 LetKeyword
 LiteralExpression
+MapCreationExpression
+MapEntry
 MapKeyword
 MinusEqualsToken
 MinusMinusToken
@@ -191,6 +193,8 @@ IndirectCallExpression
 LabelStatement
 LenExpression
 LiteralExpression
+MapDeleteExpression
+MapLiteralExpression
 NullConditionalAccessExpression
 ReturnStatement
 StructLiteralExpression
