@@ -578,17 +578,33 @@ public sealed class Evaluator
         var method = node.Method;
         if (receiverValue is StructValue sv && sv.StructType != null)
         {
-            for (var t = sv.StructType; t != null; t = t.BaseClass)
+            // Phase 3.B.4: when the static receiver is an interface, dispatch
+            // to the runtime type's implementation (most-derived wins).
+            if (method.ReceiverType is InterfaceSymbol)
             {
-                if (t == method.ReceiverType)
+                for (var t = sv.StructType; t != null; t = t.BaseClass)
                 {
-                    break;
+                    if (t.TryGetMethod(method.Name, out var implMethod))
+                    {
+                        method = implMethod;
+                        break;
+                    }
                 }
-
-                if (t.TryGetMethod(method.Name, out var overrideMethod) && overrideMethod.IsOverride)
+            }
+            else
+            {
+                for (var t = sv.StructType; t != null; t = t.BaseClass)
                 {
-                    method = overrideMethod;
-                    break;
+                    if (t == method.ReceiverType)
+                    {
+                        break;
+                    }
+
+                    if (t.TryGetMethod(method.Name, out var overrideMethod) && overrideMethod.IsOverride)
+                    {
+                        method = overrideMethod;
+                        break;
+                    }
                 }
             }
         }

@@ -214,6 +214,21 @@ public class Parser
             return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
         }
 
+        if (Current.Kind == SyntaxKind.InterfaceKeyword)
+        {
+            if (openModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.InterfaceKeyword);
+            }
+
+            if (dataKeyword != null)
+            {
+                Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+            }
+
+            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier);
+        }
+
         if (openModifier != null)
         {
             Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
@@ -279,11 +294,13 @@ public class Parser
             primaryCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         }
 
-        // Phase 3.B.3 sub-step 3: optional base-class clause `: Base`.
-        // Only valid for classes; struct types diagnose. Resolution and
-        // openness checks are performed in the binder.
+        // Phase 3.B.3 sub-step 3: optional base clause `: Base`.
+        // Phase 3.B.4 extends this to `: Base, IFoo, IBar` — a comma-separated
+        // list. The binder classifies each identifier as either the base class
+        // (at most one, must come first) or an implemented interface.
         SyntaxToken baseColon = null;
         SyntaxToken baseTypeIdentifier = null;
+        var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
         if (Current.Kind == SyntaxKind.ColonToken)
         {
             if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
@@ -293,6 +310,13 @@ public class Parser
 
             baseColon = MatchToken(SyntaxKind.ColonToken);
             baseTypeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+
+            while (Current.Kind == SyntaxKind.CommaToken)
+            {
+                NextToken();
+                var next = MatchToken(SyntaxKind.IdentifierToken);
+                additionalBaseIdentifiers.Add(next);
+            }
         }
 
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -389,10 +413,85 @@ public class Parser
             primaryCtorCloseParen,
             baseColon,
             baseTypeIdentifier,
+            additionalBaseIdentifiers.ToImmutable(),
             openBrace,
             fields.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
+    }
+
+    private InterfaceDeclarationSyntax ParseInterfaceDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier)
+    {
+        var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            // Per ADR-0018, interface members are method signatures only.
+            // No accessibility / open / override modifiers are accepted.
+            if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                methods.Add(ParseInterfaceMethodSignature());
+            }
+            else
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                NextToken();
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new InterfaceDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword,
+            identifier,
+            interfaceKeyword,
+            openBrace,
+            methods.ToImmutable(),
+            closeBrace);
+    }
+
+    private FunctionDeclarationSyntax ParseInterfaceMethodSignature()
+    {
+        var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var type = ParseOptionalTypeClause();
+
+        // ADR-0018: interface methods carry no body. Diagnose if one appears,
+        // then consume it so the rest of the body parses cleanly.
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            Diagnostics.ReportInterfaceMethodHasBody(identifier.Location, identifier.Text);
+            ParseBlockStatement();
+        }
+
+        return new FunctionDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier: null,
+            openModifier: null,
+            overrideModifier: null,
+            functionKeyword,
+            identifier,
+            openParenthesisToken,
+            parameters,
+            closeParenthesisToken,
+            type,
+            body: null);
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

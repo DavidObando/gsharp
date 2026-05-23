@@ -133,6 +133,7 @@ public sealed class StructSymbol : TypeSymbol
         PrimaryConstructorParameters = primaryConstructorParameters;
         IsOpen = isOpen;
         BaseClass = baseClass;
+        Interfaces = ImmutableArray<InterfaceSymbol>.Empty;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -165,8 +166,18 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
     public StructSymbol BaseClass { get; }
 
+    /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
+    public ImmutableArray<InterfaceSymbol> Interfaces { get; private set; }
+
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
+    /// <param name="interfaces">The interfaces this class implements directly.</param>
+    public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
+    {
+        Interfaces = interfaces;
+    }
 
     /// <summary>Sets <see cref="Methods"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
     /// <param name="methods">The bound method symbols owned by this class.</param>

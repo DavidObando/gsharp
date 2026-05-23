@@ -46,10 +46,10 @@ public sealed class Binder
                 // to `this.<field>` at name resolution time.
                 // Sub-step 3: walk inheritance chain so inherited fields are
                 // also accessible via bare name. Derived shadowing wins.
-                if (function.ReceiverType != null)
+                if (function.ReceiverType is StructSymbol receiverStruct)
                 {
                     var seenFields = new HashSet<string>();
-                    for (var t = function.ReceiverType; t != null; t = t.BaseClass)
+                    for (var t = receiverStruct; t != null; t = t.BaseClass)
                     {
                         if (t.Fields.IsDefaultOrEmpty)
                         {
@@ -158,6 +158,14 @@ public sealed class Binder
         foreach (var typeAlias in typeAliasDeclarations)
         {
             binder.BindTypeAliasDeclaration(typeAlias);
+        }
+
+        var interfaceDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                               .OfType<InterfaceDeclarationSyntax>();
+        foreach (var ifaceSyntax in interfaceDeclarations)
+        {
+            var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
+            binder.BindInterfaceDeclaration(ifaceSyntax, owningPackage);
         }
 
         var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -449,11 +457,13 @@ public sealed class Binder
             Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
         }
 
-        // Phase 3.B.3 sub-step 3: resolve the optional base-class clause.
-        // Declaration order rules: the base class must be declared (and bound
-        // into the type-alias scope) before the derived class. Forward
-        // references are not supported in Phase 3.
+        // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
+        // Each identifier is either the (single) base class or an interface
+        // implemented by this class. A base class, if present, must be the
+        // first identifier. Declaration order rules apply: base/interfaces
+        // must be declared before this type.
         StructSymbol baseClassSymbol = null;
+        var implementedInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
         if (syntax.HasBaseType)
         {
             if (!syntax.IsClass)
@@ -462,22 +472,48 @@ public sealed class Binder
             }
             else
             {
-                var baseName = syntax.BaseTypeIdentifier.Text;
-                if (!scope.TryLookupTypeAlias(baseName, out var resolvedBase))
+                var allBaseTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+                allBaseTokens.Add(syntax.BaseTypeIdentifier);
+                if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
                 {
-                    Diagnostics.ReportUnableToFindType(syntax.BaseTypeIdentifier.Location, baseName);
+                    allBaseTokens.AddRange(syntax.AdditionalBaseTypeIdentifiers);
                 }
-                else if (!(resolvedBase is StructSymbol baseStruct) || !baseStruct.IsClass)
+
+                for (var i = 0; i < allBaseTokens.Count; i++)
                 {
-                    Diagnostics.ReportUnableToFindType(syntax.BaseTypeIdentifier.Location, baseName);
-                }
-                else if (!baseStruct.IsOpen)
-                {
-                    Diagnostics.ReportBaseClassNotOpen(syntax.BaseTypeIdentifier.Location, baseName);
-                }
-                else
-                {
-                    baseClassSymbol = baseStruct;
+                    var token = allBaseTokens[i];
+                    var baseName = token.Text;
+                    if (!scope.TryLookupTypeAlias(baseName, out var resolved))
+                    {
+                        Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                        continue;
+                    }
+
+                    if (resolved is InterfaceSymbol iface)
+                    {
+                        implementedInterfaces.Add(iface);
+                        continue;
+                    }
+
+                    if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
+                    {
+                        if (i != 0)
+                        {
+                            Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                            continue;
+                        }
+
+                        if (!baseStruct.IsOpen)
+                        {
+                            Diagnostics.ReportBaseClassNotOpen(token.Location, baseName);
+                            continue;
+                        }
+
+                        baseClassSymbol = baseStruct;
+                        continue;
+                    }
+
+                    Diagnostics.ReportUnableToFindType(token.Location, baseName);
                 }
             }
         }
@@ -588,6 +624,83 @@ public sealed class Binder
 
             structSymbol.SetMethods(methodsBuilder.ToImmutable());
         }
+
+        // Phase 3.B.4: validate interface implementation. Walks each
+        // implemented interface and confirms the class (including inherited
+        // methods) provides a same-name, same-signature method.
+        if (implementedInterfaces.Count > 0)
+        {
+            structSymbol.SetInterfaces(implementedInterfaces.ToImmutable());
+            foreach (var iface in implementedInterfaces)
+            {
+                foreach (var imethod in iface.Methods)
+                {
+                    if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)
+                        || !SignaturesMatch(imethod, impl.Parameters, impl.Type))
+                    {
+                        Diagnostics.ReportInterfaceMethodNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol.Name,
+                            iface.Name,
+                            imethod.Name);
+                    }
+                }
+            }
+        }
+    }
+
+    private void BindInterfaceDeclaration(InterfaceDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
+
+        if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return;
+        }
+
+        var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var seenNames = new HashSet<string>();
+        foreach (var methodSyntax in syntax.Methods)
+        {
+            var methodName = methodSyntax.Identifier.Text;
+            if (!seenNames.Add(methodName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(methodSyntax.Identifier.Location, methodName);
+                continue;
+            }
+
+            var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+            var seenParameterNames = new HashSet<string>();
+            foreach (var parameterSyntax in methodSyntax.Parameters)
+            {
+                var parameterName = parameterSyntax.Identifier.Text;
+                var parameterType = BindTypeClause(parameterSyntax.Type);
+                if (!seenParameterNames.Add(parameterName))
+                {
+                    Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                }
+                else
+                {
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                }
+            }
+
+            var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+            var methodSymbol = new FunctionSymbol(
+                methodName,
+                parameters.ToImmutable(),
+                returnType,
+                methodSyntax,
+                package,
+                Accessibility.Public,
+                receiverType: null);
+            methodsBuilder.Add(methodSymbol);
+        }
+
+        interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
     }
 
     private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
@@ -1954,6 +2067,13 @@ public sealed class Binder
 
         if (receiver == null || receiver.Type?.ClrType == null)
         {
+            // Phase 3.B.4: dispatch to a user-defined interface method when
+            // the static receiver type is an interface.
+            if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
+            {
+                return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce);
+            }
+
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
             if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethodIncludingInherited(methodName, out var userMethod))

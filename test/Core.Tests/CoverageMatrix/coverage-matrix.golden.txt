@@ -74,6 +74,7 @@ ImportDeclaration
 ImportKeyword
 IndexAssignmentExpression
 IndexExpression
+InterfaceDeclaration
 InterfaceKeyword
 InternalKeyword
 InterpolatedStringExpression

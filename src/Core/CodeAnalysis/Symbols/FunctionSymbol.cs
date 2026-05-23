@@ -76,6 +76,30 @@ public sealed class FunctionSymbol : Symbol
         StructSymbol receiverType,
         bool isOpen,
         bool isOverride)
+        : this(name, parameters, type, declaration, package, accessibility, (TypeSymbol)receiverType, isOpen, isOverride)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="FunctionSymbol"/> class with a generic <see cref="TypeSymbol"/> receiver (Phase 3.B.4 — supports interface methods).</summary>
+    /// <param name="name">The function name.</param>
+    /// <param name="parameters">The function parameters.</param>
+    /// <param name="type">The return type.</param>
+    /// <param name="declaration">The declaring syntax.</param>
+    /// <param name="package">The owning package.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="receiverType">The receiver type for instance methods, or <c>null</c> for top-level functions.</param>
+    /// <param name="isOpen">Whether the method is declared <c>open</c> (overridable).</param>
+    /// <param name="isOverride">Whether the method overrides an inherited base method.</param>
+    public FunctionSymbol(
+        string name,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol type,
+        FunctionDeclarationSyntax declaration,
+        PackageSymbol package,
+        Accessibility accessibility,
+        TypeSymbol receiverType,
+        bool isOpen = false,
+        bool isOverride = false)
         : base(name)
     {
         Parameters = parameters;
@@ -123,7 +147,7 @@ public sealed class FunctionSymbol : Symbol
     /// method (Phase 3.B.3 sub-step 2b). <c>null</c> for top-level functions
     /// and static methods.
     /// </summary>
-    public StructSymbol ReceiverType { get; }
+    public TypeSymbol ReceiverType { get; }
 
     /// <summary>Gets a value indicating whether this function is an instance method on a user-defined class.</summary>
     public bool IsInstanceMethod => ReceiverType != null;

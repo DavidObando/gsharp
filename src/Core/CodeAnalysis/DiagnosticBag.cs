@@ -553,6 +553,24 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, $"Override of method '{methodName}' must match the base method's parameter types and return type.");
     }
 
+    /// <summary>Reports an interface method declared with a body (ADR-0018: Phase 3 interfaces are signature-only).</summary>
+    /// <param name="location">The text location of the offending method identifier.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
+    {
+        Report(location, $"Interface method '{methodName}' may not have a body in this version of GSharp; see ADR-0018.");
+    }
+
+    /// <summary>Reports a class that fails to implement an interface method.</summary>
+    /// <param name="location">The text location of the class identifier.</param>
+    /// <param name="className">The implementing class.</param>
+    /// <param name="interfaceName">The interface name.</param>
+    /// <param name="methodName">The missing method.</param>
+    public void ReportInterfaceMethodNotImplemented(TextLocation location, string className, string interfaceName, string methodName)
+    {
+        Report(location, $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);

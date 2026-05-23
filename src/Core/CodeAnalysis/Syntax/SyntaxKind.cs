@@ -159,6 +159,7 @@ public enum SyntaxKind
     CatchKeyword,
     FinallyKeyword,
     StructDeclaration,
+    InterfaceDeclaration,
     FieldDeclaration,
     StructLiteralExpression,
     FieldInitializer,
