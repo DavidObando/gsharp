@@ -165,6 +165,7 @@ BinaryExpression
 BlockStatement
 CallExpression
 CapExpression
+ClrConstructorCallExpression
 ConditionalGotoStatement
 ConstructorCallExpression
 ConversionExpression

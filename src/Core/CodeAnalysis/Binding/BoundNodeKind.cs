@@ -54,6 +54,7 @@ public enum BoundNodeKind
     TupleElementAccessExpression,
     FunctionLiteralExpression,
     IndirectCallExpression,
+    ClrConstructorCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

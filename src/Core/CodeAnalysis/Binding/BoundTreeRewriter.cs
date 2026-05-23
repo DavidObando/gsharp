@@ -338,6 +338,8 @@ public abstract class BoundTreeRewriter
                 return RewriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node);
             case BoundNodeKind.IndirectCallExpression:
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
+            case BoundNodeKind.ClrConstructorCallExpression:
+                return RewriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -702,6 +704,34 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundConstructorCallExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a CLR constructor call (Phase 4 exit).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrConstructorCallExpression(BoundClrConstructorCallExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        return builder == null ? node : new BoundClrConstructorCallExpression(node.ClrType, node.Constructor, builder.ToImmutable(), node.Type);
     }
 
     /// <summary>Rewrites an instance-method call on a user-defined class.</summary>
