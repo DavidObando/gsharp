@@ -340,6 +340,12 @@ public abstract class BoundTreeRewriter
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
             case BoundNodeKind.ClrConstructorCallExpression:
                 return RewriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node);
+            case BoundNodeKind.ClrPropertyAccessExpression:
+                return RewriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node);
+            case BoundNodeKind.ClrIndexExpression:
+                return RewriteClrIndexExpression((BoundClrIndexExpression)node);
+            case BoundNodeKind.ClrIndexAssignmentExpression:
+                return RewriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -732,6 +738,85 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundClrConstructorCallExpression(node.ClrType, node.Constructor, builder.ToImmutable(), node.Type);
+    }
+
+    /// <summary>Rewrites a CLR property/field access on a CLR receiver.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        return receiver == node.Receiver ? node : new BoundClrPropertyAccessExpression(receiver, node.Member, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR indexer read.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrIndexExpression(BoundClrIndexExpression node)
+    {
+        var target = RewriteExpression(node.Target);
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        if (target == node.Target && builder == null)
+        {
+            return node;
+        }
+
+        var args = builder?.ToImmutable() ?? node.Arguments;
+        return new BoundClrIndexExpression(target, node.Indexer, args, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR indexer write.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        var value = RewriteExpression(node.Value);
+        if (builder == null && value == node.Value)
+        {
+            return node;
+        }
+
+        var args = builder?.ToImmutable() ?? node.Arguments;
+        return new BoundClrIndexAssignmentExpression(node.Target, node.Indexer, args, value, node.Type);
     }
 
     /// <summary>Rewrites an instance-method call on a user-defined class.</summary>

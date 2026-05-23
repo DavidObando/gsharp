@@ -159,6 +159,15 @@ public static class BoundNodePrinter
             case BoundNodeKind.ClrConstructorCallExpression:
                 WriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ClrPropertyAccessExpression:
+                WriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node, writer);
+                break;
+            case BoundNodeKind.ClrIndexExpression:
+                WriteClrIndexExpression((BoundClrIndexExpression)node, writer);
+                break;
+            case BoundNodeKind.ClrIndexAssignmentExpression:
+                WriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -662,6 +671,53 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Member.Name);
+    }
+
+    private static void WriteClrIndexExpression(BoundClrIndexExpression node, IndentedTextWriter writer)
+    {
+        node.Target.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+    }
+
+    private static void WriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Target.Name);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
     }
 
     private static void WriteUserInstanceCallExpression(BoundUserInstanceCallExpression node, IndentedTextWriter writer)

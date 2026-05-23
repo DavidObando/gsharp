@@ -3451,6 +3451,29 @@ public sealed class Binder
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
                     return new BoundErrorExpression();
                 }
+                else if (receiver != null && receiver.Type is ImportedTypeSymbol && receiver.Type.ClrType != null)
+                {
+                    // Phase 4 exit: read a public instance property or field on
+                    // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
+                    // `kvp.Key`). Static members are reached through
+                    // ImportedClassSymbol; this path covers instances.
+                    var clrReceiverType = receiver.Type.ClrType;
+                    var memberName = ne.IdentifierToken.Text;
+                    var prop = clrReceiverType.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
+                    {
+                        return new BoundClrPropertyAccessExpression(receiver, prop, TypeSymbol.FromClrType(prop.PropertyType));
+                    }
+
+                    var fld = clrReceiverType.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (fld != null)
+                    {
+                        return new BoundClrPropertyAccessExpression(receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+                    return new BoundErrorExpression();
+                }
                 else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
@@ -3689,12 +3712,21 @@ public sealed class Binder
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
     {
         var target = BindExpression(syntax.Target);
-        var index = BindConversion(syntax.Index, TypeSymbol.Int);
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
+            var index = BindConversion(syntax.Index, TypeSymbol.Int);
             return new BoundIndexExpression(target, index, element);
+        }
+
+        // Phase 4 exit: CLR indexer read on an imported reference type
+        // (e.g. `d["k"]` on Dictionary[string, int]). Pick a public
+        // instance indexer (a `PropertyInfo` whose `GetIndexParameters()`
+        // matches the single argument by assignability).
+        if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
+        {
+            return new BoundClrIndexExpression(target, idxProp, idxArgs, TypeSymbol.FromClrType(idxProp.PropertyType));
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -3715,19 +3747,75 @@ public sealed class Binder
         }
 
         var element = GetIndexElementType(variable.Type);
-        if (element == null)
+        if (element != null)
         {
-            if (variable.Type != TypeSymbol.Error)
-            {
-                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
-            }
-
-            return new BoundErrorExpression();
+            var index = BindConversion(syntax.Index, TypeSymbol.Int);
+            var value = BindConversion(syntax.Value, element);
+            return new BoundIndexAssignmentExpression(variable, index, value, element);
         }
 
-        var index = BindConversion(syntax.Index, TypeSymbol.Int);
-        var value = BindConversion(syntax.Value, element);
-        return new BoundIndexAssignmentExpression(variable, index, value, element);
+        // Phase 4 exit: CLR indexer write on an imported reference type
+        // (e.g. `d["k"] = 1` on Dictionary[string, int]).
+        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
+        {
+            if (!idxProp.CanWrite)
+            {
+                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                return new BoundErrorExpression();
+            }
+
+            var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
+            var boundValue = BindConversion(syntax.Value, valueType);
+            return new BoundClrIndexAssignmentExpression(variable, idxProp, idxArgs, boundValue, valueType);
+        }
+
+        if (variable.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+        }
+
+        return new BoundErrorExpression();
+    }
+
+    private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)
+    {
+        indexer = null;
+        boundArguments = ImmutableArray<BoundExpression>.Empty;
+
+        var bound = ImmutableArray.CreateBuilder<BoundExpression>(argSyntaxes.Count);
+        for (var i = 0; i < argSyntaxes.Count; i++)
+        {
+            bound.Add(BindExpression(argSyntaxes[i]));
+        }
+
+        foreach (var prop in clrTarget.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var ps = prop.GetIndexParameters();
+            if (ps.Length != bound.Count)
+            {
+                continue;
+            }
+
+            var ok = true;
+            for (var i = 0; i < ps.Length; i++)
+            {
+                var argClr = bound[i].Type?.ClrType;
+                if (argClr == null || !ClrTypeUtilities.IsAssignableByName(ps[i].ParameterType, argClr))
+                {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok)
+            {
+                indexer = prop;
+                boundArguments = bound.ToImmutable();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static TypeSymbol GetIndexElementType(TypeSymbol type)
