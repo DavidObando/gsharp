@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -215,6 +216,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
                 BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
+                BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -790,8 +792,48 @@ public sealed class Evaluator
 
             this.locals.Pop();
 
+            if (node.Function.IsAsync)
+            {
+                return WrapAsyncResult(node.Function.Type, result);
+            }
+
             return result;
         }
+    }
+
+    private static object WrapAsyncResult(TypeSymbol declaredReturn, object value)
+    {
+        if (declaredReturn == TypeSymbol.Void || declaredReturn == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var clr = declaredReturn.ClrType ?? typeof(object);
+        var method = typeof(Task).GetMethod(nameof(Task.FromResult)).MakeGenericMethod(clr);
+        return method.Invoke(null, new[] { value });
+    }
+
+    private object EvaluateAwaitExpression(BoundAwaitExpression node)
+    {
+        var operand = EvaluateExpression(node.Expression);
+        if (operand is not Task task)
+        {
+            throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
+        }
+
+        task.GetAwaiter().GetResult();
+
+        var taskType = task.GetType();
+        if (taskType.IsGenericType)
+        {
+            var resultProperty = taskType.GetProperty("Result");
+            if (resultProperty != null)
+            {
+                return resultProperty.GetValue(task);
+            }
+        }
+
+        return null;
     }
 
     private object EvaluateUserInstanceCallExpression(BoundUserInstanceCallExpression node)

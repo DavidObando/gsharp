@@ -81,6 +81,8 @@ public enum SyntaxKind
     IdentifierToken,
 
     // Reserved keywords
+    AsyncKeyword,
+    AwaitKeyword,
     BreakKeyword,
     CaseKeyword,
     ChanKeyword,
@@ -180,6 +182,7 @@ public enum SyntaxKind
     TupleLiteralExpression,
     TupleDeconstructionStatement,
     FunctionLiteralExpression,
+    AwaitExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

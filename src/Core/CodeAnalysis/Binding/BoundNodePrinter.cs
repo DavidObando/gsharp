@@ -177,6 +177,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ClrIndexAssignmentExpression:
                 WriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node, writer);
                 break;
+            case BoundNodeKind.AwaitExpression:
+                WriteAwaitExpression((BoundAwaitExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -522,6 +525,13 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         node.Expression.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAwaitExpression(BoundAwaitExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.AwaitKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
     }
 
     private static void WriteImportedCallExpression(BoundImportedCallExpression node, IndentedTextWriter writer)

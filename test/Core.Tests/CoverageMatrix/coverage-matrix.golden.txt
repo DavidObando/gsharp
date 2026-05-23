@@ -11,6 +11,9 @@ AmpersandHatToken
 AmpersandToken
 ArrayCreationExpression
 AssignmentExpression
+AsyncKeyword
+AwaitExpression
+AwaitKeyword
 BadToken
 BangBangToken
 BangEqualsToken
@@ -164,6 +167,7 @@ WhitespaceToken
 AppendExpression
 ArrayCreationExpression
 AssignmentExpression
+AwaitExpression
 BinaryExpression
 BlockStatement
 CallExpression
