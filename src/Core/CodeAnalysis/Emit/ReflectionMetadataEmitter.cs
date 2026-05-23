@@ -849,15 +849,13 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
-        // Phase 4.1 follow-up: generic-function IL emission lands in 4.1b.
-        // For now throw a clear error at emit time so source that runs under
-        // the interpreter is not silently miscompiled.
-        if (function.IsGeneric)
-        {
-            throw new NotSupportedException(
-                $"Generic function '{function.Name}' cannot yet be lowered to IL (Phase 4.1b will add CLR generic-method emission). Run under the interpreter for now.");
-        }
-
+        // Phase 4 emit parity (F1): generic functions are emitted with a
+        // type-erased signature — each open type parameter is encoded as
+        // System.Object via EncodeTypeSymbol. Call sites insert the box /
+        // unbox.any around the boundary. This matches the interpreter's
+        // type-erased semantics. ADR-0004 still calls for CLR reified
+        // generics as the long-term goal; F2 will widen to GenericParam +
+        // MVAR/VAR encoding and add a MethodSpec at call sites.
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
@@ -2056,6 +2054,17 @@ internal sealed class ReflectionMetadataEmitter
         {
             throw new InvalidOperationException("Use ReturnTypeEncoder.Void() for void returns.");
         }
+        else if (type is TypeParameterSymbol)
+        {
+            // Phase 4 emit parity (F1, type-erased): generic function emit
+            // currently follows the interpreter's type-erased model — each
+            // open type parameter is encoded as System.Object. Call sites
+            // insert box / unbox.any around the boundary so value-type
+            // arguments and value-typed returns round-trip correctly.
+            // ADR-0004 mandates CLR reified generics as the long-term goal;
+            // a follow-up will add GenericParam rows and MVAR/VAR encoding.
+            encoder.Object();
+        }
         else if (type is ArrayTypeSymbol arr)
         {
             EncodeTypeSymbol(encoder.SZArray(), arr.ElementType);
@@ -2093,6 +2102,29 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EncodeTypeSymbol(encoder.Type(), type);
         }
+    }
+
+    // Phase 4 emit parity (F1): used by call sites to decide whether a value
+    // crossing the open-generic boundary needs box / unbox.any. Mirrors the
+    // CLR's value-type predicate over GSharp type symbols.
+    private static bool IsValueTypeSymbol(TypeSymbol type)
+    {
+        if (type == TypeSymbol.Int || type == TypeSymbol.Bool)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        if (type?.ClrType != null && type.ClrType.IsValueType)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private void EncodeClrType(SignatureTypeEncoder encoder, Type type)
@@ -2438,9 +2470,24 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitBinary(b);
                     break;
                 case BoundCallExpression call:
-                    foreach (var arg in call.Arguments)
+                    for (int i = 0; i < call.Arguments.Length; i++)
                     {
+                        var arg = call.Arguments[i];
                         this.EmitExpression(arg);
+
+                        // Phase 4 emit parity (F1, type-erased generics):
+                        // a parameter typed as an open T receives System.Object
+                        // in the emitted signature. Value-type arguments must
+                        // be boxed at the call boundary so the call's stack
+                        // shape matches the signature.
+                        if (i < call.Function.Parameters.Length
+                            && call.Function.Parameters[i].Type is TypeParameterSymbol
+                            && arg.Type is not TypeParameterSymbol
+                            && IsValueTypeSymbol(arg.Type))
+                        {
+                            this.il.OpCode(ILOpCode.Box);
+                            this.il.Token(this.outer.GetElementTypeToken(arg.Type));
+                        }
                     }
 
                     if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle))
@@ -2450,6 +2497,20 @@ internal sealed class ReflectionMetadataEmitter
                     }
 
                     this.il.Call(fnHandle);
+
+                    // Phase 4 emit parity (F1, type-erased generics): a return
+                    // typed as an open T is encoded as System.Object. If the
+                    // call's substituted return type is a value type, unbox
+                    // the result so the rest of the IL sees the expected
+                    // primitive on stack.
+                    if (call.Function.Type is TypeParameterSymbol
+                        && call.Type is not TypeParameterSymbol
+                        && IsValueTypeSymbol(call.Type))
+                    {
+                        this.il.OpCode(ILOpCode.Unbox_any);
+                        this.il.Token(this.outer.GetElementTypeToken(call.Type));
+                    }
+
                     break;
                 case BoundImportedCallExpression impCall:
                     foreach (var arg in impCall.Arguments)
