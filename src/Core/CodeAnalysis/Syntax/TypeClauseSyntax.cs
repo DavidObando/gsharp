@@ -81,6 +81,32 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a function type <c>func(T1, T2, ...) R?</c> (Phase 4.7).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="funcKeyword">The <c>func</c> keyword.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="returnTypeClause">The optional return-type clause; <c>null</c> for void.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+        : base(syntaxTree)
+    {
+        FuncKeyword = funcKeyword;
+        OpenParenToken = openParenToken;
+        FunctionParameterTypes = functionParameterTypes;
+        CloseParenToken = closeParenToken;
+        ReturnTypeClause = returnTypeClause;
+        QuestionToken = questionToken;
+    }
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -118,5 +144,17 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
-    public bool IsTuple => OpenParenToken != null;
+    public bool IsTuple => OpenParenToken != null && FuncKeyword == null;
+
+    /// <summary>Gets the <c>func</c> keyword for function-type clauses, or <c>null</c>.</summary>
+    public SyntaxToken FuncKeyword { get; }
+
+    /// <summary>Gets the function parameter-type clauses, or the default value.</summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> FunctionParameterTypes { get; }
+
+    /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
+    public TypeClauseSyntax ReturnTypeClause { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a function type <c>func(...) R?</c> (Phase 4.7).</summary>
+    public bool IsFunction => FuncKeyword != null;
 }

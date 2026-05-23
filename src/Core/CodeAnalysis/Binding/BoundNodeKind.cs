@@ -52,6 +52,8 @@ public enum BoundNodeKind
     NullConditionalAccessExpression,
     TupleLiteralExpression,
     TupleElementAccessExpression,
+    FunctionLiteralExpression,
+    IndirectCallExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

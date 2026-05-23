@@ -334,6 +334,10 @@ public abstract class BoundTreeRewriter
                 return RewriteTupleLiteralExpression((BoundTupleLiteralExpression)node);
             case BoundNodeKind.TupleElementAccessExpression:
                 return RewriteTupleElementAccessExpression((BoundTupleElementAccessExpression)node);
+            case BoundNodeKind.FunctionLiteralExpression:
+                return RewriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node);
+            case BoundNodeKind.IndirectCallExpression:
+                return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -799,5 +803,44 @@ public abstract class BoundTreeRewriter
     {
         var receiver = RewriteExpression(node.Receiver);
         return receiver == node.Receiver ? node : new BoundTupleElementAccessExpression(receiver, node.TupleType, node.Index);
+    }
+
+    /// <summary>Rewrites a function literal (Phase 4.7). The body is intentionally not rewritten because it forms a separate lexical scope.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+    {
+        return node;
+    }
+
+    /// <summary>Rewrites an indirect call (Phase 4.7).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteIndirectCallExpression(BoundIndirectCallExpression node)
+    {
+        var target = RewriteExpression(node.Target);
+        System.Collections.Immutable.ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            builder?.Add(newArg);
+        }
+
+        if (target == node.Target && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundIndirectCallExpression(target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments);
     }
 }

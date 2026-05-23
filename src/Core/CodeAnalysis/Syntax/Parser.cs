@@ -772,6 +772,11 @@ public class Parser
 
     private TypeClauseSyntax ParseTypeClause()
     {
+        if (Current.Kind == SyntaxKind.FuncKeyword)
+        {
+            return ParseFunctionTypeClause();
+        }
+
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             return ParseTupleTypeClause();
@@ -830,11 +835,47 @@ public class Parser
             question);
     }
 
+    private TypeClauseSyntax ParseFunctionTypeClause()
+    {
+        // Phase 4.7: function type clause `func(T1, T2, ...) R?`. The return
+        // type is optional; if absent the function returns void.
+        var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var returnTypeClause = ParseOptionalTypeClause();
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return new TypeClauseSyntax(
+            syntaxTree,
+            funcKeyword,
+            openParen,
+            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen,
+            returnTypeClause,
+            question);
+    }
+
     private TypeClauseSyntax ParseOptionalTypeClause()
     {
         if (Current.Kind != SyntaxKind.IdentifierToken &&
             Current.Kind != SyntaxKind.OpenSquareBracketToken &&
-            Current.Kind != SyntaxKind.OpenParenthesisToken)
+            Current.Kind != SyntaxKind.OpenParenthesisToken &&
+            Current.Kind != SyntaxKind.FuncKeyword)
         {
             return null;
         }
@@ -1637,10 +1678,25 @@ public class Parser
             case SyntaxKind.OpenSquareBracketToken:
                 return ParseArrayCreationExpression();
 
+            case SyntaxKind.FuncKeyword:
+                return ParseFunctionLiteralExpression();
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
         }
+    }
+
+    private ExpressionSyntax ParseFunctionLiteralExpression()
+    {
+        // Phase 4.7: function literal `func(p1 T1, p2 T2) R { body }`.
+        var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var returnType = ParseOptionalTypeClause();
+        var body = ParseBlockStatement();
+        return new FunctionLiteralExpressionSyntax(syntaxTree, funcKeyword, openParen, parameters, closeParen, returnType, body);
     }
 
     private ExpressionSyntax ParseArrayCreationExpression()

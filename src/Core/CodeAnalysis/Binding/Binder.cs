@@ -19,9 +19,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class Binder
 {
-    private readonly FunctionSymbol function;
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
+
+    private FunctionSymbol function;
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
@@ -1206,6 +1207,25 @@ public sealed class Binder
             return null;
         }
 
+        if (syntax.IsFunction)
+        {
+            // Phase 4.7: function-type clause `func(T1, T2, ...) R?`.
+            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
+            for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
+            {
+                var pt = BindTypeClause(syntax.FunctionParameterTypes[i]);
+                if (pt == null)
+                {
+                    return null;
+                }
+
+                paramTypes.Add(pt);
+            }
+
+            var ret = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+            return FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), ret ?? TypeSymbol.Void);
+        }
+
         if (syntax.IsTuple)
         {
             // Phase 4.5: tuple type clause `(T1, T2, ...)`.
@@ -1880,6 +1900,8 @@ public sealed class Binder
                 return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
             case SyntaxKind.TupleLiteralExpression:
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
+            case SyntaxKind.FunctionLiteralExpression:
+                return BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
@@ -2191,6 +2213,68 @@ public sealed class Binder
         return new BoundTupleLiteralExpression(tupleType, bound.MoveToImmutable());
     }
 
+    private BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax)
+    {
+        // Phase 4.7: function literal `func(p1 T1, p2 T2) R { body }`.
+        // Bind parameters, push a new scope chained to the current scope so
+        // outer locals are visible by lexical lookup (closure capture), bind
+        // the body against a synthetic FunctionSymbol whose return type is
+        // the declared return clause (or void), then collect the captured
+        // outer variables by inspecting the bound body.
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
+        var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
+        var seen = new HashSet<string>();
+        foreach (var p in syntax.Parameters)
+        {
+            var pname = p.Identifier.Text;
+            var ptype = BindTypeClause(p.Type) ?? TypeSymbol.Error;
+            if (!seen.Add(pname))
+            {
+                Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
+            }
+
+            parameterSymbols.Add(new ParameterSymbol(pname, ptype));
+            parameterTypes.Add(ptype);
+        }
+
+        var returnType = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+        returnType ??= TypeSymbol.Void;
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        var synthetic = new FunctionSymbol(
+            $"<lambda{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>",
+            parameterSymbols.ToImmutable(),
+            returnType);
+
+        // Snapshot current binder state, then push a child scope and bind
+        // the body as if we were inside this synthetic function.
+        var outerScope = scope;
+        var outerFunction = function;
+        scope = new BoundScope(outerScope);
+        function = synthetic;
+        foreach (var ps in synthetic.Parameters)
+        {
+            scope.TryDeclareVariable(ps);
+        }
+
+        var body = BindBlockStatement(syntax.Body);
+
+        scope = outerScope;
+        function = outerFunction;
+
+        var captured = CollectCapturedVariables(body, synthetic.Parameters);
+        return new BoundFunctionLiteralExpression(synthetic, fnType, (BoundBlockStatement)body, captured);
+    }
+
+    private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)
+    {
+        var paramSet = new HashSet<VariableSymbol>(parameters);
+        var seen = new HashSet<VariableSymbol>();
+        var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
+        var collector = new CapturedVariableCollector(paramSet, seen, captured);
+        collector.RewriteStatement(body);
+        return captured.ToImmutable();
+    }
+
     private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
     {
         var receiverName = syntax.Receiver.Text;
@@ -2440,6 +2524,26 @@ public sealed class Binder
         {
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
             return new BoundErrorExpression();
+        }
+
+        // Phase 4.7: invoking a function-typed variable goes through the
+        // indirect-call path. Sites like `add(1, 2)` where `add` is `let
+        // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
+        if (symbol is VariableSymbol variable && variable.Type is FunctionTypeSymbol fnType)
+        {
+            if (syntax.Arguments.Count != fnType.Arity)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, variable.Name, fnType.Arity, syntax.Arguments.Count);
+                return new BoundErrorExpression();
+            }
+
+            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                convertedArgs.Add(BindConversion(syntax.Arguments[i].Location, boundArguments[i], fnType.ParameterTypes[i]));
+            }
+
+            return new BoundIndirectCallExpression(new BoundVariableExpression(variable), fnType, convertedArgs.MoveToImmutable());
         }
 
         var function = symbol as FunctionSymbol;
@@ -3461,5 +3565,34 @@ public sealed class Binder
         return packagesInOrder.Count > 0
             ? packagesInOrder[0]
             : new PackageSymbol("Default", declaration: null);
+    }
+
+    private sealed class CapturedVariableCollector : BoundTreeRewriter
+    {
+        private readonly HashSet<VariableSymbol> parameters;
+        private readonly HashSet<VariableSymbol> seen;
+        private readonly ImmutableArray<VariableSymbol>.Builder captured;
+
+        public CapturedVariableCollector(
+            HashSet<VariableSymbol> parameters,
+            HashSet<VariableSymbol> seen,
+            ImmutableArray<VariableSymbol>.Builder captured)
+        {
+            this.parameters = parameters;
+            this.seen = seen;
+            this.captured = captured;
+        }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        {
+            if (!this.parameters.Contains(node.Variable)
+                && !(node.Variable is GlobalVariableSymbol)
+                && this.seen.Add(node.Variable))
+            {
+                this.captured.Add(node.Variable);
+            }
+
+            return node;
+        }
     }
 }
