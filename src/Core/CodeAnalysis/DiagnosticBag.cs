@@ -392,6 +392,24 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, $"Generic function '{name}' requires {expectedCount} type arguments but was given {actualCount}.");
     }
 
+    /// <summary>Reports a type-clause type-argument list applied to a non-generic type (Phase 4.3c / ADR-0020).</summary>
+    /// <param name="location">The text location of the offending identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportTypeNotGeneric(TextLocation location, string name)
+    {
+        Report(location, $"Type '{name}' is not generic.");
+    }
+
+    /// <summary>Reports an interface type-parameter used in a position incompatible with its declared variance (Phase 4.3c / ADR-0021).</summary>
+    /// <param name="location">The text location of the offending use.</param>
+    /// <param name="typeParameterName">The type-parameter name.</param>
+    /// <param name="declaredVariance">The declared variance (in/out).</param>
+    /// <param name="usedPosition">The position the type-parameter was used in (input/output).</param>
+    public void ReportTypeParameterVariancePositionViolation(TextLocation location, string typeParameterName, string declaredVariance, string usedPosition)
+    {
+        Report(location, $"Type parameter '{typeParameterName}' declared '{declaredVariance}' cannot appear in {usedPosition} position.");
+    }
+
     /// <summary>Reports a generic call whose type arguments could not be inferred from the value arguments (Phase 4.1 / ADR-0020).</summary>
     /// <param name="location">The text location of the call.</param>
     /// <param name="name">The callee name.</param>
