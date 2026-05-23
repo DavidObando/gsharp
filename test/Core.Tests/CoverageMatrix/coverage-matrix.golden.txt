@@ -68,6 +68,7 @@ FunctionDeclaration
 FunctionLiteralExpression
 GlobalStatement
 GoKeyword
+GoStatement
 GotoKeyword
 GreaterOrEqualsToken
 GreaterToken
@@ -187,6 +188,7 @@ ForEllipsisStatement
 ForInfiniteStatement
 ForRangeStatement
 FunctionLiteralExpression
+GoStatement
 GotoStatement
 IfStatement
 ImportedCallExpression

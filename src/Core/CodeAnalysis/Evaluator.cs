@@ -18,6 +18,7 @@ public sealed class Evaluator
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
     private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
+    private readonly object goLock = new object();
     private Random random;
 
     private object lastValue;
@@ -102,6 +103,10 @@ public sealed class Evaluator
                 case BoundNodeKind.ThrowStatement:
                     EvaluateThrowStatement((BoundThrowStatement)s);
                     break;
+                case BoundNodeKind.GoStatement:
+                    EvaluateGoStatement((BoundGoStatement)s);
+                    index++;
+                    break;
                 default:
                     throw new EvaluatorException($"Unexpected node {s.Kind}", s);
             }
@@ -115,6 +120,32 @@ public sealed class Evaluator
         var value = EvaluateExpression(node.Initializer);
         lastValue = value;
         Assign(node.Variable, value);
+    }
+
+    private void EvaluateGoStatement(BoundGoStatement node)
+    {
+        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run. The interpreter's
+        // evaluation state is single-threaded; serialize body execution with a
+        // monitor on the evaluator so the shared locals/globals stacks remain
+        // consistent. Concurrency in the interpreter is observational
+        // (Task scheduling) rather than parallel.
+        var expression = node.Expression;
+        Task.Run(() =>
+        {
+            try
+            {
+                lock (this.goLock)
+                {
+                    EvaluateExpression(expression);
+                }
+            }
+            catch
+            {
+                // Per ADR-0022 fire-and-forget: unhandled exceptions surface
+                // through TaskScheduler.UnobservedTaskException; the interpreter
+                // discards them rather than crashing the host.
+            }
+        });
     }
 
     private void EvaluateExpressionStatement(BoundExpressionStatement node)

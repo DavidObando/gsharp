@@ -1021,6 +1021,8 @@ public class Parser
                 return ParseThrowStatement();
             case SyntaxKind.UsingKeyword:
                 return ParseUsingStatement();
+            case SyntaxKind.GoKeyword:
+                return ParseGoStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -1665,6 +1667,13 @@ public class Parser
 
         var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
         return new UsingStatementSyntax(syntaxTree, keyword, decl);
+    }
+
+    private StatementSyntax ParseGoStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.GoKeyword);
+        var expression = ParseExpression();
+        return new GoStatementSyntax(syntaxTree, keyword, expression);
     }
 
     private ExpressionStatementSyntax ParseExpressionStatement()

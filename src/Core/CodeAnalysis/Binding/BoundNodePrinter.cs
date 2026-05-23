@@ -81,6 +81,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ThrowStatement:
                 WriteThrowStatement((BoundThrowStatement)node, writer);
                 break;
+            case BoundNodeKind.GoStatement:
+                WriteGoStatement((BoundGoStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -423,6 +426,14 @@ public static class BoundNodePrinter
     private static void WriteThrowStatement(BoundThrowStatement node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(SyntaxKind.ThrowKeyword);
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
+        writer.WriteLine();
+    }
+
+    private static void WriteGoStatement(BoundGoStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.GoKeyword);
         writer.WriteSpace();
         node.Expression.WriteTo(writer);
         writer.WriteLine();

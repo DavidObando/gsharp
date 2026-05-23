@@ -47,6 +47,8 @@ public abstract class BoundTreeRewriter
                 return RewriteTryStatement((BoundTryStatement)node);
             case BoundNodeKind.ThrowStatement:
                 return RewriteThrowStatement((BoundThrowStatement)node);
+            case BoundNodeKind.GoStatement:
+                return RewriteGoStatement((BoundGoStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -523,6 +525,20 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundAwaitExpression(expression, node.Type);
+    }
+
+    /// <summary>Rewrites a bound go statement (Phase 5.3).</summary>
+    /// <param name="node">The go statement to rewrite.</param>
+    /// <returns>The rewritten go statement.</returns>
+    protected virtual BoundStatement RewriteGoStatement(BoundGoStatement node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundGoStatement(expression);
     }
 
     /// <summary>

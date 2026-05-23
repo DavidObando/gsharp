@@ -362,6 +362,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of a <c>go</c> statement is not a call expression (Phase 5.3 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    public void ReportGoOperandIsNotACall(TextLocation location)
+    {
+        var message = "'go' must be followed by a function or method call.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the function requires a different amount of arguments.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

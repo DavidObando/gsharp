@@ -275,8 +275,11 @@ public sealed class ControlFlowGraph
                         break;
                     case BoundNodeKind.TryStatement:
                     case BoundNodeKind.ThrowStatement:
+                    case BoundNodeKind.GoStatement:
                         // Treat exception-flow constructs as opaque statements; precise
                         // CFG modeling of catch/finally edges is deferred to a later phase.
+                        // GoStatement is fire-and-forget at runtime; for CFG it falls
+                        // through to the next statement.
                         statements.Add(statement);
                         break;
                     default:
@@ -377,6 +380,7 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.LabelStatement:
                         case BoundNodeKind.ExpressionStatement:
                         case BoundNodeKind.TryStatement:
+                        case BoundNodeKind.GoStatement:
                             if (isLastStatementInBlock)
                             {
                                 Connect(current, next);

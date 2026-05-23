@@ -1174,6 +1174,8 @@ public sealed class Binder
                 return BindThrowStatement((ThrowStatementSyntax)syntax);
             case SyntaxKind.UsingStatement:
                 return BindUsingStatement((UsingStatementSyntax)syntax);
+            case SyntaxKind.GoStatement:
+                return BindGoStatement((GoStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -1857,6 +1859,28 @@ public sealed class Binder
 
         var receiver = new BoundVariableExpression(variable);
         return new BoundImportedInstanceCallExpression(receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+    }
+
+    private BoundStatement BindGoStatement(GoStatementSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+
+        if (expression is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(expression);
+        }
+
+        if (expression is not BoundCallExpression and
+            not BoundIndirectCallExpression and
+            not BoundUserInstanceCallExpression and
+            not BoundImportedCallExpression and
+            not BoundImportedInstanceCallExpression)
+        {
+            Diagnostics.ReportGoOperandIsNotACall(syntax.Expression.Location);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        return new BoundGoStatement(expression);
     }
 
     private TypeSymbol ResolveExceptionType()

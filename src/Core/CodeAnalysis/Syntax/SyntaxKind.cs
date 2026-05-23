@@ -183,6 +183,7 @@ public enum SyntaxKind
     TupleDeconstructionStatement,
     FunctionLiteralExpression,
     AwaitExpression,
+    GoStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
