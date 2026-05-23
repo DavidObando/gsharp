@@ -766,8 +766,14 @@ public class Parser
     private ParameterSyntax ParseParameter()
     {
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        SyntaxToken ellipsis = null;
+        if (Current.Kind == SyntaxKind.EllipsisToken)
+        {
+            ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+        }
+
         var type = ParseTypeClause();
-        return new ParameterSyntax(syntaxTree, identifier, type);
+        return new ParameterSyntax(syntaxTree, identifier, ellipsis, type);
     }
 
     private TypeClauseSyntax ParseTypeClause()

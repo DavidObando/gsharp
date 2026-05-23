@@ -353,6 +353,35 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports a variadic parameter (<c>...T</c>) that is not the last parameter (Phase 4.8).</summary>
+    /// <param name="location">The text location of the offending parameter.</param>
+    /// <param name="name">The parameter name.</param>
+    public void ReportVariadicParameterMustBeLast(TextLocation location, string name)
+    {
+        var message = $"Variadic parameter '{name}' must be the last parameter.";
+        Report(location, message);
+    }
+
+    /// <summary>Reports a variadic parameter used in a context that does not yet support it (Phase 4.8 — MVP: top-level functions only).</summary>
+    /// <param name="location">The text location of the offending parameter.</param>
+    /// <param name="name">The parameter name.</param>
+    public void ReportVariadicParameterNotSupportedHere(TextLocation location, string name)
+    {
+        var message = $"Variadic parameter '{name}' is only supported on top-level function declarations.";
+        Report(location, message);
+    }
+
+    /// <summary>Reports a call to a variadic function with too few fixed arguments (Phase 4.8).</summary>
+    /// <param name="location">The text location of the call.</param>
+    /// <param name="name">The callee name.</param>
+    /// <param name="minimumCount">The minimum required argument count (fixed parameters).</param>
+    /// <param name="actualCount">The actual argument count provided.</param>
+    public void ReportTooFewArgumentsForVariadic(TextLocation location, string name, int minimumCount, int actualCount)
+    {
+        var message = $"Function '{name}' requires at least {minimumCount} arguments but was given {actualCount}.";
+        Report(location, message);
+    }
+
     /// <summary>Reports a generic call whose explicit type-argument list has the wrong arity (Phase 4.1 / ADR-0020).</summary>
     /// <param name="location">The text location of the type-argument list.</param>
     /// <param name="name">The callee name.</param>

@@ -645,6 +645,11 @@ public sealed class Binder
                 {
                     var parameterName = parameterSyntax.Identifier.Text;
                     var parameterType = BindTypeClause(parameterSyntax.Type);
+                    if (parameterSyntax.IsVariadic)
+                    {
+                        Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                    }
+
                     if (!seenParameterNames.Add(parameterName))
                     {
                         Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
@@ -798,6 +803,11 @@ public sealed class Binder
             {
                 var parameterName = parameterSyntax.Identifier.Text;
                 var parameterType = BindTypeClause(parameterSyntax.Type);
+                if (parameterSyntax.IsVariadic)
+                {
+                    Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                }
+
                 if (!seenParameterNames.Add(parameterName))
                 {
                     Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
@@ -869,8 +879,26 @@ public sealed class Binder
                 }
                 else
                 {
-                    var parameter = new ParameterSymbol(parameterName, parameterType);
+                    // Phase 4.8: a `...T` parameter has type `[]T` for the body
+                    // and must be the last parameter. Auto-packing of trailing
+                    // arguments happens at the call site.
+                    var isVariadic = parameterSyntax.IsVariadic;
+                    if (isVariadic && parameterType != null && parameterType != TypeSymbol.Error)
+                    {
+                        parameterType = SliceTypeSymbol.Get(parameterType);
+                    }
+
+                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic);
                     parameters.Add(parameter);
+                }
+            }
+
+            // Phase 4.8: validate `...T` appears only on the last syntactic parameter.
+            for (var i = 0; i < syntax.Parameters.Count - 1; i++)
+            {
+                if (syntax.Parameters[i].IsVariadic)
+                {
+                    Diagnostics.ReportVariadicParameterMustBeLast(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
                 }
             }
 
@@ -2228,6 +2256,11 @@ public sealed class Binder
         {
             var pname = p.Identifier.Text;
             var ptype = BindTypeClause(p.Type) ?? TypeSymbol.Error;
+            if (p.IsVariadic)
+            {
+                Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
+            }
+
             if (!seen.Add(pname))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
@@ -2553,7 +2586,18 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        if (syntax.Arguments.Count != function.Parameters.Length)
+        var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
+        var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
+
+        if (isVariadic)
+        {
+            if (syntax.Arguments.Count < fixedParamCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, function.Name, fixedParamCount, syntax.Arguments.Count);
+                return new BoundErrorExpression();
+            }
+        }
+        else if (syntax.Arguments.Count != function.Parameters.Length)
         {
             TextSpan span;
             if (syntax.Arguments.Count > function.Parameters.Length)
@@ -2643,7 +2687,7 @@ public sealed class Binder
             }
         }
 
-        for (var i = 0; i < syntax.Arguments.Count; i++)
+        for (var i = 0; i < fixedParamCount; i++)
         {
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
@@ -2657,6 +2701,42 @@ public sealed class Binder
                 }
 
                 hasErrors = true;
+            }
+        }
+
+        // Phase 4.8: type-check trailing variadic arguments against the slice
+        // element type, then pack them into a single slice-typed argument.
+        if (isVariadic)
+        {
+            var variadicParam = function.Parameters[function.Parameters.Length - 1];
+            var sliceType = (SliceTypeSymbol)variadicParam.Type;
+            var elementType = sliceType.ElementType;
+            for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
+            {
+                var argument = boundArguments[i];
+                if (argument.Type != elementType && argument.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, variadicParam.Name, elementType, argument.Type);
+                    hasErrors = true;
+                }
+            }
+
+            if (!hasErrors)
+            {
+                var packed = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count - fixedParamCount);
+                for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
+                {
+                    packed.Add(boundArguments[i]);
+                }
+
+                var finalArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
+                for (var i = 0; i < fixedParamCount; i++)
+                {
+                    finalArgs.Add(boundArguments[i]);
+                }
+
+                finalArgs.Add(new BoundArrayCreationExpression(sliceType, packed.MoveToImmutable()));
+                boundArguments = finalArgs;
             }
         }
 
