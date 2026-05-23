@@ -79,8 +79,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Type assertion / conversion (`x.(T)`, `T(x)`) | 🟡 | 🟡 | — | 🟡 | Built-in type names invoked as `int(x)` route through `BindCallExpression` → `BindConversion`; emit currently only handles bool↔int. Go-style `x.(T)` does not exist. |
 | Address-of `&x` / dereference `*x` | 🟡 | ❌ | — | — | Parsed as unary, but no `BoundUnaryOperator` entry → binder rejects. The `Loop.gs` design sample's `*count` is **unimplementable today**. |
 | Channel receive `<-ch` | 🟡 | ❌ | — | — | Parsed; no binding. |
-| Higher-order call `f()(args)` / function values | ❌ | — | — | — | |
-| Function literal / lambda | ❌ | — | — | — | |
+| Higher-order call `f()(args)` / function values | ✅ | ✅ | ✅ | ✅ | Phase 4.7 — first-class function types (`func(T) R`), indirect-call expressions, function-typed locals/params/returns. |
+| Function literal / lambda | ✅ | ✅ | ✅ | ✅ | Phase 4.7 (`func(...) {...}` literal); Phase 4.9 adds Kotlin-style trailing-lambda call syntax — `f(args) func(...) {...}` desugars to `f(args, func(...) {...})` at parse time. |
 
 ## Operators (semantic coverage)
 
