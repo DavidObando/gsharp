@@ -18,11 +18,19 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundUserInstanceCallExpression : BoundExpression
 {
+    private readonly TypeSymbol returnTypeOverride;
+
     public BoundUserInstanceCallExpression(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments)
+        : this(receiver, method, arguments, returnTypeOverride: null)
+    {
+    }
+
+    public BoundUserInstanceCallExpression(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol returnTypeOverride)
     {
         Receiver = receiver;
         Method = method;
         Arguments = arguments;
+        this.returnTypeOverride = returnTypeOverride;
     }
 
     public BoundExpression Receiver { get; }
@@ -31,7 +39,7 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
 
     public ImmutableArray<BoundExpression> Arguments { get; }
 
-    public override TypeSymbol Type => Method.Type;
+    public override TypeSymbol Type => returnTypeOverride ?? Method.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.UserInstanceCallExpression;
 }

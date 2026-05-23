@@ -2172,6 +2172,83 @@ public sealed class Binder
 
     private BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        // Phase 4.3b / ADR-0020: a primary-constructor call on a generic
+        // class definition (`Box(5)` or `Box[int](5)`) builds a type-argument
+        // substitution before resolving the parameter list against the
+        // user-supplied arguments. Explicit `[…]` wins; otherwise we infer
+        // from value-argument types against the definition's primary-ctor
+        // parameter types (first-seen-wins, same rule as 4.1 call sites).
+        if (classType.IsGenericDefinition)
+        {
+            var tps = classType.TypeParameters;
+            var defParams = classType.PrimaryConstructorParameters;
+            var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            if (syntax.TypeArgumentList != null)
+            {
+                var explicitArgs = syntax.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != tps.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, tps.Length, explicitArgs.Count);
+                    return new BoundErrorExpression();
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression();
+                    }
+
+                    substitution[tps[i]] = ta;
+                }
+            }
+            else
+            {
+                // Pre-bind arguments and infer type arguments from them.
+                for (var i = 0; i < syntax.Arguments.Count && i < defParams.Length; i++)
+                {
+                    var preBound = BindExpression(syntax.Arguments[i]);
+                    InferTypeArguments(defParams[i].Type, preBound.Type, substitution);
+                }
+
+                foreach (var tp in tps)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
+                        return new BoundErrorExpression();
+                    }
+                }
+            }
+
+            var constraintLocation = syntax.TypeArgumentList != null
+                ? syntax.TypeArgumentList.Location
+                : syntax.Identifier.Location;
+            foreach (var tp in tps)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                    return new BoundErrorExpression();
+                }
+            }
+
+            var typeArgs = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
+            foreach (var tp in tps)
+            {
+                typeArgs.Add(substitution[tp]);
+            }
+
+            classType = StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
+        }
+        else if (syntax.TypeArgumentList != null)
+        {
+            Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, 0, syntax.TypeArgumentList.Arguments.Count);
+            return new BoundErrorExpression();
+        }
+
         var parameters = classType.PrimaryConstructorParameters;
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         foreach (var argument in syntax.Arguments)
@@ -2951,13 +3028,54 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        // Phase 4.3b / ADR-0020: if the receiver is a constructed generic
+        // class/struct, substitute the method's parameter types and return
+        // type with the receiver's type-argument map. The method symbol
+        // itself (and its bound body) are kept intact so runtime dispatch
+        // through program.Functions[method] continues to work.
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = TryBuildReceiverSubstitution(receiver.Type);
+
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], method.Parameters[i].Type));
+            var paramType = method.Parameters[i].Type;
+            var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+        }
+
+        if (substitution != null)
+        {
+            var substitutedReturn = SubstituteType(method.Type, substitution);
+            if (!ReferenceEquals(substitutedReturn, method.Type))
+            {
+                return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
+            }
         }
 
         return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable());
+    }
+
+    private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)
+    {
+        if (receiverType is StructSymbol s
+            && !s.TypeArguments.IsDefaultOrEmpty
+            && s.Definition != null
+            && !ReferenceEquals(s.Definition, s))
+        {
+            var defTps = s.Definition.TypeParameters;
+            if (!defTps.IsDefaultOrEmpty && defTps.Length == s.TypeArguments.Length)
+            {
+                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(defTps.Length);
+                for (var i = 0; i < defTps.Length; i++)
+                {
+                    map[defTps[i]] = s.TypeArguments[i];
+                }
+
+                return map;
+            }
+        }
+
+        return null;
     }
 
     private BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)

@@ -82,6 +82,49 @@ let r = Result[int]{Ok: 5, Err: ""oops""}
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("type argument"));
     }
 
+    [Fact]
+    public void GenericClass_PrimaryCtorInferred_FieldAccessReturnsValue()
+    {
+        var source = @"
+type Box[T any] class(Value T) {
+}
+let b = Box(7)
+b.Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void GenericClass_PrimaryCtorExplicit_FieldAccessReturnsValue()
+    {
+        var source = @"
+type Box[T any] class(Value T) {
+}
+let b = Box[string](""hi"")
+b.Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("hi", result.Value);
+    }
+
+    [Fact]
+    public void GenericClass_MethodCall_TypeChecksAndExecutes()
+    {
+        var source = @"
+type Holder[T any] class(value T) {
+    func Get() T { return value }
+}
+let h = Holder(42)
+h.Get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
