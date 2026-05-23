@@ -1161,6 +1161,30 @@ public sealed class Binder
             return null;
         }
 
+        if (syntax.IsTuple)
+        {
+            // Phase 4.5: tuple type clause `(T1, T2, ...)`.
+            if (syntax.TupleElements.Count < 2)
+            {
+                Diagnostics.ReportUnexpectedToken(syntax.CloseParenToken.Location, syntax.CloseParenToken.Kind, SyntaxKind.IdentifierToken);
+                return null;
+            }
+
+            var elements = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TupleElements.Count);
+            for (var i = 0; i < syntax.TupleElements.Count; i++)
+            {
+                var elementType = BindTypeClause(syntax.TupleElements[i]);
+                if (elementType == null)
+                {
+                    return null;
+                }
+
+                elements.Add(elementType);
+            }
+
+            return TupleTypeSymbol.Get(elements.MoveToImmutable());
+        }
+
         var element = LookupType(syntax.Identifier.Text);
         if (element == null)
         {
@@ -1809,6 +1833,8 @@ public sealed class Binder
                 return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.StructLiteralExpression:
                 return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
+            case SyntaxKind.TupleLiteralExpression:
+                return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
@@ -2096,6 +2122,28 @@ public sealed class Binder
         }
 
         return new BoundStructLiteralExpression(structSymbol, inits.ToImmutable());
+    }
+
+    private BoundExpression BindTupleLiteralExpression(TupleLiteralExpressionSyntax syntax)
+    {
+        // Phase 4.5: bind each element expression, derive the tuple type from
+        // their static types, and produce a BoundTupleLiteralExpression.
+        var bound = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
+        var elementTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Elements.Count);
+        foreach (var e in syntax.Elements)
+        {
+            var be = BindExpression(e);
+            if (be.Type == TypeSymbol.Error)
+            {
+                return new BoundErrorExpression();
+            }
+
+            bound.Add(be);
+            elementTypes.Add(be.Type);
+        }
+
+        var tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable());
+        return new BoundTupleLiteralExpression(tupleType, bound.MoveToImmutable());
     }
 
     private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
@@ -2876,6 +2924,20 @@ public sealed class Binder
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                }
+                else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
+                {
+                    // Phase 4.5: tuple element access via Item1..ItemN.
+                    var memberName = ne.IdentifierToken.Text;
+                    if (memberName.StartsWith("Item", System.StringComparison.Ordinal)
+                        && int.TryParse(memberName.Substring(4), out var oneBased)
+                        && oneBased >= 1 && oneBased <= tupleSym.Arity)
+                    {
+                        return new BoundTupleElementAccessExpression(receiver, tupleSym, oneBased - 1);
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+                    return new BoundErrorExpression();
                 }
                 else
                 {

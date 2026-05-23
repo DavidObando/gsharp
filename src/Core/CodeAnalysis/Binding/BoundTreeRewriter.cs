@@ -330,6 +330,10 @@ public abstract class BoundTreeRewriter
                 return RewriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node);
             case BoundNodeKind.NullConditionalAccessExpression:
                 return RewriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node);
+            case BoundNodeKind.TupleLiteralExpression:
+                return RewriteTupleLiteralExpression((BoundTupleLiteralExpression)node);
+            case BoundNodeKind.TupleElementAccessExpression:
+                return RewriteTupleElementAccessExpression((BoundTupleElementAccessExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -761,5 +765,39 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundNullConditionalAccessExpression(receiver, node.Capture, whenNotNull, node.Type);
+    }
+
+    /// <summary>Rewrites a tuple literal (Phase 4.5).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteTupleLiteralExpression(BoundTupleLiteralExpression node)
+    {
+        System.Collections.Immutable.ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            var oldEl = node.Elements[i];
+            var newEl = RewriteExpression(oldEl);
+            if (newEl != oldEl && builder == null)
+            {
+                builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundExpression>(node.Elements.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Elements[j]);
+                }
+            }
+
+            builder?.Add(newEl);
+        }
+
+        return builder == null ? node : new BoundTupleLiteralExpression(node.TupleType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a tuple element access (Phase 4.5).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteTupleElementAccessExpression(BoundTupleElementAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        return receiver == node.Receiver ? node : new BoundTupleElementAccessExpression(receiver, node.TupleType, node.Index);
     }
 }

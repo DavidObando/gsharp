@@ -205,6 +205,8 @@ public sealed class Evaluator
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
                 BoundNodeKind.NullConditionalAccessExpression => EvaluateNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node),
+                BoundNodeKind.TupleLiteralExpression => EvaluateTupleLiteralExpression((BoundTupleLiteralExpression)node),
+                BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -323,6 +325,43 @@ public sealed class Evaluator
         }
 
         return sv;
+    }
+
+    private object EvaluateTupleLiteralExpression(BoundTupleLiteralExpression node)
+    {
+        // Phase 4.5: build a CLR ValueTuple instance when an arity is supported,
+        // else materialise as an object[] (interpreter-only fallback).
+        var values = new object[node.Elements.Length];
+        for (var i = 0; i < node.Elements.Length; i++)
+        {
+            values[i] = EvaluateExpression(node.Elements[i]);
+        }
+
+        var clrType = node.TupleType.ClrType;
+        if (clrType != null)
+        {
+            return System.Activator.CreateInstance(clrType, values);
+        }
+
+        return values;
+    }
+
+    private object EvaluateTupleElementAccessExpression(BoundTupleElementAccessExpression node)
+    {
+        var receiver = EvaluateExpression(node.Receiver);
+        if (receiver == null)
+        {
+            throw new EvaluatorException("Attempted to access an element of a null tuple.", node);
+        }
+
+        if (receiver is object[] arr)
+        {
+            return arr[node.Index];
+        }
+
+        var fieldName = $"Item{node.Index + 1}";
+        var field = receiver.GetType().GetField(fieldName);
+        return field.GetValue(receiver);
     }
 
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)

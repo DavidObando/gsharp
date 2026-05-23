@@ -50,6 +50,8 @@ public enum BoundNodeKind
     FieldAccessExpression,
     FieldAssignmentExpression,
     NullConditionalAccessExpression,
+    TupleLiteralExpression,
+    TupleElementAccessExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

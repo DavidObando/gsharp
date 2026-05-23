@@ -61,6 +61,26 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="tupleElements">The comma-separated element type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> tupleElements,
+        SyntaxToken closeParenToken,
+        SyntaxToken questionToken)
+        : base(syntaxTree)
+    {
+        OpenParenToken = openParenToken;
+        TupleElements = tupleElements;
+        CloseParenToken = closeParenToken;
+        QuestionToken = questionToken;
+    }
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -87,4 +107,16 @@ public sealed class TypeClauseSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this clause denotes a nullable type <c>T?</c> (Phase 3.C.1).</summary>
     public bool IsNullable => QuestionToken != null;
+
+    /// <summary>Gets the opening <c>(</c> token for tuple types, or <c>null</c>.</summary>
+    public SyntaxToken OpenParenToken { get; }
+
+    /// <summary>Gets the closing <c>)</c> token for tuple types, or <c>null</c>.</summary>
+    public SyntaxToken CloseParenToken { get; }
+
+    /// <summary>Gets the comma-separated element-type clauses for a tuple type, or the default value.</summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
+    public bool IsTuple => OpenParenToken != null;
 }
