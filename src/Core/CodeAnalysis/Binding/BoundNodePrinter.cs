@@ -57,6 +57,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ForEllipsisStatement:
                 WriteForEllipsisStatement((BoundForEllipsisStatement)node, writer);
                 break;
+            case BoundNodeKind.ForRangeStatement:
+                WriteForRangeStatement((BoundForRangeStatement)node, writer);
+                break;
             case BoundNodeKind.LabelStatement:
                 WriteLabelStatement((BoundLabelStatement)node, writer);
                 break;
@@ -299,6 +302,28 @@ public static class BoundNodePrinter
         writer.WriteKeyword(SyntaxKind.EllipsisToken);
         writer.WriteSpace();
         node.UpperBound.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WriteNestedStatement(node.Body);
+    }
+
+    private static void WriteForRangeStatement(BoundForRangeStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.ForKeyword);
+        writer.WriteSpace();
+        if (node.KeyVariable != null)
+        {
+            writer.WriteIdentifier(node.KeyVariable.Name);
+            writer.WritePunctuation(SyntaxKind.CommaToken);
+            writer.WriteSpace();
+        }
+
+        writer.WriteIdentifier(node.ValueVariable.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.ColonEqualsToken);
+        writer.WriteSpace();
+        writer.WriteKeyword(SyntaxKind.RangeKeyword);
+        writer.WriteSpace();
+        node.Collection.WriteTo(writer);
         writer.WriteSpace();
         writer.WriteNestedStatement(node.Body);
     }

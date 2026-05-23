@@ -219,6 +219,213 @@ public sealed class Lowerer : BoundTreeRewriter
         return RewriteStatement(result);
     }
 
+    /// <inheritdoc/>
+    protected override BoundStatement RewriteForRangeStatement(BoundForRangeStatement node)
+    {
+        // for [<k>,] <v> := range <coll>
+        //     <body>
+        //
+        // ---->  (kind-dependent lowering — see helpers below)
+        //
+        // For arrays/slices (Indexed): index-based iteration using
+        // BoundIndexExpression + BoundLenExpression.
+        // For CLR dictionaries and enumerables: iterator-based iteration
+        // using GetEnumerator()/MoveNext()/Current resolved by reflection.
+        BoundStatement lowered = node.IterationKind switch
+        {
+            ForRangeKind.Indexed => LowerIndexedRange(node),
+            ForRangeKind.Dictionary => LowerCollectionRange(node, isDictionary: true),
+            ForRangeKind.Enumerable => LowerCollectionRange(node, isDictionary: false),
+            _ => throw new System.InvalidOperationException($"Unknown ForRangeKind {node.IterationKind}"),
+        };
+
+        return RewriteStatement(lowered);
+    }
+
+    private BoundStatement LowerIndexedRange(BoundForRangeStatement node)
+    {
+        // {
+        //   var __coll = <collection>
+        //   var __i = 0
+        //   goto start
+        //   body:
+        //   <key> = __i   (only if key var present)
+        //   <value> = __coll[__i]
+        //   <body>
+        //   continue:
+        //   __i = __i + 1
+        //   start:
+        //   gotoTrue (__i < len(__coll)) body
+        //   break:
+        // }
+        var collectionSymbol = new LocalVariableSymbol("__coll", isReadOnly: true, type: node.Collection.Type);
+        var collectionDecl = new BoundVariableDeclaration(collectionSymbol, node.Collection);
+        var collectionExpr = new BoundVariableExpression(collectionSymbol);
+
+        var indexSymbol = new LocalVariableSymbol("__i", isReadOnly: false, type: TypeSymbol.Int);
+        var indexDecl = new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0));
+        var indexExpr = new BoundVariableExpression(indexSymbol);
+
+        var startLabel = GenerateLabel();
+        var bodyLabel = GenerateLabel();
+
+        var perIterationStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (node.KeyVariable != null)
+        {
+            perIterationStatements.Add(new BoundVariableDeclaration(node.KeyVariable, indexExpr));
+        }
+
+        perIterationStatements.Add(new BoundVariableDeclaration(
+            node.ValueVariable,
+            new BoundIndexExpression(collectionExpr, indexExpr, node.ValueVariable.Type)));
+
+        perIterationStatements.Add(node.Body);
+
+        var increment = new BoundExpressionStatement(
+            new BoundAssignmentExpression(
+                indexSymbol,
+                new BoundBinaryExpression(
+                    indexExpr,
+                    BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                    new BoundLiteralExpression(1))));
+
+        var hasMore = new BoundBinaryExpression(
+            indexExpr,
+            BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+            new BoundLenExpression(collectionExpr));
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(collectionDecl);
+        statements.Add(indexDecl);
+        statements.Add(new BoundGotoStatement(startLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.AddRange(perIterationStatements);
+        statements.Add(new BoundLabelStatement(node.ContinueLabel));
+        statements.Add(increment);
+        statements.Add(new BoundLabelStatement(startLabel));
+        statements.Add(new BoundConditionalGotoStatement(bodyLabel, hasMore, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(node.BreakLabel));
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private BoundStatement LowerCollectionRange(BoundForRangeStatement node, bool isDictionary)
+    {
+        // {
+        //   var __enum = <coll>.GetEnumerator()
+        //   var __i = 0    (only for Enumerable when keyVar is present)
+        //   goto start
+        //   body:
+        //   <key> = __i  OR  __enum.Current.Key      (depending on kind)
+        //   <value> = __enum.Current  OR  __enum.Current.Value
+        //   <body>
+        //   continue:
+        //   __i = __i + 1   (only for Enumerable when keyVar is present)
+        //   start:
+        //   gotoTrue __enum.MoveNext() body
+        //   break:
+        // }
+        var collClrType = node.Collection.Type.ClrType;
+        var getEnumerator = collClrType.GetMethod("GetEnumerator", System.Type.EmptyTypes);
+        if (getEnumerator == null)
+        {
+            // Defensive: bail out unchanged if we can't resolve. The
+            // binder already validated this case, so this shouldn't fire.
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var enumeratorClr = getEnumerator.ReturnType;
+        var moveNext = enumeratorClr.GetMethod("MoveNext", System.Type.EmptyTypes)
+                       ?? typeof(System.Collections.IEnumerator).GetMethod("MoveNext", System.Type.EmptyTypes);
+        var currentProp = enumeratorClr.GetProperty("Current")
+                          ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
+
+        var enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
+        var enumeratorSymbol = new LocalVariableSymbol("__enum", isReadOnly: true, type: enumeratorType);
+        var getEnumCall = new BoundImportedInstanceCallExpression(
+            node.Collection,
+            getEnumerator,
+            enumeratorType,
+            ImmutableArray<BoundExpression>.Empty);
+        var enumeratorDecl = new BoundVariableDeclaration(enumeratorSymbol, getEnumCall);
+        var enumeratorExpr = new BoundVariableExpression(enumeratorSymbol);
+
+        var startLabel = GenerateLabel();
+        var bodyLabel = GenerateLabel();
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(enumeratorDecl);
+
+        LocalVariableSymbol indexSymbol = null;
+        if (!isDictionary && node.KeyVariable != null)
+        {
+            indexSymbol = new LocalVariableSymbol("__i", isReadOnly: false, type: TypeSymbol.Int);
+            statements.Add(new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0)));
+        }
+
+        statements.Add(new BoundGotoStatement(startLabel));
+        statements.Add(new BoundLabelStatement(bodyLabel));
+
+        var currentAccess = new BoundClrPropertyAccessExpression(
+            enumeratorExpr,
+            currentProp,
+            TypeSymbol.FromClrType(currentProp.PropertyType));
+
+        if (isDictionary)
+        {
+            var kvpClr = currentProp.PropertyType;
+            var keyProp = kvpClr.GetProperty("Key");
+            var valueProp = kvpClr.GetProperty("Value");
+            var kvpSymbol = new LocalVariableSymbol("__kvp", isReadOnly: true, type: TypeSymbol.FromClrType(kvpClr));
+            statements.Add(new BoundVariableDeclaration(kvpSymbol, currentAccess));
+            var kvpExpr = new BoundVariableExpression(kvpSymbol);
+
+            if (node.KeyVariable != null)
+            {
+                statements.Add(new BoundVariableDeclaration(
+                    node.KeyVariable,
+                    new BoundClrPropertyAccessExpression(kvpExpr, keyProp, TypeSymbol.FromClrType(keyProp.PropertyType))));
+            }
+
+            statements.Add(new BoundVariableDeclaration(
+                node.ValueVariable,
+                new BoundClrPropertyAccessExpression(kvpExpr, valueProp, TypeSymbol.FromClrType(valueProp.PropertyType))));
+        }
+        else
+        {
+            if (node.KeyVariable != null)
+            {
+                statements.Add(new BoundVariableDeclaration(node.KeyVariable, new BoundVariableExpression(indexSymbol)));
+            }
+
+            statements.Add(new BoundVariableDeclaration(node.ValueVariable, currentAccess));
+        }
+
+        statements.Add(node.Body);
+        statements.Add(new BoundLabelStatement(node.ContinueLabel));
+
+        if (indexSymbol != null)
+        {
+            var indexExpr = new BoundVariableExpression(indexSymbol);
+            statements.Add(new BoundExpressionStatement(
+                new BoundAssignmentExpression(
+                    indexSymbol,
+                    new BoundBinaryExpression(
+                        indexExpr,
+                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                        new BoundLiteralExpression(1)))));
+        }
+
+        statements.Add(new BoundLabelStatement(startLabel));
+        var moveNextCall = new BoundImportedInstanceCallExpression(
+            enumeratorExpr,
+            moveNext,
+            TypeSymbol.Bool,
+            ImmutableArray<BoundExpression>.Empty);
+        statements.Add(new BoundConditionalGotoStatement(bodyLabel, moveNextCall, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(node.BreakLabel));
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
     private static BoundBlockStatement Flatten(BoundStatement statement)
     {
         var builder = ImmutableArray.CreateBuilder<BoundStatement>();

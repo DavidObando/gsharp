@@ -47,7 +47,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `for i := lo ... hi { }` | ✅ | ✅ | ✅ | ✅ | GSharp-specific; not Go's `for i := lo; i < hi; i++`. |
 | `for cond { }` (while-style) | ✅ | ✅ | ✅ | ✅ | Lowered in the binder to `goto checkLabel; body; check: if cond goto body`. |
 | `for init; cond; post { }` (C-style) | ✅ | ✅ | ✅ | ✅ | Header parts are all optional; `for ;; { }` is the infinite form. `continue` jumps to `post` then re-evaluates `cond`. |
-| `for k, v := range coll` | ❌ | — | — | — | |
+| `for k, v := range coll` | ✅ | ✅ | ✅ | ❌ | Phase 4 exit: binder + interpreter support iterating over arrays/slices (index-based), CLR `IDictionary[K,V]` (key/value), and CLR `IEnumerable[T]` (element-with-counter). Lowerer rewrites to existing `BoundIndexExpression`/`BoundLenExpression` for arrays and to `GetEnumerator`/`MoveNext`/`Current` reflection calls for CLR collections. Emit gap remains. |
 | `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
 | `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
 | `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: discriminant over `int`/`string`/`bool`; each case body is a brace block; binder lowers to a chain of if/else around the bound discriminant. Multiple case values per arm and pattern-matching variants land in Phase 6. |
