@@ -190,6 +190,11 @@ public class Parser
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
+        // Phase 4.3 / ADR-0020: optional type-parameter list directly after the
+        // type name: `type Box[T any] class { ... }`. Reuses the same helpers
+        // as generic function declarations.
+        var typeParameterList = ParseOptionalTypeParameterList();
+
         // `data` is a context-sensitive keyword (ADR-0029): only acts as the
         // data-struct marker when followed directly by `struct`. Elsewhere it
         // is an ordinary identifier.
@@ -225,7 +230,9 @@ public class Parser
                 Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
             }
 
-            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
+            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
+            structDecl.TypeParameterList = typeParameterList;
+            return structDecl;
         }
 
         if (Current.Kind == SyntaxKind.InterfaceKeyword)
@@ -238,6 +245,12 @@ public class Parser
             if (dataKeyword != null)
             {
                 Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
+            }
+
+            if (typeParameterList != null)
+            {
+                // Phase 4.3a only supports generic struct/class; generic interfaces land in 4.3b.
+                Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.InterfaceKeyword);
             }
 
             return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, sealedModifier);
@@ -625,9 +638,22 @@ public class Parser
             return true;
         }
 
-        if (Peek(ahead).Kind == SyntaxKind.CloseSquareBracketToken && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken)
+        if (Peek(ahead).Kind == SyntaxKind.CloseSquareBracketToken)
         {
-            return true;
+            // Phase 4.1: function declarations follow `[T any]` with `(`.
+            // Phase 4.3 / ADR-0020: type declarations follow `[T any]` with
+            // `data`/`struct`/`class`/`interface` (contextual `data` lexes as
+            // an identifier; the lookahead also covers the not-yet-supported
+            // `interface` case for forward compatibility).
+            var follow = Peek(ahead + 1);
+            if (follow.Kind == SyntaxKind.OpenParenthesisToken
+                || follow.Kind == SyntaxKind.StructKeyword
+                || follow.Kind == SyntaxKind.ClassKeyword
+                || follow.Kind == SyntaxKind.InterfaceKeyword
+                || (follow.Kind == SyntaxKind.IdentifierToken && follow.Text == "data"))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -1771,6 +1797,19 @@ public class Parser
     {
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeArguments = ParseTypeArgumentList();
+
+        // Phase 4.3 / ADR-0020: a `[…]` type-argument list followed by `{` is a
+        // generic struct/class composite literal (`Result[int, string]{...}`).
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var initializers = ParseStructLiteralInitializers();
+            var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            var literal = new StructLiteralExpressionSyntax(syntaxTree, identifier, openBrace, initializers, closeBrace);
+            literal.TypeArgumentList = typeArguments;
+            return literal;
+        }
+
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var arguments = ParseArguments();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
@@ -1866,7 +1905,13 @@ public class Parser
     {
         var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var initializers = ParseStructLiteralInitializers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new StructLiteralExpressionSyntax(syntaxTree, typeIdentifier, openBrace, initializers, closeBrace);
+    }
 
+    private SeparatedSyntaxList<FieldInitializerSyntax> ParseStructLiteralInitializers()
+    {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
         while (parseNext &&
@@ -1884,9 +1929,7 @@ public class Parser
             }
         }
 
-        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        var initializers = new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
-        return new StructLiteralExpressionSyntax(syntaxTree, typeIdentifier, openBrace, initializers, closeBrace);
+        return new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private FieldInitializerSyntax ParseFieldInitializer()

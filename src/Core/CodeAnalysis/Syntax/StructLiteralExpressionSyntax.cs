@@ -47,4 +47,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>Gets or sets the optional type-argument list (Phase 4.3 / ADR-0020), e.g. <c>Result[int, string]{...}</c>. <c>null</c> for non-generic literals or for literals whose type arguments are to be inferred.</summary>
+    public TypeArgumentListSyntax TypeArgumentList { get; set; }
 }

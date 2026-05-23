@@ -469,6 +469,16 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
+        // Phase 4.3a (interpreter-only): generic type definitions are not yet
+        // emitted to IL. The interpreter substitutes type parameters at bind
+        // time, but CLR generic IL emission is deferred. ADR-0020 tracks the
+        // remaining 4.1b/4.3a-emit work.
+        if (structSym.IsGenericDefinition || !structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            throw new System.NotSupportedException(
+                $"Emitting generic types (here: '{structSym.Name}') is not yet supported. Use the interpreter for generic-type programs until the CLR generic emit pass lands.");
+        }
+
         // Emit field definitions in source order. Each field's signature is a
         // FieldSig encoding the GSharp type symbol.
         FieldDefinitionHandle firstField = default;

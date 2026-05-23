@@ -444,6 +444,37 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
 
+        // Phase 4.3 / ADR-0020: bind the optional type-parameter list FIRST so
+        // field/parameter types in the body can reference T, U, etc.
+        var previousTypeParameters = currentTypeParameters;
+        ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+        try
+        {
+            if (syntax.TypeParameterList != null)
+            {
+                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+                foreach (var tp in typeParameters)
+                {
+                    currentTypeParameters[tp.Name] = tp;
+                }
+            }
+
+            BindStructDeclarationBody(syntax, package, accessibility, name, typeParameters);
+        }
+        finally
+        {
+            currentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    private void BindStructDeclarationBody(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        Accessibility accessibility,
+        string name,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
         var seenFieldNames = new HashSet<string>();
         var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
 
@@ -572,6 +603,11 @@ public sealed class Binder
             primaryCtorParameters,
             isOpen: syntax.IsOpen && syntax.IsClass,
             baseClass: baseClassSymbol);
+
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            structSymbol.SetTypeParameters(typeParameters);
+        }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
@@ -1949,6 +1985,91 @@ public sealed class Binder
         if (!scope.TryLookupTypeAlias(typeName, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+            return new BoundErrorExpression();
+        }
+
+        // Phase 4.3 / ADR-0020: if the declared struct is generic, build a
+        // type-argument substitution (explicit or inferred from initializers)
+        // and construct a closed StructSymbol to bind against. Constructed
+        // instances are cached so reference-equality of TypeSymbols is
+        // preserved (e.g. `Result[int, string]` always returns the same
+        // StructSymbol object).
+        if (structSymbol.IsGenericDefinition)
+        {
+            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            var tps = structSymbol.TypeParameters;
+
+            if (syntax.TypeArgumentList != null)
+            {
+                var explicitArgs = syntax.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != tps.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, typeName, tps.Length, explicitArgs.Count);
+                    return new BoundErrorExpression();
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression();
+                    }
+
+                    substitution[tps[i]] = ta;
+                }
+            }
+            else
+            {
+                // Infer from the initializer expression types matched against
+                // the corresponding field's declared type (first-seen wins,
+                // consistent with Phase 4.1 call-site inference).
+                foreach (var initSyntax in syntax.Initializers)
+                {
+                    if (!structSymbol.TryGetFieldIncludingInherited(initSyntax.FieldIdentifier.Text, out var field, out _))
+                    {
+                        continue;
+                    }
+
+                    var valueExpr = BindExpression(initSyntax.Value);
+                    InferTypeArguments(field.Type, valueExpr.Type, substitution);
+                }
+
+                foreach (var tp in tps)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(syntax.TypeIdentifier.Location, typeName, tp.Name);
+                        return new BoundErrorExpression();
+                    }
+                }
+            }
+
+            // Phase 4.2 constraint satisfaction.
+            var constraintLocation = syntax.TypeArgumentList != null
+                ? syntax.TypeArgumentList.Location
+                : syntax.TypeIdentifier.Location;
+            foreach (var tp in tps)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                    return new BoundErrorExpression();
+                }
+            }
+
+            var typeArgs = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
+            foreach (var tp in tps)
+            {
+                typeArgs.Add(substitution[tp]);
+            }
+
+            structSymbol = StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable());
+        }
+        else if (syntax.TypeArgumentList != null)
+        {
+            Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, typeName, 0, syntax.TypeArgumentList.Arguments.Count);
             return new BoundErrorExpression();
         }
 
