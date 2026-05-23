@@ -15,13 +15,12 @@
 //   - Cross-feature use of string interpolation (Phase 1.1) and the
 //     fixed-size array literal syntax (Phase 3.A.2).
 //
-// The sample is interpreter-only for now: the emit backend does not yet
-// understand CLR constructor calls / member access / for-range (the
-// Phase 3+4 CLR-interop work is interpreter-first by design). It
-// therefore lives under `samples/aspirational/` and is excluded from
-// the emit conformance harness (ADR-0010). A sibling
-// `CountWordsSampleTests` runs it through the interpreter and diffs
-// stdout against `CountWords.golden`.
+// Runs on both backends. Originally landed under `samples/aspirational/`
+// (PR #66) because the emit pipeline could not yet encode CLR
+// constructors / member access / for-range. The emit-parity work in PRs
+// #67+ closes that gap, so this sample is now part of the top-level
+// emit conformance harness (SampleConformanceTests) in addition to its
+// interpreter-side sibling CountWordsSampleTests.
 
 package GSharp.Example.CountWords
 

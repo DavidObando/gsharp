@@ -36,7 +36,10 @@ internal sealed class ReflectionMetadataEmitter
     private readonly MetadataBuilder metadata = new MetadataBuilder();
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
+    private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>();
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
+    private readonly Dictionary<ConstructorInfo, MemberReferenceHandle> ctorRefs = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
+    private readonly Dictionary<FieldInfo, MemberReferenceHandle> fieldRefs = new Dictionary<FieldInfo, MemberReferenceHandle>();
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
     private readonly MethodBodyStreamEncoder methodBodyStream;
     private readonly BlobBuilder ilStream = new BlobBuilder();
@@ -1538,13 +1541,104 @@ internal sealed class ReflectionMetadataEmitter
             return existing;
         }
 
-        var asmRef = this.GetAssemblyReference(type.Assembly);
+        // Nested types: resolution scope is the TypeRef of the declaring type,
+        // namespace is empty, name is the short name only. Works for the
+        // open generic definition of a nested generic type as well (Reflection
+        // treats Dictionary`2+Enumerator as nested under Dictionary`2).
+        EntityHandle resolutionScope;
+        StringHandle @namespace;
+        if (type.IsNested && type.DeclaringType is Type declaring)
+        {
+            resolutionScope = this.GetTypeReference(declaring);
+            @namespace = default;
+        }
+        else
+        {
+            resolutionScope = this.GetAssemblyReference(type.Assembly);
+            @namespace = this.metadata.GetOrAddString(type.Namespace ?? string.Empty);
+        }
+
         var handle = this.metadata.AddTypeReference(
-            resolutionScope: asmRef,
-            @namespace: this.metadata.GetOrAddString(type.Namespace ?? string.Empty),
+            resolutionScope: resolutionScope,
+            @namespace: @namespace,
             name: this.metadata.GetOrAddString(type.Name));
         this.typeRefs[type] = handle;
         return handle;
+    }
+
+    /// <summary>
+    /// Returns a metadata handle suitable for use as the parent of a MemberRef.
+    /// Returns a TypeRef for non-generic types and a TypeSpec encoding a
+    /// <c>GenericInstantiation</c> for constructed generic types
+    /// (e.g. <c>List&lt;int&gt;</c>, <c>Dictionary&lt;string, int&gt;</c>).
+    /// </summary>
+    private EntityHandle GetTypeHandleForMember(Type type)
+    {
+        if (type.IsConstructedGenericType)
+        {
+            if (this.typeSpecs.TryGetValue(type, out var existingSpec))
+            {
+                return existingSpec;
+            }
+
+            var sigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+            this.EncodeClrType(encoder, type);
+            var spec = this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+            this.typeSpecs[type] = spec;
+            return spec;
+        }
+
+        return this.GetTypeReference(type);
+    }
+
+    /// <summary>
+    /// For a method on a constructed generic type, return the corresponding
+    /// method on the open generic definition; for non-generic declaring types,
+    /// returns the input. The open method's parameter / return types reference
+    /// the declaring type's generic parameters as <c>GenericTypeParameter</c>,
+    /// which <see cref="EncodeClrType"/> emits as <c>!N</c>.
+    /// </summary>
+    private static MethodInfo GetOpenMethod(MethodInfo method)
+    {
+        var declaring = method.DeclaringType;
+        if (declaring is null || !declaring.IsConstructedGenericType)
+        {
+            return method;
+        }
+
+        var open = declaring.GetGenericTypeDefinition();
+        foreach (var candidate in open.GetMethods(
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            {
+                return candidate;
+            }
+        }
+
+        return method;
+    }
+
+    private static ConstructorInfo GetOpenCtor(ConstructorInfo ctor)
+    {
+        var declaring = ctor.DeclaringType;
+        if (declaring is null || !declaring.IsConstructedGenericType)
+        {
+            return ctor;
+        }
+
+        var open = declaring.GetGenericTypeDefinition();
+        foreach (var candidate in open.GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == ctor.MetadataToken && candidate.Module == ctor.Module)
+            {
+                return candidate;
+            }
+        }
+
+        return ctor;
     }
 
     private MemberReferenceHandle GetMethodReference(MethodInfo method)
@@ -1554,27 +1648,106 @@ internal sealed class ReflectionMetadataEmitter
             return existing;
         }
 
-        var typeRef = this.GetTypeReference(method.DeclaringType
-            ?? throw new InvalidOperationException("Imported method has no declaring type."));
+        var declaring = method.DeclaringType
+            ?? throw new InvalidOperationException("Imported method has no declaring type.");
+        var parent = this.GetTypeHandleForMember(declaring);
+
+        // For instance methods on constructed generic types, encode the signature
+        // from the OPEN definition so parameters/returns reference declaring-type
+        // generic params by position (!0, !1, ...). For non-generic declarings,
+        // open == closed and parameter types are concrete.
+        var openMethod = GetOpenMethod(method);
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !method.IsStatic)
             .Parameters(
-                method.GetParameters().Length,
-                returnType: r => this.EncodeReturnClr(r, method.ReturnType),
+                openMethod.GetParameters().Length,
+                returnType: r => this.EncodeReturnClr(r, openMethod.ReturnType),
                 parameters: ps =>
                 {
-                    foreach (var p in method.GetParameters())
+                    foreach (var p in openMethod.GetParameters())
                     {
                         this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
                     }
                 });
 
         var handle = this.metadata.AddMemberReference(
-            parent: typeRef,
+            parent: parent,
             name: this.metadata.GetOrAddString(method.Name),
             signature: this.metadata.GetOrAddBlob(sigBlob));
         this.methodRefs[method] = handle;
+        return handle;
+    }
+
+    /// <summary>
+    /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor.
+    /// Handles both non-generic types (<c>StringBuilder()</c>) and constructed
+    /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).
+    /// </summary>
+    private MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
+    {
+        if (this.ctorRefs.TryGetValue(ctor, out var existing))
+        {
+            return existing;
+        }
+
+        var declaring = ctor.DeclaringType
+            ?? throw new InvalidOperationException("Imported constructor has no declaring type.");
+        var parent = this.GetTypeHandleForMember(declaring);
+        var openCtor = GetOpenCtor(ctor);
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                openCtor.GetParameters().Length,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    foreach (var p in openCtor.GetParameters())
+                    {
+                        this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                    }
+                });
+
+        var handle = this.metadata.AddMemberReference(
+            parent: parent,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        this.ctorRefs[ctor] = handle;
+        return handle;
+    }
+
+    /// <summary>
+    /// Phase 4 emit parity: get a MemberRef for a CLR field on a possibly
+    /// generic declaring type (e.g. <c>KeyValuePair&lt;K, V&gt;.Key</c>).
+    /// </summary>
+    private MemberReferenceHandle GetFieldReference(FieldInfo field)
+    {
+        if (this.fieldRefs.TryGetValue(field, out var existing))
+        {
+            return existing;
+        }
+
+        var declaring = field.DeclaringType
+            ?? throw new InvalidOperationException("Imported field has no declaring type.");
+        var parent = this.GetTypeHandleForMember(declaring);
+
+        // Use the open field's FieldType so it encodes as !N when applicable.
+        var openField = declaring.IsConstructedGenericType
+            ? declaring.GetGenericTypeDefinition().GetField(
+                field.Name,
+                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                ?? field
+            : field;
+
+        var sigBlob = new BlobBuilder();
+        this.EncodeClrType(new BlobEncoder(sigBlob).FieldSignature(), openField.FieldType);
+
+        var handle = this.metadata.AddMemberReference(
+            parent: parent,
+            name: this.metadata.GetOrAddString(field.Name),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        this.fieldRefs[field] = handle;
         return handle;
     }
 
@@ -1779,6 +1952,38 @@ internal sealed class ReflectionMetadataEmitter
                     throw new NotSupportedException("Cannot encode signature for a null CLR type.");
                 }
 
+                if (type.IsGenericParameter)
+                {
+                    // Method signatures reference declaring-type generic params as `!N`
+                    // (Phase 4 emit parity for generic-instantiated CLR types — e.g.
+                    // `Dictionary[TKey,TValue].Add(TKey, TValue)` references its open
+                    // definition's parameters by position).
+                    encoder.GenericTypeParameter(type.GenericParameterPosition);
+                    break;
+                }
+
+                if (type.IsArray && type.GetArrayRank() == 1)
+                {
+                    EncodeClrType(encoder.SZArray(), type.GetElementType()!);
+                    break;
+                }
+
+                if (type.IsConstructedGenericType)
+                {
+                    var openDef = type.GetGenericTypeDefinition();
+                    var typeArgs = type.GetGenericArguments();
+                    var genericInst = encoder.GenericInstantiation(
+                        this.GetTypeReference(openDef),
+                        typeArgs.Length,
+                        isValueType: openDef.IsValueType);
+                    foreach (var arg in typeArgs)
+                    {
+                        EncodeClrType(genericInst.AddArgument(), arg);
+                    }
+
+                    break;
+                }
+
                 encoder.Type(this.GetTypeReference(type), isValueType: type.IsValueType);
                 break;
         }
@@ -1929,7 +2134,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.Call(this.outer.GetMethodReference(impCall.Function.Method));
                     break;
                 case BoundImportedInstanceCallExpression instCall:
-                    this.EmitExpression(instCall.Receiver);
+                    this.EmitInstanceReceiver(instCall.Receiver);
                     foreach (var arg in instCall.Arguments)
                     {
                         this.EmitExpression(arg);
@@ -1987,6 +2192,24 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundNullConditionalAccessExpression nc:
                     this.EmitNullConditionalAccess(nc);
+                    break;
+                case BoundClrConstructorCallExpression clrCtor:
+                    this.EmitClrConstructorCall(clrCtor);
+                    break;
+                case BoundClrPropertyAccessExpression clrProp:
+                    this.EmitClrPropertyAccess(clrProp);
+                    break;
+                case BoundClrIndexExpression clrIdx:
+                    this.EmitClrIndex(clrIdx);
+                    break;
+                case BoundClrIndexAssignmentExpression clrIdxAsn:
+                    this.EmitClrIndexAssignment(clrIdxAsn);
+                    break;
+                case BoundTupleLiteralExpression tupleLit:
+                    this.EmitTupleLiteral(tupleLit);
+                    break;
+                case BoundTupleElementAccessExpression tupleAcc:
+                    this.EmitTupleElementAccess(tupleAcc);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -2697,6 +2920,174 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
+        }
+
+        private void EmitClrConstructorCall(BoundClrConstructorCallExpression ctorCall)
+        {
+            // Phase 4 emit parity: `newobj` against a CLR ctor. Handles both
+            // non-generic types and constructed generic types — the parent of
+            // the MemberRef becomes a TypeSpec for the latter, encoded in
+            // `GetCtorReference` / `GetTypeHandleForMember`.
+            foreach (var arg in ctorCall.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            var ctorRef = this.outer.GetCtorReference(ctorCall.Constructor);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(ctorRef);
+        }
+
+        private void EmitClrPropertyAccess(BoundClrPropertyAccessExpression access)
+        {
+            // Phase 4 emit parity: instance property/field read on a CLR
+            // receiver. Properties dispatch to their `get_X` accessor;
+            // fields use `ldfld`. Generic-instantiated declaring types are
+            // handled by `GetMethodReference` / `GetFieldReference`.
+            this.EmitInstanceReceiver(access.Receiver);
+            var receiverIsValueType = access.Receiver.Type?.ClrType?.IsValueType == true;
+            switch (access.Member)
+            {
+                case PropertyInfo property:
+                    var getter = property.GetGetMethod(nonPublic: false)
+                        ?? throw new InvalidOperationException(
+                            $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
+                    var getterRef = this.outer.GetMethodReference(getter);
+                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.Token(getterRef);
+                    break;
+                case FieldInfo field:
+                    var fieldRef = this.outer.GetFieldReference(field);
+                    this.il.OpCode(ILOpCode.Ldfld);
+                    this.il.Token(fieldRef);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"CLR member '{access.Member.GetType().Name}' is not yet supported by the emitter.");
+            }
+        }
+
+        private void EmitClrIndex(BoundClrIndexExpression idx)
+        {
+            // Phase 4 emit parity: indexer read. `d[k]` -> `callvirt get_Item(k)`.
+            this.EmitInstanceReceiver(idx.Target);
+            foreach (var arg in idx.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            var getter = idx.Indexer.GetGetMethod(nonPublic: false)
+                ?? throw new InvalidOperationException(
+                    $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
+            var receiverIsValueType = idx.Target.Type?.ClrType?.IsValueType == true;
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getter));
+        }
+
+        private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
+        {
+            // Phase 4 emit parity: indexer write. `d[k] = v` -> `callvirt set_Item(k, v)`.
+            // Like the array-index assignment path, the expression result is the
+            // assigned value, so re-read via `get_Item` after the store.
+            this.EmitLoadVariable(ixa.Target);
+            foreach (var arg in ixa.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.EmitExpression(ixa.Value);
+            var setter = ixa.Indexer.GetSetMethod(nonPublic: false)
+                ?? throw new InvalidOperationException(
+                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter.");
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(setter));
+
+            this.EmitLoadVariable(ixa.Target);
+            foreach (var arg in ixa.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            var getter = ixa.Indexer.GetGetMethod(nonPublic: false)
+                ?? throw new InvalidOperationException(
+                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public getter.");
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getter));
+        }
+
+        private void EmitTupleLiteral(BoundTupleLiteralExpression tuple)
+        {
+            // Phase 4.5 emit parity: `(e1, e2, ...)` lowers to
+            // `newobj ValueTuple<T1, T2, ...>::.ctor(T1, T2, ...)`. The CLR
+            // backing type is set by TupleTypeSymbol.BuildClrType for arities
+            // 2–7; higher arities have a null ClrType and are interpreter-only.
+            var clrType = tuple.TupleType.ClrType
+                ?? throw new NotSupportedException(
+                    $"Tuple of arity {tuple.TupleType.Arity} has no CLR backing type; emit not supported.");
+
+            ConstructorInfo ctor = null;
+            foreach (var c in clrType.GetConstructors())
+            {
+                if (c.GetParameters().Length == tuple.Elements.Length)
+                {
+                    ctor = c;
+                    break;
+                }
+            }
+
+            if (ctor == null)
+            {
+                throw new InvalidOperationException(
+                    $"ValueTuple type '{clrType.FullName}' has no constructor of arity {tuple.Elements.Length}.");
+            }
+
+            foreach (var elem in tuple.Elements)
+            {
+                this.EmitExpression(elem);
+            }
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctor));
+        }
+
+        private void EmitTupleElementAccess(BoundTupleElementAccessExpression access)
+        {
+            // Phase 4.5 emit parity: `t.ItemN`. ValueTuple<...> exposes the
+            // elements as public *fields* (Item1..Item7), not properties, so
+            // the access is a plain `ldfld`. Both struct-on-stack and
+            // managed-pointer receivers are valid operands for ldfld; the
+            // common cases (locals/params/temps) go through
+            // EmitInstanceReceiver to prefer the address form.
+            var clrType = access.TupleType.ClrType
+                ?? throw new NotSupportedException(
+                    $"Tuple of arity {access.TupleType.Arity} has no CLR backing type; emit not supported.");
+
+            var fieldName = "Item" + (access.Index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var field = clrType.GetField(fieldName)
+                ?? throw new InvalidOperationException(
+                    $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
+
+            this.EmitInstanceReceiver(access.Receiver);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(this.outer.GetFieldReference(field));
+        }
+
+        private void EmitInstanceReceiver(BoundExpression receiver)
+        {
+            // Value-type receivers need a managed pointer (the implicit `this`
+            // of an instance method on a value type is a `ref` parameter). For
+            // the common case where the receiver is a local/parameter, we can
+            // emit `ldloca`/`ldarga`. Other shapes are not yet exercised by the
+            // emit pipeline.
+            var clrType = receiver.Type?.ClrType;
+            if (clrType != null && clrType.IsValueType
+                && receiver is BoundVariableExpression bve
+                && this.TryLoadVariableAddress(bve.Variable))
+            {
+                return;
+            }
+
+            this.EmitExpression(receiver);
         }
 
         private bool TryLoadVariableAddress(VariableSymbol variable)

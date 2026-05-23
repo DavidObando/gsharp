@@ -16,13 +16,16 @@ namespace GSharp.Core.Tests.LanguageConformance;
 
 /// <summary>
 /// Phase 4 exit / ADR-0001: cross-feature integration test for the
-/// <c>samples/aspirational/CountWords.gs</c> sample. Exercises CLR
+/// <c>samples/CountWords.gs</c> sample. Exercises CLR
 /// constructor calls (#63), CLR member access + indexers (#64), and
 /// <c>for k, v := range coll</c> (#65) end-to-end against an actual
-/// <c>Dictionary[string, int]</c>. The sample lives under
-/// <c>samples/aspirational/</c> because the emit backend does not yet
-/// support these CLR-interop features; this interpreter-side test is
-/// the executable spec until emit catches up.
+/// <c>Dictionary[string, int]</c>. The sample originally lived under
+/// <c>samples/aspirational/</c> because the emit backend could not
+/// encode CLR constructors / member access / for-range; the emit-parity
+/// work in PRs #67+ closed that gap, and the sample now lives at the
+/// top level and is also covered by the emit-side
+/// <c>SampleConformanceTests</c>. This interpreter-side test exercises
+/// the same source through the evaluator path.
 /// </summary>
 public class CountWordsSampleTests
 {
@@ -32,8 +35,8 @@ public class CountWordsSampleTests
         var samplesDir = LocateSamplesDirectory();
         Assert.NotNull(samplesDir);
 
-        var samplePath = Path.Combine(samplesDir!, "aspirational", "CountWords.gs");
-        var goldenPath = Path.Combine(samplesDir!, "aspirational", "CountWords.golden");
+        var samplePath = Path.Combine(samplesDir!, "CountWords.gs");
+        var goldenPath = Path.Combine(samplesDir!, "CountWords.golden");
         Assert.True(File.Exists(samplePath), $"missing sample at {samplePath}");
         Assert.True(File.Exists(goldenPath), $"missing golden at {goldenPath}");
 
