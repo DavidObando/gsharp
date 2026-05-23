@@ -2106,6 +2106,7 @@ public class Parser
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var arguments = ParseArguments();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, arguments, closeParen);
     }
 
@@ -2141,7 +2142,47 @@ public class Parser
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var arguments = ParseArguments();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, openParenthesisToken, arguments, closeParenthesisToken);
+    }
+
+    // Phase 4.9: Kotlin-style trailing-lambda call syntax. When a call's
+    // closing paren is immediately followed by a `func(...) {...}` literal,
+    // the literal is desugared into an additional last positional argument.
+    // Useful for DSL-flavoured call sites like `runBlocking() func() { ... }`
+    // and `xs.forEach() func(x int) { ... }`. The bare-parens form
+    // (`f func(...) {...}` with no `()`) is intentionally out of scope for
+    // v0 to keep the call grammar unambiguous with statement-level function
+    // literals.
+    private SeparatedSyntaxList<ExpressionSyntax> MaybeAppendTrailingLambda(
+        SeparatedSyntaxList<ExpressionSyntax> arguments)
+    {
+        // Only `func(...) {...}` (a function LITERAL) attaches as a trailing
+        // lambda; `func Name(...)` (a function DECLARATION) must stay as the
+        // following statement-level declaration.
+        if (Current.Kind != SyntaxKind.FuncKeyword
+            || Peek(1).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return arguments;
+        }
+
+        var lambda = ParseFunctionLiteralExpression();
+        var existing = arguments.GetWithSeparators();
+        var builder = ImmutableArray.CreateBuilder<SyntaxNode>(existing.Length + 2);
+        builder.AddRange(existing);
+        if (existing.Length > 0 && existing[existing.Length - 1] is not SyntaxToken)
+        {
+            var syntheticComma = new SyntaxToken(
+                syntaxTree,
+                SyntaxKind.CommaToken,
+                lambda.Span.Start,
+                null,
+                null);
+            builder.Add(syntheticComma);
+        }
+
+        builder.Add(lambda);
+        return new SeparatedSyntaxList<ExpressionSyntax>(builder.ToImmutable());
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()
