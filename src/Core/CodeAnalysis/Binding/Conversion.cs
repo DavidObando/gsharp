@@ -71,7 +71,7 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
-        // Phase 3.C.1 / ADR-0020: T → T? is an implicit widening; T? → T?
+        // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
         // when underlyings match is identity. T? → T requires the bang
         // operator (Phase 3.C.3) and is not implicit here.
         if (to is NullableTypeSymbol toNullable)

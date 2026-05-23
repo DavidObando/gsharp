@@ -124,7 +124,7 @@ public sealed class BoundBinaryOperator
             }
         }
 
-        // Phase 3.C.2 / ADR-0020: == and != against nil for any nullable type.
+        // Phase 3.C.2 / ADR-0001: == and != against nil for any nullable type.
         if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
             (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)))
         {
@@ -132,7 +132,7 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
         }
 
-        // Phase 3.C.3 / ADR-0020: null-coalescing `?:` returns the left if
+        // Phase 3.C.3 / ADR-0001: null-coalescing `?:` returns the left if
         // non-nil, otherwise the right. Type is the underlying of the left
         // side (when the right is the same underlying or is itself nullable
         // with that underlying).

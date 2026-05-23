@@ -36,7 +36,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     public static readonly TypeSymbol Void = new TypeSymbol("void", typeof(void));
 
-    /// <summary>The static type of the <c>nil</c> literal (Phase 3.C.2 / ADR-0020). Implicitly convertible to any <see cref="NullableTypeSymbol"/>; not assignable to a non-nullable type.</summary>
+    /// <summary>The static type of the <c>nil</c> literal (Phase 3.C.2 / ADR-0001). Implicitly convertible to any <see cref="NullableTypeSymbol"/>; not assignable to a non-nullable type.</summary>
     public static readonly TypeSymbol Null = new TypeSymbol("nil");
 
     private protected TypeSymbol(string name)
@@ -71,7 +71,7 @@ public class TypeSymbol : Symbol
             return Void;
         }
 
-        // Phase 3.C.5 / ADR-0020: surface CLR value-type nullability
+        // Phase 3.C.5 / ADR-0001: surface CLR value-type nullability
         // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
         // wrapping the underlying. Reference-type nullability driven by
         // `[NullableAttribute]` byte arrays is a follow-up.

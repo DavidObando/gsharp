@@ -1985,7 +1985,7 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            // Phase 3.C.2 / ADR-0020: `nil` flows into any nullable or
+            // Phase 3.C.2 / ADR-0001: `nil` flows into any nullable or
             // reference-typed slot; the IL value is already ldnull.
             if (from == TypeSymbol.Null && (to is NullableTypeSymbol || (to is StructSymbol ts && ts.IsClass)))
             {
@@ -2260,7 +2260,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLiteral(BoundLiteralExpression literal)
         {
-            // Phase 3.C.2 / ADR-0020: the nil literal is modeled as a null
+            // Phase 3.C.2 / ADR-0001: the nil literal is modeled as a null
             // BoundLiteralExpression.Value; on reference-type or nullable
             // targets it emits as ldnull.
             if (literal.Value is null)
@@ -2616,7 +2616,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)
         {
-            // Phase 3.C.3b / ADR-0020: evaluate the receiver once into a
+            // Phase 3.C.3b / ADR-0001: evaluate the receiver once into a
             // synthetic capture local. If the captured value is null, leave
             // null on the stack and skip the access; otherwise evaluate the
             // access sub-tree, which references the capture local in place

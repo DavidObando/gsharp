@@ -2183,7 +2183,7 @@ public sealed class Binder
 
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
-        // Phase 3.C.3b / ADR-0020: null-conditional access `lhs?.rhs`.
+        // Phase 3.C.3b / ADR-0001: null-conditional access `lhs?.rhs`.
         // Evaluate the receiver once, capture it into a synthetic local,
         // then bind the rest of the access against the capture so the
         // subtree can be evaluated against the non-nil value without a

@@ -13,7 +13,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.C.1 — nullable type syntax <c>T?</c> per ADR-0020.
+/// Phase 3.C.1 — nullable type syntax <c>T?</c> per ADR-0001.
 /// </summary>
 public class NullableTypeTests
 {

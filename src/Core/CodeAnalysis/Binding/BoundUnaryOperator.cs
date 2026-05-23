@@ -67,7 +67,7 @@ public sealed class BoundUnaryOperator
     /// <returns>A bound unary operator.</returns>
     public static BoundUnaryOperator Bind(SyntaxKind syntaxKind, TypeSymbol operandType)
     {
-        // Phase 3.C.3 / ADR-0020: postfix `!!` is dynamically typed by the
+        // Phase 3.C.3 / ADR-0001: postfix `!!` is dynamically typed by the
         // operand: it returns the underlying type when applied to T?, and is
         // a no-op on already-non-nullable values (binder will diagnose).
         if (syntaxKind == SyntaxKind.BangBangToken)

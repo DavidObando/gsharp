@@ -1383,7 +1383,7 @@ public class Parser
             left = ParsePrimaryExpression();
         }
 
-        // Phase 3.C.3 / ADR-0020: postfix null-assertion `!!`. We greedily
+        // Phase 3.C.3 / ADR-0001: postfix null-assertion `!!`. We greedily
         // consume any chain of `!!` tokens immediately following the primary
         // and wrap them as unary expressions. The binder enforces that the
         // operand type is nullable (or carries it through harmlessly).

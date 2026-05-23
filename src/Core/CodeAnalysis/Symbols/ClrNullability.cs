@@ -9,7 +9,7 @@ using System.Reflection;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Phase 3.C.5 / ADR-0020: helpers for reading C# nullable-reference-types
+/// Phase 3.C.5 / ADR-0001: helpers for reading C# nullable-reference-types
 /// metadata (<c>[NullableAttribute]</c> / <c>[NullableContextAttribute]</c>)
 /// from members loaded through a <see cref="MetadataLoadContext"/>.
 ///

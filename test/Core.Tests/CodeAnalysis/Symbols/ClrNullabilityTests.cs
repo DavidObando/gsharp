@@ -10,7 +10,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Phase 3.C.5 / ADR-0020: BCL nullable interop.
+/// Phase 3.C.5 / ADR-0001: BCL nullable interop.
 ///
 /// Covers value-type lift (<c>Nullable&lt;T&gt;</c> on the CLR side becomes
 /// <see cref="NullableTypeSymbol"/> on the GSharp side) and reference-type

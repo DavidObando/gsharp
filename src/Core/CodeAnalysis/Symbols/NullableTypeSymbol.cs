@@ -7,7 +7,7 @@ using System.Collections.Concurrent;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Phase 3.C.1 / ADR-0020: wraps an underlying <see cref="TypeSymbol"/> to
+/// Phase 3.C.1 / ADR-0001: wraps an underlying <see cref="TypeSymbol"/> to
 /// indicate that values of this type may be the absence-of-value (nil).
 /// </summary>
 /// <remarks>

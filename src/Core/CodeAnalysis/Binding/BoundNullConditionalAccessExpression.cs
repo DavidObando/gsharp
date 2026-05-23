@@ -7,7 +7,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.C.3b / ADR-0020: bound representation of the null-conditional
+/// Phase 3.C.3b / ADR-0001: bound representation of the null-conditional
 /// member access operator <c>?.</c>.
 ///
 /// The evaluator:
