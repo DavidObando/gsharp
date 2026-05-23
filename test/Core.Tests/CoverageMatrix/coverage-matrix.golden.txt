@@ -61,6 +61,7 @@ ForInfiniteStatement
 ForKeyword
 FuncKeyword
 FunctionDeclaration
+FunctionLiteralExpression
 GlobalStatement
 GoKeyword
 GotoKeyword
@@ -173,12 +174,14 @@ FieldAccessExpression
 FieldAssignmentExpression
 ForEllipsisStatement
 ForInfiniteStatement
+FunctionLiteralExpression
 GotoStatement
 IfStatement
 ImportedCallExpression
 ImportedInstanceCallExpression
 IndexAssignmentExpression
 IndexExpression
+IndirectCallExpression
 LabelStatement
 LenExpression
 LiteralExpression

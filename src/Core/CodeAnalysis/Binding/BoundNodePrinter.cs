@@ -150,6 +150,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.TupleElementAccessExpression:
                 WriteTupleElementAccessExpression((BoundTupleElementAccessExpression)node, writer);
                 break;
+            case BoundNodeKind.FunctionLiteralExpression:
+                WriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node, writer);
+                break;
+            case BoundNodeKind.IndirectCallExpression:
+                WriteIndirectCallExpression((BoundIndirectCallExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -704,5 +710,43 @@ public static class BoundNodePrinter
         node.Receiver.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier($"Item{node.Index + 1}");
+    }
+
+    private static void WriteFunctionLiteralExpression(BoundFunctionLiteralExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.FuncKeyword);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Function.Parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            writer.WriteIdentifier(node.Function.Parameters[i].Name);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+        writer.WriteSpace();
+        node.Body.WriteTo(writer);
+    }
+
+    private static void WriteIndirectCallExpression(BoundIndirectCallExpression node, IndentedTextWriter writer)
+    {
+        node.Target.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 }

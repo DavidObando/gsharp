@@ -207,6 +207,8 @@ public sealed class Evaluator
                 BoundNodeKind.NullConditionalAccessExpression => EvaluateNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node),
                 BoundNodeKind.TupleLiteralExpression => EvaluateTupleLiteralExpression((BoundTupleLiteralExpression)node),
                 BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
+                BoundNodeKind.FunctionLiteralExpression => EvaluateFunctionLiteralExpression((BoundFunctionLiteralExpression)node),
+                BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -362,6 +364,61 @@ public sealed class Evaluator
         var fieldName = $"Item{node.Index + 1}";
         var field = receiver.GetType().GetField(fieldName);
         return field.GetValue(receiver);
+    }
+
+    private object EvaluateFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+    {
+        var captured = new Dictionary<VariableSymbol, object>();
+        foreach (var v in node.CapturedVariables)
+        {
+            captured[v] = LookupVariable(v);
+        }
+
+        return new ClosureValue(node.Function, node.Body, node.FunctionType, captured);
+    }
+
+    private object EvaluateIndirectCallExpression(BoundIndirectCallExpression node)
+    {
+        var targetValue = EvaluateExpression(node.Target);
+        if (targetValue == null)
+        {
+            throw new EvaluatorException("Attempted to invoke a nil function.", node);
+        }
+
+        var closure = (ClosureValue)targetValue;
+        var frame = new Dictionary<VariableSymbol, object>();
+        foreach (var kv in closure.CapturedLocals)
+        {
+            frame[kv.Key] = kv.Value;
+        }
+
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            frame[closure.Function.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        this.locals.Push(frame);
+        var result = EvaluateStatement(closure.Body);
+        this.locals.Pop();
+        return result;
+    }
+
+    private object LookupVariable(VariableSymbol v)
+    {
+        if (v is GlobalVariableSymbol)
+        {
+            return globals.TryGetValue(v, out var g) ? g : null;
+        }
+
+        foreach (var frame in this.locals)
+        {
+            if (frame.TryGetValue(v, out var value))
+            {
+                return value;
+            }
+        }
+
+        return globals.TryGetValue(v, out var gv) ? gv : null;
     }
 
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
