@@ -1364,6 +1364,45 @@ public sealed class Binder
             return TupleTypeSymbol.Get(elements.MoveToImmutable());
         }
 
+        // Phase 4.4 / ADR-0020: if the type clause carries a type-argument list,
+        // first try to resolve the identifier as an open generic CLR type via
+        // imports (mangled name `Name`N`). This lets users write `List[int]` or
+        // `Dictionary[string, int]` directly. Falls through to the regular
+        // identifier lookup (covering GSharp generic interfaces/structs) when
+        // the import-search does not produce a match.
+        if (syntax.HasTypeArguments &&
+            scope.TryLookupImportedGenericClass(syntax.Identifier.Text, syntax.TypeArguments.Count, out var clrOpenType))
+        {
+            var clrArgs = new System.Type[syntax.TypeArguments.Count];
+            for (var i = 0; i < syntax.TypeArguments.Count; i++)
+            {
+                var ta = BindTypeClause(syntax.TypeArguments[i]);
+                if (ta == null)
+                {
+                    return null;
+                }
+
+                if (ta.ClrType == null)
+                {
+                    Diagnostics.ReportTypeNotGeneric(syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location, ta.Name);
+                    return null;
+                }
+
+                clrArgs[i] = ta.ClrType;
+            }
+
+            try
+            {
+                var closed = clrOpenType.MakeGenericType(clrArgs);
+                return TypeSymbol.FromClrType(closed);
+            }
+            catch (System.ArgumentException)
+            {
+                Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                return null;
+            }
+        }
+
         var element = LookupType(syntax.Identifier.Text);
         if (element == null)
         {

@@ -160,6 +160,37 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Tries to lookup an imported generic open type by simple name and arity (Phase 4.4 / ADR-0020).
+    /// CLR generic types are stored under the mangled name <c>Name`N</c>; this overload
+    /// searches each active import for <c>Target.Name`arity</c>.
+    /// </summary>
+    /// <param name="name">The simple type name as written in source (without the backtick suffix).</param>
+    /// <param name="arity">The number of type parameters.</param>
+    /// <param name="type">The resolved open generic <see cref="System.Type"/> on success.</param>
+    /// <returns>Whether a matching open generic type was found.</returns>
+    public bool TryLookupImportedGenericClass(string name, int arity, out System.Type type)
+    {
+        type = null;
+        if (imports == null || arity <= 0)
+        {
+            return false;
+        }
+
+        var mangled = name + "`" + arity;
+        foreach (var import in imports)
+        {
+            var typeName = import.Target + "." + mangled;
+            if (References.TryResolveType(typeName, out var t))
+            {
+                type = t;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Tries to lookup an imported class.
     /// </summary>
     /// <param name="name">The class name.</param>
