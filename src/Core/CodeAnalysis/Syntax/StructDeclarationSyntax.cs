@@ -123,16 +123,59 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier: null, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken: null, baseTypeIdentifier: null, openBraceToken, fields, methods, closeBraceToken)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The aggregate identifier.</param>
+    /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="openModifier">The optional <c>open</c> contextual keyword (Phase 3.B.3 sub-step 3 — classes only).</param>
+    /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
+    /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
+    /// <param name="primaryConstructorParameters">The primary constructor parameter list (empty when no primary constructor is declared).</param>
+    /// <param name="primaryConstructorCloseParen">The optional closing paren of the primary constructor.</param>
+    /// <param name="baseColonToken">The optional <c>:</c> token introducing a base class clause (Phase 3.B.3 sub-step 3).</param>
+    /// <param name="baseTypeIdentifier">The optional base class identifier; non-null only when <paramref name="baseColonToken"/> is non-null.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="fields">The body field declarations.</param>
+    /// <param name="methods">The method declarations in the body (classes only, Phase 3.B.3 sub-step 2b).</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public StructDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken openModifier,
+        SyntaxToken structKeyword,
+        SyntaxToken primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
+        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken baseColonToken,
+        SyntaxToken baseTypeIdentifier,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FieldDeclarationSyntax> fields,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
         TypeKeyword = typeKeyword;
         Identifier = identifier;
         DataKeyword = dataKeyword;
+        OpenModifier = openModifier;
         StructKeyword = structKeyword;
         PrimaryConstructorOpenParenthesisToken = primaryConstructorOpenParen;
         PrimaryConstructorParameters = primaryConstructorParameters;
         PrimaryConstructorCloseParenthesisToken = primaryConstructorCloseParen;
+        BaseColonToken = baseColonToken;
+        BaseTypeIdentifier = baseTypeIdentifier;
         OpenBraceToken = openBraceToken;
         Fields = fields;
         Methods = methods;
@@ -154,6 +197,12 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the optional <c>data</c> contextual keyword. Non-null when this is a <c>data struct</c> (Phase 3.B.2).</summary>
     public SyntaxToken DataKeyword { get; }
 
+    /// <summary>Gets the optional <c>open</c> contextual keyword (Phase 3.B.3 sub-step 3 — classes only). Non-null marks the class as inheritable per ADR-0017.</summary>
+    public SyntaxToken OpenModifier { get; }
+
+    /// <summary>Gets a value indicating whether this aggregate is declared <c>open</c> (inheritable). Always false for <c>struct</c>.</summary>
+    public bool IsOpen => OpenModifier != null;
+
     /// <summary>Gets the <c>struct</c> or <c>class</c> keyword that marks this aggregate declaration. Inspect <see cref="IsClass"/> to distinguish.</summary>
     public SyntaxToken StructKeyword { get; }
 
@@ -165,6 +214,15 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the optional closing paren of the primary constructor parameter list; null when none was declared.</summary>
     public SyntaxToken PrimaryConstructorCloseParenthesisToken { get; }
+
+    /// <summary>Gets the optional <c>:</c> token introducing a base class clause (Phase 3.B.3 sub-step 3). Null when this class has no explicit base.</summary>
+    public SyntaxToken BaseColonToken { get; }
+
+    /// <summary>Gets the optional identifier of the base class. Non-null only when <see cref="BaseColonToken"/> is non-null.</summary>
+    public SyntaxToken BaseTypeIdentifier { get; }
+
+    /// <summary>Gets a value indicating whether this declaration carries an explicit base-class clause.</summary>
+    public bool HasBaseType => BaseTypeIdentifier != null;
 
     /// <summary>Gets a value indicating whether this declaration carries a Kotlin-style primary constructor parameter list.</summary>
     public bool HasPrimaryConstructor => PrimaryConstructorOpenParenthesisToken != null;

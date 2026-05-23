@@ -50,6 +50,32 @@ public sealed class FunctionSymbol : Symbol
         PackageSymbol package,
         Accessibility accessibility,
         StructSymbol receiverType)
+        : this(name, parameters, type, declaration, package, accessibility, receiverType, isOpen: false, isOverride: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The name of the function.</param>
+    /// <param name="parameters">The parameters of the function.</param>
+    /// <param name="type">The return type of the function.</param>
+    /// <param name="declaration">The declaration of the function.</param>
+    /// <param name="package">The package this function belongs to, or null for built-ins.</param>
+    /// <param name="accessibility">The CLR visibility level.</param>
+    /// <param name="receiverType">The class that owns this function when it is an instance method (Phase 3.B.3 sub-step 2b).</param>
+    /// <param name="isOpen">True when the method is declared <c>open</c> — overridable (Phase 3.B.3 sub-step 3 / ADR-0017). Only meaningful on instance methods.</param>
+    /// <param name="isOverride">True when the method is declared <c>override</c> — must shadow an open base method.</param>
+    public FunctionSymbol(
+        string name,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol type,
+        FunctionDeclarationSyntax declaration,
+        PackageSymbol package,
+        Accessibility accessibility,
+        StructSymbol receiverType,
+        bool isOpen,
+        bool isOverride)
         : base(name)
     {
         Parameters = parameters;
@@ -59,6 +85,8 @@ public sealed class FunctionSymbol : Symbol
         Accessibility = accessibility;
         ReceiverType = receiverType;
         ThisParameter = receiverType != null ? new ParameterSymbol("this", receiverType) : null;
+        IsOpen = isOpen;
+        IsOverride = isOverride;
     }
 
     /// <inheritdoc/>
@@ -102,4 +130,13 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets the synthesized <c>this</c> parameter for instance methods, or <c>null</c> for non-instance functions. Always at IL parameter slot 0 when emitted.</summary>
     public ParameterSymbol ThisParameter { get; }
+
+    /// <summary>Gets a value indicating whether this method is declared <c>open</c> — overridable per ADR-0017 (Phase 3.B.3 sub-step 3).</summary>
+    public bool IsOpen { get; }
+
+    /// <summary>Gets a value indicating whether this method is declared <c>override</c> — must shadow an open base method per ADR-0017.</summary>
+    public bool IsOverride { get; }
+
+    /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
+    public FunctionSymbol OverriddenMethod { get; set; }
 }

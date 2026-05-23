@@ -55,9 +55,41 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken closeParenthesisToken,
         TypeClauseSyntax type,
         BlockStatementSyntax body)
+        : this(syntaxTree, accessibilityModifier, openModifier: null, overrideModifier: null, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class with explicit accessibility and virtuality modifiers (Phase 3.B.3 sub-step 3).
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>).</param>
+    /// <param name="openModifier">The optional <c>open</c> contextual keyword (marks the method as overridable per ADR-0017). Class methods only.</param>
+    /// <param name="overrideModifier">The optional <c>override</c> contextual keyword (marks the method as overriding a base method). Class methods only.</param>
+    /// <param name="functionKeyword">The func keyword.</param>
+    /// <param name="identifier">The function identifier.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token.</param>
+    /// <param name="parameters">The function's parameters.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token.</param>
+    /// <param name="type">The function's type.</param>
+    /// <param name="body">The function's body.</param>
+    public FunctionDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier,
+        SyntaxToken functionKeyword,
+        SyntaxToken identifier,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ParameterSyntax> parameters,
+        SyntaxToken closeParenthesisToken,
+        TypeClauseSyntax type,
+        BlockStatementSyntax body)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
+        OpenModifier = openModifier;
+        OverrideModifier = overrideModifier;
         FunctionKeyword = functionKeyword;
         Identifier = identifier;
         OpenParenthesisToken = openParenthesisToken;
@@ -74,6 +106,18 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// Gets the optional accessibility modifier token (<c>public</c>/<c>internal</c>/<c>private</c>), or <c>null</c> if none was supplied.
     /// </summary>
     public SyntaxToken AccessibilityModifier { get; }
+
+    /// <summary>Gets the optional <c>open</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overridable per ADR-0017. Only meaningful on class methods.</summary>
+    public SyntaxToken OpenModifier { get; }
+
+    /// <summary>Gets the optional <c>override</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overriding a base method per ADR-0017. Only meaningful on class methods.</summary>
+    public SyntaxToken OverrideModifier { get; }
+
+    /// <summary>Gets a value indicating whether this function is marked <c>open</c>.</summary>
+    public bool IsOpen => OpenModifier != null;
+
+    /// <summary>Gets a value indicating whether this function is marked <c>override</c>.</summary>
+    public bool IsOverride => OverrideModifier != null;
 
     /// <summary>
     /// Gets the func keyword.

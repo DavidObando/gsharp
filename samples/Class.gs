@@ -54,3 +54,33 @@ Console.WriteLine(pt.Sum())
 pt.Scale(10)
 Console.WriteLine(pt.Sum())
 
+// Phase 3.B.3 (3/3): open / override + single inheritance per ADR-0017.
+// Sealed-by-default — `open` opts a class in to subclassing, `override`
+// redefines an open inherited method. Virtual dispatch routes through
+// the derived override at runtime. Phase 3 does not yet forward derived
+// primary ctors to base ctors; the sample uses composite literals to
+// initialize inherited fields directly.
+type Animal open class {
+    Kind string
+    open func Speak() string {
+        return "..."
+    }
+
+    func Label() string {
+        return Kind
+    }
+}
+
+type Dog class : Animal {
+    override func Speak() string {
+        return "Woof"
+    }
+}
+
+var dog = Dog{Kind: "dog"}
+Console.WriteLine(dog.Label())
+Console.WriteLine(dog.Speak())
+
+var unknown = Animal{Kind: "mystery"}
+Console.WriteLine(unknown.Speak())
+

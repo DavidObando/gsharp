@@ -512,6 +512,47 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports an attempt to subclass a sealed (non-<c>open</c>) class. Phase 3.B.3 sub-step 3 / ADR-0017.</summary>
+    /// <param name="location">The text location of the base-type identifier.</param>
+    /// <param name="baseTypeName">The base type name.</param>
+    public void ReportBaseClassNotOpen(TextLocation location, string baseTypeName)
+    {
+        Report(location, $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
+    }
+
+    /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="baseTypeName">The base type name.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportMissingOverride(TextLocation location, string baseTypeName, string methodName)
+    {
+        Report(location, $"Method '{baseTypeName}.{methodName}' is overridable; add 'override' to redefine it.");
+    }
+
+    /// <summary>Reports an <c>override</c> method that does not match any open base method. ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportNoBaseMethodToOverride(TextLocation location, string methodName)
+    {
+        Report(location, $"Method '{methodName}' is marked 'override' but no matching open base method was found.");
+    }
+
+    /// <summary>Reports an <c>override</c> targeting a method that is not <c>open</c> (sealed override). ADR-0017.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportOverrideOfSealedMethod(TextLocation location, string methodName)
+    {
+        Report(location, $"Method '{methodName}' cannot override the base method because the base method is not open.");
+    }
+
+    /// <summary>Reports a signature mismatch between an <c>override</c> method and its base method.</summary>
+    /// <param name="location">The text location of the offending declaration.</param>
+    /// <param name="methodName">The method name.</param>
+    public void ReportOverrideSignatureMismatch(TextLocation location, string methodName)
+    {
+        Report(location, $"Override of method '{methodName}' must match the base method's parameter types and return type.");
+    }
+
     private void Report(TextLocation location, string message)
     {
         var diagnostic = new Diagnostic(location, message);

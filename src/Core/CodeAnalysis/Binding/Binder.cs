@@ -44,11 +44,25 @@ public sealed class Binder
                 // Phase 3.B.3 sub-step 2b: expose each field on the receiver
                 // as a bare name inside the method body. Field access lowers
                 // to `this.<field>` at name resolution time.
-                if (function.ReceiverType != null && !function.ReceiverType.Fields.IsDefaultOrEmpty)
+                // Sub-step 3: walk inheritance chain so inherited fields are
+                // also accessible via bare name. Derived shadowing wins.
+                if (function.ReceiverType != null)
                 {
-                    foreach (var fld in function.ReceiverType.Fields)
+                    var seenFields = new HashSet<string>();
+                    for (var t = function.ReceiverType; t != null; t = t.BaseClass)
                     {
-                        scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, function.ReceiverType, fld));
+                        if (t.Fields.IsDefaultOrEmpty)
+                        {
+                            continue;
+                        }
+
+                        foreach (var fld in t.Fields)
+                        {
+                            if (seenFields.Add(fld.Name))
+                            {
+                                scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
+                            }
+                        }
                     }
                 }
             }
@@ -435,7 +449,50 @@ public sealed class Binder
             Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
         }
 
-        var structSymbol = new StructSymbol(name, fields.ToImmutable(), accessibility, syntax, package.Name, syntax.IsData, syntax.IsClass, primaryCtorParameters);
+        // Phase 3.B.3 sub-step 3: resolve the optional base-class clause.
+        // Declaration order rules: the base class must be declared (and bound
+        // into the type-alias scope) before the derived class. Forward
+        // references are not supported in Phase 3.
+        StructSymbol baseClassSymbol = null;
+        if (syntax.HasBaseType)
+        {
+            if (!syntax.IsClass)
+            {
+                Diagnostics.ReportUnexpectedToken(syntax.BaseColonToken.Location, SyntaxKind.ColonToken, SyntaxKind.OpenBraceToken);
+            }
+            else
+            {
+                var baseName = syntax.BaseTypeIdentifier.Text;
+                if (!scope.TryLookupTypeAlias(baseName, out var resolvedBase))
+                {
+                    Diagnostics.ReportUnableToFindType(syntax.BaseTypeIdentifier.Location, baseName);
+                }
+                else if (!(resolvedBase is StructSymbol baseStruct) || !baseStruct.IsClass)
+                {
+                    Diagnostics.ReportUnableToFindType(syntax.BaseTypeIdentifier.Location, baseName);
+                }
+                else if (!baseStruct.IsOpen)
+                {
+                    Diagnostics.ReportBaseClassNotOpen(syntax.BaseTypeIdentifier.Location, baseName);
+                }
+                else
+                {
+                    baseClassSymbol = baseStruct;
+                }
+            }
+        }
+
+        var structSymbol = new StructSymbol(
+            name,
+            fields.ToImmutable(),
+            accessibility,
+            syntax,
+            package.Name,
+            syntax.IsData,
+            syntax.IsClass,
+            primaryCtorParameters,
+            isOpen: syntax.IsOpen && syntax.IsClass,
+            baseClass: baseClassSymbol);
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
@@ -483,14 +540,49 @@ public sealed class Binder
 
                 var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
                 var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+                var methodParameters = parameters.ToImmutable();
+
+                // Phase 3.B.3 sub-step 3: open/override validation against
+                // base class chain per ADR-0017.
+                FunctionSymbol overriddenMethod = null;
+                if (methodSyntax.IsOverride)
+                {
+                    if (structSymbol.BaseClass == null || !structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var baseMethod))
+                    {
+                        Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else if (!baseMethod.IsOpen)
+                    {
+                        Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
+                    {
+                        Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                    }
+                    else
+                    {
+                        overriddenMethod = baseMethod;
+                    }
+                }
+                else if (structSymbol.BaseClass != null
+                    && structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var shadowed)
+                    && shadowed.IsOpen)
+                {
+                    // Method shadows an overridable base method without `override`.
+                    Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                }
+
                 var methodSymbol = new FunctionSymbol(
                     methodName,
-                    parameters.ToImmutable(),
+                    methodParameters,
                     returnType,
                     methodSyntax,
                     package,
                     methodAccessibility,
-                    receiverType: structSymbol);
+                    receiverType: structSymbol,
+                    isOpen: methodSyntax.IsOpen,
+                    isOverride: methodSyntax.IsOverride);
+                methodSymbol.OverriddenMethod = overriddenMethod;
                 methodsBuilder.Add(methodSymbol);
             }
 
@@ -527,6 +619,29 @@ public sealed class Binder
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
         }
+    }
+
+    private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
+    {
+        if (baseMethod.Type != derivedReturnType)
+        {
+            return false;
+        }
+
+        if (baseMethod.Parameters.Length != derivedParams.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < derivedParams.Length; i++)
+        {
+            if (baseMethod.Parameters[i].Type != derivedParams[i].Type)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static Accessibility ResolveAccessibility(SyntaxToken modifier)
@@ -1363,7 +1478,7 @@ public sealed class Binder
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
-            if (!structSymbol.TryGetField(fieldName, out var field))
+            if (!structSymbol.TryGetFieldIncludingInherited(fieldName, out var field, out _))
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                 continue;
@@ -1399,7 +1514,7 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        if (!structSymbol.TryGetField(syntax.FieldIdentifier.Text, out var field))
+        if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
             return new BoundErrorExpression();
@@ -1792,9 +1907,13 @@ public sealed class Binder
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
                 {
-                    if (structSym.TryGetField(ne.IdentifierToken.Text, out var field))
+                    // Walk base chain to find the field.
+                    for (var c = structSym; c != null; c = c.BaseClass)
                     {
-                        return new BoundFieldAccessExpression(receiver, structSym, field);
+                        if (c.TryGetField(ne.IdentifierToken.Text, out var field))
+                        {
+                            return new BoundFieldAccessExpression(receiver, c, field);
+                        }
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
@@ -1837,7 +1956,7 @@ public sealed class Binder
         {
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
-            if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethod(methodName, out var userMethod))
+            if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethodIncludingInherited(methodName, out var userMethod))
             {
                 return BindUserInstanceCall(receiver, userMethod, arguments, ce);
             }
@@ -1849,7 +1968,7 @@ public sealed class Binder
         // Prefer a user-defined class method when the receiver is a user
         // class symbol that has one with this name. (BCL lookup is the
         // fallback for imported CLR types.)
-        if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethod(methodName, out var userMethodPriority))
+        if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethodIncludingInherited(methodName, out var userMethodPriority))
         {
             return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce);
         }

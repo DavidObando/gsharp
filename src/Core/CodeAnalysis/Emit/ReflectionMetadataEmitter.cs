@@ -278,7 +278,7 @@ internal sealed class ReflectionMetadataEmitter
         // first (rows 1..K), then per-package ctor + functions + entry point.
         foreach (var c in classes)
         {
-            var ctorHandle = this.EmitClassDefaultConstructor();
+            var ctorHandle = this.EmitClassDefaultConstructor(c);
             this.classCtorHandles[c] = ctorHandle;
 
             if (c.HasPrimaryConstructor)
@@ -452,15 +452,28 @@ internal sealed class ReflectionMetadataEmitter
         EntityHandle baseType;
         if (structSym.IsClass)
         {
-            // Phase 3.B.3: class types are CLR reference types. Sealed by
-            // default per ADR-0017 (Kotlin-style `open` opt-in lands with
-            // sub-step 3). Base is Object; AutoLayout matches what the C#
-            // compiler emits for a plain class.
-            typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
+            // Phase 3.B.3 sub-step 3: classes are CLR reference types.
+            // Sealed by default per ADR-0017 (Kotlin-style `open` opt-in).
+            // Base is either the user-declared base class (if any) or
+            // System.Object.
+            var classAttrs = TypeAttributes.Class
                 | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
                 | MapTypeAccessibility(structSym.Accessibility);
-            baseType = this.objectTypeRef;
+            if (!structSym.IsOpen)
+            {
+                classAttrs |= TypeAttributes.Sealed;
+            }
+
+            typeAttrs = classAttrs;
+            if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            {
+                baseType = baseHandle;
+            }
+            else
+            {
+                baseType = this.objectTypeRef;
+            }
         }
         else
         {
@@ -482,12 +495,47 @@ internal sealed class ReflectionMetadataEmitter
 
     /// <summary>
     /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
-    /// (Phase 3.B.3). The body chains to <c>object::.ctor()</c> and returns.
+    /// (Phase 3.B.3). The body chains to the base class's <c>.ctor()</c>
+    /// (either an inherited user class or <c>System.Object</c>) and returns.
     /// </summary>
-    private MethodDefinitionHandle EmitClassDefaultConstructor()
+    /// <param name="classSym">The class whose default constructor is being emitted.</param>
+    private MethodDefinitionHandle EmitClassDefaultConstructor(StructSymbol classSym)
     {
-        // Identical IL to <Program>'s default ctor — chain to object base.
-        return this.EmitDefaultConstructor();
+        var baseCtorToken = this.GetBaseCtorToken(classSym);
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: MetadataTokens.ParameterHandle(1));
+    }
+
+    /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="objectCtorRef"/>.</summary>
+    private EntityHandle GetBaseCtorToken(StructSymbol classSym)
+    {
+        if (classSym.BaseClass != null && this.classCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
+        {
+            return baseCtor;
+        }
+
+        return this.objectCtorRef;
     }
 
     /// <summary>
@@ -500,13 +548,15 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitClassPrimaryConstructor(StructSymbol classSym)
     {
         var parameters = classSym.PrimaryConstructorParameters;
+        var baseCtorToken = this.GetBaseCtorToken(classSym);
 
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
-            il.Call(this.objectCtorRef);
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
 
             // For each ctor param: this.<field> = arg; positional 1:1 with
             // fields of the same name.
@@ -680,13 +730,25 @@ internal sealed class ReflectionMetadataEmitter
             ? MethodAttributes.Public
             : ToMethodVisibility(function.Accessibility);
 
-        // Instance methods omit MethodAttributes.Static; emit them as Virtual
-        // so callers can use `callvirt` for null-check safety (sub-step 3 will
-        // introduce true polymorphism).
+        // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
+        // models open/override per ADR-0017:
+        //   plain (neither):    Virtual | NewSlot | Final  (callvirt-safe, non-overridable)
+        //   open:               Virtual | NewSlot          (overridable in derived)
+        //   override (sealed):  Virtual | Final            (reuses base slot, no further override)
+        //   open override:      Virtual                    (reuses base slot, still overridable)
         var methodAttrs = visibility | MethodAttributes.HideBySig;
         if (function.IsInstanceMethod)
         {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+            methodAttrs |= MethodAttributes.Virtual;
+            if (!function.IsOverride)
+            {
+                methodAttrs |= MethodAttributes.NewSlot;
+            }
+
+            if (!function.IsOpen)
+            {
+                methodAttrs |= MethodAttributes.Final;
+            }
         }
         else
         {

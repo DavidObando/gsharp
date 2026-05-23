@@ -304,10 +304,16 @@ public sealed class Evaluator
     {
         var sv = new StructValue(node.StructType);
 
-        // Default-initialize all fields, then apply explicit initializers.
-        foreach (var f in node.StructType.Fields)
+        // Default-initialize all fields (walking inheritance), then apply explicit initializers.
+        for (var t = node.StructType; t != null; t = t.BaseClass)
         {
-            sv.Fields[f.Name] = DefaultValue(f.Type);
+            foreach (var f in t.Fields)
+            {
+                if (!sv.Fields.ContainsKey(f.Name))
+                {
+                    sv.Fields[f.Name] = DefaultValue(f.Type);
+                }
+            }
         }
 
         foreach (var init in node.Initializers)
@@ -322,11 +328,16 @@ public sealed class Evaluator
     {
         var sv = new StructValue(node.StructType);
 
-        // Default-initialize all fields first, then bind primary-ctor args to
-        // their same-named fields (binder guarantees positional alignment).
-        foreach (var f in node.StructType.Fields)
+        // Default-initialize all fields first (including inherited), then bind primary-ctor args.
+        for (var t = node.StructType; t != null; t = t.BaseClass)
         {
-            sv.Fields[f.Name] = DefaultValue(f.Type);
+            foreach (var f in t.Fields)
+            {
+                if (!sv.Fields.ContainsKey(f.Name))
+                {
+                    sv.Fields[f.Name] = DefaultValue(f.Type);
+                }
+            }
         }
 
         var parameters = node.StructType.PrimaryConstructorParameters;
@@ -562,20 +573,40 @@ public sealed class Evaluator
     {
         var receiverValue = EvaluateExpression(node.Receiver);
 
+        // Phase 3.B.3 sub-step 3: virtual dispatch. If the receiver's runtime
+        // type overrides the statically-bound method, route to the override.
+        var method = node.Method;
+        if (receiverValue is StructValue sv && sv.StructType != null)
+        {
+            for (var t = sv.StructType; t != null; t = t.BaseClass)
+            {
+                if (t == method.ReceiverType)
+                {
+                    break;
+                }
+
+                if (t.TryGetMethod(method.Name, out var overrideMethod) && overrideMethod.IsOverride)
+                {
+                    method = overrideMethod;
+                    break;
+                }
+            }
+        }
+
         var frame = new Dictionary<VariableSymbol, object>
         {
-            [node.Method.ThisParameter] = receiverValue,
+            [method.ThisParameter] = receiverValue,
         };
 
         for (int i = 0; i < node.Arguments.Length; i++)
         {
-            var parameter = node.Method.Parameters[i];
+            var parameter = method.Parameters[i];
             var value = EvaluateExpression(node.Arguments[i]);
             frame.Add(parameter, value);
         }
 
         locals.Push(frame);
-        var statement = program.Functions[node.Method];
+        var statement = program.Functions[method];
         var result = EvaluateStatement(statement);
         locals.Pop();
 

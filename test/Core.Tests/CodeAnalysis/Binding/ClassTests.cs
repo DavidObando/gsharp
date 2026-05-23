@@ -304,6 +304,147 @@ type Pt struct {
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    // Phase 3.B.3 sub-step 3: open / override + single inheritance (ADR-0017).
+
+    [Fact]
+    public void Inheritance_BaseMustBeOpen_Diagnoses()
+    {
+        var source = @"
+type A class { X int }
+type B class : A { Y int }
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("not open"));
+    }
+
+    [Fact]
+    public void Inheritance_OpenClass_Subclass_Works()
+    {
+        var source = @"
+type A open class { X int }
+type B class : A { Y int }
+var b = B{X: 1, Y: 2}
+b.X + b.Y
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void Override_OverridesOpenMethod_Dispatches()
+    {
+        var source = @"
+type A open class {
+    open func F() int { return 1 }
+}
+type B class : A {
+    override func F() int { return 2 }
+}
+var b = B{}
+b.F()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void Override_OfNonOpenMethod_Diagnoses()
+    {
+        var source = @"
+type A open class {
+    func F() int { return 1 }
+}
+type B class : A {
+    override func F() int { return 2 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("not open"));
+    }
+
+    [Fact]
+    public void Override_WithoutKeyword_Diagnoses()
+    {
+        var source = @"
+type A open class {
+    open func F() int { return 1 }
+}
+type B class : A {
+    func F() int { return 2 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("add 'override'"));
+    }
+
+    [Fact]
+    public void Override_NoBaseMethod_Diagnoses()
+    {
+        var source = @"
+type A open class {}
+type B class : A {
+    override func F() int { return 1 }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("no matching open base method"));
+    }
+
+    [Fact]
+    public void Override_SignatureMismatch_Diagnoses()
+    {
+        var source = @"
+type A open class {
+    open func F() int { return 1 }
+}
+type B class : A {
+    override func F(x int) int { return x }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("match the base method"));
+    }
+
+    [Fact]
+    public void Inheritance_InheritedFieldAccessibleByBareName()
+    {
+        var source = @"
+type A open class {
+    X int
+    func GetX() int { return X }
+}
+type B class : A {}
+var b = B{X: 42}
+b.GetX()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void Inheritance_InheritedMethod_Callable()
+    {
+        var source = @"
+type A open class {
+    func Hello() int { return 7 }
+}
+type B class : A {}
+var b = B{}
+b.Hello()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

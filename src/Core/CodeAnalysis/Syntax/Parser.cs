@@ -199,9 +199,24 @@ public class Parser
             dataKeyword = NextToken();
         }
 
+        // Phase 3.B.3 sub-step 3: optional `open` modifier on a class
+        // declaration. Per ADR-0017, plain `class` is sealed; `open class`
+        // can be subclassed. `open` before `struct` is diagnosed in the
+        // struct parser (structs cannot be subclassed in CLR).
+        SyntaxToken openModifier = null;
+        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword))
+        {
+            openModifier = NextToken();
+        }
+
         if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword)
         {
-            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword);
+            return ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
+        }
+
+        if (openModifier != null)
+        {
+            Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
         }
 
         if (dataKeyword != null)
@@ -222,7 +237,8 @@ public class Parser
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword)
+        SyntaxToken dataKeyword,
+        SyntaxToken openModifier)
     {
         var structOrClassKeyword = Current.Kind == SyntaxKind.ClassKeyword
             ? MatchToken(SyntaxKind.ClassKeyword)
@@ -234,6 +250,13 @@ public class Parser
             // the Phase 3 design. Diagnose but continue so the rest of the
             // body parses cleanly.
             Diagnostics.ReportUnexpectedToken(structOrClassKeyword.Location, SyntaxKind.ClassKeyword, SyntaxKind.StructKeyword);
+        }
+
+        if (openModifier != null && structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+        {
+            // ADR-0017: `open` is only meaningful on a `class` (structs are
+            // value types and cannot be subclassed).
+            Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.ClassKeyword);
         }
 
         // Phase 3.B.3 sub-step 2: optional Kotlin-style primary constructor
@@ -256,6 +279,22 @@ public class Parser
             primaryCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         }
 
+        // Phase 3.B.3 sub-step 3: optional base-class clause `: Base`.
+        // Only valid for classes; struct types diagnose. Resolution and
+        // openness checks are performed in the binder.
+        SyntaxToken baseColon = null;
+        SyntaxToken baseTypeIdentifier = null;
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
+            }
+
+            baseColon = MatchToken(SyntaxKind.ColonToken);
+            baseTypeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        }
+
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
@@ -273,9 +312,39 @@ public class Parser
                 Current.Kind == SyntaxKind.InternalKeyword ||
                 Current.Kind == SyntaxKind.PrivateKeyword)
             {
-                if (Peek(1).Kind == SyntaxKind.FuncKeyword)
+                // Accessibility modifier may be followed by an optional
+                // `open`/`override` and then `func`.
+                var ahead = 1;
+                while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
+                {
+                    ahead++;
+                }
+
+                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword)
                 {
                     memberAccessibility = NextToken();
+                }
+            }
+
+            // Phase 3.B.3 sub-step 3: parse optional `open` / `override`
+            // modifiers (any order) before the method's `func` keyword.
+            SyntaxToken memberOpenModifier = null;
+            SyntaxToken memberOverrideModifier = null;
+            while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
+            {
+                if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
+                {
+                    memberOpenModifier = NextToken();
+                }
+                else if (Current.Kind == SyntaxKind.OverrideKeyword && memberOverrideModifier == null)
+                {
+                    memberOverrideModifier = NextToken();
+                }
+                else
+                {
+                    // Duplicate modifier — diagnose by consuming and reporting.
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                    NextToken();
                 }
             }
 
@@ -286,11 +355,17 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
                 }
 
-                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility);
+                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
                 methods.Add(method);
             }
             else
             {
+                if (memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 fields.Add(ParseFieldDeclaration());
             }
 
@@ -307,10 +382,13 @@ public class Parser
             typeKeyword,
             identifier,
             dataKeyword,
+            openModifier,
             structOrClassKeyword,
             primaryCtorOpenParen,
             primaryCtorParameters,
             primaryCtorCloseParen,
+            baseColon,
+            baseTypeIdentifier,
             openBrace,
             fields.ToImmutable(),
             methods.ToImmutable(),
@@ -333,6 +411,9 @@ public class Parser
     }
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
+        => ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null);
+
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -341,7 +422,7 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body);
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()

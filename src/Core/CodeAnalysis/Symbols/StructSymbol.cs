@@ -94,6 +94,34 @@ public sealed class StructSymbol : TypeSymbol
         bool isData,
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters)
+        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters, isOpen: false, baseClass: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class.
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node.</param>
+    /// <param name="packageName">The package the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations.</param>
+    /// <param name="isClass">True for <c>class</c> declarations.</param>
+    /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters.</param>
+    /// <param name="isOpen">True when this class was declared with the <c>open</c> modifier (Phase 3.B.3 sub-step 3 / ADR-0017). Always false for structs.</param>
+    /// <param name="baseClass">The base class symbol (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isClass,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters,
+        bool isOpen,
+        StructSymbol baseClass)
         : base(name)
     {
         Fields = fields;
@@ -103,6 +131,8 @@ public sealed class StructSymbol : TypeSymbol
         IsData = isData;
         IsClass = isClass;
         PrimaryConstructorParameters = primaryConstructorParameters;
+        IsOpen = isOpen;
+        BaseClass = baseClass;
     }
 
     /// <summary>Gets the field declarations in source order.</summary>
@@ -129,6 +159,12 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
     public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
 
+    /// <summary>Gets a value indicating whether this class was declared <c>open</c> (Phase 3.B.3 sub-step 3 / ADR-0017). Required for subclassing.</summary>
+    public bool IsOpen { get; }
+
+    /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
+    public StructSymbol BaseClass { get; }
+
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
 
@@ -137,6 +173,42 @@ public sealed class StructSymbol : TypeSymbol
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetInheritedMethod(string name, out FunctionSymbol method)
+    {
+        for (var c = this.BaseClass; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetMethod(name, out method))
+            {
+                return true;
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /// <summary>Looks up a method by name on this class or any ancestor (this-first).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetMethodIncludingInherited(string name, out FunctionSymbol method)
+    {
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetMethod(name, out method))
+            {
+                return true;
+            }
+        }
+
+        method = null;
+        return false;
     }
 
     /// <summary>Tries to find a method by name on this class.</summary>
@@ -177,6 +249,27 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         field = null;
+        return false;
+    }
+
+    /// <summary>Looks up a field by name on this class or any ancestor (this-first). Phase 3.B.3 sub-step 3.</summary>
+    /// <param name="name">The field name.</param>
+    /// <param name="field">The found field on success.</param>
+    /// <param name="declaringType">The class that actually declares the field.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetFieldIncludingInherited(string name, out FieldSymbol field, out StructSymbol declaringType)
+    {
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetField(name, out field))
+            {
+                declaringType = c;
+                return true;
+            }
+        }
+
+        field = null;
+        declaringType = null;
         return false;
     }
 }

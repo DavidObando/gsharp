@@ -166,6 +166,10 @@ public static class SyntaxFacts
                 return SyntaxKind.LetKeyword;
             case "map":
                 return SyntaxKind.MapKeyword;
+            case "open":
+                return SyntaxKind.OpenKeyword;
+            case "override":
+                return SyntaxKind.OverrideKeyword;
             case "package":
                 return SyntaxKind.PackageKeyword;
             case "private":
@@ -382,6 +386,10 @@ public static class SyntaxFacts
                 return "let";
             case SyntaxKind.MapKeyword:
                 return "map";
+            case SyntaxKind.OpenKeyword:
+                return "open";
+            case SyntaxKind.OverrideKeyword:
+                return "override";
             case SyntaxKind.PackageKeyword:
                 return "package";
             case SyntaxKind.PrivateKeyword:

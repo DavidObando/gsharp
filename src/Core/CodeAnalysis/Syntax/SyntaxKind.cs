@@ -98,6 +98,8 @@ public enum SyntaxKind
     InternalKeyword,
     LetKeyword,
     MapKeyword,
+    OpenKeyword,
+    OverrideKeyword,
     PackageKeyword,
     PrivateKeyword,
     PublicKeyword,
