@@ -16,18 +16,40 @@ public sealed class BoundVariableExpression : BoundExpression
     /// </summary>
     /// <param name="variable">The variable symbol.</param>
     public BoundVariableExpression(VariableSymbol variable)
+        : this(variable, narrowedType: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundVariableExpression"/>
+    /// class with a narrowed type. Phase 3.C.4: used by smart-cast flow
+    /// analysis to surface a non-nullable view of a nullable variable
+    /// inside an <c>if x != nil { ... }</c> guard, without losing the
+    /// underlying symbol identity (so the evaluator still loads from the
+    /// original slot).
+    /// </summary>
+    /// <param name="variable">The variable symbol.</param>
+    /// <param name="narrowedType">The narrowed type to report from
+    /// <see cref="Type"/>. Pass <c>null</c> to use the variable's declared
+    /// type.</param>
+    public BoundVariableExpression(VariableSymbol variable, TypeSymbol narrowedType)
     {
         Variable = variable;
+        NarrowedType = narrowedType;
     }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.VariableExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => Variable.Type;
+    public override TypeSymbol Type => NarrowedType ?? Variable.Type;
+
+    /// <summary>Gets the variable symbol.</summary>
+    public VariableSymbol Variable { get; }
 
     /// <summary>
-    /// Gets the variable symbol.
+    /// Gets the narrowed type, or <c>null</c> if the variable's declared
+    /// type is in effect.
     /// </summary>
-    public VariableSymbol Variable { get; }
+    public TypeSymbol NarrowedType { get; }
 }

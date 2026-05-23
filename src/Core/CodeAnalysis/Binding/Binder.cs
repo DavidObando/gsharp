@@ -24,6 +24,7 @@ public sealed class Binder
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
     private int nullConditionalCaptureCounter;
+    private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
     private BoundScope scope;
 
     /// <summary>
@@ -952,8 +953,14 @@ public sealed class Binder
         if (syntax.Initializer == null)
         {
             var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-            var thenStatement = BindStatement(syntax.ThenStatement);
-            var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+            // Phase 3.C.4: minimal smart-cast narrowing for `x != nil` and
+            // `x == nil` guards. The non-nil arm sees `x` as the underlying
+            // type; the nil arm sees it as the bottom `TypeSymbol.Null`.
+            var (nonNilNarrow, nilNarrow) = TryClassifyNilGuard(condition);
+
+            var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, nonNilNarrow);
+            var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, nilNarrow);
             return new BoundIfStatement(condition, thenStatement, elseStatement);
         }
 
@@ -974,6 +981,69 @@ public sealed class Binder
 
         var inner = new BoundIfStatement(initCondition, initThen, initElse);
         return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
+    {
+        // Phase 3.C.4: recognise the canonical narrowing patterns. We support
+        // only single-variable guards here; conjunctions, disjunctions and
+        // pattern-based narrowing are deferred.
+        if (condition is not BoundBinaryExpression be)
+        {
+            return (null, null);
+        }
+
+        VariableSymbol target = null;
+        if (be.Left is BoundVariableExpression lv && IsNilLiteral(be.Right))
+        {
+            target = lv.Variable;
+        }
+        else if (be.Right is BoundVariableExpression rv && IsNilLiteral(be.Left))
+        {
+            target = rv.Variable;
+        }
+
+        if (target == null || target.Type is not NullableTypeSymbol nullable)
+        {
+            return (null, null);
+        }
+
+        var underlying = nullable.UnderlyingType;
+        Dictionary<VariableSymbol, TypeSymbol> nonNilFrame = null;
+        Dictionary<VariableSymbol, TypeSymbol> nilFrame = null;
+        if (be.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+        {
+            nonNilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+        }
+        else if (be.Op.Kind == BoundBinaryOperatorKind.Equals)
+        {
+            nilFrame = new Dictionary<VariableSymbol, TypeSymbol> { [target] = underlying };
+        }
+
+        return (nonNilFrame, nilFrame);
+    }
+
+    private static bool IsNilLiteral(BoundExpression expr)
+    {
+        return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
+    }
+
+    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (frame == null)
+        {
+            return BindStatement(syntax);
+        }
+
+        narrowedVariables.Add(frame);
+        try
+        {
+            return BindStatement(syntax);
+        }
+        finally
+        {
+            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+        }
     }
 
     private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
@@ -1614,7 +1684,22 @@ public sealed class Binder
                 implicitField.Field);
         }
 
-        return new BoundVariableExpression(variable);
+        return new BoundVariableExpression(variable, TryGetNarrowedType(variable));
+    }
+
+    private TypeSymbol TryGetNarrowedType(VariableSymbol variable)
+    {
+        // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
+        // innermost frame outward — the topmost narrowing wins.
+        for (var i = narrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (narrowedVariables[i].TryGetValue(variable, out var narrowed))
+            {
+                return narrowed;
+            }
+        }
+
+        return null;
     }
 
     private BoundExpression BindAssignmentExpression(AssignmentExpressionSyntax syntax)
