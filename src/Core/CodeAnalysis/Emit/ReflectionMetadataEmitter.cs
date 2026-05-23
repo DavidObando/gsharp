@@ -423,6 +423,13 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Phase 4 emit parity (F2, type-erased): now that every generic
+        // definition has its TypeDef + FieldDefs + ctor handles in the
+        // lookup dictionaries, walk the bound program for constructed
+        // StructSymbols (Box[int], Pair[string, int], ...) and alias them
+        // to their definitions' rows.
+        this.RegisterConstructedTypeAliases();
+
         foreach (var pkg in packages)
         {
             var pkgCtor = this.EmitDefaultConstructor();
@@ -550,14 +557,19 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
-        // Phase 4.3a (interpreter-only): generic type definitions are not yet
-        // emitted to IL. The interpreter substitutes type parameters at bind
-        // time, but CLR generic IL emission is deferred. ADR-0020 tracks the
-        // remaining 4.1b/4.3a-emit work.
-        if (structSym.IsGenericDefinition || !structSym.TypeArguments.IsDefaultOrEmpty)
+        // Phase 4 emit parity (F2, type-erased): generic type definitions
+        // are emitted as ordinary non-generic CLR classes/structs. Each
+        // T-typed field is encoded as System.Object via EncodeTypeSymbol;
+        // constructed instances (Box[int], Box[string]) share the same CLR
+        // TypeDef as the definition and round-trip values through box /
+        // unbox.any at field-access and primary-ctor boundaries. Constructed
+        // StructSymbols are aliased into the lookup dictionaries by
+        // RegisterConstructedTypeAliases after the definition's TypeDef and
+        // members are emitted.
+        if (!structSym.TypeArguments.IsDefaultOrEmpty)
         {
             throw new System.NotSupportedException(
-                $"Emitting generic types (here: '{structSym.Name}') is not yet supported. Use the interpreter for generic-type programs until the CLR generic emit pass lands.");
+                $"Internal error: a constructed StructSymbol ('{structSym.Name}') reached EmitStructTypeDef. Only definitions should be in program.Structs.");
         }
 
         // Emit field definitions in source order. Each field's signature is a
@@ -1058,6 +1070,69 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return sink;
+    }
+
+    // Phase 4 emit parity (F2, type-erased generic user types): discover
+    // every constructed StructSymbol referenced in the bound program
+    // (function bodies, class methods, and lambda bodies) and alias it to
+    // its definition's TypeDef, ctor, primary-ctor, and per-field FieldDef
+    // rows. Emission sites can then do plain dictionary lookups regardless
+    // of whether the type is open, constructed, or already a non-generic
+    // symbol.
+    private void RegisterConstructedTypeAliases()
+    {
+        var collector = new ConstructedTypeCollector();
+        foreach (var kvp in this.program.Functions)
+        {
+            collector.RewriteStatement(kvp.Value);
+        }
+
+        foreach (var body in this.lambdaBodies.Values)
+        {
+            collector.RewriteStatement(body);
+        }
+
+        foreach (var constructed in collector.Constructed)
+        {
+            var def = constructed.Definition;
+            if (def == null || def == constructed)
+            {
+                continue;
+            }
+
+            if (this.structTypeDefs.TryGetValue(def, out var td))
+            {
+                this.structTypeDefs[constructed] = td;
+            }
+
+            if (this.classCtorHandles.TryGetValue(def, out var cc))
+            {
+                this.classCtorHandles[constructed] = cc;
+            }
+
+            if (this.classPrimaryCtorHandles.TryGetValue(def, out var pc))
+            {
+                this.classPrimaryCtorHandles[constructed] = pc;
+            }
+
+            foreach (var cf in constructed.Fields)
+            {
+                FieldSymbol df = null;
+                foreach (var candidate in def.Fields)
+                {
+                    if (candidate.Name == cf.Name)
+                    {
+                        df = candidate;
+                        break;
+                    }
+                }
+
+                if (df != null && this.structFieldDefs.TryGetValue(df, out var fd))
+                {
+                    this.structFieldDefs[cf] = fd;
+                }
+            }
+        }
     }
 
     // Phase 4 emit parity (E2): for each lambda that captures outer variables,
@@ -2342,6 +2417,51 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class ConstructedTypeCollector : BoundTreeRewriter
+    {
+        public HashSet<StructSymbol> Constructed { get; } = new HashSet<StructSymbol>();
+
+        protected override BoundExpression RewriteExpression(BoundExpression node)
+        {
+            this.TryAdd(node.Type);
+            switch (node)
+            {
+                case BoundStructLiteralExpression sl:
+                    this.TryAdd(sl.StructType);
+                    foreach (var init in sl.Initializers)
+                    {
+                        this.TryAdd(init.Field.Type);
+                    }
+
+                    break;
+                case BoundFieldAccessExpression fa:
+                    this.TryAdd(fa.StructType);
+                    this.TryAdd(fa.Field.Type);
+                    break;
+                case BoundFieldAssignmentExpression fas:
+                    this.TryAdd(fas.StructType);
+                    this.TryAdd(fas.Field.Type);
+                    break;
+                case BoundConstructorCallExpression cc:
+                    this.TryAdd(cc.StructType);
+                    break;
+                case BoundVariableExpression ve:
+                    this.TryAdd(ve.Variable.Type);
+                    break;
+            }
+
+            return base.RewriteExpression(node);
+        }
+
+        private void TryAdd(TypeSymbol type)
+        {
+            if (type is StructSymbol s && !s.TypeArguments.IsDefaultOrEmpty)
+            {
+                this.Constructed.Add(s);
+            }
+        }
+    }
+
     private sealed class LambdaCollector : BoundTreeRewriter
     {
         private readonly List<BoundFunctionLiteralExpression> sink;
@@ -3128,9 +3248,26 @@ internal sealed class ReflectionMetadataEmitter
                     $"Class '{call.StructType.Name}' has no emitted primary ctor.");
             }
 
-            foreach (var arg in call.Arguments)
+            // Phase 4 emit parity (F2, type-erased generic user types): the
+            // primary ctor is emitted on the definition with each T-typed
+            // parameter encoded as System.Object. When the call site uses
+            // a constructed instance, value-type arguments crossing into
+            // those parameters must be boxed at the boundary.
+            var def = call.StructType.Definition ?? call.StructType;
+            var defParams = def.PrimaryConstructorParameters;
+            for (int i = 0; i < call.Arguments.Length; i++)
             {
+                var arg = call.Arguments[i];
                 this.EmitExpression(arg);
+
+                if (i < defParams.Length
+                    && defParams[i].Type is TypeParameterSymbol
+                    && arg.Type is not TypeParameterSymbol
+                    && IsValueTypeSymbol(arg.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(arg.Type));
+                }
             }
 
             this.il.OpCode(ILOpCode.Newobj);
@@ -3175,6 +3312,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Newobj);
                 this.il.Token(ctorHandle);
 
+                var classDef = literal.StructType.Definition ?? literal.StructType;
                 foreach (var init in literal.Initializers)
                 {
                     if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
@@ -3185,6 +3323,33 @@ internal sealed class ReflectionMetadataEmitter
 
                     this.il.OpCode(ILOpCode.Dup);
                     this.EmitExpression(init.Value);
+
+                    // Phase 4 emit parity (F2, type-erased): box when the
+                    // definition's field is open (T) and the assigned value
+                    // is a value type. Same boundary semantics as the
+                    // primary-ctor and call-site box passes.
+                    if (classDef != literal.StructType)
+                    {
+                        FieldSymbol df = null;
+                        foreach (var f in classDef.Fields)
+                        {
+                            if (f.Name == init.Field.Name)
+                            {
+                                df = f;
+                                break;
+                            }
+                        }
+
+                        if (df != null
+                            && df.Type is TypeParameterSymbol
+                            && init.Value.Type is not TypeParameterSymbol
+                            && IsValueTypeSymbol(init.Value.Type))
+                        {
+                            this.il.OpCode(ILOpCode.Box);
+                            this.il.Token(this.outer.GetElementTypeToken(init.Value.Type));
+                        }
+                    }
+
                     this.il.OpCode(ILOpCode.Stfld);
                     this.il.Token(fieldHandle);
                 }
@@ -3204,6 +3369,7 @@ internal sealed class ReflectionMetadataEmitter
             this.il.Token(typeDef);
 
             // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
+            var structDef = literal.StructType.Definition ?? literal.StructType;
             foreach (var init in literal.Initializers)
             {
                 if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
@@ -3214,6 +3380,29 @@ internal sealed class ReflectionMetadataEmitter
 
                 this.il.LoadLocalAddress(slot);
                 this.EmitExpression(init.Value);
+
+                if (structDef != literal.StructType)
+                {
+                    FieldSymbol df = null;
+                    foreach (var f in structDef.Fields)
+                    {
+                        if (f.Name == init.Field.Name)
+                        {
+                            df = f;
+                            break;
+                        }
+                    }
+
+                    if (df != null
+                        && df.Type is TypeParameterSymbol
+                        && init.Value.Type is not TypeParameterSymbol
+                        && IsValueTypeSymbol(init.Value.Type))
+                    {
+                        this.il.OpCode(ILOpCode.Box);
+                        this.il.Token(this.outer.GetElementTypeToken(init.Value.Type));
+                    }
+                }
+
                 this.il.OpCode(ILOpCode.Stfld);
                 this.il.Token(fieldHandle);
             }
@@ -3247,6 +3436,33 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
+
+            // Phase 4 emit parity (F2, type-erased generic user types): if
+            // the definition's field is open (T) but the constructed
+            // instance substitutes it to a value type, the ldfld pushes an
+            // object reference (the boxed value). Unbox.any so the rest of
+            // the IL sees the expected primitive.
+            if (fa.StructType?.Definition is StructSymbol def && def != fa.StructType)
+            {
+                FieldSymbol defField = null;
+                foreach (var f in def.Fields)
+                {
+                    if (f.Name == fa.Field.Name)
+                    {
+                        defField = f;
+                        break;
+                    }
+                }
+
+                if (defField != null
+                    && defField.Type is TypeParameterSymbol
+                    && fa.Field.Type is not TypeParameterSymbol
+                    && IsValueTypeSymbol(fa.Field.Type))
+                {
+                    this.il.OpCode(ILOpCode.Unbox_any);
+                    this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
+                }
+            }
         }
 
         private void EmitNullConditionalAccess(BoundNullConditionalAccessExpression nc)
