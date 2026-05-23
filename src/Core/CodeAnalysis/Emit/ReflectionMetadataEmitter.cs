@@ -64,6 +64,21 @@ internal sealed class ReflectionMetadataEmitter
     // body is emitted via the same EmitFunction path.
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
+    // Phase 4 emit parity (E2): synthesized closure classes for lambdas
+    // that capture outer variables. Each captured-variable lambda gets:
+    //   * A sealed class with one public field per capture (the closure).
+    //   * An instance method holding the rewritten body where captured-
+    //     variable reads/writes become this.field reads/writes.
+    //   * A default ctor (chains to object::.ctor()) — emitted by the
+    //     existing EmitClassDefaultConstructor path.
+    // Capture semantics match the interpreter: snapshot-by-value at the
+    // literal site. The synthesized class is appended to the user struct
+    // list so it threads through the existing class TypeDef/method/field
+    // row planning naturally.
+    private readonly Dictionary<BoundFunctionLiteralExpression, ClosureInfo> closureInfos = new Dictionary<BoundFunctionLiteralExpression, ClosureInfo>();
+    private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
+    private int closureCounter;
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -146,7 +161,28 @@ internal sealed class ReflectionMetadataEmitter
         //   TypeDef 4: <Program>  fieldList=N+1  methodList=1
         //
         // Where N = total struct fields. <Module> "owns" rows [1, 1) = none.
+        // Phase 4 emit parity (E1+E2): discover all function literals before
+        // any row planning. No-capture literals add MethodDef rows alongside
+        // user functions; capture-bearing literals are lowered into synthesized
+        // closure classes that fold into the existing class TypeDef/method/
+        // field row planning. The host package for both is the entry-point
+        // package (which always exists for compilable programs that run).
+        var lambdaLiterals = this.CollectFunctionLiterals();
+        var hostPackageGuess = this.program.EntryPoint?.Package
+            ?? this.program.EntryPointPackage
+            ?? (this.program.Packages.IsDefaultOrEmpty ? null : this.program.Packages[0]);
+        this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+
+        // Phase 3.B.4: user-defined interface TypeDefs (planned below).
+        // Synthesized closure classes are appended after user aggregates so
+        // their TypeDefs come last among the class block; field-row planning
+        // walks the combined list so closure fields get well-defined rows.
         var allAggregates = this.program.Structs;
+        if (this.synthesizedClosureClasses.Count > 0)
+        {
+            allAggregates = allAggregates.AddRange(this.synthesizedClosureClasses);
+        }
+
         var classes = allAggregates.Where(s => s.IsClass).ToList();
         var structs = allAggregates.Where(s => !s.IsClass).ToList();
         var interfaces = this.program.Interfaces;
@@ -306,14 +342,13 @@ internal sealed class ReflectionMetadataEmitter
 
         var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
 
-        // Phase 4 emit parity (E1): discover all function literals so they get
-        // MethodDef rows and bodies emitted. Walk every user function body
-        // (including class methods), then attach lambdas to the entry-point
-        // package's <Program> container. Bail on closures — captured-variable
-        // support is a follow-up (closure-class synthesis).
-        var lambdas = this.CollectFunctionLiterals();
+        // Phase 4 emit parity (E1): non-capture function literals are attached
+        // to the entry-point package's <Program> container as ordinary static
+        // methods. Capture-bearing literals were already redirected into
+        // closure-class invoke methods by SynthesizeClosures, so we skip them
+        // here.
         var lambdaHostPackage = entryPointPackage ?? packages[0];
-        if (lambdas.Count > 0)
+        if (lambdaLiterals.Count > 0)
         {
             if (!functionsByPackage.TryGetValue(lambdaHostPackage, out var hostBucket))
             {
@@ -322,12 +357,11 @@ internal sealed class ReflectionMetadataEmitter
                 packages = packages.Add(lambdaHostPackage);
             }
 
-            foreach (var literal in lambdas)
+            foreach (var literal in lambdaLiterals)
             {
                 if (literal.CapturedVariables.Length > 0)
                 {
-                    throw new NotSupportedException(
-                        $"Function literal '{literal.Function.Name}' captures outer variables ({string.Join(", ", literal.CapturedVariables.Select(v => v.Name))}); closure emit is not yet supported (Phase 4 emit parity E2). Run under the interpreter for now.");
+                    continue;
                 }
 
                 this.lambdaBodies[literal.Function] = literal.Body;
@@ -378,7 +412,11 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in c.Methods)
                 {
-                    var body = this.program.Functions[m];
+                    if (!this.program.Functions.TryGetValue(m, out var body))
+                    {
+                        body = this.lambdaBodies[m];
+                    }
+
                     var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
                     this.methodHandles[m] = emittedHandle;
                 }
@@ -1022,6 +1060,81 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return sink;
+    }
+
+    // Phase 4 emit parity (E2): for each lambda that captures outer variables,
+    // synthesize a sealed closure class on the entry-point package with:
+    //   - one public field per captured VariableSymbol (typed identically),
+    //   - one instance method (the lambda body, with captured reads/writes
+    //     rewritten to this.field reads/writes),
+    //   - a default ctor (chains to object::.ctor() via the existing
+    //     EmitClassDefaultConstructor path).
+    // Capture semantics are snapshot-by-value at literal creation time — the
+    // same semantics the interpreter implements (see
+    // <c>EvaluateFunctionLiteralExpression</c>): writes inside the lambda
+    // update the closure copy only, not the outer variable.
+    //
+    // Nested-lambda captures (a lambda that captures a variable already
+    // captured by an enclosing closure) are not yet supported: detecting them
+    // requires another rewrite layer. The synthesis throws a clear
+    // NotSupportedException for that case.
+    private void SynthesizeClosures(List<BoundFunctionLiteralExpression> literals, PackageSymbol hostPackage)
+    {
+        foreach (var literal in literals)
+        {
+            if (literal.CapturedVariables.Length == 0)
+            {
+                continue;
+            }
+
+            var closureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+            var packageName = hostPackage?.Name ?? string.Empty;
+
+            var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(literal.CapturedVariables.Length);
+            var captureFields = new Dictionary<VariableSymbol, FieldSymbol>();
+            foreach (var captured in literal.CapturedVariables)
+            {
+                var field = new FieldSymbol(captured.Name, captured.Type, Accessibility.Public);
+                fieldBuilder.Add(field);
+                captureFields[captured] = field;
+            }
+
+            var closureClass = new StructSymbol(
+                name: closureName,
+                fields: fieldBuilder.MoveToImmutable(),
+                accessibility: Accessibility.Internal,
+                declaration: null,
+                packageName: packageName,
+                isData: false,
+                isClass: true);
+
+            // The invoke method reuses the lambda's parameter symbols so the
+            // rewritten body's BoundVariableExpression(parameter) nodes still
+            // resolve to the same ParameterSymbols (which EmitFunction maps
+            // to IL arg slots).
+            var invokeMethod = new FunctionSymbol(
+                name: "Invoke",
+                parameters: literal.Function.Parameters,
+                type: literal.Function.Type,
+                declaration: null,
+                package: hostPackage,
+                accessibility: Accessibility.Public,
+                receiverType: (TypeSymbol)closureClass);
+
+            closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
+
+            var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
+            var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(literal.Body);
+            if (rewriter.UnsupportedCapture != null)
+            {
+                throw new NotSupportedException(
+                    $"Function literal '{literal.Function.Name}' captures '{rewriter.UnsupportedCapture.Name}' from a kind ('{rewriter.UnsupportedCaptureKind}') the emitter cannot currently rewrite. Run under the interpreter for now.");
+            }
+
+            this.lambdaBodies[invokeMethod] = rewrittenBody;
+            this.synthesizedClosureClasses.Add(closureClass);
+            this.closureInfos[literal] = new ClosureInfo(closureClass, invokeMethod, captureFields);
+        }
     }
 
     private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
@@ -2119,6 +2232,82 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return hostType;
+    }
+
+    private sealed class ClosureInfo
+    {
+        public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields)
+        {
+            this.ClassSym = classSym;
+            this.InvokeMethod = invokeMethod;
+            this.CaptureFields = captureFields;
+        }
+
+        public StructSymbol ClassSym { get; }
+
+        public FunctionSymbol InvokeMethod { get; }
+
+        public Dictionary<VariableSymbol, FieldSymbol> CaptureFields { get; }
+    }
+
+    private sealed class CaptureRewriter : BoundTreeRewriter
+    {
+        private readonly StructSymbol closureClass;
+        private readonly Dictionary<VariableSymbol, FieldSymbol> captureFields;
+        private readonly ParameterSymbol thisParam;
+
+        public CaptureRewriter(StructSymbol closureClass, Dictionary<VariableSymbol, FieldSymbol> captureFields, ParameterSymbol thisParam)
+        {
+            this.closureClass = closureClass;
+            this.captureFields = captureFields;
+            this.thisParam = thisParam;
+        }
+
+        // Set when the rewriter encounters a captured variable in a context
+        // it cannot lower (e.g., as the target of a BoundIndexAssignmentExpression
+        // or other shape that the BoundFieldAssignment node does not model).
+        // Reported by SynthesizeClosures as a NotSupportedException.
+        public VariableSymbol UnsupportedCapture { get; private set; }
+
+        public string UnsupportedCaptureKind { get; private set; }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        {
+            if (this.captureFields.TryGetValue(node.Variable, out var field))
+            {
+                return new BoundFieldAccessExpression(
+                    new BoundVariableExpression(this.thisParam),
+                    this.closureClass,
+                    field);
+            }
+
+            return node;
+        }
+
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (this.captureFields.TryGetValue(node.Variable, out var field))
+            {
+                var value = this.RewriteExpression(node.Expression);
+                return new BoundFieldAssignmentExpression(this.thisParam, this.closureClass, field, value);
+            }
+
+            return base.RewriteAssignmentExpression(node);
+        }
+
+        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        {
+            // Lambda body declares its own locals — never the captured ones.
+            // Still record an "unsupported capture" check in case a captured
+            // VariableSymbol re-appears as a declaration shadow (binder bug).
+            if (this.captureFields.ContainsKey(node.Variable))
+            {
+                this.UnsupportedCapture = node.Variable;
+                this.UnsupportedCaptureKind = nameof(BoundVariableDeclaration);
+            }
+
+            return base.RewriteVariableDeclaration(node);
+        }
     }
 
     private sealed class LambdaCollector : BoundTreeRewriter
@@ -3229,10 +3418,68 @@ internal sealed class ReflectionMetadataEmitter
         // `(object, IntPtr)` ctor.
         private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
         {
+            if (this.outer.closureInfos.TryGetValue(literal, out var closure))
+            {
+                // Capture-bearing literal: instantiate the closure class,
+                // snapshot each captured variable into its field, then bind
+                // the delegate to the instance method.
+                //
+                //   newobj <closureClass>::.ctor()
+                //   foreach capture:
+                //       dup
+                //       <load captured value>
+                //       stfld <closureClass>::<field>
+                //   dup
+                //   ldftn  <closureClass>::Invoke
+                //   newobj Func/Action::.ctor(object, IntPtr)
+                if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Closure class '{closure.ClassSym.Name}' has no emitted constructor.");
+                }
+
+                if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Closure invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
+                }
+
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(ctorHandle);
+
+                foreach (var captured in literal.CapturedVariables)
+                {
+                    if (!closure.CaptureFields.TryGetValue(captured, out var field))
+                    {
+                        throw new InvalidOperationException(
+                            $"Closure for '{literal.Function.Name}' has no field for captured '{captured.Name}'.");
+                    }
+
+                    if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Closure field '{field.Name}' has no emitted FieldDef.");
+                    }
+
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.EmitExpression(new BoundVariableExpression(captured));
+                    this.il.OpCode(ILOpCode.Stfld);
+                    this.il.Token(fieldHandle);
+                }
+
+                var delegateTypeC = this.outer.ResolveDelegateClrType(literal.FunctionType);
+                var delegateCtorC = delegateTypeC.GetConstructors()[0];
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(invokeHandle);
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(delegateCtorC));
+                return;
+            }
+
             if (literal.CapturedVariables.Length > 0)
             {
                 throw new NotSupportedException(
-                    $"Function literal '{literal.Function.Name}' captures outer variables; closure emit is not yet supported.");
+                    $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
             }
 
             if (!this.outer.functionHandles.TryGetValue(literal.Function, out var methodHandle))
