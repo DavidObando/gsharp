@@ -1066,6 +1066,29 @@ public class Parser
         }
 
         var keyword = MatchToken(expected);
+
+        // Phase 4.5: `let (a, b, ...) = expr` deconstructs a tuple-typed
+        // initializer. The opening paren must come *directly* after the
+        // keyword: an explicit type clause or identifier always starts with
+        // an identifier, so this is unambiguous.
+        if (expected == SyntaxKind.LetKeyword && Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+            while (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+            }
+
+            var idents = new SeparatedSyntaxList<SyntaxToken>(nodesAndSeparators.ToImmutable());
+            var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+            var equalsTok = MatchToken(SyntaxKind.EqualsToken);
+            var init = ParseExpression();
+            return new TupleDeconstructionStatementSyntax(syntaxTree, keyword, openParen, idents, closeParen, equalsTok, init);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
         var equals = MatchToken(SyntaxKind.EqualsToken);
@@ -1342,7 +1365,31 @@ public class Parser
         var currentLine = syntaxTree.Text.GetLineIndex(Current.Span.Start);
         var isEof = Current.Kind == SyntaxKind.EndOfFileToken;
         var sameLine = !isEof && keywordLine == currentLine;
-        var expression = sameLine ? ParseExpression() : null;
+        ExpressionSyntax expression = null;
+        if (sameLine)
+        {
+            expression = ParseExpression();
+
+            // Phase 4.6: multi-return support. `return e1, e2, ...` lowers to
+            // returning a tuple literal so callers can deconstruct or bind it
+            // through the standard tuple machinery.
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                nodesAndSeparators.Add(expression);
+                var syntheticOpen = new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, keyword.Position, null, null);
+                while (Current.Kind == SyntaxKind.CommaToken)
+                {
+                    nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                    nodesAndSeparators.Add(ParseExpression());
+                }
+
+                var syntheticClose = new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, Current.Position, null, null);
+                var elements = new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+                expression = new TupleLiteralExpressionSyntax(syntaxTree, syntheticOpen, elements, syntheticClose);
+            }
+        }
+
         return new ReturnStatementSyntax(syntaxTree, keyword, expression);
     }
 

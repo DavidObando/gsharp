@@ -141,6 +141,7 @@ ThrowStatement
 TrueKeyword
 TryKeyword
 TryStatement
+TupleDeconstructionStatement
 TupleLiteralExpression
 TypeAliasDeclaration
 TypeArgumentList

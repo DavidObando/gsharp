@@ -78,6 +78,56 @@ p.Item3
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Deconstruction_BindsNamedLocals()
+    {
+        var result = Evaluate(@"
+let (a, b) = (10, ""ok"")
+a
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void Deconstruction_AccessesSecondElement()
+    {
+        var result = Evaluate(@"
+let (a, b) = (10, ""ok"")
+b
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
+    public void MultiReturn_PackedIntoTuple_DeconstructAtCallSite()
+    {
+        var result = Evaluate(@"
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+let (q, r) = divmod(10, 3)
+q
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void MultiReturn_RemainderAccessible()
+    {
+        var result = Evaluate(@"
+func divmod(a int, b int) (int, int) {
+    return a / b, a % b
+}
+let (q, r) = divmod(10, 3)
+r
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

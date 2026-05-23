@@ -26,6 +26,7 @@ public sealed class Binder
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
     private int labelCounter;
     private int nullConditionalCaptureCounter;
+    private int syntheticLocalCounter;
     private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
     private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
@@ -1054,6 +1055,8 @@ public sealed class Binder
                 return BindThrowStatement((ThrowStatementSyntax)syntax);
             case SyntaxKind.UsingStatement:
                 return BindUsingStatement((UsingStatementSyntax)syntax);
+            case SyntaxKind.TupleDeconstructionStatement:
+                return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -1152,6 +1155,48 @@ public sealed class Binder
         var convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
 
         return new BoundVariableDeclaration(variable, convertedInitializer);
+    }
+
+    private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
+    {
+        // Phase 4.5: `let (a, b, ...) = expr`. Evaluate the RHS into a single
+        // synthetic readonly local (preserving single-eval semantics), then
+        // declare each named identifier as `let xi = temp.ItemI+1`.
+        var initializer = BindExpression(syntax.Initializer);
+        if (initializer.Type == TypeSymbol.Error)
+        {
+            return new BoundExpressionStatement(initializer);
+        }
+
+        if (!(initializer.Type is TupleTypeSymbol tupleType))
+        {
+            Diagnostics.ReportUnexpectedToken(syntax.OpenParenToken.Location, syntax.OpenParenToken.Kind, SyntaxKind.IdentifierToken);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        if (syntax.Identifiers.Count != tupleType.Arity)
+        {
+            Diagnostics.ReportUnexpectedToken(syntax.CloseParenToken.Location, syntax.CloseParenToken.Kind, SyntaxKind.IdentifierToken);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+
+        for (var i = 0; i < syntax.Identifiers.Count; i++)
+        {
+            var idTok = syntax.Identifiers[i];
+            var elemType = tupleType.ElementTypes[i];
+            var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, elemType);
+            var access = new BoundTupleElementAccessExpression(new BoundVariableExpression(tempVar), tupleType, i);
+            statements.Add(new BoundVariableDeclaration(elemVar, access));
+        }
+
+        return new BoundBlockStatement(statements.ToImmutable());
     }
 
     private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)

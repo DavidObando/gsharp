@@ -175,6 +175,7 @@ public enum SyntaxKind
     FieldAccessExpression,
     FieldAssignmentExpression,
     TupleLiteralExpression,
+    TupleDeconstructionStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
