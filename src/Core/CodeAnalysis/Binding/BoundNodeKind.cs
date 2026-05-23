@@ -19,6 +19,7 @@ public enum BoundNodeKind
     IfStatement,
     ForInfiniteStatement,
     ForEllipsisStatement,
+    ForRangeStatement,
     LabelStatement,
     GotoStatement,
     ConditionalGotoStatement,

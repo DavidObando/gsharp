@@ -1153,6 +1153,8 @@ public sealed class Binder
                 return BindForConditionStatement((ForConditionStatementSyntax)syntax);
             case SyntaxKind.ForClauseStatement:
                 return BindForClauseStatement((ForClauseStatementSyntax)syntax);
+            case SyntaxKind.ForRangeStatement:
+                return BindForRangeStatement((ForRangeStatementSyntax)syntax);
             case SyntaxKind.BreakStatement:
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
@@ -1877,6 +1879,118 @@ public sealed class Binder
         scope = scope.Parent;
 
         return new BoundForEllipsisStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
+    }
+
+    private BoundStatement BindForRangeStatement(ForRangeStatementSyntax syntax)
+    {
+        var collection = BindExpression(syntax.Collection);
+
+        // Decide iteration strategy and element/key types based on the
+        // collection type.
+        ForRangeKind iterationKind;
+        TypeSymbol keyType;
+        TypeSymbol valueType;
+        switch (collection.Type)
+        {
+            case ArrayTypeSymbol arr:
+                iterationKind = ForRangeKind.Indexed;
+                keyType = TypeSymbol.Int;
+                valueType = arr.ElementType;
+                break;
+            case SliceTypeSymbol slice:
+                iterationKind = ForRangeKind.Indexed;
+                keyType = TypeSymbol.Int;
+                valueType = slice.ElementType;
+                break;
+            case ImportedTypeSymbol imp when imp.ClrType != null:
+                if (TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
+                {
+                    iterationKind = ForRangeKind.Dictionary;
+                    keyType = TypeSymbol.FromClrType(dKey);
+                    valueType = TypeSymbol.FromClrType(dVal);
+                }
+                else if (TryGetClrEnumerableElementType(imp.ClrType, out var elemType))
+                {
+                    iterationKind = ForRangeKind.Enumerable;
+                    keyType = TypeSymbol.Int;
+                    valueType = TypeSymbol.FromClrType(elemType);
+                }
+                else
+                {
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    return new BoundExpressionStatement(new BoundErrorExpression());
+                }
+
+                break;
+            default:
+                if (collection.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                }
+
+                return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        scope = new BoundScope(scope);
+
+        VariableSymbol keyVariable = null;
+        VariableSymbol valueVariable;
+        if (syntax.SecondIdentifier != null)
+        {
+            keyVariable = BindVariableDeclaration(syntax.FirstIdentifier, isReadOnly: false, type: keyType);
+            valueVariable = BindVariableDeclaration(syntax.SecondIdentifier, isReadOnly: false, type: valueType);
+        }
+        else
+        {
+            // `for v := range coll` — single var binds the value/element.
+            valueVariable = BindVariableDeclaration(syntax.FirstIdentifier, isReadOnly: false, type: valueType);
+        }
+
+        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        return new BoundForRangeStatement(keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
+    }
+
+    private static bool TryGetClrDictionaryTypes(System.Type clrType, out System.Type keyType, out System.Type valueType)
+    {
+        foreach (var iface in clrType.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IDictionary`2")
+            {
+                var args = iface.GetGenericArguments();
+                keyType = args[0];
+                valueType = args[1];
+                return true;
+            }
+        }
+
+        keyType = null;
+        valueType = null;
+        return false;
+    }
+
+    private static bool TryGetClrEnumerableElementType(System.Type clrType, out System.Type elementType)
+    {
+        foreach (var iface in clrType.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+            {
+                elementType = iface.GetGenericArguments()[0];
+                return true;
+            }
+        }
+
+        // Non-generic IEnumerable falls back to object.
+        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(clrType))
+        {
+            elementType = typeof(object);
+            return true;
+        }
+
+        elementType = null;
+        return false;
     }
 
     private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)

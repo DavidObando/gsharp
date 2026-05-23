@@ -59,6 +59,7 @@ ForConditionStatement
 ForEllipsisStatement
 ForInfiniteStatement
 ForKeyword
+ForRangeStatement
 FuncKeyword
 FunctionDeclaration
 FunctionLiteralExpression
@@ -178,6 +179,7 @@ FieldAccessExpression
 FieldAssignmentExpression
 ForEllipsisStatement
 ForInfiniteStatement
+ForRangeStatement
 FunctionLiteralExpression
 GotoStatement
 IfStatement

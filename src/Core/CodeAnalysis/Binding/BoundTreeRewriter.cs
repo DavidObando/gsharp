@@ -31,6 +31,8 @@ public abstract class BoundTreeRewriter
                 return RewriteForInfiniteStatement((BoundForInfiniteStatement)node);
             case BoundNodeKind.ForEllipsisStatement:
                 return RewriteForEllipsisStatement((BoundForEllipsisStatement)node);
+            case BoundNodeKind.ForRangeStatement:
+                return RewriteForRangeStatement((BoundForRangeStatement)node);
             case BoundNodeKind.LabelStatement:
                 return RewriteLabelStatement((BoundLabelStatement)node);
             case BoundNodeKind.GotoStatement:
@@ -156,6 +158,23 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundForEllipsisStatement(node.Variable, lowerBound, upperBound, body, node.BreakLabel, node.ContinueLabel);
+    }
+
+    /// <summary>
+    /// Rewrites a for-range statement.
+    /// </summary>
+    /// <param name="node">The for-range statement to rewrite.</param>
+    /// <returns>The rewritten for-range statement.</returns>
+    protected virtual BoundStatement RewriteForRangeStatement(BoundForRangeStatement node)
+    {
+        var collection = RewriteExpression(node.Collection);
+        var body = RewriteStatement(node.Body);
+        if (collection == node.Collection && body == node.Body)
+        {
+            return node;
+        }
+
+        return new BoundForRangeStatement(node.KeyVariable, node.ValueVariable, collection, node.IterationKind, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>

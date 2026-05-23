@@ -1252,6 +1252,11 @@ public class Parser
             return ParseForInfiniteStatement();
         }
 
+        if (LooksLikeForRange())
+        {
+            return ParseForRangeStatement();
+        }
+
         if (LooksLikeForEllipsis())
         {
             return ParseForEllipsisStatement();
@@ -1263,6 +1268,34 @@ public class Parser
         }
 
         return ParseForConditionStatement();
+    }
+
+    private bool LooksLikeForRange()
+    {
+        // `for <ident> := range <expr> { ... }`
+        // `for <ident>, <ident> := range <expr> { ... }`
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        int o = 2;
+        if (Peek(o).Kind == SyntaxKind.CommaToken)
+        {
+            if (Peek(o + 1).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            o += 2;
+        }
+
+        if (Peek(o).Kind != SyntaxKind.ColonEqualsToken)
+        {
+            return false;
+        }
+
+        return Peek(o + 1).Kind == SyntaxKind.RangeKeyword;
     }
 
     private bool LooksLikeForEllipsis()
@@ -1415,6 +1448,25 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var body = ParseStatement();
         return new ForInfiniteStatementSyntax(syntaxTree, keyword, body);
+    }
+
+    private StatementSyntax ParseForRangeStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+        var firstIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        SyntaxToken commaToken = null;
+        SyntaxToken secondIdentifier = null;
+        if (Current.Kind == SyntaxKind.CommaToken)
+        {
+            commaToken = MatchToken(SyntaxKind.CommaToken);
+            secondIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        }
+
+        var colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
+        var rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        var collection = ParseExpression();
+        var body = ParseStatement();
+        return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, collection, body);
     }
 
     private StatementSyntax ParseForEllipsisStatement()

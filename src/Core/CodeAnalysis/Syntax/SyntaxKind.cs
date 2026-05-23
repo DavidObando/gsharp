@@ -154,6 +154,7 @@ public enum SyntaxKind
     ForEllipsisStatement,
     ForConditionStatement,
     ForClauseStatement,
+    ForRangeStatement,
     BreakStatement,
     ContinueStatement,
     ReturnStatement,
