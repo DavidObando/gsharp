@@ -18,7 +18,42 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The interface identifier.</param>
+    /// <param name="typeParameterList">The optional type-parameter list (Phase 4.3c / ADR-0020).</param>
     /// <param name="sealedKeyword">The optional <c>sealed</c> contextual keyword (Phase 3.B.5). Non-null restricts implementors to the same package.</param>
+    /// <param name="interfaceKeyword">The <c>interface</c> keyword.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="methods">The method signatures declared inside the interface body.</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public InterfaceDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
+        SyntaxToken sealedKeyword,
+        SyntaxToken interfaceKeyword,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
+        : base(syntaxTree)
+    {
+        AccessibilityModifier = accessibilityModifier;
+        TypeKeyword = typeKeyword;
+        Identifier = identifier;
+        TypeParameterList = typeParameterList;
+        SealedKeyword = sealedKeyword;
+        InterfaceKeyword = interfaceKeyword;
+        OpenBraceToken = openBraceToken;
+        Methods = methods;
+        CloseBraceToken = closeBraceToken;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class without a type-parameter list (Phase 3 / 4.3c back-compat overload).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The interface identifier.</param>
+    /// <param name="sealedKeyword">The optional <c>sealed</c> contextual keyword (Phase 3.B.5).</param>
     /// <param name="interfaceKeyword">The <c>interface</c> keyword.</param>
     /// <param name="openBraceToken">The opening brace of the body.</param>
     /// <param name="methods">The method signatures declared inside the interface body.</param>
@@ -33,16 +68,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
-        : base(syntaxTree)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, typeParameterList: null, sealedKeyword, interfaceKeyword, openBraceToken, methods, closeBraceToken)
     {
-        AccessibilityModifier = accessibilityModifier;
-        TypeKeyword = typeKeyword;
-        Identifier = identifier;
-        SealedKeyword = sealedKeyword;
-        InterfaceKeyword = interfaceKeyword;
-        OpenBraceToken = openBraceToken;
-        Methods = methods;
-        CloseBraceToken = closeBraceToken;
     }
 
     /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class without a sealed modifier (back-compat overload).</summary>
@@ -78,6 +105,9 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the interface identifier.</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>Gets the optional type-parameter list for generic interfaces (Phase 4.3c / ADR-0020).</summary>
+    public TypeParameterListSyntax TypeParameterList { get; }
 
     /// <summary>Gets the optional <c>sealed</c> contextual keyword (Phase 3.B.5). Non-null marks this as a closed hierarchy whose implementors must live in the same package.</summary>
     public SyntaxToken SealedKeyword { get; }

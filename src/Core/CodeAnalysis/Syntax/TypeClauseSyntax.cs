@@ -52,12 +52,39 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken closeBracketToken,
         SyntaxToken identifier,
         SyntaxToken questionToken)
+        : this(syntaxTree, openBracketToken, lengthToken, closeBracketToken, identifier, typeArgumentOpenBracketToken: null, typeArguments: default, typeArgumentCloseBracketToken: null, questionToken)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class supporting an optional type-argument list <c>Foo[T1, T2]</c> in type position (Phase 4.3c / ADR-0020).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openBracketToken">The opening bracket token of the array/slice prefix, or <c>null</c>.</param>
+    /// <param name="lengthToken">The numeric length token, or <c>null</c>.</param>
+    /// <param name="closeBracketToken">The closing bracket token of the array/slice prefix, or <c>null</c>.</param>
+    /// <param name="identifier">The (element) type identifier.</param>
+    /// <param name="typeArgumentOpenBracketToken">The opening bracket of the type-argument list, or <c>null</c>.</param>
+    /// <param name="typeArguments">The type-argument list, or the default value.</param>
+    /// <param name="typeArgumentCloseBracketToken">The closing bracket of the type-argument list, or <c>null</c>.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SyntaxToken lengthToken,
+        SyntaxToken closeBracketToken,
+        SyntaxToken identifier,
+        SyntaxToken typeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
+        SyntaxToken typeArgumentCloseBracketToken,
+        SyntaxToken questionToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
         LengthToken = lengthToken;
         CloseBracketToken = closeBracketToken;
         Identifier = identifier;
+        TypeArgumentOpenBracketToken = typeArgumentOpenBracketToken;
+        TypeArguments = typeArguments;
+        TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
         QuestionToken = questionToken;
     }
 
@@ -157,4 +184,16 @@ public sealed class TypeClauseSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this clause denotes a function type <c>func(...) R?</c> (Phase 4.7).</summary>
     public bool IsFunction => FuncKeyword != null;
+
+    /// <summary>Gets the opening <c>[</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
+    public SyntaxToken TypeArgumentOpenBracketToken { get; }
+
+    /// <summary>Gets the comma-separated type-argument clauses for a constructed generic type (Phase 4.3c), or the default value.</summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> TypeArguments { get; }
+
+    /// <summary>Gets the closing <c>]</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
+    public SyntaxToken TypeArgumentCloseBracketToken { get; }
+
+    /// <summary>Gets a value indicating whether this clause carries a type-argument list <c>Foo[T1, T2]</c> (Phase 4.3c).</summary>
+    public bool HasTypeArguments => TypeArgumentOpenBracketToken != null;
 }

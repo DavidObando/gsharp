@@ -247,13 +247,9 @@ public class Parser
                 Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.InterfaceKeyword);
             }
 
-            if (typeParameterList != null)
-            {
-                // Phase 4.3a only supports generic struct/class; generic interfaces land in 4.3b.
-                Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.InterfaceKeyword);
-            }
-
-            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, sealedModifier);
+            // Phase 4.3c / ADR-0020/0021: generic interfaces. The type-parameter
+            // list (if any) is now forwarded into ParseInterfaceDeclaration.
+            return ParseInterfaceDeclaration(accessibilityModifier, typeKeyword, identifier, typeParameterList, sealedModifier);
         }
 
         if (sealedModifier != null)
@@ -456,6 +452,7 @@ public class Parser
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
         SyntaxToken sealedModifier)
     {
         var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
@@ -490,6 +487,7 @@ public class Parser
             accessibilityModifier,
             typeKeyword,
             identifier,
+            typeParameterList,
             sealedModifier,
             interfaceKeyword,
             openBrace,
@@ -650,6 +648,8 @@ public class Parser
                 || follow.Kind == SyntaxKind.StructKeyword
                 || follow.Kind == SyntaxKind.ClassKeyword
                 || follow.Kind == SyntaxKind.InterfaceKeyword
+                || follow.Kind == SyntaxKind.SealedKeyword
+                || follow.Kind == SyntaxKind.OpenKeyword
                 || (follow.Kind == SyntaxKind.IdentifierToken && follow.Text == "data"))
             {
                 return true;
@@ -804,8 +804,44 @@ public class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Phase 4.3c: optional type-argument list `Foo[T1, T2]` in type position.
+        SyntaxToken typeArgOpen = null;
+        SeparatedSyntaxList<TypeClauseSyntax> typeArgs = default;
+        SyntaxToken typeArgClose = null;
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            typeArgOpen = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+            while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+                   Current.Kind != SyntaxKind.EndOfFileToken)
+            {
+                nodesAndSeparators.Add(ParseTypeClause());
+                if (Current.Kind == SyntaxKind.CommaToken)
+                {
+                    nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            typeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+            typeArgClose = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        }
+
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
-        return new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, identifier, question);
+        return new TypeClauseSyntax(
+            syntaxTree,
+            openBracketToken: null,
+            lengthToken: null,
+            closeBracketToken: null,
+            identifier,
+            typeArgOpen,
+            typeArgs,
+            typeArgClose,
+            question);
     }
 
     private TypeClauseSyntax ParseTupleTypeClause()

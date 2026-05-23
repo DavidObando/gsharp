@@ -766,6 +766,14 @@ public sealed class Binder
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
 
+        // Phase 4.3c / ADR-0020: bind type parameters at declaration time so
+        // method-signature binding (which happens later) can resolve them.
+        var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            interfaceSymbol.SetTypeParameters(typeParameters);
+        }
+
         if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
@@ -785,6 +793,30 @@ public sealed class Binder
     }
 
     private void BindInterfaceMembers(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
+    {
+        // Phase 4.3c: push the interface's type parameters so that method
+        // signatures can reference them.
+        var previousTypeParameters = currentTypeParameters;
+        if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
+        {
+            currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            foreach (var tp in interfaceSymbol.TypeParameters)
+            {
+                currentTypeParameters[tp.Name] = tp;
+            }
+        }
+
+        try
+        {
+            BindInterfaceMembersCore(syntax, interfaceSymbol, package);
+        }
+        finally
+        {
+            currentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    private void BindInterfaceMembersCore(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol, PackageSymbol package)
     {
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var seenNames = new HashSet<string>();
@@ -831,6 +863,60 @@ public sealed class Binder
         }
 
         interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
+
+        // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
+        // parameter types (contravariant position) and return type (covariant
+        // position). An `out T` may only appear in covariant position; an
+        // `in T` may only appear in contravariant position.
+        if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
+        {
+            for (var i = 0; i < interfaceSymbol.Methods.Length; i++)
+            {
+                var m = interfaceSymbol.Methods[i];
+                var methodSyntax = syntax.Methods[i];
+                CheckVariancePosition(m.Type, isOutput: true, methodSyntax.Type?.Location ?? methodSyntax.Identifier.Location);
+                for (var p = 0; p < m.Parameters.Length; p++)
+                {
+                    var paramSyntax = methodSyntax.Parameters[p];
+                    CheckVariancePosition(m.Parameters[p].Type, isOutput: false, paramSyntax.Type?.Location ?? paramSyntax.Location);
+                }
+            }
+        }
+    }
+
+    private void CheckVariancePosition(TypeSymbol type, bool isOutput, TextLocation location)
+    {
+        if (type is TypeParameterSymbol tp)
+        {
+            if (tp.Variance == TypeParameterVariance.Out && !isOutput)
+            {
+                Diagnostics.ReportTypeParameterVariancePositionViolation(location, tp.Name, "out", "input");
+            }
+            else if (tp.Variance == TypeParameterVariance.In && isOutput)
+            {
+                Diagnostics.ReportTypeParameterVariancePositionViolation(location, tp.Name, "in", "output");
+            }
+
+            return;
+        }
+
+        if (type is SliceTypeSymbol s)
+        {
+            CheckVariancePosition(s.ElementType, isOutput, location);
+            return;
+        }
+
+        if (type is ArrayTypeSymbol a)
+        {
+            CheckVariancePosition(a.ElementType, isOutput, location);
+            return;
+        }
+
+        if (type is NullableTypeSymbol n)
+        {
+            CheckVariancePosition(n.UnderlyingType, isOutput, location);
+            return;
+        }
     }
 
     private void BindFunctionDeclaration(FunctionDeclarationSyntax syntax, PackageSymbol package)
@@ -1283,6 +1369,46 @@ public sealed class Binder
         {
             Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
             return null;
+        }
+
+        // Phase 4.3c / ADR-0020: handle generic type construction `Foo[T1, T2]` in
+        // type position (currently interfaces; structs follow up later).
+        if (syntax.HasTypeArguments)
+        {
+            var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
+            for (var i = 0; i < syntax.TypeArguments.Count; i++)
+            {
+                var ta = BindTypeClause(syntax.TypeArguments[i]);
+                if (ta == null)
+                {
+                    return null;
+                }
+
+                typeArgsBuilder.Add(ta);
+            }
+
+            var typeArgs = typeArgsBuilder.MoveToImmutable();
+            if (element is InterfaceSymbol iface)
+            {
+                if (!iface.IsGenericDefinition)
+                {
+                    Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                    return null;
+                }
+
+                if (iface.TypeParameters.Length != typeArgs.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, iface.TypeParameters.Length, typeArgs.Length);
+                    return null;
+                }
+
+                element = InterfaceSymbol.Construct(iface, typeArgs);
+            }
+            else
+            {
+                Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                return null;
+            }
         }
 
         if (!syntax.IsArray)
