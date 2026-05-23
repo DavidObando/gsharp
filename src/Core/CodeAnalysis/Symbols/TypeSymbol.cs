@@ -71,6 +71,20 @@ public class TypeSymbol : Symbol
             return Void;
         }
 
+        // Phase 3.C.5 / ADR-0020: surface CLR value-type nullability
+        // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
+        // wrapping the underlying. Reference-type nullability driven by
+        // `[NullableAttribute]` byte arrays is a follow-up.
+        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        {
+            var def = clrType.GetGenericTypeDefinition();
+            if (def.FullName == "System.Nullable`1")
+            {
+                var inner = clrType.GetGenericArguments()[0];
+                return NullableTypeSymbol.Get(FromClrType(inner));
+            }
+        }
+
         // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
         // target framework's identity) still map onto the built-in primitive symbols.
         var fullName = clrType.FullName;

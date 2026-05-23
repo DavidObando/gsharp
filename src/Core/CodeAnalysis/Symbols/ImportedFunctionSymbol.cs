@@ -57,6 +57,6 @@ public sealed class ImportedFunctionSymbol : Symbol
 
     private TypeSymbol GetMethodType(MethodInfo method)
     {
-        return TypeSymbol.FromClrType(method.ReturnType);
+        return ClrNullability.GetReturnTypeSymbol(method);
     }
 }
