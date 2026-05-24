@@ -1777,7 +1777,15 @@ public sealed class Binder
             arms.Add(new BoundPatternSwitchArm(pattern, body));
         }
 
-        return new BoundPatternSwitchStatement(discriminant, arms.ToImmutable());
+        var boundArms = arms.ToImmutable();
+        ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
+            syntax.SwitchKeyword.Location,
+            switchType,
+            boundArms,
+            scope.GetDeclaredStructs(),
+            Diagnostics);
+
+        return new BoundPatternSwitchStatement(discriminant, boundArms);
     }
 
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
@@ -1792,7 +1800,20 @@ public sealed class Binder
 
         if (syntax.Arms.Length == 0)
         {
-            Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
+            if (ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType))
+            {
+                ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
+                    syntax.SwitchKeyword.Location,
+                    switchType,
+                    ImmutableArray<BoundSwitchExpressionArm>.Empty,
+                    scope.GetDeclaredStructs(),
+                    Diagnostics);
+            }
+            else
+            {
+                Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
+            }
+
             return new BoundErrorExpression();
         }
 
@@ -1832,7 +1853,7 @@ public sealed class Binder
             boundArmBuilders.Add((armSyntax, pattern, armResult));
         }
 
-        if (!hasDefault)
+        if (!hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType))
         {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
         }
@@ -1860,7 +1881,15 @@ public sealed class Binder
             arms.Add(new BoundSwitchExpressionArm(arm.Pattern, result));
         }
 
-        return new BoundSwitchExpression(discriminant, arms.ToImmutable(), resultType);
+        var boundArms = arms.ToImmutable();
+        ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
+            syntax.SwitchKeyword.Location,
+            switchType,
+            boundArms,
+            scope.GetDeclaredStructs(),
+            Diagnostics);
+
+        return new BoundSwitchExpression(discriminant, boundArms, resultType);
     }
 
     private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
