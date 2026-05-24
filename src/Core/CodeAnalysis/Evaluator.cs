@@ -887,6 +887,11 @@ public sealed class Evaluator
             return string.Empty;
         }
 
+        if (type is Symbols.EnumSymbol)
+        {
+            return 0;
+        }
+
         if (type is Symbols.StructSymbol s)
         {
             var sv = new StructValue(s);

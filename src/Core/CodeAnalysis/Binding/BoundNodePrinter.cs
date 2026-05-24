@@ -494,6 +494,10 @@ public static class BoundNodePrinter
             value = "\"" + value.Replace("\"", "\\\"") + "\"";
             writer.WriteString(value);
         }
+        else if (node.Value is int)
+        {
+            writer.WriteNumber(value);
+        }
         else
         {
             throw new Exception($"Unexpected type {node.Type}");

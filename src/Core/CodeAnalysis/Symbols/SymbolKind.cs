@@ -58,4 +58,9 @@ public enum SymbolKind
     /// The symbol is a field on a struct or class.
     /// </summary>
     Field,
+
+    /// <summary>
+    /// The symbol is an enum member.
+    /// </summary>
+    EnumMember,
 }

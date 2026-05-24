@@ -38,6 +38,9 @@ public static class SymbolPrinter
             case SymbolKind.Type:
                 WriteTypeTo((TypeSymbol)symbol, writer);
                 break;
+            case SymbolKind.EnumMember:
+                WriteEnumMemberTo((EnumMemberSymbol)symbol, writer);
+                break;
             case SymbolKind.Package:
                 WritePackageTo((PackageSymbol)symbol, writer);
                 break;
@@ -112,6 +115,13 @@ public static class SymbolPrinter
 
     private static void WriteTypeTo(TypeSymbol symbol, TextWriter writer)
     {
+        writer.WriteIdentifier(symbol.Name);
+    }
+
+    private static void WriteEnumMemberTo(EnumMemberSymbol symbol, TextWriter writer)
+    {
+        writer.WriteIdentifier(symbol.EnumType.Name);
+        writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(symbol.Name);
     }
 

@@ -199,6 +199,14 @@ public sealed class Binder
             }
         }
 
+        var enumDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                           .OfType<EnumDeclarationSyntax>();
+        foreach (var enumSyntax in enumDeclarations)
+        {
+            var owningPackage = packageByTree[enumSyntax.SyntaxTree];
+            binder.BindEnumDeclaration(enumSyntax, owningPackage);
+        }
+
         var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                             .OfType<StructDeclarationSyntax>();
         foreach (var structSyntax in structDeclarations)
@@ -427,6 +435,49 @@ public sealed class Binder
         }
 
         if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+    }
+
+    private void BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+
+        switch (name)
+        {
+            case "bool":
+            case "int":
+            case "string":
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+                return;
+        }
+
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var enumSymbol = new EnumSymbol(name, accessibility, package.Name, syntax);
+
+        var seenMemberNames = new HashSet<string>();
+        var members = ImmutableArray.CreateBuilder<EnumMemberSymbol>();
+        foreach (var memberSyntax in syntax.Members)
+        {
+            var memberName = memberSyntax.Identifier.Text;
+            if (!seenMemberNames.Add(memberName))
+            {
+                Diagnostics.ReportDuplicateEnumMember(memberSyntax.Identifier.Location, memberName, name);
+                continue;
+            }
+
+            members.Add(new EnumMemberSymbol(memberName, enumSymbol, members.Count));
+        }
+
+        if (members.Count == 0)
+        {
+            Diagnostics.ReportEmptyEnumDeclaration(syntax.Identifier.Location, name);
+        }
+
+        enumSymbol.SetMembers(members.ToImmutable());
+
+        if (!scope.TryDeclareTypeAlias(name, enumSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
@@ -1691,7 +1742,8 @@ public sealed class Binder
         if (switchType != TypeSymbol.Error &&
             switchType != TypeSymbol.Int &&
             switchType != TypeSymbol.String &&
-            switchType != TypeSymbol.Bool)
+            switchType != TypeSymbol.Bool &&
+            switchType is not EnumSymbol)
         {
             Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
             return BindErrorStatement();
@@ -1786,7 +1838,8 @@ public sealed class Binder
 
         if (switchType != TypeSymbol.Int &&
             switchType != TypeSymbol.String &&
-            switchType != TypeSymbol.Bool)
+            switchType != TypeSymbol.Bool &&
+            switchType is not EnumSymbol)
         {
             Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
             return new BoundErrorExpression();
@@ -3939,6 +3992,7 @@ public sealed class Binder
         var rightPart = syntax.RightPart;
         BoundExpression receiver = null;
         ImportedClassSymbol classSymbol = null;
+        EnumSymbol enumSymbol = null;
 
         if (leftPart is NameExpressionSyntax leftName)
         {
@@ -3969,6 +4023,10 @@ public sealed class Binder
             {
                 classSymbol = importedClass;
             }
+            else if (scope.TryLookupTypeAlias(name, out var typeAlias) && typeAlias is EnumSymbol foundEnum)
+            {
+                enumSymbol = foundEnum;
+            }
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -3978,6 +4036,11 @@ public sealed class Binder
         else
         {
             receiver = BindExpression(leftPart);
+        }
+
+        if (enumSymbol != null)
+        {
+            return BindEnumAccessorStep(enumSymbol, rightPart);
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
@@ -4065,6 +4128,34 @@ public sealed class Binder
         importedClass = new ImportedClassSymbol(type, typeNameSyntax);
         rightPart = remainder;
         return true;
+    }
+
+    private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
+    {
+        switch (rightPart)
+        {
+            case AccessorExpressionSyntax nested:
+                var head = BindEnumAccessorStep(enumSymbol, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
+
+            case NameExpressionSyntax ne:
+                var memberName = ne.IdentifierToken.Text;
+                if (enumSymbol.TryGetMember(memberName, out var member))
+                {
+                    return new BoundLiteralExpression(member.Value, enumSymbol);
+                }
+
+                Diagnostics.ReportUndefinedEnumMember(ne.Location, memberName, enumSymbol.Name);
+                return new BoundErrorExpression();
+
+            default:
+                return new BoundErrorExpression();
+        }
     }
 
     private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)

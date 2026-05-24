@@ -123,6 +123,16 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool);
         }
 
+        // Phase 6.8: enum equality compares the underlying int values.
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+            && leftType is EnumSymbol le && rightType is EnumSymbol re && le == re)
+        {
+            var enumKind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                ? BoundBinaryOperatorKind.Equals
+                : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, TypeSymbol.Bool);
+        }
+
         // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
         if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
         {

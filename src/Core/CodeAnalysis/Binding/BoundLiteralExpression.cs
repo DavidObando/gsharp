@@ -17,32 +17,19 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// </summary>
     /// <param name="value">The value.</param>
     public BoundLiteralExpression(object value)
+        : this(value, InferType(value))
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class with an explicit type.
+    /// </summary>
+    /// <param name="value">The runtime value.</param>
+    /// <param name="type">The static type.</param>
+    public BoundLiteralExpression(object value, TypeSymbol type)
     {
         Value = value;
-
-        if (value == null)
-        {
-            // Phase 3.C.2 / ADR-0001: the nil literal carries the special
-            // TypeSymbol.Null sentinel until conversion or smart-cast pins it
-            // to a concrete nullable type.
-            Type = TypeSymbol.Null;
-        }
-        else if (value is bool)
-        {
-            Type = TypeSymbol.Bool;
-        }
-        else if (value is int)
-        {
-            Type = TypeSymbol.Int;
-        }
-        else if (value is string)
-        {
-            Type = TypeSymbol.String;
-        }
-        else
-        {
-            throw new Exception($"Unexpected literal '{value}' of type {value.GetType()}");
-        }
+        Type = type;
     }
 
     /// <inheritdoc/>
@@ -55,4 +42,29 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// Gets the value.
     /// </summary>
     public object Value { get; }
+
+    private static TypeSymbol InferType(object value)
+    {
+        if (value == null)
+        {
+            return TypeSymbol.Null;
+        }
+
+        if (value is bool)
+        {
+            return TypeSymbol.Bool;
+        }
+
+        if (value is int)
+        {
+            return TypeSymbol.Int;
+        }
+
+        if (value is string)
+        {
+            return TypeSymbol.String;
+        }
+
+        throw new Exception($"Unexpected literal '{value}' of type {value.GetType()}");
+    }
 }
