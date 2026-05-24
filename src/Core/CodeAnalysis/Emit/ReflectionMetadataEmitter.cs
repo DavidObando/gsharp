@@ -38,6 +38,7 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
     private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>();
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
+    private readonly Dictionary<MethodInfo, MethodSpecificationHandle> methodSpecs = new Dictionary<MethodInfo, MethodSpecificationHandle>();
     private readonly Dictionary<ConstructorInfo, MemberReferenceHandle> ctorRefs = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
     private readonly Dictionary<FieldInfo, MemberReferenceHandle> fieldRefs = new Dictionary<FieldInfo, MemberReferenceHandle>();
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
@@ -1157,7 +1158,8 @@ internal sealed class ReflectionMetadataEmitter
             var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
             var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
             var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, il);
+            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, il);
 
             // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -1196,7 +1198,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -1298,6 +1300,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -1313,7 +1316,7 @@ internal sealed class ReflectionMetadataEmitter
         //   * any locals declared by arm bodies and by the type-pattern
         //     arm-local bindings — these need pre-allocation because the
         //     pre-scan above does not descend into pattern-switch arms.
-        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -1374,11 +1377,12 @@ internal sealed class ReflectionMetadataEmitter
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         foreach (var s in statements)
         {
-            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
         }
     }
 
@@ -1388,7 +1392,8 @@ internal sealed class ReflectionMetadataEmitter
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         switch (statement)
         {
@@ -1397,13 +1402,13 @@ internal sealed class ReflectionMetadataEmitter
                     var discriminantSlot = localTypes.Count;
                     localTypes.Add(ps.Discriminant.Type);
                     patternSwitchSlots[ps] = discriminantSlot;
-                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                     foreach (var arm in ps.Arms)
                     {
                         if (arm.Pattern != null)
                         {
                             AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                         }
 
                         if (arm.Body is BoundBlockStatement armBlock)
@@ -1416,12 +1421,12 @@ internal sealed class ReflectionMetadataEmitter
                                     localTypes.Add(decl.Variable.Type);
                                 }
 
-                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                             }
                         }
                         else
                         {
-                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                         }
                     }
 
@@ -1431,49 +1436,95 @@ internal sealed class ReflectionMetadataEmitter
             case BoundBlockStatement block:
                 foreach (var inner in block.Statements)
                 {
-                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundIfStatement ifs:
-                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
-                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 if (ifs.ElseStatement != null)
                 {
-                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundTryStatement tryStmt:
-                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 foreach (var clause in tryStmt.CatchClauses)
                 {
-                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 if (tryStmt.FinallyBlock != null)
                 {
-                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundExpressionStatement es:
-                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundVariableDeclaration vd:
-                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundReturnStatement rs:
                 if (rs.Expression != null)
                 {
-                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundConditionalGotoStatement cg:
-                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                break;
+            case BoundChannelSendStatement chs:
+                AllocateChannelSendSlots(chs, localTypes, channelOpSlots);
+                WalkExpressionForSwitches(chs.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(chs.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
         }
+    }
+
+    private static void AllocateChannelSendSlots(
+        BoundChannelSendStatement node,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+    {
+        if (channelOpSlots.ContainsKey(node))
+        {
+            return;
+        }
+
+        var vt = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
+        var ta = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
+        channelOpSlots[node] = (vt, ta, -1, -1);
+    }
+
+    private static void AllocateChannelReceiveSlots(
+        BoundChannelReceiveExpression node,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+    {
+        if (channelOpSlots.ContainsKey(node))
+        {
+            return;
+        }
+
+        var chType = (ChannelTypeSymbol)node.Channel.Type;
+        var elementClr = chType.ElementType.ClrType ?? typeof(object);
+        var vtClr = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
+        var taClr = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
+
+        var vt = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(vtClr));
+        var ta = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(taClr));
+        var result = localTypes.Count;
+        localTypes.Add(chType.ElementType.ClrType != null ? chType.ElementType : TypeSymbol.FromClrType(typeof(object)));
+        channelOpSlots[node] = (vt, ta, result, -1);
     }
 
     // Walks any BoundExpression to discover nested BoundSwitchExpression nodes
@@ -1488,7 +1539,8 @@ internal sealed class ReflectionMetadataEmitter
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         if (expression == null)
         {
@@ -1507,46 +1559,60 @@ internal sealed class ReflectionMetadataEmitter
                     switchExpressionSlots[sx] = (resultSlot, discrSlot);
                 }
 
-                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 foreach (var arm in sx.Arms)
                 {
                     if (arm.Pattern != null)
                     {
                         AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                     }
 
-                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundBinaryExpression be:
-                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
-                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundUnaryExpression ue:
-                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundAssignmentExpression ae:
-                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundCallExpression ce:
                 foreach (var a in ce.Arguments)
                 {
-                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundConversionExpression cv:
-                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundBlockExpression bex:
                 foreach (var s in bex.Statements)
                 {
-                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
-                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                break;
+            case BoundChannelReceiveExpression chr:
+                AllocateChannelReceiveSlots(chr, localTypes, channelOpSlots);
+                WalkExpressionForSwitches(chr.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                break;
+            case BoundChannelCloseExpression chc:
+                WalkExpressionForSwitches(chc.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                break;
+            case BoundMakeChannelExpression mkCh:
+                if (mkCh.Capacity != null)
+                {
+                    WalkExpressionForSwitches(mkCh.Capacity, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                }
+
                 break;
         }
     }
@@ -1557,27 +1623,28 @@ internal sealed class ReflectionMetadataEmitter
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         switch (pattern)
         {
             case BoundConstantPattern cp:
-                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundRelationalPattern rp:
-                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 break;
             case BoundPropertyPattern pp:
                 foreach (var f in pp.Fields)
                 {
-                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
             case BoundListPattern lp:
                 foreach (var e in lp.Elements)
                 {
-                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
                 }
 
                 break;
@@ -2534,14 +2601,24 @@ internal sealed class ReflectionMetadataEmitter
         // open == closed and parameter types are concrete.
         var openMethod = GetOpenMethod(method);
 
+        // When the method itself is generic (e.g. Channel.CreateUnbounded<T>),
+        // encode the MemberRef against its generic definition so `!!N` placeholders
+        // referenced in the signature resolve correctly. The caller wraps the
+        // resulting handle in a MethodSpecification.
+        var openForMethodGenerics = openMethod.IsGenericMethod
+            ? openMethod.GetGenericMethodDefinition()
+            : openMethod;
+
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !method.IsStatic)
-            .Parameters(
-                openMethod.GetParameters().Length,
-                returnType: r => this.EncodeReturnClr(r, openMethod.ReturnType),
+        var sigEncoder = new BlobEncoder(sigBlob).MethodSignature(
+            isInstanceMethod: !method.IsStatic,
+            genericParameterCount: openForMethodGenerics.IsGenericMethodDefinition ? openForMethodGenerics.GetGenericArguments().Length : 0);
+        sigEncoder.Parameters(
+                openForMethodGenerics.GetParameters().Length,
+                returnType: r => this.EncodeReturnClr(r, openForMethodGenerics.ReturnType),
                 parameters: ps =>
                 {
-                    foreach (var p in openMethod.GetParameters())
+                    foreach (var p in openForMethodGenerics.GetParameters())
                     {
                         var paramType = p.ParameterType;
                         if (paramType.IsByRef)
@@ -2562,6 +2639,35 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.metadata.GetOrAddBlob(sigBlob));
         this.methodRefs[method] = handle;
         return handle;
+    }
+
+    // Phase E: returns a callable EntityHandle for any MethodInfo, wrapping
+    // constructed generic methods in a MethodSpecification per ECMA-335 II.23.2.15.
+    private EntityHandle GetMethodEntityHandle(MethodInfo method)
+    {
+        if (!method.IsGenericMethod || method.IsGenericMethodDefinition)
+        {
+            return this.GetMethodReference(method);
+        }
+
+        if (this.methodSpecs.TryGetValue(method, out var existing))
+        {
+            return existing;
+        }
+
+        var openDef = method.GetGenericMethodDefinition();
+        var openRef = this.GetMethodReference(openDef);
+
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(method.GetGenericArguments().Length);
+        foreach (var typeArg in method.GetGenericArguments())
+        {
+            this.EncodeClrType(argsEncoder.AddArgument(), typeArg);
+        }
+
+        var spec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        this.methodSpecs[method] = spec;
+        return spec;
     }
 
     /// <summary>
@@ -2844,6 +2950,16 @@ internal sealed class ReflectionMetadataEmitter
 
             encoder.Type(ifaceDef, isValueType: false);
         }
+        else if (type is ChannelTypeSymbol chType)
+        {
+            // Phase E: chan T -> System.Threading.Channels.Channel<T>.
+            // For element types that lack a ClrType we erase to object,
+            // matching the interpreter's `ElementType.ClrType ?? typeof(object)`
+            // fallback (ADR-0022 §interpreter).
+            var elementClr = chType.ElementType.ClrType ?? typeof(object);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            this.EncodeClrType(encoder, channelClr);
+        }
         else if (type?.ClrType != null)
         {
             this.EncodeClrType(encoder, type.ClrType);
@@ -2926,10 +3042,17 @@ internal sealed class ReflectionMetadataEmitter
                 if (type.IsGenericParameter)
                 {
                     // Method signatures reference declaring-type generic params as `!N`
-                    // (Phase 4 emit parity for generic-instantiated CLR types — e.g.
-                    // `Dictionary[TKey,TValue].Add(TKey, TValue)` references its open
-                    // definition's parameters by position).
-                    encoder.GenericTypeParameter(type.GenericParameterPosition);
+                    // and declaring-method generic params as `!!N` (Phase E adds method
+                    // generic support for calls like `Channel.CreateUnbounded<T>()`).
+                    if (type.DeclaringMethod != null)
+                    {
+                        encoder.GenericMethodTypeParameter(type.GenericParameterPosition);
+                    }
+                    else
+                    {
+                        encoder.GenericTypeParameter(type.GenericParameterPosition);
+                    }
+
                     break;
                 }
 
@@ -3220,6 +3343,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
+        private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -3232,7 +3356,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundIndexExpression, int> mapIndexSlots,
             Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
             Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-            Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+            Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
         {
             this.outer = outer;
             this.il = il;
@@ -3245,6 +3370,7 @@ internal sealed class ReflectionMetadataEmitter
             this.patternSwitchSlots = patternSwitchSlots;
             this.typePatternScratchSlots = typePatternScratchSlots;
             this.switchExpressionSlots = switchExpressionSlots;
+            this.channelOpSlots = channelOpSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -3311,6 +3437,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundPatternSwitchStatement ps:
                     this.EmitPatternSwitchStatement(ps);
+                    break;
+                case BoundChannelSendStatement cs:
+                    this.EmitChannelSendStatement(cs);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -3456,6 +3585,15 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundSwitchExpression switchExpr:
                     this.EmitSwitchExpression(switchExpr);
+                    break;
+                case BoundMakeChannelExpression mkCh:
+                    this.EmitMakeChannelExpression(mkCh);
+                    break;
+                case BoundChannelReceiveExpression chRecv:
+                    this.EmitChannelReceiveExpression(chRecv);
+                    break;
+                case BoundChannelCloseExpression chClose:
+                    this.EmitChannelCloseExpression(chClose);
                     break;
                 case BoundConstructorCallExpression ctorCall:
                     this.EmitConstructorCall(ctorCall);
@@ -5080,6 +5218,208 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             return false;
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Phase E: channel emit (ADR-0022 §I/O).
+        //
+        // Strategy mirrors the interpreter (EvaluateMakeChannelExpression /
+        // Send / Receive / Close). The pre-pass allocated per-call-site
+        // scratch slots for any value-typed receivers we need to address
+        // (ValueTask, TaskAwaiter[, <T>]). Async ops block via
+        // .AsTask().GetAwaiter().GetResult() to match the synchronous
+        // evaluator surface.
+        //
+        // Element types lacking a ClrType (e.g. user-defined class
+        // values) are erased to object, mirroring the interpreter's
+        // `ElementType.ClrType ?? typeof(object)` fallback.
+        private static Type ResolveChannelElementClrType(TypeSymbol elementType)
+        {
+            return elementType.ClrType ?? typeof(object);
+        }
+
+        private void EmitMakeChannelExpression(BoundMakeChannelExpression node)
+        {
+            var elementClr = ResolveChannelElementClrType(node.ChannelType.ElementType);
+            if (node.Capacity == null)
+            {
+                var openCreate = typeof(System.Threading.Channels.Channel)
+                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .First(m => m.Name == nameof(System.Threading.Channels.Channel.CreateUnbounded)
+                        && m.IsGenericMethodDefinition
+                        && m.GetParameters().Length == 0);
+                var create = openCreate.MakeGenericMethod(elementClr);
+                this.il.Call(this.outer.GetMethodEntityHandle(create));
+                return;
+            }
+
+            var optionsCtor = typeof(System.Threading.Channels.BoundedChannelOptions)
+                .GetConstructor(new[] { typeof(int) });
+            this.EmitExpression(node.Capacity);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(optionsCtor));
+
+            var openBounded = typeof(System.Threading.Channels.Channel)
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .First(m => m.Name == nameof(System.Threading.Channels.Channel.CreateBounded)
+                    && m.IsGenericMethodDefinition
+                    && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType == typeof(System.Threading.Channels.BoundedChannelOptions));
+            var bounded = openBounded.MakeGenericMethod(elementClr);
+            this.il.Call(this.outer.GetMethodEntityHandle(bounded));
+        }
+
+        private void EmitChannelSendStatement(BoundChannelSendStatement node)
+        {
+            var chType = (ChannelTypeSymbol)node.Channel.Type;
+            var elementClr = ResolveChannelElementClrType(chType.ElementType);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
+            var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
+            var writeAsync = writerClr.GetMethod(
+                "WriteAsync",
+                new[] { elementClr, typeof(System.Threading.CancellationToken) });
+            var asTaskNonGeneric = typeof(System.Threading.Tasks.ValueTask).GetMethod("AsTask", Type.EmptyTypes);
+            var getAwaiter = typeof(System.Threading.Tasks.Task).GetMethod("GetAwaiter", Type.EmptyTypes);
+            var getResult = typeof(System.Runtime.CompilerServices.TaskAwaiter).GetMethod("GetResult", Type.EmptyTypes);
+
+            var (vtSlot, taSlot, _, _) = this.channelOpSlots[node];
+
+            this.EmitExpression(node.Channel);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getWriter));
+
+            this.EmitExpression(node.Value);
+            this.EmitCancellationTokenNone();
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(writeAsync));
+
+            this.il.StoreLocal(vtSlot);
+            this.il.LoadLocalAddress(vtSlot);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(asTaskNonGeneric));
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getAwaiter));
+            this.il.StoreLocal(taSlot);
+            this.il.LoadLocalAddress(taSlot);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(getResult));
+        }
+
+        private void EmitChannelReceiveExpression(BoundChannelReceiveExpression node)
+        {
+            // try { result = ch.Reader.ReadAsync(default).AsTask().GetAwaiter().GetResult(); }
+            // catch (ChannelClosedException) { result = default(T); }
+            // ldloc result
+            var chType = (ChannelTypeSymbol)node.Channel.Type;
+            var elementClr = ResolveChannelElementClrType(chType.ElementType);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
+            var getReader = channelClr.GetProperty("Reader").GetGetMethod();
+            var readAsync = readerClr.GetMethod(
+                "ReadAsync",
+                new[] { typeof(System.Threading.CancellationToken) });
+
+            var valueTaskGeneric = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
+            var asTaskGeneric = valueTaskGeneric.GetMethod("AsTask", Type.EmptyTypes);
+            var taskGeneric = typeof(System.Threading.Tasks.Task<>).MakeGenericType(elementClr);
+            var taskGetAwaiter = taskGeneric.GetMethod("GetAwaiter", Type.EmptyTypes);
+            var taskAwaiterGeneric = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
+            var taskGetResult = taskAwaiterGeneric.GetMethod("GetResult", Type.EmptyTypes);
+            var ccExceptionClr = typeof(System.Threading.Channels.ChannelClosedException);
+
+            var (vtSlot, taSlot, resultSlot, _) = this.channelOpSlots[node];
+            var tryStart = this.il.DefineLabel();
+            var tryEnd = this.il.DefineLabel();
+            var handlerStart = this.il.DefineLabel();
+            var handlerEnd = this.il.DefineLabel();
+            var endLabel = this.il.DefineLabel();
+
+            this.il.MarkLabel(tryStart);
+
+            this.EmitExpression(node.Channel);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getReader));
+
+            this.EmitCancellationTokenNone();
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(readAsync));
+
+            this.il.StoreLocal(vtSlot);
+            this.il.LoadLocalAddress(vtSlot);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(asTaskGeneric));
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(taskGetAwaiter));
+            this.il.StoreLocal(taSlot);
+            this.il.LoadLocalAddress(taSlot);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(taskGetResult));
+            this.il.StoreLocal(resultSlot);
+            this.il.Branch(ILOpCode.Leave, endLabel);
+            this.il.MarkLabel(tryEnd);
+
+            this.il.MarkLabel(handlerStart);
+            this.il.OpCode(ILOpCode.Pop);
+            this.EmitZeroInit(resultSlot, chType.ElementType, elementClr);
+            this.il.Branch(ILOpCode.Leave, endLabel);
+            this.il.MarkLabel(handlerEnd);
+
+            this.il.MarkLabel(endLabel);
+
+            var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(ccExceptionClr);
+            this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
+
+            this.il.LoadLocal(resultSlot);
+        }
+
+        private void EmitChannelCloseExpression(BoundChannelCloseExpression node)
+        {
+            var chType = (ChannelTypeSymbol)node.Channel.Type;
+            var elementClr = ResolveChannelElementClrType(chType.ElementType);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
+            var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
+            var complete = writerClr.GetMethod("Complete", new[] { typeof(Exception) });
+
+            this.EmitExpression(node.Channel);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getWriter));
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(complete));
+        }
+
+        private void EmitCancellationTokenNone()
+        {
+            // ldc.i4.0; newobj CancellationToken(bool) — the canonical
+            // "default" CancellationToken IL pattern. Avoids needing a
+            // dedicated local for `default(CancellationToken)`.
+            var ctCtor = typeof(System.Threading.CancellationToken).GetConstructor(new[] { typeof(bool) });
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctCtor));
+        }
+
+        private void EmitZeroInit(int slot, TypeSymbol gsharpType, Type clrType)
+        {
+            if (clrType.IsValueType)
+            {
+                this.il.LoadLocalAddress(slot);
+                this.il.OpCode(ILOpCode.Initobj);
+                var initType = gsharpType.ClrType == null
+                    ? TypeSymbol.FromClrType(clrType)
+                    : gsharpType;
+                this.il.Token(this.outer.GetElementTypeToken(initType));
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                this.il.StoreLocal(slot);
+            }
         }
     }
 }
