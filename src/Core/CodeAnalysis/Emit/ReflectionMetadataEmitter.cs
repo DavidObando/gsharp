@@ -91,6 +91,8 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle stringConcatRef;
     private MemberReferenceHandle stringEqualsRef;
     private MemberReferenceHandle objectStaticEqualsRef;
+    private MemberReferenceHandle objectInstanceToStringRef;
+    private MemberReferenceHandle objectInstanceGetHashCodeRef;
     private MemberReferenceHandle nullRefExceptionCtorRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
@@ -251,12 +253,17 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in structs)
         {
-            if (s.Methods.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline)
             {
                 continue;
             }
 
             structFirstMethodRows[s] = methodRow;
+            if (s.IsInline)
+            {
+                methodRow += 7;
+            }
+
             foreach (var m in s.Methods)
             {
                 var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
@@ -447,6 +454,11 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var s in structs)
         {
+            if (s.IsInline)
+            {
+                this.EmitInlineStructSynthesizedMembers(s);
+            }
+
             if (s.Methods.IsDefaultOrEmpty)
             {
                 continue;
@@ -621,6 +633,11 @@ internal sealed class ReflectionMetadataEmitter
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
             var attrs = MapFieldAccessibility(field.Accessibility);
+            if (field.IsReadOnly)
+            {
+                attrs |= FieldAttributes.InitOnly;
+            }
+
             var handle = this.metadata.AddFieldDefinition(
                 attributes: attrs,
                 name: this.metadata.GetOrAddString(field.Name),
@@ -683,6 +700,38 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.structTypeDefs[structSym] = handle2;
+        if (structSym.IsInline)
+        {
+            this.EmitIsReadOnlyAttribute(handle2);
+        }
+    }
+
+    /// <summary>Emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on an inline struct TypeDef.</summary>
+    /// <param name="typeHandle">The inline struct TypeDef handle.</param>
+    private void EmitIsReadOnlyAttribute(TypeDefinitionHandle typeHandle)
+    {
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -872,6 +921,190 @@ internal sealed class ReflectionMetadataEmitter
             Accessibility.Private => FieldAttributes.Private,
             _ => FieldAttributes.Public,
         };
+    }
+
+    /// <summary>Emits the ADR-0033 synthesized members for an inline struct.</summary>
+    /// <param name="structSym">The inline struct symbol.</param>
+    private void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
+    {
+        var field = structSym.Fields[0];
+        var fieldHandle = this.structFieldDefs[field];
+        var typeDef = this.structTypeDefs[structSym];
+        this.EmitInlineEqualsObject(structSym, field, fieldHandle, typeDef);
+        this.EmitInlineEqualsTyped(structSym, field, fieldHandle);
+        this.EmitInlineGetHashCode(structSym, field, fieldHandle);
+        this.EmitInlineToString(structSym, field, fieldHandle);
+        this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: false);
+        this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: true);
+        this.EmitInlineDeconstruct(structSym, field, fieldHandle);
+    }
+
+    private void EmitBoxIfNeeded(InstructionEncoder il, TypeSymbol type)
+    {
+        if (IsValueTypeSymbol(type))
+        {
+            il.OpCode(ILOpCode.Box);
+            il.Token(this.GetElementTypeToken(type));
+        }
+    }
+
+    private int FinishInlineBody(InstructionEncoder il)
+    {
+        return this.metadataOnly ? -1 : this.methodBodyStream.AddMethodBody(il);
+    }
+
+    private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, TypeDefinitionHandle typeDef)
+    {
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        if (!this.metadataOnly)
+        {
+            var hasValue = il.DefineLabel();
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Isinst);
+            il.Token(typeDef);
+            il.OpCode(ILOpCode.Dup);
+            il.Branch(ILOpCode.Brtrue, hasValue);
+            il.OpCode(ILOpCode.Pop);
+            il.LoadConstantI4(0);
+            il.OpCode(ILOpCode.Ret);
+            il.MarkLabel(hasValue);
+            il.OpCode(ILOpCode.Pop);
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Unbox);
+            il.Token(typeDef);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.Call(this.GetObjectStaticEqualsReference());
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+    }
+
+    private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.LoadArgumentAddress(1);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.Call(this.GetObjectStaticEqualsReference());
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+    }
+
+    private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.GetObjectInstanceGetHashCodeReference());
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().Int32(), _ => { });
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("GetHashCode"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+    }
+
+    private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            il.LoadString(this.metadata.GetOrAddUserString(structSym.Name + "(" + field.Name + "="));
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.OpCode(ILOpCode.Callvirt);
+            il.Token(this.GetObjectInstanceToStringReference());
+            il.Call(this.GetStringConcatReference());
+            il.LoadString(this.metadata.GetOrAddUserString(")"));
+            il.Call(this.GetStringConcatReference());
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().String(), _ => { });
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("ToString"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+    }
+
+    private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            il.LoadArgumentAddress(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.LoadArgumentAddress(1);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            this.EmitBoxIfNeeded(il, field.Type);
+            il.Call(this.GetObjectStaticEqualsReference());
+            if (isInequality)
+            {
+                il.LoadConstantI4(0);
+                il.OpCode(ILOpCode.Ceq);
+            }
+
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().Boolean(),
+                ps =>
+                {
+                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
+                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
+                });
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+    }
+
+    private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    {
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            il.LoadArgument(1);
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldfld);
+            il.Token(fieldHandle);
+            il.OpCode(ILOpCode.Stobj);
+            il.Token(this.GetElementTypeToken(field.Type));
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Deconstruct"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
     }
 
     private MethodDefinitionHandle EmitDefaultConstructor()
@@ -1260,6 +1493,7 @@ internal sealed class ReflectionMetadataEmitter
                 declaration: null,
                 packageName: packageName,
                 isData: false,
+                isInline: false,
                 isClass: true);
 
             // The invoke method reuses the lambda's parameter symbols so the
@@ -2177,6 +2411,40 @@ internal sealed class ReflectionMetadataEmitter
         return this.stringEqualsRef;
     }
 
+    private MemberReferenceHandle GetObjectInstanceToStringReference()
+    {
+        if (!this.objectInstanceToStringRef.IsNil)
+        {
+            return this.objectInstanceToStringRef;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Type().String(), _ => { });
+        this.objectInstanceToStringRef = this.metadata.AddMemberReference(
+            parent: this.objectTypeRef,
+            name: this.metadata.GetOrAddString("ToString"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.objectInstanceToStringRef;
+    }
+
+    private MemberReferenceHandle GetObjectInstanceGetHashCodeReference()
+    {
+        if (!this.objectInstanceGetHashCodeRef.IsNil)
+        {
+            return this.objectInstanceGetHashCodeRef;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Type().Int32(), _ => { });
+        this.objectInstanceGetHashCodeRef = this.metadata.AddMemberReference(
+            parent: this.objectTypeRef,
+            name: this.metadata.GetOrAddString("GetHashCode"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
+        return this.objectInstanceGetHashCodeRef;
+    }
+
     /// <summary>
     /// Returns a MemberRef for static <c>bool System.Object.Equals(object, object)</c>.
     /// Used by Phase 3.B.2 data-struct <c>==</c> / <c>!=</c> lowering: we box
@@ -2973,6 +3241,13 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType == typeof(object))
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.GetElementTypeToken(fromStruct));
+                return;
+            }
+
             throw new NotSupportedException(
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
         }
@@ -3077,6 +3352,40 @@ internal sealed class ReflectionMetadataEmitter
                         this.il.OpCode(ILOpCode.Ceq);
                         return;
                 }
+            }
+
+            // Phase 7.4 / ADR-0033: inline structs compare their single field directly.
+            if (b.Left.Type is StructSymbol inlineStruct && inlineStruct.IsInline && b.Right.Type == inlineStruct &&
+                (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+            {
+                var field = inlineStruct.Fields[0];
+                var fieldHandle = this.outer.structFieldDefs[field];
+                this.EmitExpression(b.Left);
+                this.il.OpCode(ILOpCode.Ldfld);
+                this.il.Token(fieldHandle);
+                if (IsValueTypeSymbol(field.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(field.Type));
+                }
+
+                this.EmitExpression(b.Right);
+                this.il.OpCode(ILOpCode.Ldfld);
+                this.il.Token(fieldHandle);
+                if (IsValueTypeSymbol(field.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(field.Type));
+                }
+
+                this.il.Call(field.Type == TypeSymbol.String ? this.outer.GetStringEqualsReference() : this.outer.GetObjectStaticEqualsReference());
+                if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+                {
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                }
+
+                return;
             }
 
             // Phase 3.B.2 / ADR-0029: structural == / != on data-struct

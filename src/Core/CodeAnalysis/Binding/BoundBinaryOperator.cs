@@ -133,8 +133,8 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, TypeSymbol.Bool);
         }
 
-        // Phase 3.B.2 / ADR-0029: structural == / != on data struct values.
-        if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && ls.IsData)
+        // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
+        if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && (ls.IsData || ls.IsInline))
         {
             if (syntaxKind == SyntaxKind.EqualsEqualsToken)
             {

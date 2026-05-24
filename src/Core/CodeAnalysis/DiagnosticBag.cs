@@ -142,6 +142,40 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports that an inline struct does not declare exactly one field.</summary>
+    /// <param name="location">The text location of the struct identifier.</param>
+    /// <param name="name">The struct name.</param>
+    /// <param name="actualCount">The actual field count.</param>
+    public void ReportInlineStructRequiresExactlyOneField(TextLocation location, string name, int actualCount)
+    {
+        var message = $"'inline struct {name}' requires exactly one field, but has {actualCount}.";
+        Report(location, message);
+    }
+
+    /// <summary>Reports that inline and data modifiers were combined.</summary>
+    /// <param name="location">The text location of the conflicting modifier.</param>
+    public void ReportInlineCannotBeCombinedWithData(TextLocation location)
+    {
+        Report(location, "'inline' cannot be combined with 'data' or 'record'.");
+    }
+
+    /// <summary>Reports that inline and open modifiers were combined.</summary>
+    /// <param name="location">The text location of the conflicting modifier.</param>
+    public void ReportInlineCannotBeCombinedWithOpen(TextLocation location)
+    {
+        Report(location, "'inline struct' cannot be combined with 'open'.");
+    }
+
+    /// <summary>Reports that a synthesized inline-struct member was hand-written.</summary>
+    /// <param name="location">The text location of the member name.</param>
+    /// <param name="typeName">The inline struct type name.</param>
+    /// <param name="memberName">The synthesized member name.</param>
+    public void ReportInlineStructSynthesizedMemberConflict(TextLocation location, string typeName, string memberName)
+    {
+        var message = $"Inline struct '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
+        Report(location, message);
+    }
+
     /// <summary>
     /// Reports that the <c>record</c> alias cannot be combined with the <c>data</c> contextual keyword.
     /// </summary>

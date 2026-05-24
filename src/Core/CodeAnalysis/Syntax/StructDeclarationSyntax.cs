@@ -31,7 +31,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword: null, structKeyword, openBraceToken, fields, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword: null, inlineKeyword: null, structKeyword, openBraceToken, fields, closeBraceToken)
     {
     }
 
@@ -43,6 +43,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The struct identifier.</param>
     /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
     /// <param name="structKeyword">The <c>struct</c> keyword.</param>
     /// <param name="openBraceToken">The opening brace.</param>
     /// <param name="fields">The field declarations.</param>
@@ -53,11 +54,12 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken structKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, primaryConstructorOpenParen: null, primaryConstructorParameters: new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty), primaryConstructorCloseParen: null, openBraceToken, fields, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, structKeyword, primaryConstructorOpenParen: null, primaryConstructorParameters: new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty), primaryConstructorCloseParen: null, openBraceToken, fields, closeBraceToken)
     {
     }
 
@@ -69,6 +71,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The aggregate identifier.</param>
     /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
     /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
     /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
     /// <param name="primaryConstructorParameters">The primary constructor parameter list (empty when no primary constructor is declared).</param>
@@ -82,6 +85,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken structKeyword,
         SyntaxToken primaryConstructorOpenParen,
         SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
@@ -89,7 +93,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, openBraceToken, fields, ImmutableArray<FunctionDeclarationSyntax>.Empty, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, openBraceToken, fields, ImmutableArray<FunctionDeclarationSyntax>.Empty, closeBraceToken)
     {
     }
 
@@ -101,6 +105,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The aggregate identifier.</param>
     /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
     /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
     /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
     /// <param name="primaryConstructorParameters">The primary constructor parameter list (empty when no primary constructor is declared).</param>
@@ -115,6 +120,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken structKeyword,
         SyntaxToken primaryConstructorOpenParen,
         SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
@@ -123,7 +129,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier: null, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken: null, baseTypeIdentifier: null, openBraceToken, fields, methods, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier: null, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken: null, baseTypeIdentifier: null, openBraceToken, fields, methods, closeBraceToken)
     {
     }
 
@@ -135,6 +141,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The aggregate identifier.</param>
     /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
     /// <param name="openModifier">The optional <c>open</c> contextual keyword (Phase 3.B.3 sub-step 3 — classes only).</param>
     /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
     /// <param name="primaryConstructorOpenParen">The optional opening paren of a Kotlin-style primary constructor (classes only).</param>
@@ -152,6 +159,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken openModifier,
         SyntaxToken structKeyword,
         SyntaxToken primaryConstructorOpenParen,
@@ -163,7 +171,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken, baseTypeIdentifier, ImmutableArray<SyntaxToken>.Empty, openBraceToken, fields, methods, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken, baseTypeIdentifier, ImmutableArray<SyntaxToken>.Empty, openBraceToken, fields, methods, closeBraceToken)
     {
     }
 
@@ -173,6 +181,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="typeKeyword">The <c>type</c> keyword.</param>
     /// <param name="identifier">The aggregate identifier.</param>
     /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
     /// <param name="openModifier">The optional <c>open</c> contextual keyword (classes only).</param>
     /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
     /// <param name="primaryConstructorOpenParen">The optional opening paren of a primary constructor.</param>
@@ -191,6 +200,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken openModifier,
         SyntaxToken structKeyword,
         SyntaxToken primaryConstructorOpenParen,
@@ -209,6 +219,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         TypeKeyword = typeKeyword;
         Identifier = identifier;
         DataKeyword = dataKeyword;
+        InlineKeyword = inlineKeyword;
         OpenModifier = openModifier;
         StructKeyword = structKeyword;
         PrimaryConstructorOpenParenthesisToken = primaryConstructorOpenParen;
@@ -237,6 +248,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the optional <c>data</c> contextual keyword. Non-null when this is a <c>data struct</c> (Phase 3.B.2).</summary>
     public SyntaxToken DataKeyword { get; }
+
+    /// <summary>Gets the optional <c>inline</c> contextual keyword. Non-null when this is an <c>inline struct</c> (ADR-0033).</summary>
+    public SyntaxToken InlineKeyword { get; }
 
     /// <summary>Gets the optional <c>open</c> contextual keyword (Phase 3.B.3 sub-step 3 — classes only). Non-null marks the class as inheritable per ADR-0017.</summary>
     public SyntaxToken OpenModifier { get; }
@@ -273,6 +287,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this struct was declared with the <c>data</c> contextual keyword.</summary>
     public bool IsData => DataKeyword != null;
+
+    /// <summary>Gets a value indicating whether this struct was declared with the <c>inline</c> contextual keyword.</summary>
+    public bool IsInline => InlineKeyword != null;
 
     /// <summary>Gets a value indicating whether this aggregate was declared with the <c>class</c> keyword (Phase 3.B.3) rather than <c>struct</c>.</summary>
     public bool IsClass => StructKeyword?.Kind == SyntaxKind.ClassKeyword;
