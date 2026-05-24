@@ -1,3 +1,0 @@
-[submodule "src/Roslyn"]
-	path = src/Roslyn
-	url = https://github.com/DavidObando/gsharp-roslyn.git

@@ -16,27 +16,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
       - name: Setup .NET SDK (main)
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-
-      - name: Setup .NET SDK 9.0 (for Roslyn fork)
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.0.107
-
-      - name: Build Gsharp.Microsoft.CodeAnalysis (Roslyn fork)
-        working-directory: src/Roslyn
-        run: |
-          ./eng/build.sh -r -b --pack -c Release \
-            --solution src/Compilers/Core/Portable/Microsoft.CodeAnalysis.csproj \
-            /p:WarningsNotAsErrors=NU1603 /p:MSBuildTreatWarningsAsErrors=false \
-            || true
-          mkdir -p ../../.nugs
-          cp artifacts/packages/Release/Shipping/Gsharp.Microsoft.CodeAnalysis.*.nupkg ../../.nugs/
 
       - name: Restore
         run: dotnet restore
