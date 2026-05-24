@@ -78,6 +78,48 @@ public class ClrInteropEmitTests
         Assert.Equal("3\n10\n30\n", output);
     }
 
+    [Fact]
+    public void StaticPropertyRead_AndInstancePropertyWrite_RoundTrip()
+    {
+        // Stream B emit parity: bare `Int32.MaxValue` → `call get_MaxValue`
+        // (static read), `sb.Capacity = 64` → `callvirt set_Capacity` (instance
+        // write). The re-read after the store ensures the assignment yields
+        // the assigned value, matching the indexer-assignment shape.
+        var source = """
+            package P
+            import System
+            import System.Text
+
+            Console.WriteLine(Int32.MaxValue)
+            var sb = StringBuilder()
+            sb.Capacity = 64
+            Console.WriteLine(sb.Capacity)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2147483647\n64\n", output);
+    }
+
+    [Fact]
+    public void ClrUserDefinedOperator_TimeSpanAddition_EmitsCallToOpAddition()
+    {
+        // Stream C emit parity: `a + b` for TimeSpan operands should compile to
+        // `call System.TimeSpan::op_Addition(TimeSpan, TimeSpan)`, and the
+        // result must round-trip when written via Console.WriteLine.
+        var source = """
+            package P
+            import System
+
+            var a = TimeSpan(0, 0, 30)
+            var b = TimeSpan(0, 0, 15)
+            var c = a + b
+            Console.WriteLine(c.Seconds)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("45\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;

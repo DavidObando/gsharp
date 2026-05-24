@@ -112,19 +112,21 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 
 | Operator | int | bool | string | Imported types |
 | --- | --- | --- | --- | --- |
-| `+` | ✅ | — | ✅ (string concat via `String.Concat`) | ❌ |
-| `-` `*` `/` `%` | ✅ | — | — | ❌ |
-| `<<` `>>` | ✅ | — | — | ❌ |
-| `&` `\|` `^` `&^` | ✅ | partial (`&`/`\|`/`^` ✅, `&^` ❌) | — | ❌ |
-| `&&` `\|\|` | — | ✅ | — | ❌ |
-| `==` `!=` | ✅ | ✅ | ✅ (via `String.Equals`) | ❌ |
-| `<` `<=` `>` `>=` | ✅ | — | — | ❌ |
-| unary `+` `-` `^` | ✅ | — | — | ❌ |
-| unary `!` | — | ✅ | — | — |
+| `+` | ✅ | — | ✅ (string concat via `String.Concat`) | ✅ (Stream C: `op_Addition` on either operand's type) |
+| `-` `*` `/` `%` | ✅ | — | — | ✅ (Stream C: `op_Subtraction`, `op_Multiply`, `op_Division`, `op_Modulus`) |
+| `<<` `>>` | ✅ | — | — | ✅ (Stream C: `op_LeftShift`, `op_RightShift`) |
+| `&` `\|` `^` `&^` | ✅ | partial (`&`/`\|`/`^` ✅, `&^` ❌) | — | ✅ for `&` `\|` `^` (`op_BitwiseAnd`, `op_BitwiseOr`, `op_ExclusiveOr`); `&^` is still GSharp-side only |
+| `&&` `\|\|` | — | ✅ | — | ❌ (requires `op_True`/`op_False` lowering — deferred) |
+| `==` `!=` | ✅ | ✅ | ✅ (via `String.Equals`) | ✅ (Stream C: `op_Equality`/`op_Inequality`) |
+| `<` `<=` `>` `>=` | ✅ | — | — | ✅ (Stream C: `op_LessThan`, `op_LessThanOrEqual`, `op_GreaterThan`, `op_GreaterThanOrEqual`) |
+| unary `+` `-` `^` | ✅ | — | — | ✅ for `+`/`-` (`op_UnaryPlus`, `op_UnaryNegation`); `~` (CLR `op_OnesComplement`) currently maps to GSharp `^` |
+| unary `!` | — | ✅ | — | ✅ (`op_LogicalNot`) |
 | unary `*` `&` `<-` | ❌ | ❌ | ❌ | ❌ |
-| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): a method named `plus` on a user type stays a regular method, not an implicit `op_Addition`. Re-opening criteria recorded in ADR-0026. |
+| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): a method named `plus` on a user type stays a regular method, not an implicit `op_Addition`. Streams C/E land CLR-side `op_*` consumption; declaring `operator` on GSharp types is tracked separately (Stream D — see ADR-0026 follow-up). |
 
-Implicit and explicit conversions: `BindConversion` exists; the emitter (`EmitConversion`) implements four conversion shapes today: `int ↔ bool`, `nil` flowing into any nullable or reference-typed slot (the IL value is already `ldnull`), reference-compatible nullable widen/narrow (`T → T?` and `T? → T` where `T` is a reference type, both metadata-only because the CLR representation is shared), and boxing of a value-typed `struct` to `System.Object`. Any other conversion the binder considers legal — most notably to/from imported CLR types and most numeric conversions — will throw `NotSupportedException` at emit time. This remains the largest binder/emit asymmetry in the codebase.
+Operator resolution: when neither operand is a built-in, the binder runs the shared `OverloadResolution` over `op_*` candidates collected from both operand types (and their CLR base chains), deduped by identity. Ambiguous matches surface as a binder diagnostic; no first-match fallback. See `ClrOperatorResolution.cs`.
+
+Implicit and explicit conversions: `BindConversion` first runs the built-in `Conversion.Classify` (covers `int ↔ bool`, `nil` → nullable/reference, reference-compatible `T ↔ T?` for reference `T`, `struct → object` boxing, and reference-compatible upcasts to base classes or interfaces). When that returns `!Exists`, Stream E falls back to `ClrOperatorResolution.TryResolveConversion`, which searches public-static `op_Implicit` on the source and target CLR types, then `op_Explicit` when the call site allows explicit conversions. A successful resolution lowers to `BoundClrConversionCallExpression`; both the interpreter (`MethodInfo.Invoke`) and the emitter (`call` to the conversion method) dispatch the node. User-defined implicits also feed `OverloadResolution.UserDefinedImplicitConversionLookup`, so an `op_Implicit` participates in better-function-member tie-breaking for overload resolution.
 
 Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval.gs`): a `class` value implicitly converts to any interface it implements and to any of its (transitive) base classes. The interpreter treats the upcast as a no-op (the boxed instance keeps its concrete class identity), so `Lit{Value: 1}` flowing into an `Expr`-typed parameter or composite-literal field works end-to-end on the interpreter. Emit handles both **class → base-class** and **class → interface** upcasts as no-ops via the `IsReferenceCompatible` walk used by `EmitConversion`: the boxed reference already satisfies the target contract on the CLR, and the encoder threads interface TypeDefs through `EncodeTypeSymbol` so interface-typed slots, parameters, and return types all encode correctly.
 
@@ -145,7 +147,7 @@ Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval
 2. **Two design samples already exceed the implementation.** `samples/Loop.gs` (pre-Phase-0 rewrite) and `design/Gsharp-design-v0.1.md` use C-style `for init; cond; post`, `args[0]` indexing, `i--`, and `*count` — none of which parse today. The Phase-0 rewrite of `samples/Loop.gs` removes those constructs; the v0.1 design Loop section is annotated as aspirational pointing at `design/Gsharp-design-v0.2.md`.
 3. **String interpolation is real (Phase 1.1).** `"Count value: $i"` lexes as an `InterpolatedStringToken`, parses as `InterpolatedStringExpressionSyntax`, and lowers in the binder to a `+`-chain over `Convert.ToString` calls — emitted unchanged.
 4. **The emitter caps literals at `int`/`string`/`bool`.** Adding any new literal kind (float, char/rune, null) requires coordinated lexer + binder + `EmitLiteral` changes.
-5. **`EmitConversion` covers five shapes today: `int ↔ bool`, `nil → reference/nullable`, reference-compatible nullable wrap/unwrap (`T ↔ T?` for reference `T`, metadata-only), `struct → object` boxing, and reference-compatible upcasts (`class → base class` and `class → interface`).** Adding numeric widening or imported-type conversions to the binder must coordinate with `EmitConversion` first; otherwise valid programs will compile under the interpreter and crash the emitter.
+5. **`EmitConversion` covers five built-in shapes plus user-defined CLR conversions.** Built-in: `int ↔ bool`, `nil → reference/nullable`, reference-compatible nullable wrap/unwrap (`T ↔ T?` for reference `T`, metadata-only), `struct → object` boxing, and reference-compatible upcasts (`class → base class` and `class → interface`). On top of that, Stream E lowers any unmatched conversion to `BoundClrConversionCallExpression` when an `op_Implicit` or (for explicit casts) `op_Explicit` exists on the source or target type — both backends dispatch through the resolved `MethodInfo`. Numeric widening / narrowing between unrelated CLR numeric types still requires either a built-in conversion shape or an `op_*` on one of the types.
 6. **Phase 5 concurrency emit covers the core surface.** Channels plus synchronous send/receive/close, `go`, `scope`, and `select` now emit (`samples/Channels.gs`, `samples/GoScope.gs`, `samples/Select.gs`). `async` / `await` and `await for` remain interpreter-only pending the async-aware lowering/state-machine decision (ADR-0027); the aspirational samples still cover those surfaces on the interpreter.
 7. **Phase 6.1/6.2 switch on both backends.** `switch` statements with pattern arms (Phase B emit) and `switch` expressions (Phase C emit) lower in the emitter to a discriminant temp plus per-arm pattern-test branches; switch expressions additionally allocate a result temp that holds the chosen arm value. The same `EmitPattern` dispatcher handles every pattern flavor in both forms.
 
@@ -159,9 +161,11 @@ Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval
 
 **Open Phase-5 polish follow-ups** (carried into Phase 6/7):
 
-- `HttpClient` end-to-end interop in a `.gs` sample requires (a) constructable imported types and (b) instance-member access on imported instances. Both are tracked as binder/symbol-table follow-ups; once they land, `AsyncTask.gs` will gain an `HttpClient`-using sibling and the exit row above is promoted from "BCL `Task`" to "BCL `HttpClient`".
+- `HttpClient` end-to-end interop in a `.gs` sample: constructable imported types ✅ (Phase 4), instance / static member read+write ✅ (Stream B), imported `op_*` ✅ (Stream C), user-defined CLR conversions ✅ (Stream E). Remaining gap is event subscription via `+=` (Stream B′ — needs a parser change to `FieldAssignmentExpressionSyntax`), which `HttpClient` itself doesn't require — so an `HttpClient`-using sibling to `AsyncTask.gs` is now unblocked.
 - Two-value channel receive `v, ok := <-ch` (ADR-0022 §Open follow-ups).
 - `ctx` source binding to expose a scope's CTS to user code (ADR-0022 §scope; deferred from #78).
 - `break` / `continue` inside `await for` body (deferred from #79).
 - Async-aware lowering of `await` and emit of state machines (Phase 7 / ADR-0027).
+- Event subscription (`obj.Click += handler`, `-=`) and multi-segment compound-assignment LHS (`a.b.c += …`) — Stream B′, parser-side work.
+- `operator` keyword on GSharp-defined types (declaring `operator +` etc.). Tracked as Stream D; superseding ADR-0026 is part of that follow-up PR.
 

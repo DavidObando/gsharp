@@ -1,9 +1,9 @@
 # ADR-0026: Operator-by-name on user types — deferred
 
-- **Status**: Accepted (deferral)
+- **Status**: Accepted (deferral). Imported-CLR `op_*` consumption shipped in ADR-0034; user-type operator overloading still deferred.
 - **Date**: 2026-05-24
 - **Phase**: Phase 6
-- **Related**: ADR-0019 (extension functions); ADR-0024 (methods vs extensions canonical style); ADR-0029 (data struct synthesized members); execution plan §6.5
+- **Related**: ADR-0019 (extension functions); ADR-0024 (methods vs extensions canonical style); ADR-0029 (data struct synthesized members); ADR-0034 (imported CLR interop); execution plan §6.5
 
 ## Context
 
@@ -24,7 +24,7 @@ Concretely:
 
 - Source code containing `func (p Point) plus(o Point) Point { … }` continues to declare a regular method named `plus`. There is no implicit reinterpretation as `op_Addition`. Call sites must write `p.plus(q)`, not `p + q`.
 - The binder's binary-operator resolution continues to require a `BoundBinaryOperator` table entry for each operand-type pair. User types are not eligible operands except where ADR-0029 already permits (`==` / `!=` on `data struct`).
-- Imported CLR types with overloaded operators are unaffected by this decision; their operator surface is handled by the existing import path (and is itself currently a coverage-matrix gap separate from 6.5).
+- Imported CLR types with overloaded operators are unaffected by this decision; their operator surface is handled by the import path. **Update (ADR-0034, this PR):** GSharp now consumes imported `op_*` static methods through `ClrOperatorResolution` so call sites like `TimeSpan + TimeSpan` or `DateTime - TimeSpan` resolve through the standard binder pipeline. The deferral above only concerns *declaring* operators on GSharp types.
 
 ## Consequences
 

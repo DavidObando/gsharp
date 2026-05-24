@@ -701,6 +701,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>
+    /// Reports that an overloaded call (constructor, static method, or
+    /// instance method) is ambiguous between two or more applicable
+    /// candidates under the binder's "better function member" rules.
+    /// </summary>
+    /// <param name="location">The text location of the call expression.</param>
+    /// <param name="name">The function or constructor name.</param>
+    /// <param name="candidateCount">The number of tied applicable candidates.</param>
+    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount)
+    {
+        var message = $"Call to '{name}' is ambiguous between {candidateCount} applicable overloads.";
+        Report(location, message);
+    }
+
     /// <summary>Reports that copy/with syntax was applied to a non-data-struct value.</summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="type">The actual receiver type.</param>

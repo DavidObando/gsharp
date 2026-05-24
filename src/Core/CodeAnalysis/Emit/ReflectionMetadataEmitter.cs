@@ -4049,6 +4049,18 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundClrPropertyAccessExpression clrProp:
                     this.EmitClrPropertyAccess(clrProp);
                     break;
+                case BoundClrPropertyAssignmentExpression clrPropAsn:
+                    this.EmitClrPropertyAssignment(clrPropAsn);
+                    break;
+                case BoundClrBinaryOperatorExpression clrBinOp:
+                    this.EmitClrBinaryOperator(clrBinOp);
+                    break;
+                case BoundClrUnaryOperatorExpression clrUnOp:
+                    this.EmitClrUnaryOperator(clrUnOp);
+                    break;
+                case BoundClrConversionCallExpression clrConv:
+                    this.EmitClrConversionCall(clrConv);
+                    break;
                 case BoundClrIndexExpression clrIdx:
                     this.EmitClrIndex(clrIdx);
                     break;
@@ -5370,12 +5382,18 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitClrPropertyAccess(BoundClrPropertyAccessExpression access)
         {
-            // Phase 4 emit parity: instance property/field read on a CLR
-            // receiver. Properties dispatch to their `get_X` accessor;
-            // fields use `ldfld`. Generic-instantiated declaring types are
-            // handled by `GetMethodReference` / `GetFieldReference`.
-            this.EmitInstanceReceiver(access.Receiver);
-            var receiverIsValueType = access.Receiver.Type?.ClrType?.IsValueType == true;
+            // Phase 4 / Stream B: property or field read on a CLR receiver.
+            // Properties dispatch to their `get_X` accessor (callvirt for
+            // reference types, call for value types); fields use `ldfld`.
+            // When `Receiver` is null the access is static: emit `ldsfld` /
+            // `call get_X` with no receiver instead.
+            var isStatic = access.Receiver == null;
+            if (!isStatic)
+            {
+                this.EmitInstanceReceiver(access.Receiver);
+            }
+
+            var receiverIsValueType = !isStatic && access.Receiver.Type?.ClrType?.IsValueType == true;
             switch (access.Member)
             {
                 case PropertyInfo property:
@@ -5383,18 +5401,101 @@ internal sealed class ReflectionMetadataEmitter
                         ?? throw new InvalidOperationException(
                             $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
                     var getterRef = this.outer.GetMethodReference(getter);
-                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(getterRef);
                     break;
                 case FieldInfo field:
                     var fieldRef = this.outer.GetFieldReference(field);
-                    this.il.OpCode(ILOpCode.Ldfld);
+                    this.il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
                     this.il.Token(fieldRef);
                     break;
                 default:
                     throw new NotSupportedException(
                         $"CLR member '{access.Member.GetType().Name}' is not yet supported by the emitter.");
             }
+        }
+
+        private void EmitClrPropertyAssignment(BoundClrPropertyAssignmentExpression assn)
+        {
+            // Stream B emit parity: property/field write on a CLR receiver.
+            // The expression result is the assigned value, so we re-read the
+            // member after the store (matches BoundClrIndexAssignment shape).
+            var isStatic = assn.Receiver == null;
+            if (!isStatic)
+            {
+                this.EmitInstanceReceiver(assn.Receiver);
+            }
+
+            this.EmitExpression(assn.Value);
+
+            var receiverIsValueType = !isStatic && assn.Receiver.Type?.ClrType?.IsValueType == true;
+            switch (assn.Member)
+            {
+                case PropertyInfo property:
+                    var setter = property.GetSetMethod(nonPublic: false)
+                        ?? throw new InvalidOperationException(
+                            $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public setter.");
+                    this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.Token(this.outer.GetMethodReference(setter));
+                    break;
+                case FieldInfo field:
+                    this.il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
+                    this.il.Token(this.outer.GetFieldReference(field));
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"CLR member '{assn.Member.GetType().Name}' is not yet supported by the emitter.");
+            }
+
+            // Re-load the assigned value so the expression yields it.
+            if (!isStatic)
+            {
+                this.EmitInstanceReceiver(assn.Receiver);
+            }
+
+            switch (assn.Member)
+            {
+                case PropertyInfo property2:
+                    var getter2 = property2.GetGetMethod(nonPublic: false)
+                        ?? throw new InvalidOperationException(
+                            $"Property '{property2.DeclaringType?.FullName}.{property2.Name}' has no public getter.");
+                    this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.Token(this.outer.GetMethodReference(getter2));
+                    break;
+                case FieldInfo field2:
+                    this.il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
+                    this.il.Token(this.outer.GetFieldReference(field2));
+                    break;
+            }
+        }
+
+        private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)
+        {
+            // Stream C emit parity: user-defined binary operator on a CLR type.
+            // C# operators are public-static methods, so we emit `call` against
+            // the resolved MethodInfo with both arguments pushed in source
+            // order.
+            this.EmitExpression(op.Left);
+            this.EmitExpression(op.Right);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(op.Method));
+        }
+
+        private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)
+        {
+            // Stream C emit parity: user-defined unary operator on a CLR type.
+            this.EmitExpression(op.Operand);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(op.Method));
+        }
+
+        private void EmitClrConversionCall(BoundClrConversionCallExpression conv)
+        {
+            // Stream E emit parity: user-defined op_Implicit / op_Explicit is a
+            // public-static method taking one arg, returning the target type.
+            this.EmitExpression(conv.Source);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(conv.Method));
         }
 
         private void EmitClrIndex(BoundClrIndexExpression idx)

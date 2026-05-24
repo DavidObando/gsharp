@@ -1,0 +1,36 @@
+// <copyright file="BoundClrConversionCallExpression.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Reflection;
+using GSharp.Core.CodeAnalysis.Symbols;
+
+#pragma warning disable CS1591
+#pragma warning disable SA1600
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// User-defined conversion on a CLR type, resolved to a public static
+/// <c>op_Implicit</c> or <c>op_Explicit</c> <see cref="MethodInfo"/>.
+/// Stream E lets GSharp source assign across types that carry CLR conversion
+/// operators (e.g. <c>System.Numerics.BigInteger</c> ↔ <c>int</c>,
+/// <c>System.Half</c> ↔ <c>float</c>).
+/// </summary>
+public sealed class BoundClrConversionCallExpression : BoundExpression
+{
+    public BoundClrConversionCallExpression(BoundExpression source, MethodInfo method, TypeSymbol resultType)
+    {
+        Source = source;
+        Method = method;
+        Type = resultType;
+    }
+
+    public BoundExpression Source { get; }
+
+    public MethodInfo Method { get; }
+
+    public override TypeSymbol Type { get; }
+
+    public override BoundNodeKind Kind => BoundNodeKind.ClrConversionCallExpression;
+}

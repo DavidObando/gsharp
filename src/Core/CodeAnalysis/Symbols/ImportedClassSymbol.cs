@@ -42,15 +42,33 @@ public sealed class ImportedClassSymbol : Symbol
     public ExpressionSyntax Declaration { get; }
 
     /// <summary>
-    /// Tries to get a member from this imported class symbol.
+    /// Tries to get a static member (field or property) from this imported
+    /// class symbol. Static methods continue to flow through
+    /// <see cref="TryLookupFunction(string, CallExpressionSyntax, ImmutableArray{BoundExpression}, out ImportedFunctionSymbol)"/>.
     /// </summary>
     /// <param name="text">The name of the member.</param>
-    /// <param name="ne">The name expression.</param>
-    /// <param name="member">The resulting member, if one is found.</param>
-    /// <returns>Whether we found a matching member or not.</returns>
-    public bool TryLookupMember(string text, NameExpressionSyntax ne, out object member)
+    /// <param name="ne">The name expression (currently unused; reserved for diagnostics).</param>
+    /// <param name="member">The resulting member when found.</param>
+    /// <returns>Whether we found a matching public static field or property.</returns>
+    public bool TryLookupMember(string text, NameExpressionSyntax ne, out MemberInfo member)
     {
-        throw new NotImplementedException();
+        _ = ne;
+        var property = ClassType.GetProperty(text, BindingFlags.Public | BindingFlags.Static);
+        if (property != null && property.GetIndexParameters().Length == 0)
+        {
+            member = property;
+            return true;
+        }
+
+        var field = ClassType.GetField(text, BindingFlags.Public | BindingFlags.Static);
+        if (field != null)
+        {
+            member = field;
+            return true;
+        }
+
+        member = null;
+        return false;
     }
 
     /// <summary>
@@ -60,50 +78,53 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="callExpression">The call expression.</param>
     /// <param name="arguments">The bound arguments.</param>
     /// <param name="function">The resulting function, if one is found.</param>
+    /// <param name="isAmbiguous">Set to true when two or more candidates tied under "better function member" rules.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous)
     {
         function = null;
+        isAmbiguous = false;
         var methods = ClassType.GetMethods(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
         var nameMatches = methods.Where(m => m.Name == text).ToList();
-        foreach (var match in nameMatches)
+        if (nameMatches.Count == 0)
         {
-            var parameters = match.GetParameters();
-            if (arguments.Length != parameters.Length)
+            return false;
+        }
+
+        var argTypes = new Type[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = arguments[i].Type?.ClrType;
+            if (t == null)
             {
-                continue;
+                return false;
             }
 
-            bool hasMatchError = false;
-            for (var i = 0; i < arguments.Length; i++)
-            {
-                var argument = arguments[i];
-                var parameter = parameters[i];
+            argTypes[i] = t;
+        }
 
-                if (!TypesMatch(argument.Type, parameter.ParameterType))
-                {
-                    hasMatchError = true;
-                    break;
-                }
-            }
-
-            if (!hasMatchError)
-            {
-                function = new ImportedFunctionSymbol(text, this, match, callExpression);
+        var result = OverloadResolution.Resolve(nameMatches, argTypes);
+        switch (result.Outcome)
+        {
+            case OverloadResolution.ResolutionOutcome.Resolved:
+                function = new ImportedFunctionSymbol(text, this, result.Best, callExpression);
                 return true;
-            }
+            case OverloadResolution.ResolutionOutcome.Ambiguous:
+                isAmbiguous = true;
+                return false;
+            default:
+                return false;
         }
-
-        return false;
     }
 
-    private bool TypesMatch(TypeSymbol type, Type parameterType)
-    {
-        if (type?.ClrType != null)
-        {
-            return ClrTypeUtilities.IsAssignableByName(parameterType, type.ClrType);
-        }
-
-        return false;
-    }
+    /// <summary>
+    /// Backwards-compatible overload that drops the ambiguity flag.
+    /// </summary>
+    /// <param name="text">The name of the function.</param>
+    /// <param name="callExpression">The call expression.</param>
+    /// <param name="arguments">The bound arguments.</param>
+    /// <param name="function">The resulting function, if one is found.</param>
+    /// <returns>Whether we found a matching function or not.</returns>
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
+        => TryLookupFunction(text, callExpression, arguments, out function, out _);
 }

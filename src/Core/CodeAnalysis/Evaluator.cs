@@ -481,6 +481,10 @@ public sealed class Evaluator
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
+                BoundNodeKind.ClrPropertyAssignmentExpression => EvaluateClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node),
+                BoundNodeKind.ClrBinaryOperatorExpression => EvaluateClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node),
+                BoundNodeKind.ClrUnaryOperatorExpression => EvaluateClrUnaryOperatorExpression((BoundClrUnaryOperatorExpression)node),
+                BoundNodeKind.ClrConversionCallExpression => EvaluateClrConversionCallExpression((BoundClrConversionCallExpression)node),
                 BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
                 BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
@@ -810,13 +814,51 @@ public sealed class Evaluator
 
     private object EvaluateClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
     {
-        var receiver = EvaluateExpression(node.Receiver);
+        var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
         return node.Member switch
         {
             System.Reflection.PropertyInfo p => p.GetValue(receiver),
             System.Reflection.FieldInfo f => f.GetValue(receiver),
             _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
         };
+    }
+
+    private object EvaluateClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+    {
+        var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+        var value = EvaluateExpression(node.Value);
+        switch (node.Member)
+        {
+            case System.Reflection.PropertyInfo p:
+                p.SetValue(receiver, value);
+                break;
+            case System.Reflection.FieldInfo f:
+                f.SetValue(receiver, value);
+                break;
+            default:
+                throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node);
+        }
+
+        return value;
+    }
+
+    private object EvaluateClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node)
+    {
+        var left = EvaluateExpression(node.Left);
+        var right = EvaluateExpression(node.Right);
+        return node.Method.Invoke(null, new[] { left, right });
+    }
+
+    private object EvaluateClrUnaryOperatorExpression(BoundClrUnaryOperatorExpression node)
+    {
+        var operand = EvaluateExpression(node.Operand);
+        return node.Method.Invoke(null, new[] { operand });
+    }
+
+    private object EvaluateClrConversionCallExpression(BoundClrConversionCallExpression node)
+    {
+        var source = EvaluateExpression(node.Source);
+        return node.Method.Invoke(null, new[] { source });
     }
 
     private object EvaluateClrIndexExpression(BoundClrIndexExpression node)
