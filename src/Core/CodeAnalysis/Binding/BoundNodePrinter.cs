@@ -90,6 +90,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.SelectStatement:
                 WriteSelectStatement((BoundSelectStatement)node, writer);
                 break;
+            case BoundNodeKind.ScopeStatement:
+                WriteScopeStatement((BoundScopeStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -618,6 +621,13 @@ public static class BoundNodePrinter
         writer.Indent--;
         writer.WritePunctuation(SyntaxKind.CloseBraceToken);
         writer.WriteLine();
+    }
+
+    private static void WriteScopeStatement(BoundScopeStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.ScopeKeyword);
+        writer.WriteSpace();
+        node.Body.WriteTo(writer);
     }
 
     private static void WriteMakeChannelExpression(BoundMakeChannelExpression node, IndentedTextWriter writer)

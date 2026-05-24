@@ -1039,6 +1039,8 @@ public class Parser
                 return ParseGoStatement();
             case SyntaxKind.SelectKeyword:
                 return ParseSelectStatement();
+            case SyntaxKind.ScopeKeyword:
+                return ParseScopeStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -1690,6 +1692,14 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.GoKeyword);
         var expression = ParseExpression();
         return new GoStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseScopeStatement()
+    {
+        // Phase 5.7 / ADR-0022: `scope { … }` opens a structured-concurrency region.
+        var scopeKeyword = MatchToken(SyntaxKind.ScopeKeyword);
+        var body = ParseBlockStatement();
+        return new ScopeStatementSyntax(syntaxTree, scopeKeyword, body);
     }
 
     private StatementSyntax ParseSelectStatement()

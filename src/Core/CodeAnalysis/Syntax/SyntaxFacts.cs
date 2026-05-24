@@ -187,6 +187,8 @@ public static class SyntaxFacts
                 return SyntaxKind.RangeKeyword;
             case "return":
                 return SyntaxKind.ReturnKeyword;
+            case "scope":
+                return SyntaxKind.ScopeKeyword;
             case "sealed":
                 return SyntaxKind.SealedKeyword;
             case "select":
@@ -425,6 +427,8 @@ public static class SyntaxFacts
                 return "return";
             case SyntaxKind.SealedKeyword:
                 return "sealed";
+            case SyntaxKind.ScopeKeyword:
+                return "scope";
             case SyntaxKind.SelectKeyword:
                 return "select";
             case SyntaxKind.StructKeyword:

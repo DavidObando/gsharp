@@ -1180,6 +1180,8 @@ public sealed class Binder
                 return BindChannelSendStatement((ChannelSendStatementSyntax)syntax);
             case SyntaxKind.SelectStatement:
                 return BindSelectStatement((SelectStatementSyntax)syntax);
+            case SyntaxKind.ScopeStatement:
+                return BindScopeStatement((ScopeStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -2019,6 +2021,19 @@ public sealed class Binder
         }
 
         return new BoundSelectStatement(bound.ToImmutable());
+    }
+
+    private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)
+    {
+        // Phase 5.7 / ADR-0022: structured concurrency. The body's `go`
+        // statements register with the scope at evaluation time; the binder
+        // itself just wraps the body. Open a fresh lexical scope so any
+        // future implicit binding (e.g. `ctx`) can be introduced without
+        // leaking into the enclosing function.
+        scope = new BoundScope(scope);
+        var body = BindStatement(syntax.Body);
+        scope = scope.Parent;
+        return new BoundScopeStatement(body);
     }
 
     private TypeSymbol ResolveExceptionType()

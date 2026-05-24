@@ -23,6 +23,7 @@ public sealed class Evaluator
     private readonly Dictionary<VariableSymbol, object> globals;
     private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
     private readonly object goLock = new object();
+    private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
     private Random random;
 
     private object lastValue;
@@ -119,6 +120,10 @@ public sealed class Evaluator
                     EvaluateSelectStatement((BoundSelectStatement)s);
                     index++;
                     break;
+                case BoundNodeKind.ScopeStatement:
+                    EvaluateScopeStatement((BoundScopeStatement)s);
+                    index++;
+                    break;
                 default:
                     throw new EvaluatorException($"Unexpected node {s.Kind}", s);
             }
@@ -136,12 +141,31 @@ public sealed class Evaluator
 
     private void EvaluateGoStatement(BoundGoStatement node)
     {
-        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run. The interpreter's
-        // evaluation state is single-threaded; serialize body execution with a
-        // monitor on the evaluator so the shared locals/globals stacks remain
-        // consistent. Concurrency in the interpreter is observational
-        // (Task scheduling) rather than parallel.
+        // Phase 5.3 / ADR-0022: fire-and-forget Task.Run by default. The
+        // interpreter's evaluation state is single-threaded; serialize body
+        // execution with a monitor on the evaluator so the shared
+        // locals/globals stacks remain consistent. Concurrency in the
+        // interpreter is observational (Task scheduling) rather than parallel.
+        //
+        // Phase 5.7 / ADR-0022: when this `go` is lexically inside a `scope`,
+        // register the resulting Task with the innermost scope frame so it can
+        // be awaited at scope exit. Exceptions are not swallowed in that case;
+        // the scope propagates them.
         var expression = node.Expression;
+        var enclosingScope = scopeFrames.Count > 0 ? scopeFrames.Peek() : null;
+        if (enclosingScope != null)
+        {
+            var task = Task.Run(() =>
+            {
+                lock (this.goLock)
+                {
+                    EvaluateExpression(expression);
+                }
+            });
+            enclosingScope.Tasks.Add(task);
+            return;
+        }
+
         Task.Run(() =>
         {
             try
@@ -158,6 +182,75 @@ public sealed class Evaluator
                 // discards them rather than crashing the host.
             }
         });
+    }
+
+    private void EvaluateScopeStatement(BoundScopeStatement node)
+    {
+        // Phase 5.7 / ADR-0022: structured concurrency. Spawned `go` tasks
+        // inside the body register with the frame we just pushed; the
+        // body runs to completion, then we await all registered tasks.
+        // First failure wins (rethrown); the remaining failures, if any,
+        // are attached as AggregateException.InnerExceptions[1..].
+        var frame = new ScopeFrame();
+        scopeFrames.Push(frame);
+        try
+        {
+            EvaluateStatement((BoundBlockStatement)node.Body);
+        }
+        finally
+        {
+            scopeFrames.Pop();
+        }
+
+        if (frame.Tasks.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Task.WhenAll(frame.Tasks).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // On any failure, signal the scope's cancellation token so
+            // cooperating tasks can short-circuit. The `ctx` source binding
+            // that exposes this CTS to user code is deferred.
+            try
+            {
+                frame.Cts.Cancel();
+            }
+            catch
+            {
+                // Cancellation callbacks must not mask the original failure.
+            }
+
+            // Collect every failure for the AggregateException tail and
+            // rethrow the first one in source-completion order.
+            var failures = new List<Exception>();
+            foreach (var t in frame.Tasks)
+            {
+                if (t.IsFaulted && t.Exception != null)
+                {
+                    foreach (var inner in t.Exception.InnerExceptions)
+                    {
+                        failures.Add(inner);
+                    }
+                }
+            }
+
+            if (failures.Count == 1)
+            {
+                throw failures[0];
+            }
+
+            if (failures.Count > 1)
+            {
+                throw new AggregateException(failures);
+            }
+
+            throw;
+        }
     }
 
     private void EvaluateExpressionStatement(BoundExpressionStatement node)
@@ -1266,5 +1359,12 @@ public sealed class Evaluator
             var locals = this.locals.Peek();
             locals[variable] = value;
         }
+    }
+
+    private sealed class ScopeFrame
+    {
+        public List<Task> Tasks { get; } = new List<Task>();
+
+        public System.Threading.CancellationTokenSource Cts { get; } = new System.Threading.CancellationTokenSource();
     }
 }
