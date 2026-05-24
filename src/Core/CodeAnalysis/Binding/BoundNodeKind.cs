@@ -67,6 +67,7 @@ public enum BoundNodeKind
     ClrConversionCallExpression,
     ClrIndexExpression,
     ClrIndexAssignmentExpression,
+    ClrEventSubscriptionExpression,
     AwaitExpression,
     SwitchExpression,
     SwitchExpressionArm,

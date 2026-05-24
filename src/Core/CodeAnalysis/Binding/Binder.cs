@@ -3237,6 +3237,8 @@ public sealed class Binder
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.EventSubscriptionExpression:
+                return BindEventSubscriptionExpression((EventSubscriptionExpressionSyntax)syntax);
             case SyntaxKind.WithExpression:
                 return BindWithExpression((WithExpressionSyntax)syntax);
             case SyntaxKind.NamedArgumentExpression:
@@ -3800,6 +3802,116 @@ public sealed class Binder
 
         var converted = BindConversion(syntax.Value.Location, value, field.Type);
         return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
+    }
+
+    private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
+    {
+        // Stream B′: `lhs.Event += handler` / `lhs.Event -= handler`.
+        // The parser guarantees LeftHandSide is an AccessorExpressionSyntax.
+        if (syntax.LeftHandSide is not AccessorExpressionSyntax accessor)
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.LeftHandSide.Location, syntax.OperatorToken.Text);
+            return new BoundErrorExpression();
+        }
+
+        if (accessor.RightPart is not NameExpressionSyntax eventNameSyntax)
+        {
+            Diagnostics.ReportUnableToFindMember(accessor.RightPart.Location, syntax.OperatorToken.Text);
+            return new BoundErrorExpression();
+        }
+
+        var eventName = eventNameSyntax.IdentifierToken.Text;
+        var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
+
+        // Resolve receiver: either an ImportedClassSymbol (static event) or
+        // any value-producing expression with a CLR-backed type (instance event).
+        BoundExpression boundReceiver = null;
+        Type receiverClrType = null;
+        BindingFlags flags;
+        if (accessor.LeftPart is NameExpressionSyntax leftName
+            && scope.TryLookupImportedClass(leftName.IdentifierToken.Text, leftName, out var importedClass))
+        {
+            receiverClrType = importedClass.ClassType;
+            flags = BindingFlags.Public | BindingFlags.Static;
+        }
+        else
+        {
+            boundReceiver = BindExpression(accessor.LeftPart);
+            if (boundReceiver.Type == TypeSymbol.Error)
+            {
+                return new BoundErrorExpression();
+            }
+
+            receiverClrType = boundReceiver.Type?.ClrType;
+            if (receiverClrType == null)
+            {
+                Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+                return new BoundErrorExpression();
+            }
+
+            flags = BindingFlags.Public | BindingFlags.Instance;
+        }
+
+        var eventInfo = receiverClrType.GetEvent(eventName, flags);
+        if (eventInfo == null)
+        {
+            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+            return new BoundErrorExpression();
+        }
+
+        var handlerType = eventInfo.EventHandlerType;
+        var boundHandler = BindExpression(syntax.Value);
+
+        // The handler is most useful when expressed as a function literal of
+        // matching signature. For that path we skip BindConversion (which has
+        // no generic fn → custom-delegate rule) and rely on the evaluator /
+        // emitter to materialize the right delegate type. Otherwise fall back
+        // to the standard conversion (covers null, already-typed delegate
+        // variables, etc.).
+        BoundExpression convertedHandler;
+        if (boundHandler.Type is FunctionTypeSymbol fn
+            && IsSignatureCompatibleWithDelegate(fn, handlerType))
+        {
+            convertedHandler = boundHandler;
+        }
+        else
+        {
+            var handlerSymbol = TypeSymbol.FromClrType(handlerType);
+            convertedHandler = BindConversion(syntax.Value.Location, boundHandler, handlerSymbol);
+        }
+
+        return new BoundClrEventSubscriptionExpression(boundReceiver, eventInfo, convertedHandler, isAdd);
+    }
+
+    private static bool IsSignatureCompatibleWithDelegate(FunctionTypeSymbol fn, Type delegateType)
+    {
+        if (delegateType == null || !typeof(Delegate).IsAssignableFrom(delegateType))
+        {
+            return false;
+        }
+
+        var invoke = delegateType.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        var parms = invoke.GetParameters();
+        if (parms.Length != fn.ParameterTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < parms.Length; i++)
+        {
+            if (fn.ParameterTypes[i]?.ClrType != parms[i].ParameterType)
+            {
+                return false;
+            }
+        }
+
+        var fnRetClr = fn.ReturnType == TypeSymbol.Void ? typeof(void) : fn.ReturnType?.ClrType;
+        return fnRetClr == invoke.ReturnType;
     }
 
     private static bool TryGetWritableClrMember(MemberInfo member, out Type targetType, out bool writable)

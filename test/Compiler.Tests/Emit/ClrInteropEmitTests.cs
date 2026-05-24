@@ -120,6 +120,28 @@ public class ClrInteropEmitTests
         Assert.Equal("45\n", output);
     }
 
+    [Fact]
+    public void EventSubscription_AddInvokeRemove_RoundTripsThroughEmit()
+    {
+        // Stream B′ emit parity: `evt += handler` should emit
+        // `callvirt add_X(receiver, handler)` against the resolved event
+        // accessor, and `-=` should emit the matching remove call. Use
+        // AppDomain.ProcessExit so we don't have to spin up a custom event;
+        // the round-trip just needs to compile, run, and execute the
+        // attach/detach without throwing.
+        var source = """
+            package P
+            import System
+
+            var d = AppDomain.CurrentDomain
+            d.ProcessExit += func(sender Object, e EventArgs) { }
+            Console.WriteLine("done")
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("done\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;

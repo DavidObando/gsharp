@@ -162,11 +162,11 @@ Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval
 
 **Open Phase-5 polish follow-ups** (carried into Phase 6/7):
 
-- `HttpClient` end-to-end interop in a `.gs` sample: constructable imported types ✅ (Phase 4), instance / static member read+write ✅ (Stream B), imported `op_*` ✅ (Stream C), user-defined CLR conversions ✅ (Stream E). Remaining gap is event subscription via `+=` (Stream B′ — needs a parser change to `FieldAssignmentExpressionSyntax`), which `HttpClient` itself doesn't require — so an `HttpClient`-using sibling to `AsyncTask.gs` is now unblocked.
+- `HttpClient` end-to-end interop in a `.gs` sample: constructable imported types ✅ (Phase 4), instance / static member read+write ✅ (Stream B), imported `op_*` ✅ (Stream C), user-defined CLR conversions ✅ (Stream E), event subscription `+=` / `-=` ✅ (Stream B′ / ADR-0036). An `HttpClient`-using sibling to `AsyncTask.gs` is now unblocked end-to-end.
 - Two-value channel receive `v, ok := <-ch` (ADR-0022 §Open follow-ups).
 - `ctx` source binding to expose a scope's CTS to user code (ADR-0022 §scope; deferred from #78).
 - `break` / `continue` inside `await for` body (deferred from #79).
 - Async-aware lowering of `await` and emit of state machines (Phase 7 / ADR-0027).
-- Event subscription (`obj.Click += handler`, `-=`) and multi-segment compound-assignment LHS (`a.b.c += …`) — Stream B′, parser-side work.
+- ~~Event subscription (`obj.Click += handler`, `-=`) and multi-segment compound-assignment LHS (`a.b.c += …`) — Stream B′, parser-side work.~~ **Shipped** in Stream B′ / ADR-0036. A generalized `FunctionTypeSymbol → CLR-delegate` conversion (so function literals can be passed to non-event APIs expecting custom delegates) remains a follow-up.
 - ~~`operator` keyword on GSharp-defined types (declaring `operator +` etc.). Tracked as Stream D; superseding ADR-0026 is part of that follow-up PR.~~ **Shipped** in Stream D / ADR-0035 (receiver-form binary and unary operators). Free-function form, conversions, `++` / `--`, and `op_True` / `op_False` short-circuit remain deferred.
 

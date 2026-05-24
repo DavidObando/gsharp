@@ -214,6 +214,7 @@ public enum SyntaxKind
     SelectCase,
     ScopeStatement,
     AwaitForRangeStatement,
+    EventSubscriptionExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
