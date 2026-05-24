@@ -73,6 +73,13 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
     /// <inheritdoc/>
     public override Task<Unit> Handle(DidSaveTextDocumentParams request, CancellationToken cancellationToken)
     {
+        var text = request.Text;
+        if (!string.IsNullOrEmpty(text))
+        {
+            // Open/change keeps binding diagnostics disabled for responsive typing; save runs the full pipeline.
+            this.DiagnoseText(request.TextDocument.Uri, text, skipBinding: false);
+        }
+
         return Unit.Task;
     }
 
@@ -83,18 +90,7 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
         return Unit.Task;
     }
 
-    /// <inheritdoc/>
-    protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(
-        TextSynchronizationCapability capability, ClientCapabilities clientCapabilities)
-    {
-        return new TextDocumentSyncRegistrationOptions(TextDocumentSyncKind.Full)
-        {
-            DocumentSelector = Constants.DocumentSelector,
-            Save = new BooleanOr<SaveOptions>(new SaveOptions { IncludeText = true }),
-        };
-    }
-
-    private void DiagnoseText(DocumentUri documentUri, string text, bool skipBinding = true)
+    internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
         var newLines = new List<int>();
         int nextNewLine = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
@@ -107,7 +103,6 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
         var diagnostics = new List<Diagnostic>();
 
         var syntaxTree = SyntaxTree.Parse(text);
-        this.documentContentService.AddOrUpdate(documentUri.ToString(), new DocumentContent(syntaxTree, newLines));
         foreach (var d in syntaxTree.Diagnostics)
         {
             diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
@@ -128,10 +123,28 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
             }
         }
 
+        return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines), diagnostics);
+    }
+
+    /// <inheritdoc/>
+    protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(
+        TextSynchronizationCapability capability, ClientCapabilities clientCapabilities)
+    {
+        return new TextDocumentSyncRegistrationOptions(TextDocumentSyncKind.Full)
+        {
+            DocumentSelector = Constants.DocumentSelector,
+            Save = new BooleanOr<SaveOptions>(new SaveOptions { IncludeText = true }),
+        };
+    }
+
+    private void DiagnoseText(DocumentUri documentUri, string text, bool skipBinding = true)
+    {
+        var result = ComputeDiagnostics(text, skipBinding);
+        this.documentContentService.AddOrUpdate(documentUri.ToString(), result.Content);
         this.router.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams
         {
             Uri = documentUri,
-            Diagnostics = diagnostics,
+            Diagnostics = new Container<Diagnostic>(result.Diagnostics),
         });
     }
 
@@ -148,4 +161,17 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
             Source = Constants.LanguageIdentifier,
         };
     }
+}
+
+internal sealed class DiagnosticComputationResult
+{
+    public DiagnosticComputationResult(DocumentContent content, IReadOnlyList<Diagnostic> diagnostics)
+    {
+        Content = content;
+        Diagnostics = diagnostics;
+    }
+
+    public DocumentContent Content { get; }
+
+    public IReadOnlyList<Diagnostic> Diagnostics { get; }
 }
