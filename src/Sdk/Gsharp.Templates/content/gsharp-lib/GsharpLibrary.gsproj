@@ -1,0 +1,9 @@
+<Project Sdk="Gsharp.NET.Sdk/__GSHARP_SDK_VERSION__">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>GsharpLibrary</RootNamespace>
+  </PropertyGroup>
+
+</Project>
