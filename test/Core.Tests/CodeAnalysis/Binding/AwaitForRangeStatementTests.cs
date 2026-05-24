@@ -65,6 +65,28 @@ await for v := range AsyncStreamFixture.Empty() {
         Assert.Empty(result.Diagnostics);
     }
 
+    [Fact]
+    public void AwaitFor_BodyWithNestedIf_LowersAndEvaluates()
+    {
+        // Regression: the Lowerer must recurse into the await-for body
+        // when flattening so nested if/for control flow works. Pre-fix
+        // this raised `Unexpected node BlockStatement` from the evaluator.
+        var source = @"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+var evens = 0
+await for v := range AsyncStreamFixture.Counts() {
+    if v % 2 == 0 {
+        evens = evens + 1
+    }
+}
+evens
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

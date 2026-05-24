@@ -99,6 +99,29 @@ select { }
     }
 
     [Fact]
+    public void Select_ArmBodyWithNestedIf_LowersAndEvaluates()
+    {
+        // Regression: the Lowerer must recurse into each select arm body
+        // when flattening so nested control flow inside an arm body works.
+        // Pre-fix this raised `Unexpected node BlockStatement` from the
+        // evaluator when the arm body's lowered if-statement (wrapped in
+        // a BoundBlockStatement) was treated as an opaque statement.
+        var source = @"
+let ch = make(chan int, 1)
+ch <- 5
+select {
+case v := <-ch {
+    if v > 0 {
+        let x = v + 1
+    }
+}
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Select_DuplicateDefault_Diagnoses()
     {
         var source = @"

@@ -455,6 +455,31 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatFinally = t.FinallyBlock == null ? null : (BoundStatement)Flatten(t.FinallyBlock);
                 builder.Add(new BoundTryStatement(flatTry, flatCatches.ToImmutable(), flatFinally));
             }
+            else if (current is BoundScopeStatement scope)
+            {
+                // Phase 5.7: flatten the scope body so the evaluator's flat-statement
+                // walker sees lowered gotos/conditionals instead of nested blocks.
+                var flatScopeBody = Flatten(scope.Body);
+                builder.Add(new BoundScopeStatement(flatScopeBody));
+            }
+            else if (current is BoundSelectStatement sel)
+            {
+                // Phase 5.6: flatten each case body for the same reason.
+                var flatCases = ImmutableArray.CreateBuilder<BoundSelectCase>(sel.Cases.Length);
+                foreach (var arm in sel.Cases)
+                {
+                    var flatArmBody = Flatten(arm.Body);
+                    flatCases.Add(new BoundSelectCase(arm.CaseKind, arm.Channel, arm.Value, arm.Variable, flatArmBody));
+                }
+
+                builder.Add(new BoundSelectStatement(flatCases.ToImmutable()));
+            }
+            else if (current is BoundAwaitForRangeStatement af)
+            {
+                // Phase 5.8: flatten the await-for body so nested if/for/etc. work.
+                var flatAfBody = Flatten(af.Body);
+                builder.Add(new BoundAwaitForRangeStatement(af.ValueVariable, af.Stream, flatAfBody));
+            }
             else
             {
                 builder.Add(current);

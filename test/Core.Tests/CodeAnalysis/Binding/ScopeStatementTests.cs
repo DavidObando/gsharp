@@ -83,6 +83,28 @@ scope {
     }
 
     [Fact]
+    public void Scope_BodyWithNestedIf_LowersAndEvaluates()
+    {
+        // Regression: the Lowerer must recurse into the scope body when
+        // flattening so the evaluator sees a flat statement list (gotos
+        // for `if`) rather than a residual BoundIfStatement / nested
+        // BoundBlockStatement. Pre-fix this surfaced as
+        // `Unexpected node BlockStatement` from the evaluator.
+        var source = @"
+let n = 3
+scope {
+    if n > 0 {
+        let x = n + 1
+    } else {
+        let y = n - 1
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Scope_FailureInGoTask_Propagates()
     {
         // A scoped goroutine that throws should cause the enclosing
