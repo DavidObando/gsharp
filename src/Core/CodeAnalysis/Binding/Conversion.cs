@@ -120,6 +120,12 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
+        // Boxing conversion for user value types to System.Object.
+        if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType == typeof(object))
+        {
+            return Conversion.Implicit;
+        }
+
         // Reference upcast: a class implicitly converts to any interface in
         // its (transitive) implements-list or to any of its (transitive)
         // base classes. The interpreter stores instances as objects of the

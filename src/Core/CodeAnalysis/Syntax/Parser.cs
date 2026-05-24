@@ -223,8 +223,26 @@ public class Parser
         // `data` is a context-sensitive keyword (ADR-0029): only acts as the
         // data-struct marker when followed directly by `struct` or `enum`.
         // Elsewhere it is an ordinary identifier.
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || Peek(1).Text == "record"))
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || Peek(1).Text == "record" || Peek(1).Text == "inline"))
         {
+            dataKeyword = NextToken();
+        }
+
+        SyntaxToken inlineKeyword = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Text == "data" || Peek(1).Kind == SyntaxKind.OpenKeyword))
+        {
+            inlineKeyword = NextToken();
+        }
+
+        if (dataKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
+        {
+            Diagnostics.ReportInlineCannotBeCombinedWithData(Current.Location);
+            inlineKeyword = NextToken();
+        }
+
+        if (inlineKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
+        {
+            Diagnostics.ReportInlineCannotBeCombinedWithData(inlineKeyword.Location);
             dataKeyword = NextToken();
         }
 
@@ -233,9 +251,14 @@ public class Parser
         // can be subclassed. `open` before `struct` is diagnosed in the
         // struct parser (structs cannot be subclassed in CLR).
         SyntaxToken openModifier = null;
-        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "record")))
+        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && (Peek(1).Text == "record" || Peek(1).Text == "inline"))))
         {
             openModifier = NextToken();
+        }
+
+        if (openModifier != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "inline")
+        {
+            inlineKeyword = NextToken();
         }
 
         // Phase 3.B.5: optional `sealed` modifier on an interface declaration.
@@ -270,7 +293,7 @@ public class Parser
                 Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
             }
 
-            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier, preconsumedStructOrClassKeyword);
+            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, preconsumedStructOrClassKeyword);
             structDecl.TypeParameterList = typeParameterList;
             return structDecl;
         }
@@ -388,12 +411,18 @@ public class Parser
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
         SyntaxToken openModifier,
         SyntaxToken preconsumedStructOrClassKeyword = null)
     {
         var structOrClassKeyword = preconsumedStructOrClassKeyword ?? (Current.Kind == SyntaxKind.ClassKeyword
             ? MatchToken(SyntaxKind.ClassKeyword)
             : MatchToken(SyntaxKind.StructKeyword));
+
+        if (inlineKeyword != null && structOrClassKeyword.Kind != SyntaxKind.StructKeyword)
+        {
+            Diagnostics.ReportUnexpectedToken(inlineKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.StructKeyword);
+        }
 
         if (dataKeyword != null && structOrClassKeyword.Kind == SyntaxKind.ClassKeyword)
         {
@@ -420,7 +449,7 @@ public class Parser
         SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
-            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+            if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword && inlineKeyword == null)
             {
                 Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.OpenBraceToken);
             }
@@ -455,10 +484,36 @@ public class Parser
             }
         }
 
-        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-
+        SyntaxToken openBrace;
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", null);
+            var syntheticCloseBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, Current.Position, "}", null);
+            return new StructDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                typeKeyword,
+                identifier,
+                dataKeyword,
+                inlineKeyword,
+                openModifier,
+                structOrClassKeyword,
+                primaryCtorOpenParen,
+                primaryCtorParameters,
+                primaryCtorCloseParen,
+                baseColon,
+                baseTypeIdentifier,
+                additionalBaseIdentifiers.ToImmutable(),
+                openBrace,
+                fields.ToImmutable(),
+                methods.ToImmutable(),
+                syntheticCloseBrace);
+        }
+
+        openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
@@ -542,6 +597,7 @@ public class Parser
             typeKeyword,
             identifier,
             dataKeyword,
+            inlineKeyword,
             openModifier,
             structOrClassKeyword,
             primaryCtorOpenParen,

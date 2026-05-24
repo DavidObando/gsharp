@@ -32,7 +32,7 @@ public sealed class StructSymbol : TypeSymbol
         Accessibility accessibility,
         StructDeclarationSyntax declaration,
         string packageName)
-        : this(name, fields, accessibility, declaration, packageName, isData: false)
+        : this(name, fields, accessibility, declaration, packageName, isData: false, isInline: false)
     {
     }
 
@@ -45,14 +45,16 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="declaration">The declaring syntax node.</param>
     /// <param name="packageName">The package the struct lives in.</param>
     /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isInline">True for <c>inline struct</c> declarations (ADR-0033).</param>
     public StructSymbol(
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
         StructDeclarationSyntax declaration,
         string packageName,
-        bool isData)
-        : this(name, fields, accessibility, declaration, packageName, isData, isClass: false)
+        bool isData,
+        bool isInline = false)
+        : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass: false)
     {
     }
 
@@ -65,6 +67,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="declaration">The declaring syntax node.</param>
     /// <param name="packageName">The package the type lives in.</param>
     /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isInline">True for <c>inline struct</c> declarations (ADR-0033).</param>
     /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
     public StructSymbol(
         string name,
@@ -73,8 +76,9 @@ public sealed class StructSymbol : TypeSymbol
         StructDeclarationSyntax declaration,
         string packageName,
         bool isData,
+        bool isInline,
         bool isClass)
-        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty)
+        : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass, primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty)
     {
     }
 
@@ -87,6 +91,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="declaration">The declaring syntax node.</param>
     /// <param name="packageName">The package the type lives in.</param>
     /// <param name="isData">True for <c>data struct</c> declarations (Phase 3.B.2 / ADR-0029).</param>
+    /// <param name="isInline">True for <c>inline struct</c> declarations (ADR-0033).</param>
     /// <param name="isClass">True for <c>class</c> declarations (Phase 3.B.3): emitted as a CLR reference type with object base; not value-copied on assignment.</param>
     /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds to a field of the same name; empty when the type has no explicit primary constructor (default parameterless ctor).</param>
     public StructSymbol(
@@ -96,9 +101,10 @@ public sealed class StructSymbol : TypeSymbol
         StructDeclarationSyntax declaration,
         string packageName,
         bool isData,
+        bool isInline,
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters)
-        : this(name, fields, accessibility, declaration, packageName, isData, isClass, primaryConstructorParameters, isOpen: false, baseClass: null)
+        : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass, primaryConstructorParameters, isOpen: false, baseClass: null)
     {
     }
 
@@ -111,6 +117,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="declaration">The declaring syntax node.</param>
     /// <param name="packageName">The package the type lives in.</param>
     /// <param name="isData">True for <c>data struct</c> declarations.</param>
+    /// <param name="isInline">True for <c>inline struct</c> declarations.</param>
     /// <param name="isClass">True for <c>class</c> declarations.</param>
     /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters.</param>
     /// <param name="isOpen">True when this class was declared with the <c>open</c> modifier (Phase 3.B.3 sub-step 3 / ADR-0017). Always false for structs.</param>
@@ -122,6 +129,7 @@ public sealed class StructSymbol : TypeSymbol
         StructDeclarationSyntax declaration,
         string packageName,
         bool isData,
+        bool isInline,
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
@@ -133,6 +141,7 @@ public sealed class StructSymbol : TypeSymbol
         Declaration = declaration;
         PackageName = packageName;
         IsData = isData;
+        IsInline = isInline;
         IsClass = isClass;
         PrimaryConstructorParameters = primaryConstructorParameters;
         IsOpen = isOpen;
@@ -155,6 +164,9 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
     public bool IsData { get; }
+
+    /// <summary>Gets a value indicating whether this is an <c>inline struct</c> declaration (ADR-0033).</summary>
+    public bool IsInline { get; }
 
     /// <summary>Gets a value indicating whether this is a <c>class</c> declaration (Phase 3.B.3). Class types are reference types on the CLR; struct types (this flag false) are value types.</summary>
     public bool IsClass { get; }
@@ -384,6 +396,7 @@ public sealed class StructSymbol : TypeSymbol
             definition.Declaration,
             definition.PackageName,
             definition.IsData,
+            definition.IsInline,
             definition.IsClass,
             substitutedPrimary,
             definition.IsOpen,

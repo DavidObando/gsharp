@@ -561,7 +561,7 @@ public sealed class Binder
                 }
 
                 ctorBuilder.Add(new ParameterSymbol(paramName, paramType));
-                fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public));
+                fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
 
             primaryCtorParameters = ctorBuilder.ToImmutable();
@@ -583,12 +583,30 @@ public sealed class Binder
             }
 
             var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
-            fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility));
+            fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline));
         }
 
         if (syntax.IsData && fields.Count == 0)
         {
             Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
+        }
+
+        if (syntax.IsInline)
+        {
+            if (syntax.IsData)
+            {
+                Diagnostics.ReportInlineCannotBeCombinedWithData(syntax.InlineKeyword.Location);
+            }
+
+            if (syntax.IsOpen)
+            {
+                Diagnostics.ReportInlineCannotBeCombinedWithOpen(syntax.OpenModifier.Location);
+            }
+
+            if (fields.Count != 1)
+            {
+                Diagnostics.ReportInlineStructRequiresExactlyOneField(syntax.Identifier.Location, name, fields.Count);
+            }
         }
 
         // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
@@ -659,6 +677,7 @@ public sealed class Binder
             syntax,
             package.Name,
             syntax.IsData,
+            syntax.IsInline,
             syntax.IsClass,
             primaryCtorParameters,
             isOpen: syntax.IsOpen && syntax.IsClass,
@@ -1068,6 +1087,12 @@ public sealed class Binder
             if (methodReceiverStruct != null)
             {
                 var methodName = syntax.Identifier.Text;
+                if (methodReceiverStruct.IsInline && IsInlineSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportInlineStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);
+                    return;
+                }
+
                 if (methodReceiverStruct.TryGetField(methodName, out _) || methodReceiverStruct.TryGetMethod(methodName, out _))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName);
@@ -1114,6 +1139,16 @@ public sealed class Binder
         {
             currentTypeParameters = previousTypeParameters;
         }
+    }
+
+    private static bool IsInlineSynthesizedMemberName(string methodName)
+    {
+        return methodName == "Equals" ||
+            methodName == "GetHashCode" ||
+            methodName == "ToString" ||
+            methodName == "op_Equality" ||
+            methodName == "op_Inequality" ||
+            methodName == "Deconstruct";
     }
 
     private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
@@ -1505,7 +1540,7 @@ public sealed class Binder
             return new BoundBlockStatement(statements.ToImmutable());
         }
 
-        if (initializer.Type is StructSymbol structType && structType.IsData)
+        if (initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline))
         {
             var fields = structType.Fields;
             if (syntax.Identifiers.Count != fields.Length)
@@ -1544,7 +1579,7 @@ public sealed class Binder
             return new BoundExpressionStatement(initializer);
         }
 
-        if (!(initializer.Type is StructSymbol structType) || !structType.IsData)
+        if (!(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline))
         {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type);
             return new BoundExpressionStatement(new BoundErrorExpression());
@@ -3346,6 +3381,11 @@ public sealed class Binder
 
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
+            if (implicitField.Field.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            }
+
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
             return new BoundFieldAssignmentExpression(implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
         }
@@ -3684,6 +3724,11 @@ public sealed class Binder
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, receiverName);
         }
 
+        if (field.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+        }
+
         var converted = BindConversion(syntax.Value.Location, value, field.Type);
         return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
     }
@@ -3889,6 +3934,20 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        if (!classType.IsClass)
+        {
+            var fieldInitializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(parameters.Length);
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (classType.TryGetField(parameters[i].Name, out var field))
+                {
+                    fieldInitializers.Add(new BoundFieldInitializer(field, boundArguments[i]));
+                }
+            }
+
+            return new BoundStructLiteralExpression(classType, fieldInitializers.ToImmutable());
+        }
+
         return new BoundConstructorCallExpression(classType, boundArguments.ToImmutable());
     }
 
@@ -3911,7 +3970,7 @@ public sealed class Binder
             // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
             // type with a one-parameter primary constructor, treat it as a
             // ctor call instead.
-            if (!(type is StructSymbol singleArgStruct && singleArgStruct.IsClass && singleArgStruct.HasPrimaryConstructor))
+            if (!(type is StructSymbol singleArgStruct && (singleArgStruct.IsClass || singleArgStruct.IsInline) && singleArgStruct.HasPrimaryConstructor))
             {
                 return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
             }
@@ -3920,7 +3979,7 @@ public sealed class Binder
         // Phase 3.B.3 sub-step 2: `ClassName(arg1, arg2, ...)` invokes the
         // class's primary constructor when the call target resolves to a
         // class type with a declared primary ctor.
-        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && classType.IsClass && classType.HasPrimaryConstructor)
+        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && (classType.IsClass || classType.IsInline) && classType.HasPrimaryConstructor)
         {
             return BindConstructorCallExpression(syntax, classType);
         }
