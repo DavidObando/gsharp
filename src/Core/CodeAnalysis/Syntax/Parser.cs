@@ -213,7 +213,7 @@ public class Parser
         // data-struct marker when followed directly by `struct`. Elsewhere it
         // is an ordinary identifier.
         SyntaxToken dataKeyword = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && Peek(1).Kind == SyntaxKind.StructKeyword)
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
         {
             dataKeyword = NextToken();
         }
@@ -223,7 +223,7 @@ public class Parser
         // can be subclassed. `open` before `struct` is diagnosed in the
         // struct parser (structs cannot be subclassed in CLR).
         SyntaxToken openModifier = null;
-        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword))
+        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
         {
             openModifier = NextToken();
         }
@@ -232,7 +232,7 @@ public class Parser
         // `sealed interface` restricts implementors to the same package
         // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
         SyntaxToken sealedModifier = null;
-        if (Current.Kind == SyntaxKind.SealedKeyword && Peek(1).Kind == SyntaxKind.InterfaceKeyword)
+        if (Current.Kind == SyntaxKind.SealedKeyword && (Peek(1).Kind == SyntaxKind.InterfaceKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
         {
             sealedModifier = NextToken();
         }
@@ -247,6 +247,31 @@ public class Parser
             var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
             structDecl.TypeParameterList = typeParameterList;
             return structDecl;
+        }
+
+        if (Current.Kind == SyntaxKind.EnumKeyword)
+        {
+            if (sealedModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
+            }
+
+            if (openModifier != null)
+            {
+                Diagnostics.ReportUnexpectedToken(openModifier.Location, SyntaxKind.OpenKeyword, SyntaxKind.ClassKeyword);
+            }
+
+            if (dataKeyword != null)
+            {
+                Diagnostics.ReportUnexpectedToken(dataKeyword.Location, SyntaxKind.IdentifierToken, SyntaxKind.StructKeyword);
+            }
+
+            if (typeParameterList != null)
+            {
+                Diagnostics.ReportUnexpectedToken(typeParameterList.OpenBracketToken.Location, SyntaxKind.OpenSquareBracketToken, SyntaxKind.EnumKeyword);
+            }
+
+            return ParseEnumDeclaration(accessibilityModifier, typeKeyword, identifier);
         }
 
         if (Current.Kind == SyntaxKind.InterfaceKeyword)
@@ -288,6 +313,48 @@ public class Parser
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
         return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
+    }
+
+    private EnumDeclarationSyntax ParseEnumDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier)
+    {
+        var enumKeyword = MatchToken(SyntaxKind.EnumKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var members = ParseEnumMembers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+
+        if (members.Count == 0)
+        {
+            Diagnostics.ReportEmptyEnumDeclaration(identifier.Location, identifier.Text);
+        }
+
+        return new EnumDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, enumKeyword, openBrace, members, closeBrace);
+    }
+
+    private SeparatedSyntaxList<EnumMemberSyntax> ParseEnumMembers()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            nodesAndSeparators.Add(new EnumMemberSyntax(syntaxTree, identifier));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<EnumMemberSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private StructDeclarationSyntax ParseStructDeclaration(
@@ -663,6 +730,7 @@ public class Parser
             var follow = Peek(ahead + 1);
             if (follow.Kind == SyntaxKind.OpenParenthesisToken
                 || follow.Kind == SyntaxKind.StructKeyword
+                || follow.Kind == SyntaxKind.EnumKeyword
                 || follow.Kind == SyntaxKind.ClassKeyword
                 || follow.Kind == SyntaxKind.InterfaceKeyword
                 || follow.Kind == SyntaxKind.SealedKeyword

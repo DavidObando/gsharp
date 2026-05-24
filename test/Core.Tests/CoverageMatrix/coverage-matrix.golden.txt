@@ -49,6 +49,9 @@ EllipsisToken
 ElseClause
 ElseKeyword
 EndOfFileToken
+EnumDeclaration
+EnumKeyword
+EnumMember
 EqualsEqualsToken
 EqualsToken
 ExpressionStatement

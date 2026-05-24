@@ -132,6 +132,41 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that an enum declaration contains no members.
+    /// </summary>
+    /// <param name="location">The text location of the enum identifier.</param>
+    /// <param name="enumName">The enum name.</param>
+    public void ReportEmptyEnumDeclaration(TextLocation location, string enumName)
+    {
+        var message = $"Enum '{enumName}' must declare at least one member.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that an enum declares the same member more than once.
+    /// </summary>
+    /// <param name="location">The text location of the duplicate member.</param>
+    /// <param name="memberName">The duplicate member name.</param>
+    /// <param name="enumName">The enum name.</param>
+    public void ReportDuplicateEnumMember(TextLocation location, string memberName, string enumName)
+    {
+        var message = $"Enum '{enumName}' already declares a member named '{memberName}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that an enum member access references an unknown member.
+    /// </summary>
+    /// <param name="location">The text location of the unknown member.</param>
+    /// <param name="memberName">The unknown member name.</param>
+    /// <param name="enumName">The enum name.</param>
+    public void ReportUndefinedEnumMember(TextLocation location, string memberName, string enumName)
+    {
+        var message = $"Enum '{enumName}' does not define a member named '{memberName}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that a type doesn't exist.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

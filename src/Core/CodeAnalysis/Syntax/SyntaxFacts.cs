@@ -145,6 +145,8 @@ public static class SyntaxFacts
                 return SyntaxKind.DeferKeyword;
             case "else":
                 return SyntaxKind.ElseKeyword;
+            case "enum":
+                return SyntaxKind.EnumKeyword;
             case "false":
                 return SyntaxKind.FalseKeyword;
             case "fallthrough":
@@ -385,6 +387,8 @@ public static class SyntaxFacts
                 return "defer";
             case SyntaxKind.ElseKeyword:
                 return "else";
+            case SyntaxKind.EnumKeyword:
+                return "enum";
             case SyntaxKind.FalseKeyword:
                 return "false";
             case SyntaxKind.FallthroughKeyword:
