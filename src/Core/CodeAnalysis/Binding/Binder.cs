@@ -1176,6 +1176,8 @@ public sealed class Binder
                 return BindUsingStatement((UsingStatementSyntax)syntax);
             case SyntaxKind.GoStatement:
                 return BindGoStatement((GoStatementSyntax)syntax);
+            case SyntaxKind.ChannelSendStatement:
+                return BindChannelSendStatement((ChannelSendStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -1381,6 +1383,18 @@ public sealed class Binder
             }
 
             return MapTypeSymbol.Get(keyType, valueType);
+        }
+
+        if (syntax.IsChannel)
+        {
+            // Phase 5.4 / ADR-0022: channel type clause `chan T`.
+            var elementType = BindTypeClause(syntax.ChanElementType);
+            if (elementType == null)
+            {
+                return null;
+            }
+
+            return ChannelTypeSymbol.Get(elementType);
         }
 
         // Phase 4.4 / ADR-0020: if the type clause carries a type-argument list,
@@ -1883,6 +1897,43 @@ public sealed class Binder
         return new BoundGoStatement(expression);
     }
 
+    private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
+    {
+        // Phase 5.5 / ADR-0022: `ch <- v` send statement.
+        var channel = BindExpression(syntax.Channel);
+        if (channel is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(channel);
+        }
+
+        if (channel.Type is not ChannelTypeSymbol chan)
+        {
+            Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var value = BindConversion(syntax.Value, chan.ElementType);
+        return new BoundChannelSendStatement(channel, value);
+    }
+
+    private BoundExpression BindMakeChannelExpression(MakeChannelExpressionSyntax syntax)
+    {
+        // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
+        var typeSymbol = BindTypeClause(syntax.ChannelTypeClause);
+        if (typeSymbol is not ChannelTypeSymbol chan)
+        {
+            return new BoundErrorExpression();
+        }
+
+        BoundExpression capacity = null;
+        if (syntax.Capacity != null)
+        {
+            capacity = BindConversion(syntax.Capacity, TypeSymbol.Int);
+        }
+
+        return new BoundMakeChannelExpression(chan, capacity);
+    }
+
     private TypeSymbol ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
@@ -2252,6 +2303,8 @@ public sealed class Binder
                 return BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
             case SyntaxKind.AwaitExpression:
                 return BindAwaitExpression((AwaitExpressionSyntax)syntax);
+            case SyntaxKind.MakeChannelExpression:
+                return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             default:
@@ -2663,6 +2716,14 @@ public sealed class Binder
 
     private BoundExpression BindUnaryExpression(UnaryExpressionSyntax syntax)
     {
+        // Phase 5.5 / ADR-0022: prefix `<-ch` is a channel-receive expression,
+        // not a unary operator. Route to a dedicated binder so the operator
+        // table doesn't need a per-element-type entry.
+        if (syntax.OperatorToken.Kind == SyntaxKind.LeftArrowToken)
+        {
+            return BindChannelReceiveExpression(syntax);
+        }
+
         var boundOperand = BindExpression(syntax.Operand);
 
         if (boundOperand.Type == TypeSymbol.Error)
@@ -2679,6 +2740,23 @@ public sealed class Binder
         }
 
         return new BoundUnaryExpression(boundOperator, boundOperand);
+    }
+
+    private BoundExpression BindChannelReceiveExpression(UnaryExpressionSyntax syntax)
+    {
+        var operand = BindExpression(syntax.Operand);
+        if (operand is BoundErrorExpression)
+        {
+            return operand;
+        }
+
+        if (operand.Type is not ChannelTypeSymbol chan)
+        {
+            Diagnostics.ReportReceiveOperandIsNotChannel(syntax.Operand.Location, operand.Type);
+            return new BoundErrorExpression();
+        }
+
+        return new BoundChannelReceiveExpression(operand, chan.ElementType);
     }
 
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)
@@ -3435,6 +3513,34 @@ public sealed class Binder
 
                 var keyExpr = BindConversion(syntax.Arguments[1], mapType.KeyType);
                 result = new BoundMapDeleteExpression(mapExpr, keyExpr);
+                return true;
+            }
+
+            case "close":
+            {
+                // Phase 5.4 / ADR-0022: `close(ch)` marks the channel writer complete.
+                if (syntax.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                var chanExpr = BindExpression(syntax.Arguments[0]);
+                if (chanExpr.Type == TypeSymbol.Error)
+                {
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                if (chanExpr.Type is not ChannelTypeSymbol)
+                {
+                    Diagnostics.ReportCloseOperandIsNotChannel(syntax.Arguments[0].Location, chanExpr.Type);
+                    result = new BoundErrorExpression();
+                    return true;
+                }
+
+                result = new BoundChannelCloseExpression(chanExpr);
                 return true;
             }
 

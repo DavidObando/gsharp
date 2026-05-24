@@ -184,6 +184,9 @@ public enum SyntaxKind
     FunctionLiteralExpression,
     AwaitExpression,
     GoStatement,
+    MakeChannelExpression,
+    ChannelReceiveExpression,
+    ChannelSendStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

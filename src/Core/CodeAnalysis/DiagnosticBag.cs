@@ -372,6 +372,39 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    /// <param name="actualType">The actual type of the operand.</param>
+    public void ReportReceiveOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
+    {
+        var message = $"The receive operator '<-' requires a channel operand; got '{actualType}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the left-hand side of a channel-send statement is not a channel (Phase 5.5 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the left-hand side.</param>
+    /// <param name="actualType">The actual type of the left-hand side.</param>
+    public void ReportSendTargetIsNotChannel(TextLocation location, TypeSymbol actualType)
+    {
+        var message = $"The send operator '<-' requires a channel on the left; got '{actualType}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports that the operand of <c>close(ch)</c> is not a channel (Phase 5.4 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    /// <param name="actualType">The actual type of the operand.</param>
+    public void ReportCloseOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
+    {
+        var message = $"'close' requires a channel operand; got '{actualType}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the function requires a different amount of arguments.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

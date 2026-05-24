@@ -160,6 +160,23 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a channel type <c>chan T?</c> (Phase 5.4 / ADR-0022).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="chanKeyword">The <c>chan</c> keyword.</param>
+    /// <param name="chanElementType">The element type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken chanKeyword,
+        TypeClauseSyntax chanElementType,
+        SyntaxToken questionToken)
+        : base(syntaxTree)
+    {
+        ChanKeyword = chanKeyword;
+        ChanElementType = chanElementType;
+        QuestionToken = questionToken;
+    }
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -240,4 +257,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K]V</c> (Phase 3.A.4).</summary>
     public bool IsMap => MapKeyword != null;
+
+    /// <summary>Gets the <c>chan</c> keyword for channel types, or <c>null</c>.</summary>
+    public SyntaxToken ChanKeyword { get; }
+
+    /// <summary>Gets the channel element type clause, or <c>null</c>.</summary>
+    public TypeClauseSyntax ChanElementType { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a channel type <c>chan T</c> (Phase 5.4 / ADR-0022).</summary>
+    public bool IsChannel => ChanKeyword != null;
 }

@@ -27,6 +27,8 @@ CaseKeyword
 CatchClause
 CatchKeyword
 ChanKeyword
+ChannelReceiveExpression
+ChannelSendStatement
 ClassKeyword
 CloseBraceToken
 CloseParenthesisToken
@@ -91,6 +93,7 @@ LessOrEqualsToken
 LessToken
 LetKeyword
 LiteralExpression
+MakeChannelExpression
 MapCreationExpression
 MapEntry
 MapKeyword
@@ -173,6 +176,9 @@ BinaryExpression
 BlockStatement
 CallExpression
 CapExpression
+ChannelCloseExpression
+ChannelReceiveExpression
+ChannelSendStatement
 ClrConstructorCallExpression
 ClrIndexAssignmentExpression
 ClrIndexExpression
@@ -199,6 +205,7 @@ IndirectCallExpression
 LabelStatement
 LenExpression
 LiteralExpression
+MakeChannelExpression
 MapDeleteExpression
 MapLiteralExpression
 NullConditionalAccessExpression

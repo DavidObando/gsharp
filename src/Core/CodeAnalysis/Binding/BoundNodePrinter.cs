@@ -84,6 +84,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.GoStatement:
                 WriteGoStatement((BoundGoStatement)node, writer);
                 break;
+            case BoundNodeKind.ChannelSendStatement:
+                WriteChannelSendStatement((BoundChannelSendStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -182,6 +185,15 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.AwaitExpression:
                 WriteAwaitExpression((BoundAwaitExpression)node, writer);
+                break;
+            case BoundNodeKind.MakeChannelExpression:
+                WriteMakeChannelExpression((BoundMakeChannelExpression)node, writer);
+                break;
+            case BoundNodeKind.ChannelReceiveExpression:
+                WriteChannelReceiveExpression((BoundChannelReceiveExpression)node, writer);
+                break;
+            case BoundNodeKind.ChannelCloseExpression:
+                WriteIntrinsicCall("close", ((BoundChannelCloseExpression)node).Channel, writer);
                 break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
@@ -543,6 +555,39 @@ public static class BoundNodePrinter
         writer.WriteKeyword(SyntaxKind.AwaitKeyword);
         writer.WriteSpace();
         node.Expression.WriteTo(writer);
+    }
+
+    private static void WriteChannelSendStatement(BoundChannelSendStatement node, IndentedTextWriter writer)
+    {
+        node.Channel.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.LeftArrowToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
+        writer.WriteLine();
+    }
+
+    private static void WriteMakeChannelExpression(BoundMakeChannelExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("make");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteKeyword(SyntaxKind.ChanKeyword);
+        writer.WriteSpace();
+        writer.WriteIdentifier(node.ChannelType.ElementType.Name);
+        if (node.Capacity != null)
+        {
+            writer.WritePunctuation(SyntaxKind.CommaToken);
+            writer.WriteSpace();
+            node.Capacity.WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteChannelReceiveExpression(BoundChannelReceiveExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.LeftArrowToken);
+        node.Channel.WriteTo(writer);
     }
 
     private static void WriteImportedCallExpression(BoundImportedCallExpression node, IndentedTextWriter writer)
