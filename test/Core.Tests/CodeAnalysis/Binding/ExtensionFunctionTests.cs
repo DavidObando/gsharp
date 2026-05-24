@@ -20,22 +20,25 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class ExtensionFunctionTests
 {
     [Fact]
-    public void Extension_OnUserStruct_Binds_And_Dispatches()
+    public void Extension_OnCrossPackageUserStruct_Binds_And_Dispatches()
     {
-        var source = @"
-type Point struct {
+        var typeTree = SyntaxTree.Parse(SourceText.From(@"
+package Geometry
+public type Point struct {
     X int
     Y int
 }
-
+"));
+        var extensionTree = SyntaxTree.Parse(SourceText.From(@"
+package GeometryExtensions
 func (p Point) SumXY() int {
     return p.X + p.Y
 }
 
 var p = Point{X: 3, Y: 4}
 p.SumXY()
-";
-        var result = Evaluate(source);
+"));
+        var result = Evaluate(typeTree, extensionTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
     }
@@ -125,7 +128,12 @@ n.Foo()
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(syntaxTree);
+        return Evaluate(syntaxTree);
+    }
+
+    private static EvaluationResult Evaluate(params SyntaxTree[] syntaxTrees)
+    {
+        var compilation = new Compilation(syntaxTrees);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

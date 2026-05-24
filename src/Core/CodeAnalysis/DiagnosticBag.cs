@@ -121,6 +121,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a same-package receiver declaration targets a non-aggregate type.
+    /// </summary>
+    /// <param name="location">The text location where the receiver type was found.</param>
+    /// <param name="receiverTypeName">The receiver type name.</param>
+    public void ReportMethodReceiverMustBeStructOrClass(TextLocation location, string receiverTypeName)
+    {
+        var message = $"Method receiver type '{receiverTypeName}' must be a struct or class declared in the same package.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that a <c>data struct</c> was declared with no fields (ADR-0029).
     /// </summary>
     /// <param name="location">The text location of the struct identifier.</param>

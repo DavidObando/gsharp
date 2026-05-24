@@ -188,9 +188,9 @@ internal sealed class ReflectionMetadataEmitter
         var interfaces = this.program.Interfaces;
 
         // TypeDef row order: <Module>, interfaces (each owns abstract method
-        // rows), classes (each owns a ctor row + methods), structs (no methods
-        // of their own — yet), <Program>s. Field-row planning is independent
-        // of methods so we walk allAggregates in their original order; the
+        // rows), classes (each owns ctor rows + methods), structs (receiver
+        // methods only), <Program>s. Field-row planning is independent of
+        // methods so we walk allAggregates in their original order; the
         // methodList re-planning is what requires interfaces before classes
         // before structs (non-decreasing methodList rule per ECMA-335).
         int nextFieldRow = 1;
@@ -228,7 +228,7 @@ internal sealed class ReflectionMetadataEmitter
         // default ctor row, and the methods are emitted in this row order.
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
-        var classMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
+        var aggregateMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
         foreach (var c in classes)
         {
             classCtorRows[c] = methodRow++;
@@ -241,8 +241,27 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in c.Methods)
                 {
-                    classMethodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                    var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                    aggregateMethodHandles[m] = handle;
+                    this.methodHandles[m] = handle;
                 }
+            }
+        }
+
+        var structFirstMethodRows = new Dictionary<StructSymbol, int>();
+        foreach (var s in structs)
+        {
+            if (s.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            structFirstMethodRows[s] = methodRow;
+            foreach (var m in s.Methods)
+            {
+                var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                aggregateMethodHandles[m] = handle;
+                this.methodHandles[m] = handle;
             }
         }
 
@@ -272,8 +291,8 @@ internal sealed class ReflectionMetadataEmitter
 
         // 2b. Emit class TypeDefs (so methodLists stay non-decreasing), then
         // struct TypeDefs. Class TypeDefs' methodList points at the class's
-        // preassigned ctor row; struct TypeDefs point past the last class
-        // ctor (they own zero methods today).
+        // preassigned ctor row; struct TypeDefs point at their first receiver
+        // method row when present, otherwise at the package method block.
         foreach (var c in classes)
         {
             this.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
@@ -296,7 +315,10 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var s in structs)
         {
-            this.EmitStructTypeDef(s, structFirstFieldRow[s], firstPackageCtorRow);
+            var methodListRow = structFirstMethodRows.TryGetValue(s, out var firstStructMethodRow)
+                ? firstStructMethodRow
+                : firstPackageCtorRow;
+            this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -420,6 +442,25 @@ internal sealed class ReflectionMetadataEmitter
                     var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
                     this.methodHandles[m] = emittedHandle;
                 }
+            }
+        }
+
+        foreach (var s in structs)
+        {
+            if (s.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var m in s.Methods)
+            {
+                if (!this.program.Functions.TryGetValue(m, out var body))
+                {
+                    body = this.lambdaBodies[m];
+                }
+
+                var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                this.methodHandles[m] = emittedHandle;
             }
         }
 
@@ -894,9 +935,16 @@ internal sealed class ReflectionMetadataEmitter
                 parameters[function.ThisParameter] = 0;
             }
 
+            var emittedParameterIndex = 0;
             for (var i = 0; i < function.Parameters.Length; i++)
             {
-                parameters[function.Parameters[i]] = i + paramSlotShift;
+                if (ReferenceEquals(function.Parameters[i], function.ThisParameter))
+                {
+                    continue;
+                }
+
+                parameters[function.Parameters[i]] = emittedParameterIndex + paramSlotShift;
+                emittedParameterIndex++;
             }
 
             StandaloneSignatureHandle localsSignature = default;
@@ -925,14 +973,20 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var sigBlob = new BlobBuilder();
+        var signatureParameterCount = function.Parameters.Length - (function.ExplicitReceiverParameter == null ? 0 : 1);
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: function.IsInstanceMethod)
             .Parameters(
-                function.Parameters.Length,
+                signatureParameterCount,
                 r => EncodeReturnSymbol(r, function.Type),
                 ps =>
                 {
                     foreach (var p in function.Parameters)
                     {
+                        if (ReferenceEquals(p, function.ThisParameter))
+                        {
+                            continue;
+                        }
+
                         EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
                     }
                 });
@@ -3365,13 +3419,14 @@ internal sealed class ReflectionMetadataEmitter
                     $"Instance method '{call.Method.Name}' on '{call.Method.ReceiverType?.Name}' has no emitted handle.");
             }
 
-            this.EmitExpression(call.Receiver);
+            this.EmitInstanceReceiver(call.Receiver);
             foreach (var arg in call.Arguments)
             {
                 this.EmitExpression(arg);
             }
 
-            this.il.OpCode(ILOpCode.Callvirt);
+            var receiverIsValueType = call.Method.ReceiverType is StructSymbol receiverStruct && !receiverStruct.IsClass;
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(methodHandle);
         }
 
