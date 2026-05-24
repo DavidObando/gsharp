@@ -1,0 +1,26 @@
+{
+    "$schema": "http://json.schemastore.org/template",
+    "author": "GSharp Authors",
+    "classifications": [ "Test", "xUnit", "GSharp" ],
+    "identity": "GSharp.Templates.XunitTests",
+    "name": "GSharp Library with xUnit Test Project",
+    "shortName": "gsharp-xunit",
+    "description": "A solution scaffold containing a GSharp class library and a C# xUnit test project that exercises it. Demonstrates the cross-language interop path described in ADR-0027.",
+    "tags": {
+        "language": "GSharp",
+        "type": "solution"
+    },
+    "sourceName": "GsharpLibrary",
+    "preferNameDirectory": true,
+    "symbols": {
+        "Framework": {
+            "type": "parameter",
+            "datatype": "choice",
+            "choices": [
+                { "choice": "net10.0", "description": "Target .NET 10.0" }
+            ],
+            "defaultValue": "net10.0",
+            "replaces": "net10.0"
+        }
+    }
+}

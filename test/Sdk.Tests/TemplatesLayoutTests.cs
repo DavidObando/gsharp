@@ -12,17 +12,29 @@ namespace GSharp.Sdk.Tests;
 /// <summary>
 /// Sanity checks the <c>Gsharp.Templates</c> package content: <c>template.json</c>
 /// metadata, the scaffolded <c>.gsproj</c> using <c>Gsharp.NET.Sdk</c>, and the
-/// sample sources we ship for <c>dotnet new gsharp-console</c>.
+/// sample sources we ship for each <c>dotnet new</c> template.
 /// </summary>
 public class TemplatesLayoutTests
 {
-    private static readonly string ContentRoot =
-        Path.Combine(RepoRoot.TemplatesSourceDir, "content", "gsharp-console");
+    private static readonly string TemplatesContentRoot =
+        Path.Combine(RepoRoot.TemplatesSourceDir, "content");
+
+    private static readonly string ConsoleContentRoot =
+        Path.Combine(TemplatesContentRoot, "gsharp-console");
+
+    private static readonly string LibContentRoot =
+        Path.Combine(TemplatesContentRoot, "gsharp-lib");
+
+    private static readonly string WebContentRoot =
+        Path.Combine(TemplatesContentRoot, "gsharp-web");
+
+    private static readonly string XunitContentRoot =
+        Path.Combine(TemplatesContentRoot, "gsharp-xunit");
 
     [Fact]
     public void TemplateConfig_Has_Expected_Identity_And_ShortName()
     {
-        var path = Path.Combine(ContentRoot, ".template.config", "template.json");
+        var path = Path.Combine(ConsoleContentRoot, ".template.config", "template.json");
         Assert.True(File.Exists(path), path);
 
         using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
@@ -37,7 +49,7 @@ public class TemplatesLayoutTests
     [Fact]
     public void Scaffolded_Gsproj_Uses_GsharpNetSdk_And_Compiles_GsFiles()
     {
-        var path = Path.Combine(ContentRoot, "GsharpConsoleApp.gsproj");
+        var path = Path.Combine(ConsoleContentRoot, "GsharpConsoleApp.gsproj");
         Assert.True(File.Exists(path), path);
 
         var doc = XDocument.Load(path);
@@ -51,7 +63,7 @@ public class TemplatesLayoutTests
     [Fact]
     public void Scaffolded_Program_Has_Package_And_TopLevel_WriteLine()
     {
-        var path = Path.Combine(ContentRoot, "Program.gs");
+        var path = Path.Combine(ConsoleContentRoot, "Program.gs");
         Assert.True(File.Exists(path), path);
 
         var src = File.ReadAllText(path);
@@ -67,5 +79,152 @@ public class TemplatesLayoutTests
 
         var doc = XDocument.Load(path);
         Assert.Equal("Gsharp.NET.Sdk", (string)doc.Root.Attribute("Sdk"));
+    }
+
+    [Fact]
+    public void Lib_Template_Has_Expected_Identity_And_ShortName()
+    {
+        var path = Path.Combine(LibContentRoot, ".template.config", "template.json");
+        Assert.True(File.Exists(path), path);
+
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        var root = doc.RootElement;
+
+        Assert.Equal("GSharp.Templates.Library", root.GetProperty("identity").GetString());
+        Assert.Equal("gsharp-lib", root.GetProperty("shortName").GetString());
+        Assert.Equal("GsharpLibrary", root.GetProperty("sourceName").GetString());
+        Assert.Equal("project", root.GetProperty("tags").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Lib_Template_Gsproj_Targets_Library_With_GsharpNetSdk()
+    {
+        var path = Path.Combine(LibContentRoot, "GsharpLibrary.gsproj");
+        Assert.True(File.Exists(path), path);
+
+        var doc = XDocument.Load(path);
+        var sdkAttr = (string)doc.Root.Attribute("Sdk");
+        Assert.StartsWith("Gsharp.NET.Sdk", sdkAttr, System.StringComparison.Ordinal);
+
+        var text = File.ReadAllText(path);
+        Assert.Contains("<OutputType>Library</OutputType>", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Lib_Template_Source_Has_Package_And_Function()
+    {
+        var path = Path.Combine(LibContentRoot, "Greeter.gs");
+        Assert.True(File.Exists(path), path);
+
+        var src = File.ReadAllText(path);
+        Assert.Contains("package GsharpLibrary", src, System.StringComparison.Ordinal);
+        Assert.Contains("func Greeting", src, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Web_Template_Has_Expected_Identity_And_ShortName()
+    {
+        var path = Path.Combine(WebContentRoot, ".template.config", "template.json");
+        Assert.True(File.Exists(path), path);
+
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        var root = doc.RootElement;
+
+        Assert.Equal("GSharp.Templates.Web", root.GetProperty("identity").GetString());
+        Assert.Equal("gsharp-web", root.GetProperty("shortName").GetString());
+        Assert.Equal("GsharpWebApp", root.GetProperty("sourceName").GetString());
+        Assert.Equal("project", root.GetProperty("tags").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Web_Template_Gsproj_Produces_Executable_With_GsharpNetSdk()
+    {
+        var path = Path.Combine(WebContentRoot, "GsharpWebApp.gsproj");
+        Assert.True(File.Exists(path), path);
+
+        var doc = XDocument.Load(path);
+        var sdkAttr = (string)doc.Root.Attribute("Sdk");
+        Assert.StartsWith("Gsharp.NET.Sdk", sdkAttr, System.StringComparison.Ordinal);
+
+        var text = File.ReadAllText(path);
+        Assert.Contains("<OutputType>Exe</OutputType>", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Web_Template_Program_Imports_System_Net_And_Uses_HttpListener()
+    {
+        var path = Path.Combine(WebContentRoot, "Program.gs");
+        Assert.True(File.Exists(path), path);
+
+        var src = File.ReadAllText(path);
+        Assert.Contains("package GsharpWebApp", src, System.StringComparison.Ordinal);
+        Assert.Contains("import System.Net", src, System.StringComparison.Ordinal);
+        Assert.Contains("HttpListener()", src, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Xunit_Template_Has_Expected_Identity_And_Solution_Type()
+    {
+        var path = Path.Combine(XunitContentRoot, ".template.config", "template.json");
+        Assert.True(File.Exists(path), path);
+
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        var root = doc.RootElement;
+
+        Assert.Equal("GSharp.Templates.XunitTests", root.GetProperty("identity").GetString());
+        Assert.Equal("gsharp-xunit", root.GetProperty("shortName").GetString());
+        Assert.Equal("GsharpLibrary", root.GetProperty("sourceName").GetString());
+        Assert.Equal("solution", root.GetProperty("tags").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Xunit_Template_Library_Project_Is_Gsharp_Library()
+    {
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary", "GsharpLibrary.gsproj");
+        Assert.True(File.Exists(path), path);
+
+        var doc = XDocument.Load(path);
+        var sdkAttr = (string)doc.Root.Attribute("Sdk");
+        Assert.StartsWith("Gsharp.NET.Sdk", sdkAttr, System.StringComparison.Ordinal);
+
+        var text = File.ReadAllText(path);
+        Assert.Contains("<OutputType>Library</OutputType>", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Xunit_Template_Library_Source_Defines_Public_Class()
+    {
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary", "Greeter.gs");
+        Assert.True(File.Exists(path), path);
+
+        var src = File.ReadAllText(path);
+        Assert.Contains("package GsharpLibrary", src, System.StringComparison.Ordinal);
+        Assert.Contains("type Greeter class", src, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Xunit_Template_Test_Project_References_Library_And_Xunit()
+    {
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary.Tests", "GsharpLibrary.Tests.csproj");
+        Assert.True(File.Exists(path), path);
+
+        var doc = XDocument.Load(path);
+        Assert.Equal("Microsoft.NET.Sdk", (string)doc.Root.Attribute("Sdk"));
+
+        var text = File.ReadAllText(path);
+        Assert.Contains("xunit", text, System.StringComparison.Ordinal);
+        Assert.Contains("Microsoft.NET.Test.Sdk", text, System.StringComparison.Ordinal);
+        Assert.Contains("GsharpLibrary.gsproj", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Xunit_Template_Has_Solution_File()
+    {
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary.sln");
+        Assert.True(File.Exists(path), path);
+
+        var text = File.ReadAllText(path);
+        Assert.Contains("GsharpLibrary.gsproj", text, System.StringComparison.Ordinal);
+        Assert.Contains("GsharpLibrary.Tests.csproj", text, System.StringComparison.Ordinal);
     }
 }
