@@ -179,6 +179,8 @@ public static class SyntaxFacts
                 return SyntaxKind.NilKeyword;
             case "open":
                 return SyntaxKind.OpenKeyword;
+            case "operator":
+                return SyntaxKind.OperatorKeyword;
             case "override":
                 return SyntaxKind.OverrideKeyword;
             case "package":
@@ -425,6 +427,8 @@ public static class SyntaxFacts
                 return "nil";
             case SyntaxKind.OverrideKeyword:
                 return "override";
+            case SyntaxKind.OperatorKeyword:
+                return "operator";
             case SyntaxKind.PackageKeyword:
                 return "package";
             case SyntaxKind.PrivateKeyword:

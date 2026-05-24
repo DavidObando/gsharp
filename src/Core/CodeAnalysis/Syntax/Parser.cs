@@ -730,7 +730,7 @@ public class Parser
             receiverCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         }
 
-        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var identifier = MatchOperatorOrIdentifier(receiver != null);
         var typeParameterList = ParseOptionalTypeParameterList();
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
@@ -738,6 +738,45 @@ public class Parser
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
         return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+    }
+
+    // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the
+    // optional receiver clause, if the current token is the contextual
+    // `operator` keyword we consume it and the following operator token, then
+    // synthesize an IdentifierToken whose text is the CLR op_* name (e.g.
+    // `op_Addition`). Downstream binding sees a regular extension function with
+    // that name; the binder later hooks `BindBinaryExpression` /
+    // `BindUnaryExpression` to look up `op_*` on the user type's symbol.
+    private SyntaxToken MatchOperatorOrIdentifier(bool hasReceiver)
+    {
+        if (Current.Kind != SyntaxKind.OperatorKeyword)
+        {
+            return MatchToken(SyntaxKind.IdentifierToken);
+        }
+
+        var operatorKeyword = NextToken();
+        var operatorToken = NextToken();
+
+        // Disambiguate binary vs unary by peeking the parameter list. With a
+        // receiver clause, the parameter list contains only the *extra*
+        // operands — empty list ⇒ unary, otherwise binary. (Free-function
+        // form without a receiver is not yet wired through this path.)
+        var isUnary = hasReceiver
+            && Current.Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(1).Kind == SyntaxKind.CloseParenthesisToken;
+
+        var name = isUnary
+            ? GSharp.Core.CodeAnalysis.Binding.OperatorNames.TryGetUnaryName(operatorToken.Kind)
+            : GSharp.Core.CodeAnalysis.Binding.OperatorNames.TryGetBinaryName(operatorToken.Kind)
+              ?? GSharp.Core.CodeAnalysis.Binding.OperatorNames.TryGetUnaryName(operatorToken.Kind);
+
+        if (name == null)
+        {
+            Diagnostics.ReportUnexpectedToken(operatorToken.Location, operatorToken.Kind, SyntaxKind.PlusToken);
+            return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, operatorKeyword.Position, "__bad_operator__", null);
+        }
+
+        return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, operatorKeyword.Position, name, null);
     }
 
     private TypeParameterListSyntax ParseOptionalTypeParameterList()
@@ -896,12 +935,22 @@ public class Parser
         }
 
         ahead++;
-        if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+        if (Peek(ahead).Kind != SyntaxKind.IdentifierToken && Peek(ahead).Kind != SyntaxKind.OperatorKeyword)
         {
             return false;
         }
 
         ahead++;
+
+        // Stream D: `operator <op>(` follows the receiver clause for operator
+        // overloads. Accept any non-`(`/non-EOF token after `operator` here —
+        // the operator-token validation happens in MatchOperatorOrIdentifier.
+        if (Peek(ahead - 1).Kind == SyntaxKind.OperatorKeyword)
+        {
+            return Peek(ahead).Kind != SyntaxKind.EndOfFileToken
+                && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken;
+        }
+
         return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken;
     }
 

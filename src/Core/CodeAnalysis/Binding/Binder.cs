@@ -3842,6 +3842,37 @@ public sealed class Binder
 
         if (boundOperator == null)
         {
+            // Stream D: try user-defined `func (a T) operator <op>() R` on the
+            // operand's user type. Same-package methods bind onto the struct
+            // (Phase 6.4); the receiver is Parameters[0] (Parameters.Length==1
+            // for unary ops). Extension-function fallback also covered.
+            var userOpName = OperatorNames.TryGetUnaryName(syntax.OperatorToken.Kind);
+            if (userOpName != null && boundOperand.Type != null)
+            {
+                FunctionSymbol userOp = null;
+                bool isStructReceiver = false;
+                if (boundOperand.Type is StructSymbol operandStruct && operandStruct.TryGetMethodIncludingInherited(userOpName, out var structOp))
+                {
+                    userOp = structOp;
+                    isStructReceiver = true;
+                }
+                else if (scope.TryLookupExtensionFunction(boundOperand.Type, userOpName, out var extOp))
+                {
+                    userOp = extOp;
+                }
+
+                if (userOp != null && userOp.Parameters.Length == 1)
+                {
+                    var convertedOperand = BindConversion(syntax.Operand.Location, boundOperand, userOp.Parameters[0].Type);
+                    if (isStructReceiver)
+                    {
+                        return new BoundUserInstanceCallExpression(convertedOperand, userOp, ImmutableArray<BoundExpression>.Empty);
+                    }
+
+                    return new BoundCallExpression(userOp, ImmutableArray.Create(convertedOperand));
+                }
+            }
+
             // Stream C: fall back to a public-static unary `op_*` method on
             // the operand's CLR type (`-time`, `~bits`, ...).
             var ambiguous = false;
@@ -3898,6 +3929,53 @@ public sealed class Binder
 
         if (boundOperator == null)
         {
+            // Stream D: try user-defined `func (a T) operator <op>(b U) R` on
+            // either operand's user type. Same-package operators are bound as
+            // methods on the struct (Phase 6.4); the receiver is at
+            // Parameters[0] (so binary ops have Parameters.Length == 2).
+            var userOpName = OperatorNames.TryGetBinaryName(syntax.OperatorToken.Kind);
+            if (userOpName != null)
+            {
+                FunctionSymbol userOp = null;
+                bool leftIsStructReceiver = false;
+                bool rightIsStructReceiver = false;
+                if (boundLeft.Type is StructSymbol leftStruct && leftStruct.TryGetMethodIncludingInherited(userOpName, out var leftOp))
+                {
+                    userOp = leftOp;
+                    leftIsStructReceiver = true;
+                }
+                else if (boundRight.Type is StructSymbol rightStruct && rightStruct.TryGetMethodIncludingInherited(userOpName, out var rightOp))
+                {
+                    userOp = rightOp;
+                    rightIsStructReceiver = true;
+                }
+                else if (boundLeft.Type != null && scope.TryLookupExtensionFunction(boundLeft.Type, userOpName, out var leftExt))
+                {
+                    userOp = leftExt;
+                }
+                else if (boundRight.Type != null && scope.TryLookupExtensionFunction(boundRight.Type, userOpName, out var rightExt))
+                {
+                    userOp = rightExt;
+                }
+
+                if (userOp != null && userOp.Parameters.Length == 2)
+                {
+                    var convertedLeft = BindConversion(syntax.Left.Location, boundLeft, userOp.Parameters[0].Type);
+                    var convertedRight = BindConversion(syntax.Right.Location, boundRight, userOp.Parameters[1].Type);
+                    if (leftIsStructReceiver)
+                    {
+                        return new BoundUserInstanceCallExpression(convertedLeft, userOp, ImmutableArray.Create(convertedRight));
+                    }
+
+                    if (rightIsStructReceiver)
+                    {
+                        return new BoundUserInstanceCallExpression(convertedRight, userOp, ImmutableArray.Create(convertedLeft));
+                    }
+
+                    return new BoundCallExpression(userOp, ImmutableArray.Create(convertedLeft, convertedRight));
+                }
+            }
+
             // Stream C: fall back to a public-static `op_*` method on either
             // operand's CLR type (TimeSpan + TimeSpan, BigInteger * int, ...).
             var ambiguous = false;

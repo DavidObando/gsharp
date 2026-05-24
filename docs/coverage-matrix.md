@@ -122,7 +122,8 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | unary `+` `-` `^` | ✅ | — | — | ✅ for `+`/`-` (`op_UnaryPlus`, `op_UnaryNegation`); `~` (CLR `op_OnesComplement`) currently maps to GSharp `^` |
 | unary `!` | — | ✅ | — | ✅ (`op_LogicalNot`) |
 | unary `*` `&` `<-` | ❌ | ❌ | ❌ | ❌ |
-| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): a method named `plus` on a user type stays a regular method, not an implicit `op_Addition`. Streams C/E land CLR-side `op_*` consumption; declaring `operator` on GSharp types is tracked separately (Stream D — see ADR-0026 follow-up). |
+| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): Kotlin-style implicit reinterpretation (e.g. a method named `plus` becoming `op_Addition`) is not adopted. |
+| Explicit `operator` keyword on user types (`func (a T) operator +(b T) T`) | ✅ | ✅ | ✅ | ✅ Stream D / ADR-0035: receiver-form binary (`+ - * / % & | ^ << >> == != < <= > >=`) and unary (`+ - ! ~`) operators on `struct` / `data struct` / `class` types. The parser synthesizes an `op_*` identifier; the binder resolves user operators (struct methods then extension functions) ahead of the imported-CLR `op_*` fallback. Value-type `struct` operators bind and run under the interpreter but share the pre-existing value-type-receiver IL-emit limitation (use `class` for compiled scenarios today). Free-function form, `operator implicit` / `operator explicit`, `++` / `--`, and `op_True` / `op_False` are deferred. |
 
 Operator resolution: when neither operand is a built-in, the binder runs the shared `OverloadResolution` over `op_*` candidates collected from both operand types (and their CLR base chains), deduped by identity. Ambiguous matches surface as a binder diagnostic; no first-match fallback. See `ClrOperatorResolution.cs`.
 
@@ -167,5 +168,5 @@ Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval
 - `break` / `continue` inside `await for` body (deferred from #79).
 - Async-aware lowering of `await` and emit of state machines (Phase 7 / ADR-0027).
 - Event subscription (`obj.Click += handler`, `-=`) and multi-segment compound-assignment LHS (`a.b.c += …`) — Stream B′, parser-side work.
-- `operator` keyword on GSharp-defined types (declaring `operator +` etc.). Tracked as Stream D; superseding ADR-0026 is part of that follow-up PR.
+- ~~`operator` keyword on GSharp-defined types (declaring `operator +` etc.). Tracked as Stream D; superseding ADR-0026 is part of that follow-up PR.~~ **Shipped** in Stream D / ADR-0035 (receiver-form binary and unary operators). Free-function form, conversions, `++` / `--`, and `op_True` / `op_False` short-circuit remain deferred.
 

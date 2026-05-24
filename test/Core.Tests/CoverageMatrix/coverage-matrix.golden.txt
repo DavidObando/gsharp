@@ -120,6 +120,7 @@ OpenBraceToken
 OpenKeyword
 OpenParenthesisToken
 OpenSquareBracketToken
+OperatorKeyword
 OverrideKeyword
 PackageDeclaration
 PackageKeyword
