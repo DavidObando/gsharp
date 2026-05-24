@@ -1433,6 +1433,8 @@ public class Parser
     {
         // `for <ident> := range <expr> { ... }`
         // `for <ident>, <ident> := range <expr> { ... }`
+        // `for <ident> in <expr> { ... }`
+        // `for <ident>, <ident> in <expr> { ... }`
         if (Peek(1).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
@@ -1447,6 +1449,11 @@ public class Parser
             }
 
             o += 2;
+        }
+
+        if (Peek(o).Kind == SyntaxKind.IdentifierToken && Peek(o).Text == "in")
+        {
+            return true;
         }
 
         if (Peek(o).Kind != SyntaxKind.ColonEqualsToken)
@@ -1621,11 +1628,22 @@ public class Parser
             secondIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         }
 
-        var colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
-        var rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        SyntaxToken colonEqualsToken = null;
+        SyntaxToken rangeKeyword = null;
+        SyntaxToken inToken = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
+        {
+            inToken = NextToken();
+        }
+        else
+        {
+            colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
+            rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        }
+
         var collection = ParseExpression();
         var body = ParseStatement();
-        return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, collection, body);
+        return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, inToken, collection, body);
     }
 
     private StatementSyntax ParseForEllipsisStatement()
@@ -1901,16 +1919,29 @@ public class Parser
 
     private StatementSyntax ParseAwaitForRangeStatement()
     {
-        // Phase 5.8 / ADR-0023: `await for v := range stream { … }`.
+        // Phase 5.8 / ADR-0023 legacy `await for v := range stream { … }`.
+        // Phase 7.2 adds canonical `await for v in stream { … }` with `in`
+        // parsed as a contextual identifier token.
         var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
         var forKeyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
-        var rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        SyntaxToken colonEquals = null;
+        SyntaxToken rangeKeyword = null;
+        SyntaxToken inToken = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
+        {
+            inToken = NextToken();
+        }
+        else
+        {
+            colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+            rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        }
+
         var stream = ParseExpression();
         var body = ParseBlockStatement();
         return new AwaitForRangeStatementSyntax(
-            syntaxTree, awaitKeyword, forKeyword, identifier, colonEquals, rangeKeyword, stream, body);
+            syntaxTree, awaitKeyword, forKeyword, identifier, colonEquals, rangeKeyword, inToken, stream, body);
     }
 
     private StatementSyntax ParseSelectStatement()

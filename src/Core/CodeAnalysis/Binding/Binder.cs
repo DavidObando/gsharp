@@ -2725,12 +2725,23 @@ public sealed class Binder
                     keyType = TypeSymbol.Int;
                     valueType = TypeSymbol.FromClrType(elemType);
                 }
+                else if (TryGetClrPatternEnumerableElementType(imp.ClrType, out var patternElemType))
+                {
+                    iterationKind = ForRangeKind.PatternEnumerator;
+                    keyType = TypeSymbol.Int;
+                    valueType = TypeSymbol.FromClrType(patternElemType);
+                }
                 else
                 {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
                     return new BoundExpressionStatement(new BoundErrorExpression());
                 }
 
+                break;
+            case StructSymbol userType when TryGetUserPatternEnumerableElementType(userType, out var userElemType):
+                iterationKind = ForRangeKind.PatternEnumerator;
+                keyType = TypeSymbol.Int;
+                valueType = userElemType;
                 break;
             default:
                 if (collection.Type != TypeSymbol.Error)
@@ -2765,7 +2776,7 @@ public sealed class Binder
 
     private static bool TryGetClrDictionaryTypes(System.Type clrType, out System.Type keyType, out System.Type valueType)
     {
-        foreach (var iface in clrType.GetInterfaces())
+        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
         {
             if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IDictionary`2")
             {
@@ -2783,7 +2794,7 @@ public sealed class Binder
 
     private static bool TryGetClrEnumerableElementType(System.Type clrType, out System.Type elementType)
     {
-        foreach (var iface in clrType.GetInterfaces())
+        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
         {
             if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
             {
@@ -2796,6 +2807,80 @@ public sealed class Binder
         if (typeof(System.Collections.IEnumerable).IsAssignableFrom(clrType))
         {
             elementType = typeof(object);
+            return true;
+        }
+
+        elementType = null;
+        return false;
+    }
+
+    private static bool TryGetClrPatternEnumerableElementType(System.Type clrType, out System.Type elementType)
+    {
+        var getEnumerator = clrType.GetMethod(
+            "GetEnumerator",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: System.Type.EmptyTypes,
+            modifiers: null);
+        if (getEnumerator == null)
+        {
+            elementType = null;
+            return false;
+        }
+
+        var enumeratorType = getEnumerator.ReturnType;
+        var moveNext = enumeratorType.GetMethod(
+            "MoveNext",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: System.Type.EmptyTypes,
+            modifiers: null);
+        if (moveNext?.ReturnType != typeof(bool))
+        {
+            elementType = null;
+            return false;
+        }
+
+        if (TryGetClrCurrentMemberType(enumeratorType, out elementType))
+        {
+            return true;
+        }
+
+        elementType = null;
+        return false;
+    }
+
+    private static bool TryGetClrCurrentMemberType(System.Type enumeratorType, out System.Type elementType)
+    {
+        var currentProperty = enumeratorType.GetProperty("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        if (currentProperty != null)
+        {
+            elementType = currentProperty.PropertyType;
+            return true;
+        }
+
+        var currentField = enumeratorType.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        if (currentField != null)
+        {
+            elementType = currentField.FieldType;
+            return true;
+        }
+
+        elementType = null;
+        return false;
+    }
+
+    private static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol elementType)
+    {
+        if (type.TryGetMethodIncludingInherited("GetEnumerator", out var getEnumerator) &&
+            getEnumerator.Parameters.Length == 0 &&
+            getEnumerator.Type is StructSymbol enumeratorType &&
+            enumeratorType.TryGetMethodIncludingInherited("MoveNext", out var moveNext) &&
+            moveNext.Parameters.Length == 0 &&
+            moveNext.Type == TypeSymbol.Bool &&
+            enumeratorType.TryGetField("Current", out var currentField))
+        {
+            elementType = currentField.Type;
             return true;
         }
 

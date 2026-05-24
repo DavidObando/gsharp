@@ -5,11 +5,11 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a for-range statement: <c>for v := range coll { ... }</c> or
-/// <c>for k, v := range coll { ... }</c>. For arrays and slices the first
+/// Represents a for-range statement: legacy <c>for v := range coll { ... }</c>
+/// or canonical <c>for v in coll { ... }</c>. For arrays and slices the first
 /// identifier binds the int index; for maps / CLR dictionaries the first
 /// identifier binds the key. The second identifier (when present) binds
-/// the element / value. Phase 4 exit.
+/// the element / value.
 /// </summary>
 public sealed class ForRangeStatementSyntax : StatementSyntax
 {
@@ -21,8 +21,9 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
     /// <param name="firstIdentifier">The first identifier (index/key, or value when alone).</param>
     /// <param name="commaToken">Optional comma separating the two identifiers.</param>
     /// <param name="secondIdentifier">Optional second identifier (the value).</param>
-    /// <param name="colonEqualsToken">The <c>:=</c> token.</param>
-    /// <param name="rangeKeyword">The <c>range</c> keyword.</param>
+    /// <param name="colonEqualsToken">The legacy <c>:=</c> token, or null for canonical <c>in</c>.</param>
+    /// <param name="rangeKeyword">The legacy <c>range</c> keyword, or null for canonical <c>in</c>.</param>
+    /// <param name="inToken">The contextual <c>in</c> token, or null for legacy <c>:= range</c>.</param>
     /// <param name="collection">The collection expression.</param>
     /// <param name="body">The loop body.</param>
     public ForRangeStatementSyntax(
@@ -33,6 +34,7 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
         SyntaxToken secondIdentifier,
         SyntaxToken colonEqualsToken,
         SyntaxToken rangeKeyword,
+        SyntaxToken inToken,
         ExpressionSyntax collection,
         StatementSyntax body)
         : base(syntaxTree)
@@ -43,6 +45,7 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
         SecondIdentifier = secondIdentifier;
         ColonEqualsToken = colonEqualsToken;
         RangeKeyword = rangeKeyword;
+        InToken = inToken;
         Collection = collection;
         Body = body;
     }
@@ -67,6 +70,9 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
 
     /// <summary>Gets the <c>range</c> keyword.</summary>
     public SyntaxToken RangeKeyword { get; }
+
+    /// <summary>Gets the contextual <c>in</c> token.</summary>
+    public SyntaxToken InToken { get; }
 
     /// <summary>Gets the collection expression.</summary>
     public ExpressionSyntax Collection { get; }

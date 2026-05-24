@@ -19,6 +19,9 @@ public enum ForRangeKind
 
     /// <summary>Iterates a CLR <c>IEnumerable</c> (no index — the key variable, if any, is a running counter).</summary>
     Enumerable,
+
+    /// <summary>Iterates a pattern-based <c>GetEnumerator()</c> enumerable.</summary>
+    PatternEnumerator,
 }
 
 /// <summary>
