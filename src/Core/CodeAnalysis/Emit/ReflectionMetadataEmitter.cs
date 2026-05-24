@@ -2832,6 +2832,18 @@ internal sealed class ReflectionMetadataEmitter
 
             encoder.Type(typeDef, isValueType: !structSym.IsClass);
         }
+        else if (type is InterfaceSymbol ifaceSym)
+        {
+            // Phase D: user-defined interface as a signature type. The
+            // CLR encodes interfaces with the same CLASS bit as a reference
+            // type (isValueType: false).
+            if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
+            {
+                throw new InvalidOperationException($"Interface '{ifaceSym.Name}' has no emitted TypeDef.");
+            }
+
+            encoder.Type(ifaceDef, isValueType: false);
+        }
         else if (type?.ClrType != null)
         {
             this.EncodeClrType(encoder, type.ClrType);
@@ -3549,6 +3561,14 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Phase D: class → interface upcast is a CLR reference-level
+            // no-op. The receiver already implements the interface; loading
+            // the reference into an interface-typed slot needs no IL.
+            if (IsReferenceCompatible(from, to))
+            {
+                return;
+            }
+
             throw new NotSupportedException(
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
         }
@@ -3567,6 +3587,25 @@ internal sealed class ReflectionMetadataEmitter
                     if (c == bClass)
                     {
                         return true;
+                    }
+                }
+            }
+
+            // Phase D: class → interface upcast. The CLR satisfies the
+            // contract at the reference level (no IL op required); we only
+            // need to recognise it so EmitConversion emits a no-op. Walk
+            // the class hierarchy so an interface declared on a base class
+            // is also recognised on the derived class.
+            if (a is StructSymbol srcClass && srcClass.IsClass && b is InterfaceSymbol targetIface)
+            {
+                for (var c = srcClass; c != null; c = c.BaseClass)
+                {
+                    foreach (var iface in c.Interfaces)
+                    {
+                        if (iface == targetIface)
+                        {
+                            return true;
+                        }
                     }
                 }
             }
