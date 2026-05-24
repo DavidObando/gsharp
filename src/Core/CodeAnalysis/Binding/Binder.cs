@@ -1182,6 +1182,8 @@ public sealed class Binder
                 return BindSelectStatement((SelectStatementSyntax)syntax);
             case SyntaxKind.ScopeStatement:
                 return BindScopeStatement((ScopeStatementSyntax)syntax);
+            case SyntaxKind.AwaitForRangeStatement:
+                return BindAwaitForRangeStatement((AwaitForRangeStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -2034,6 +2036,67 @@ public sealed class Binder
         var body = BindStatement(syntax.Body);
         scope = scope.Parent;
         return new BoundScopeStatement(body);
+    }
+
+    private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)
+    {
+        // Phase 5.8 / ADR-0023: `await for v := range stream { … }`.
+        // The stream operand must be an `IAsyncEnumerable[T]` (a CLR type
+        // that exposes a `GetAsyncEnumerator` method). The value variable
+        // is typed as the stream's element `T`. The interpreter handles
+        // the underlying `MoveNextAsync`/`Current`/`DisposeAsync` cycle
+        // synchronously (matching Phase 5.1's `await` lowering). The
+        // async-aware lowering and emit are deferred.
+        var stream = BindExpression(syntax.Stream);
+        if (stream is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(stream);
+        }
+
+        if (!TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
+        {
+            Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        scope = new BoundScope(scope);
+        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, type: elementType);
+        var body = BindStatement(syntax.Body);
+        scope = scope.Parent;
+
+        return new BoundAwaitForRangeStatement(variable, stream, body);
+    }
+
+    private static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
+    {
+        elementType = null;
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        foreach (var iface in EnumerateSelfAndInterfaces(clr))
+        {
+            if (iface.IsGenericType &&
+                !iface.IsGenericTypeDefinition &&
+                iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+            {
+                elementType = TypeSymbol.FromClrType(iface.GetGenericArguments()[0]);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static System.Collections.Generic.IEnumerable<System.Type> EnumerateSelfAndInterfaces(System.Type t)
+    {
+        yield return t;
+        foreach (var i in t.GetInterfaces())
+        {
+            yield return i;
+        }
     }
 
     private TypeSymbol ResolveExceptionType()
