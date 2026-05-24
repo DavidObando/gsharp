@@ -482,6 +482,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
                 BoundNodeKind.ClrPropertyAssignmentExpression => EvaluateClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node),
+                BoundNodeKind.ClrEventSubscriptionExpression => EvaluateClrEventSubscriptionExpression((BoundClrEventSubscriptionExpression)node),
                 BoundNodeKind.ClrBinaryOperatorExpression => EvaluateClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node),
                 BoundNodeKind.ClrUnaryOperatorExpression => EvaluateClrUnaryOperatorExpression((BoundClrUnaryOperatorExpression)node),
                 BoundNodeKind.ClrConversionCallExpression => EvaluateClrConversionCallExpression((BoundClrConversionCallExpression)node),
@@ -840,6 +841,30 @@ public sealed class Evaluator
         }
 
         return value;
+    }
+
+    private object EvaluateClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
+    {
+        var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+        var handlerValue = EvaluateExpression(node.Handler);
+        var handler = handlerValue as Delegate;
+        if (handler != null
+            && node.Event.EventHandlerType != null
+            && !node.Event.EventHandlerType.IsAssignableFrom(handler.GetType()))
+        {
+            handler = Delegate.CreateDelegate(node.Event.EventHandlerType, handler.Target, handler.Method);
+        }
+
+        if (node.IsAdd)
+        {
+            node.Event.AddEventHandler(receiver, handler);
+        }
+        else
+        {
+            node.Event.RemoveEventHandler(receiver, handler);
+        }
+
+        return null;
     }
 
     private object EvaluateClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node)

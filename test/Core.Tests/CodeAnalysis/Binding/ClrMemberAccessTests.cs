@@ -174,6 +174,56 @@ lst.Count = 5
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void EventSubscription_AddAndRemoveHandler_Binds()
+    {
+        // Stream B′: subscribing to a CLR event with `+=` and unsubscribing
+        // with `-=` should bind without diagnostics and route through
+        // BoundClrEventSubscriptionExpression. We use AppDomain.ProcessExit
+        // (a regular EventHandler) and exercise both operators so the
+        // remove-path is covered too.
+        var source = @"
+import System
+
+var d = AppDomain.CurrentDomain
+let h = func(sender Object, e EventArgs) { }
+d.ProcessExit += h
+d.ProcessExit -= h
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void EventSubscription_UnknownEvent_Diagnoses()
+    {
+        var source = @"
+import System
+
+var d = AppDomain.CurrentDomain
+let h = func(sender Object, e EventArgs) { }
+d.NoSuchEvent += h
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void EventSubscription_StaticEvent_Binds()
+    {
+        // Static-event form: `Class.Event += handler`. Console.CancelKeyPress
+        // is a static event with a ConsoleCancelEventHandler signature.
+        var source = @"
+import System
+
+let h = func(sender Object, e ConsoleCancelEventArgs) { }
+Console.CancelKeyPress += h
+Console.CancelKeyPress -= h
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

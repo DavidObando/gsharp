@@ -2262,7 +2262,21 @@ public class Parser
             return new AssignmentExpressionSyntax(syntaxTree, identifierToken, equalsToken, binary);
         }
 
-        return ParseBinaryExpression();
+        var expression = ParseBinaryExpression();
+
+        // Stream B′: `receiver.Event += handler` / `receiver.Event -= handler`
+        // is captured as an EventSubscriptionExpressionSyntax once the LHS has
+        // been parsed as a member-access chain. The binder later validates that
+        // the LHS resolves to a CLR EventInfo.
+        if (expression is AccessorExpressionSyntax accessor
+            && (Current.Kind == SyntaxKind.PlusEqualsToken || Current.Kind == SyntaxKind.MinusEqualsToken))
+        {
+            var opToken = NextToken();
+            var rhs = ParseAssignmentExpression();
+            return new EventSubscriptionExpressionSyntax(syntaxTree, accessor, opToken, rhs);
+        }
+
+        return expression;
     }
 
     private ExpressionSyntax ParseBinaryExpression(int parentPrecedence = 0)

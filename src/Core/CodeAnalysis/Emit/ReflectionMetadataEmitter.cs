@@ -4061,6 +4061,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundClrPropertyAssignmentExpression clrPropAsn:
                     this.EmitClrPropertyAssignment(clrPropAsn);
                     break;
+                case BoundClrEventSubscriptionExpression clrEventSub:
+                    this.EmitClrEventSubscription(clrEventSub);
+                    break;
                 case BoundClrBinaryOperatorExpression clrBinOp:
                     this.EmitClrBinaryOperator(clrBinOp);
                     break;
@@ -5478,6 +5481,45 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        private void EmitClrEventSubscription(BoundClrEventSubscriptionExpression subscription)
+        {
+            // Stream B′ emit parity: `+=` / `-=` calls the event's add_X /
+            // remove_X accessor. Both accessors are void-returning.
+            var isStatic = subscription.Receiver == null;
+            var receiverIsValueType = !isStatic && subscription.Receiver.Type?.ClrType?.IsValueType == true;
+
+            if (!isStatic)
+            {
+                this.EmitInstanceReceiver(subscription.Receiver);
+            }
+
+            // Function-literal handlers default to Action/Func; redirect them
+            // to the event's actual delegate type so the AddEventHandler call
+            // is type-correct.
+            if (subscription.Handler is BoundFunctionLiteralExpression literalHandler
+                && subscription.Event.EventHandlerType != null)
+            {
+                var mappedDelegateType = this.outer.MapToReferenceClrType(subscription.Event.EventHandlerType);
+                this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
+            }
+            else
+            {
+                this.EmitExpression(subscription.Handler);
+            }
+
+            var accessor = subscription.IsAdd
+                ? subscription.Event.GetAddMethod(nonPublic: false)
+                : subscription.Event.GetRemoveMethod(nonPublic: false);
+            if (accessor == null)
+            {
+                throw new InvalidOperationException(
+                    $"Event '{subscription.Event.DeclaringType?.FullName}.{subscription.Event.Name}' has no public {(subscription.IsAdd ? "add" : "remove")} accessor.");
+            }
+
+            this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(accessor));
+        }
+
         private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)
         {
             // Stream C emit parity: user-defined binary operator on a CLR type.
@@ -5626,6 +5668,11 @@ internal sealed class ReflectionMetadataEmitter
         // `(object, IntPtr)` ctor.
         private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
         {
+            EmitFunctionLiteral(literal, overrideDelegateType: null);
+        }
+
+        private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType)
+        {
             if (this.outer.closureInfos.TryGetValue(literal, out var closure))
             {
                 // Capture-bearing literal: instantiate the closure class,
@@ -5675,7 +5722,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.Token(fieldHandle);
                 }
 
-                var delegateTypeC = this.outer.ResolveDelegateClrType(literal.FunctionType);
+                var delegateTypeC = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
                 var delegateCtorC = delegateTypeC.GetConstructors()[0];
                 this.il.OpCode(ILOpCode.Ldftn);
                 this.il.Token(invokeHandle);
@@ -5696,7 +5743,7 @@ internal sealed class ReflectionMetadataEmitter
                     $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
             }
 
-            var delegateType = this.outer.ResolveDelegateClrType(literal.FunctionType);
+            var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
             var delegateCtor = delegateType.GetConstructors()[0];
 
             this.il.OpCode(ILOpCode.Ldnull);

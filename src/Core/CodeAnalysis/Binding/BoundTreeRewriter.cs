@@ -381,6 +381,8 @@ public abstract class BoundTreeRewriter
                 return RewriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node);
             case BoundNodeKind.ClrPropertyAssignmentExpression:
                 return RewriteClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node);
+            case BoundNodeKind.ClrEventSubscriptionExpression:
+                return RewriteClrEventSubscriptionExpression((BoundClrEventSubscriptionExpression)node);
             case BoundNodeKind.ClrBinaryOperatorExpression:
                 return RewriteClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node);
             case BoundNodeKind.ClrUnaryOperatorExpression:
@@ -1177,6 +1179,21 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundClrPropertyAssignmentExpression(receiver, node.Member, value, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR event subscription (Stream B′).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
+    {
+        var receiver = node.Receiver == null ? null : RewriteExpression(node.Receiver);
+        var handler = RewriteExpression(node.Handler);
+        if (receiver == node.Receiver && handler == node.Handler)
+        {
+            return node;
+        }
+
+        return new BoundClrEventSubscriptionExpression(receiver, node.Event, handler, node.IsAdd);
     }
 
     /// <summary>Rewrites a CLR binary operator call (Stream C).</summary>
