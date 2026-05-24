@@ -1237,6 +1237,7 @@ internal sealed class ReflectionMetadataEmitter
             var emitter = new BodyEmitter(
                 this,
                 il,
+                function,
                 locals,
                 parameters,
                 labels,
@@ -1253,7 +1254,12 @@ internal sealed class ReflectionMetadataEmitter
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
-            if (function.Type == TypeSymbol.Void)
+            if (function.IsAsync && function.Type == TypeSymbol.Void)
+            {
+                EmitTaskCompleted(il, this);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else if (function.Type == TypeSymbol.Void)
             {
                 il.OpCode(ILOpCode.Ret);
             }
@@ -3323,6 +3329,15 @@ internal sealed class ReflectionMetadataEmitter
         return typeof(System.Threading.Tasks.Task<>).MakeGenericType(resultClr);
     }
 
+    private static void EmitTaskCompleted(InstructionEncoder il, ReflectionMetadataEmitter emitter)
+    {
+        var getter = typeof(System.Threading.Tasks.Task).GetProperty(
+            nameof(System.Threading.Tasks.Task.CompletedTask))?.GetGetMethod()
+            ?? throw new InvalidOperationException("Task.CompletedTask getter was not found.");
+        il.OpCode(ILOpCode.Call);
+        il.Token(emitter.GetMethodReference(getter));
+    }
+
     // Phase 4 emit parity (F1): used by call sites to decide whether a value
     // crossing the open-generic boundary needs box / unbox.any. Mirrors the
     // CLR's value-type predicate over GSharp type symbols.
@@ -3788,6 +3803,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         private readonly ReflectionMetadataEmitter outer;
         private readonly InstructionEncoder il;
+        private readonly FunctionSymbol function;
         private readonly Dictionary<VariableSymbol, int> locals;
         private readonly Dictionary<ParameterSymbol, int> parameters;
         private readonly Dictionary<BoundLabel, LabelHandle> labels;
@@ -3805,6 +3821,7 @@ internal sealed class ReflectionMetadataEmitter
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
             InstructionEncoder il,
+            FunctionSymbol function,
             Dictionary<VariableSymbol, int> locals,
             Dictionary<ParameterSymbol, int> parameters,
             Dictionary<BoundLabel, LabelHandle> labels,
@@ -3821,6 +3838,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.outer = outer;
             this.il = il;
+            this.function = function;
             this.locals = locals;
             this.parameters = parameters;
             this.labels = labels;
@@ -3854,6 +3872,28 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(blockExpression.Expression);
         }
 
+        private void EmitAsyncReturn(BoundReturnStatement ret)
+        {
+            if (ret.Expression is null || this.function.Type == TypeSymbol.Void)
+            {
+                EmitTaskCompleted(this.il, this.outer);
+                this.il.OpCode(ILOpCode.Ret);
+                return;
+            }
+
+            this.EmitExpression(ret.Expression);
+            var resultClr = this.function.Type.ClrType
+                ?? throw new NotSupportedException($"Cannot emit async return type for '{this.function.Type.Name}'.");
+            var fromResultOpen = typeof(System.Threading.Tasks.Task)
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .First(m => m.Name == nameof(System.Threading.Tasks.Task.FromResult)
+                    && m.IsGenericMethodDefinition
+                    && m.GetParameters().Length == 1);
+            var fromResult = fromResultOpen.MakeGenericMethod(resultClr);
+            this.il.Call(this.outer.GetMethodEntityHandle(fromResult));
+            this.il.OpCode(ILOpCode.Ret);
+        }
+
         private void EmitStatement(BoundStatement statement)
         {
             switch (statement)
@@ -3870,12 +3910,20 @@ internal sealed class ReflectionMetadataEmitter
 
                     break;
                 case BoundReturnStatement ret:
-                    if (ret.Expression is not null)
+                    if (this.function.IsAsync)
                     {
-                        this.EmitExpression(ret.Expression);
+                        this.EmitAsyncReturn(ret);
+                    }
+                    else
+                    {
+                        if (ret.Expression is not null)
+                        {
+                            this.EmitExpression(ret.Expression);
+                        }
+
+                        this.il.OpCode(ILOpCode.Ret);
                     }
 
-                    this.il.OpCode(ILOpCode.Ret);
                     break;
                 case BoundVariableDeclaration decl:
                     this.EmitExpression(decl.Initializer);
