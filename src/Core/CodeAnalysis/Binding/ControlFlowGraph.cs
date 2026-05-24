@@ -277,6 +277,7 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ThrowStatement:
                     case BoundNodeKind.GoStatement:
                     case BoundNodeKind.ChannelSendStatement:
+                    case BoundNodeKind.SelectStatement:
                         // Treat exception-flow constructs as opaque statements; precise
                         // CFG modeling of catch/finally edges is deferred to a later phase.
                         // GoStatement and ChannelSendStatement fall through to the next
@@ -383,6 +384,7 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.TryStatement:
                         case BoundNodeKind.GoStatement:
                         case BoundNodeKind.ChannelSendStatement:
+                        case BoundNodeKind.SelectStatement:
                             if (isLastStatementInBlock)
                             {
                                 Connect(current, next);

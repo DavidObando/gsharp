@@ -10,6 +10,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis;
 
@@ -112,6 +113,10 @@ public sealed class Evaluator
                     break;
                 case BoundNodeKind.ChannelSendStatement:
                     EvaluateChannelSendStatement((BoundChannelSendStatement)s);
+                    index++;
+                    break;
+                case BoundNodeKind.SelectStatement:
+                    EvaluateSelectStatement((BoundSelectStatement)s);
                     index++;
                     break;
                 default:
@@ -960,6 +965,151 @@ public sealed class Evaluator
         var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
         writer.GetType().GetMethod("Complete", new[] { typeof(Exception) }).Invoke(writer, new object[] { null });
         return null;
+    }
+
+    private void EvaluateSelectStatement(BoundSelectStatement node)
+    {
+        // Phase 5.6 / ADR-0022: orchestrate a set of channel sends/receives,
+        // optionally with a default arm.
+        //
+        // Strategy:
+        // - Snapshot each non-default arm's channel value once (so a stateful
+        //   channel expression like `make(chan int)` isn't re-evaluated each
+        //   wakeup).
+        // - Loop: for each arm in source order, try a non-blocking
+        //   TryRead / TryWrite. If any succeeds, run that arm and return.
+        //   Else, if a default arm exists, run it and return.
+        //   Otherwise, build a WaitToReadAsync / WaitToWriteAsync task per
+        //   arm and block on Task.WhenAny, then re-loop.
+        var channels = new object[node.Cases.Length];
+        for (var i = 0; i < node.Cases.Length; i++)
+        {
+            if (node.Cases[i].Channel != null)
+            {
+                channels[i] = EvaluateExpression(node.Cases[i].Channel);
+            }
+        }
+
+        var defaultIndex = -1;
+        for (var i = 0; i < node.Cases.Length; i++)
+        {
+            if (node.Cases[i].IsDefault)
+            {
+                defaultIndex = i;
+                break;
+            }
+        }
+
+        while (true)
+        {
+            for (var i = 0; i < node.Cases.Length; i++)
+            {
+                var arm = node.Cases[i];
+                if (arm.IsDefault)
+                {
+                    continue;
+                }
+
+                if (TryRunSelectArm(arm, channels[i]))
+                {
+                    return;
+                }
+            }
+
+            if (defaultIndex >= 0)
+            {
+                EvaluateStatement((BoundBlockStatement)node.Cases[defaultIndex].Body);
+                return;
+            }
+
+            // Build per-arm wait tasks and block on the first to become ready.
+            var waits = new List<Task>();
+            for (var i = 0; i < node.Cases.Length; i++)
+            {
+                var arm = node.Cases[i];
+                if (arm.IsDefault)
+                {
+                    continue;
+                }
+
+                waits.Add(BuildSelectWaitTask(arm, channels[i]));
+            }
+
+            Task.WhenAny(waits).GetAwaiter().GetResult();
+
+            // Loop and re-try in source order. If we lose every race we
+            // simply wait again — this preserves fairness without livelocking
+            // because progress on any channel surfaces through WaitToRead/Write.
+        }
+    }
+
+    private bool TryRunSelectArm(BoundSelectCase arm, object channel)
+    {
+        var elementType = channel.GetType().GenericTypeArguments[0];
+
+        if (arm.CaseKind == SelectCaseKind.Send)
+        {
+            var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
+            var tryWrite = writer.GetType().GetMethod("TryWrite", new[] { elementType });
+            if (tryWrite == null)
+            {
+                return false;
+            }
+
+            var value = EvaluateExpression(arm.Value);
+            var ok = (bool)tryWrite.Invoke(writer, new[] { value });
+            if (!ok)
+            {
+                return false;
+            }
+
+            EvaluateStatement((BoundBlockStatement)arm.Body);
+            return true;
+        }
+
+        // Receive (discard or bind).
+        var reader = channel.GetType().GetProperty("Reader").GetValue(channel);
+        var tryRead = reader.GetType().GetMethod("TryRead");
+        var args = new object[] { null };
+        var got = (bool)tryRead.Invoke(reader, args);
+        if (!got)
+        {
+            // Drained-closed channels also surface receive-readiness through
+            // WaitToReadAsync returning false. Detect "closed and empty" by
+            // peeking at Completion; if completed, the receive should produce
+            // the element's zero value (matches Go's `v := <-closedCh`).
+            var completionTask = (Task)reader.GetType().GetProperty("Completion").GetValue(reader);
+            if (!completionTask.IsCompleted)
+            {
+                return false;
+            }
+
+            args[0] = elementType.IsValueType ? Activator.CreateInstance(elementType) : null;
+        }
+
+        if (arm.CaseKind == SelectCaseKind.ReceiveBind)
+        {
+            Assign(arm.Variable, args[0]);
+        }
+
+        EvaluateStatement((BoundBlockStatement)arm.Body);
+        return true;
+    }
+
+    private static Task BuildSelectWaitTask(BoundSelectCase arm, object channel)
+    {
+        if (arm.CaseKind == SelectCaseKind.Send)
+        {
+            var writer = channel.GetType().GetProperty("Writer").GetValue(channel);
+            var waitToWrite = writer.GetType().GetMethod("WaitToWriteAsync", new[] { typeof(System.Threading.CancellationToken) });
+            var vt = waitToWrite.Invoke(writer, new object[] { System.Threading.CancellationToken.None });
+            return (Task)vt.GetType().GetMethod("AsTask").Invoke(vt, null);
+        }
+
+        var reader = channel.GetType().GetProperty("Reader").GetValue(channel);
+        var waitToRead = reader.GetType().GetMethod("WaitToReadAsync", new[] { typeof(System.Threading.CancellationToken) });
+        var vt2 = waitToRead.Invoke(reader, new object[] { System.Threading.CancellationToken.None });
+        return (Task)vt2.GetType().GetMethod("AsTask").Invoke(vt2, null);
     }
 
     private object EvaluateUserInstanceCallExpression(BoundUserInstanceCallExpression node)

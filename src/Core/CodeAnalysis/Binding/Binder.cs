@@ -1178,6 +1178,8 @@ public sealed class Binder
                 return BindGoStatement((GoStatementSyntax)syntax);
             case SyntaxKind.ChannelSendStatement:
                 return BindChannelSendStatement((ChannelSendStatementSyntax)syntax);
+            case SyntaxKind.SelectStatement:
+                return BindSelectStatement((SelectStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             default:
@@ -1932,6 +1934,91 @@ public sealed class Binder
         }
 
         return new BoundMakeChannelExpression(chan, capacity);
+    }
+
+    private BoundStatement BindSelectStatement(SelectStatementSyntax syntax)
+    {
+        // Phase 5.6 / ADR-0022: select statement orchestrating channel ops.
+        if (syntax.Cases.Length == 0)
+        {
+            Diagnostics.ReportSelectWithNoCases(syntax.SelectKeyword.Location);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var bound = ImmutableArray.CreateBuilder<BoundSelectCase>();
+        var sawDefault = false;
+        foreach (var caseSyntax in syntax.Cases)
+        {
+            if (caseSyntax.CaseKind == SelectCaseKind.Default)
+            {
+                if (sawDefault)
+                {
+                    Diagnostics.ReportSelectDuplicateDefault(caseSyntax.Keyword.Location);
+                }
+
+                sawDefault = true;
+                var defaultBody = BindStatement(caseSyntax.Body);
+                bound.Add(new BoundSelectCase(SelectCaseKind.Default, channel: null, value: null, variable: null, defaultBody));
+                continue;
+            }
+
+            // All non-default arms reference a channel.
+            var channelExpr = BindExpression(caseSyntax.Channel);
+            ChannelTypeSymbol chan = channelExpr.Type as ChannelTypeSymbol;
+            if (channelExpr is BoundErrorExpression || chan == null)
+            {
+                if (chan == null && channelExpr is not BoundErrorExpression)
+                {
+                    if (caseSyntax.CaseKind == SelectCaseKind.Send)
+                    {
+                        Diagnostics.ReportSendTargetIsNotChannel(caseSyntax.Channel.Location, channelExpr.Type);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportReceiveOperandIsNotChannel(caseSyntax.Channel.Location, channelExpr.Type);
+                    }
+                }
+
+                // Best-effort recover: bind the body anyway so further
+                // diagnostics surface.
+                var recoveredBody = BindStatement(caseSyntax.Body);
+                bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, value: null, variable: null, recoveredBody));
+                continue;
+            }
+
+            BoundExpression valueExpr = null;
+            VariableSymbol variable = null;
+            BoundStatement body;
+
+            if (caseSyntax.CaseKind == SelectCaseKind.Send)
+            {
+                valueExpr = BindConversion(caseSyntax.Value, chan.ElementType);
+                body = BindStatement(caseSyntax.Body);
+            }
+            else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
+            {
+                // Introduce a scope so the bound variable is visible only inside
+                // the case body — matches `for v := range` lexical hygiene.
+                scope = new BoundScope(scope);
+                variable = new LocalVariableSymbol(caseSyntax.Identifier.Text, isReadOnly: true, chan.ElementType);
+                if (!scope.TryDeclareVariable(variable))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(caseSyntax.Identifier.Location, caseSyntax.Identifier.Text);
+                }
+
+                body = BindStatement(caseSyntax.Body);
+                scope = scope.Parent;
+            }
+            else
+            {
+                // ReceiveDiscard
+                body = BindStatement(caseSyntax.Body);
+            }
+
+            bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
+        }
+
+        return new BoundSelectStatement(bound.ToImmutable());
     }
 
     private TypeSymbol ResolveExceptionType()

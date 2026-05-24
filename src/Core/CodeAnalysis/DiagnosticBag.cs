@@ -405,6 +405,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports a <c>select</c> with no arms (Phase 5.6 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the <c>select</c> keyword.</param>
+    public void ReportSelectWithNoCases(TextLocation location)
+    {
+        var message = "'select' with no cases is unreachable.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a <c>select</c> with more than one <c>default</c> arm (Phase 5.6 / ADR-0022).
+    /// </summary>
+    /// <param name="location">The text location of the duplicate <c>default</c> keyword.</param>
+    public void ReportSelectDuplicateDefault(TextLocation location)
+    {
+        var message = "'select' may have at most one 'default' arm.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the function requires a different amount of arguments.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
