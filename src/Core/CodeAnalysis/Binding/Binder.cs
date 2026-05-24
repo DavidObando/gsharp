@@ -1,4 +1,4 @@
-﻿// <copyright file="Binder.cs" company="GSharp">
+// <copyright file="Binder.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -1312,6 +1312,8 @@ public sealed class Binder
                 return BindAwaitForRangeStatement((AwaitForRangeStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
+            case SyntaxKind.NamedDeconstructionStatement:
+                return BindNamedDeconstructionStatement((NamedDeconstructionStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -1468,41 +1470,111 @@ public sealed class Binder
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
     {
-        // Phase 4.5: `let (a, b, ...) = expr`. Evaluate the RHS into a single
-        // synthetic readonly local (preserving single-eval semantics), then
-        // declare each named identifier as `let xi = temp.ItemI+1`.
+        // Phase 4.5: `let (a, b, ...) = expr`. Phase 7.3 extends the RHS from
+        // tuple-only to data structs, preserving single-eval via a synthetic local.
         var initializer = BindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
             return new BoundExpressionStatement(initializer);
         }
 
-        if (!(initializer.Type is TupleTypeSymbol tupleType))
+        if (initializer.Type is TupleTypeSymbol tupleType)
         {
-            Diagnostics.ReportUnexpectedToken(syntax.OpenParenToken.Location, syntax.OpenParenToken.Kind, SyntaxKind.IdentifierToken);
+            if (syntax.Identifiers.Count != tupleType.Arity)
+            {
+                Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, tupleType.Arity, syntax.Identifiers.Count);
+                return new BoundExpressionStatement(new BoundErrorExpression());
+            }
+
+            var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
+            scope.TryDeclareVariable(tempVar);
+
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+
+            for (var i = 0; i < syntax.Identifiers.Count; i++)
+            {
+                var idTok = syntax.Identifiers[i];
+                var elemType = tupleType.ElementTypes[i];
+                var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, elemType);
+                var access = new BoundTupleElementAccessExpression(new BoundVariableExpression(tempVar), tupleType, i);
+                statements.Add(new BoundVariableDeclaration(elemVar, access));
+            }
+
+            return new BoundBlockStatement(statements.ToImmutable());
+        }
+
+        if (initializer.Type is StructSymbol structType && structType.IsData)
+        {
+            var fields = structType.Fields;
+            if (syntax.Identifiers.Count != fields.Length)
+            {
+                Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, fields.Length, syntax.Identifiers.Count);
+                return new BoundExpressionStatement(new BoundErrorExpression());
+            }
+
+            var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
+            scope.TryDeclareVariable(tempVar);
+
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+            for (var i = 0; i < syntax.Identifiers.Count; i++)
+            {
+                var idTok = syntax.Identifiers[i];
+                var field = fields[i];
+                var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, field.Type);
+                var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), structType, field);
+                statements.Add(new BoundVariableDeclaration(elemVar, access));
+            }
+
+            return new BoundBlockStatement(statements.ToImmutable());
+        }
+
+        Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type);
+        return new BoundExpressionStatement(new BoundErrorExpression());
+    }
+
+    private BoundStatement BindNamedDeconstructionStatement(NamedDeconstructionStatementSyntax syntax)
+    {
+        var initializer = BindExpression(syntax.Initializer);
+        if (initializer.Type == TypeSymbol.Error)
+        {
+            return new BoundExpressionStatement(initializer);
+        }
+
+        if (!(initializer.Type is StructSymbol structType) || !structType.IsData)
+        {
+            Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type);
             return new BoundExpressionStatement(new BoundErrorExpression());
         }
 
-        if (syntax.Identifiers.Count != tupleType.Arity)
-        {
-            Diagnostics.ReportUnexpectedToken(syntax.CloseParenToken.Location, syntax.CloseParenToken.Kind, SyntaxKind.IdentifierToken);
-            return new BoundExpressionStatement(new BoundErrorExpression());
-        }
-
-        var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
-        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
+        var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
         scope.TryDeclareVariable(tempVar);
 
+        var seen = new HashSet<string>();
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(tempVar, initializer));
-
-        for (var i = 0; i < syntax.Identifiers.Count; i++)
+        foreach (var fieldSyntax in syntax.Fields)
         {
-            var idTok = syntax.Identifiers[i];
-            var elemType = tupleType.ElementTypes[i];
-            var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, elemType);
-            var access = new BoundTupleElementAccessExpression(new BoundVariableExpression(tempVar), tupleType, i);
-            statements.Add(new BoundVariableDeclaration(elemVar, access));
+            var fieldName = fieldSyntax.FieldIdentifier.Text;
+            if (!seen.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            if (!structType.TryGetFieldIncludingInherited(fieldName, out var field, out var declaringType))
+            {
+                Diagnostics.ReportUnableToFindMember(fieldSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            var variable = BindVariableDeclaration(fieldSyntax.LocalIdentifier, isReadOnly: true, field.Type);
+            var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), declaringType, field);
+            statements.Add(new BoundVariableDeclaration(variable, access));
         }
 
         return new BoundBlockStatement(statements.ToImmutable());
@@ -3115,6 +3187,11 @@ public sealed class Binder
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.WithExpression:
+                return BindWithExpression((WithExpressionSyntax)syntax);
+            case SyntaxKind.NamedArgumentExpression:
+                Diagnostics.ReportNamedArgumentOnlyValidForCopy(syntax.Location);
+                return new BoundErrorExpression();
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -3281,6 +3358,95 @@ public sealed class Binder
         var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(variable, convertedExpression);
+    }
+
+    private BoundExpression BindWithExpression(WithExpressionSyntax syntax)
+    {
+        var receiver = BindExpression(syntax.Receiver);
+        return LowerCopyOrWith(receiver, syntax.Initializers, syntax.WithToken.Location);
+    }
+
+    private BoundExpression LowerCopyOrWith(BoundExpression receiver, SeparatedSyntaxList<FieldInitializerSyntax> overrides, TextLocation diagnosticLocation)
+    {
+        if (receiver.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression();
+        }
+
+        if (!(receiver.Type is StructSymbol structType) || !structType.IsData)
+        {
+            Diagnostics.ReportCopyOrWithNotDataStruct(diagnosticLocation, receiver.Type);
+            return new BoundErrorExpression();
+        }
+
+        var tempName = "$copy" + System.Threading.Interlocked.Increment(ref syntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
+        scope.TryDeclareVariable(tempVar);
+
+        var seen = new HashSet<string>();
+        var explicitValues = new Dictionary<string, (FieldSymbol Field, StructSymbol DeclaringType, BoundExpression Value)>();
+        foreach (var initSyntax in overrides)
+        {
+            var fieldName = initSyntax.FieldIdentifier.Text;
+            if (!seen.Add(fieldName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            if (!structType.TryGetFieldIncludingInherited(fieldName, out var field, out var declaringType))
+            {
+                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            var valueExpr = BindExpression(initSyntax.Value);
+            valueExpr = BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
+            explicitValues[fieldName] = (field, declaringType, valueExpr);
+        }
+
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        foreach (var field in structType.Fields)
+        {
+            if (explicitValues.TryGetValue(field.Name, out var explicitValue))
+            {
+                initializers.Add(new BoundFieldInitializer(explicitValue.Field, explicitValue.Value));
+            }
+            else
+            {
+                var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), structType, field);
+                initializers.Add(new BoundFieldInitializer(field, access));
+            }
+        }
+
+        var declaration = new BoundVariableDeclaration(tempVar, receiver);
+        var literal = new BoundStructLiteralExpression(structType, initializers.ToImmutable());
+        return new BoundBlockExpression(ImmutableArray.Create<BoundStatement>(declaration), literal);
+    }
+
+    private static bool TryGetCopyOverrides(CallExpressionSyntax call, out SeparatedSyntaxList<FieldInitializerSyntax> overrides)
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        foreach (var node in call.Arguments.GetWithSeparators())
+        {
+            if (node is SyntaxToken token)
+            {
+                nodesAndSeparators.Add(token);
+                continue;
+            }
+
+            if (node is NamedArgumentExpressionSyntax named)
+            {
+                nodesAndSeparators.Add(new FieldInitializerSyntax(named.SyntaxTree, named.NameToken, named.EqualsToken, named.Expression));
+                continue;
+            }
+
+            overrides = default;
+            return false;
+        }
+
+        overrides = new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
+        return true;
     }
 
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
@@ -4742,6 +4908,25 @@ public sealed class Binder
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
+        var methodName = ce.Identifier.Text;
+        var hasNamedArguments = ce.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
+        if (classSymbol == null && methodName == "copy" && (hasNamedArguments || (receiver?.Type is StructSymbol copyStruct && copyStruct.IsData)))
+        {
+            if (TryGetCopyOverrides(ce, out var overrides))
+            {
+                return LowerCopyOrWith(receiver, overrides, ce.Identifier.Location);
+            }
+
+            Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);
+            return new BoundErrorExpression();
+        }
+
+        if (hasNamedArguments)
+        {
+            Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);
+            return new BoundErrorExpression();
+        }
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var argument in ce.Arguments)
         {
@@ -4749,7 +4934,6 @@ public sealed class Binder
         }
 
         var arguments = boundArguments.ToImmutable();
-        var methodName = ce.Identifier.Text;
 
         if (classSymbol != null)
         {

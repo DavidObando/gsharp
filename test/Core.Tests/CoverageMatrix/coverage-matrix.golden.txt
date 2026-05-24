@@ -111,6 +111,9 @@ MinusMinusToken
 MinusToken
 MultiAssignmentStatement
 NameExpression
+NamedArgumentExpression
+NamedDeconstructionField
+NamedDeconstructionStatement
 NilKeyword
 NumberToken
 OpenBraceToken
@@ -186,6 +189,7 @@ UsingStatement
 VarKeyword
 VariableDeclaration
 WhitespaceToken
+WithExpression
 
 [BoundNodeKind]
 AppendExpression
@@ -194,6 +198,7 @@ AssignmentExpression
 AwaitExpression
 AwaitForRangeStatement
 BinaryExpression
+BlockExpression
 BlockStatement
 CallExpression
 CapExpression

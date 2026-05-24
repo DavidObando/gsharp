@@ -156,6 +156,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.StructLiteralExpression:
                 WriteStructLiteralExpression((BoundStructLiteralExpression)node, writer);
                 break;
+            case BoundNodeKind.BlockExpression:
+                WriteBlockExpression((BoundBlockExpression)node, writer);
+                break;
             case BoundNodeKind.ConstructorCallExpression:
                 WriteConstructorCallExpression((BoundConstructorCallExpression)node, writer);
                 break;
@@ -970,6 +973,22 @@ public static class BoundNodePrinter
         writer.WriteSpace();
         node.Key.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteBlockExpression(BoundBlockExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        writer.WriteLine();
+        writer.Indent++;
+        foreach (var statement in node.Statements)
+        {
+            statement.WriteTo(writer);
+        }
+
+        node.Expression.WriteTo(writer);
+        writer.WriteLine();
+        writer.Indent--;
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
     }
 
     private static void WriteStructLiteralExpression(BoundStructLiteralExpression node, IndentedTextWriter writer)

@@ -66,6 +66,7 @@ public enum BoundNodeKind
     AwaitExpression,
     SwitchExpression,
     SwitchExpressionArm,
+    BlockExpression,
 
     // Patterns
     ConstantPattern,

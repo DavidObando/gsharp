@@ -355,6 +355,8 @@ public abstract class BoundTreeRewriter
                 return RewriteAppendExpression((BoundAppendExpression)node);
             case BoundNodeKind.StructLiteralExpression:
                 return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
+            case BoundNodeKind.BlockExpression:
+                return RewriteBlockExpression((BoundBlockExpression)node);
             case BoundNodeKind.ConstructorCallExpression:
                 return RewriteConstructorCallExpression((BoundConstructorCallExpression)node);
             case BoundNodeKind.UserInstanceCallExpression:
@@ -1048,6 +1050,40 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundStructLiteralExpression(node.StructType, builder.ToImmutable());
+    }
+
+    /// <summary>Rewrites a block expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteBlockExpression(BoundBlockExpression node)
+    {
+        ImmutableArray<BoundStatement>.Builder statementBuilder = null;
+        for (var i = 0; i < node.Statements.Length; i++)
+        {
+            var oldStatement = node.Statements[i];
+            var newStatement = RewriteStatement(oldStatement);
+            if (newStatement != oldStatement && statementBuilder == null)
+            {
+                statementBuilder = ImmutableArray.CreateBuilder<BoundStatement>(node.Statements.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    statementBuilder.Add(node.Statements[j]);
+                }
+            }
+
+            if (statementBuilder != null)
+            {
+                statementBuilder.Add(newStatement);
+            }
+        }
+
+        var expression = RewriteExpression(node.Expression);
+        if (statementBuilder == null && expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundBlockExpression(statementBuilder?.ToImmutable() ?? node.Statements, expression);
     }
 
     /// <summary>Rewrites a class primary-constructor call.</summary>

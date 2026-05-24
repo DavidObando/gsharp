@@ -6,7 +6,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Represents a single <c>FieldName: value</c> element inside a struct composite
-/// literal (Phase 3.B.1).
+/// literal (Phase 3.B.1), or <c>FieldName = value</c> in data-struct copy sugar.
 /// </summary>
 public sealed class FieldInitializerSyntax : SyntaxNode
 {
@@ -15,7 +15,7 @@ public sealed class FieldInitializerSyntax : SyntaxNode
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="fieldIdentifier">The field name.</param>
-    /// <param name="colonToken">The colon separator.</param>
+    /// <param name="colonToken">The field/value separator.</param>
     /// <param name="value">The value expression.</param>
     public FieldInitializerSyntax(
         SyntaxTree syntaxTree,
@@ -35,7 +35,7 @@ public sealed class FieldInitializerSyntax : SyntaxNode
     /// <summary>Gets the field identifier.</summary>
     public SyntaxToken FieldIdentifier { get; }
 
-    /// <summary>Gets the colon token.</summary>
+    /// <summary>Gets the field/value separator token.</summary>
     public SyntaxToken ColonToken { get; }
 
     /// <summary>Gets the value expression.</summary>
