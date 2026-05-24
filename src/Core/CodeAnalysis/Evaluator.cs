@@ -108,6 +108,10 @@ public sealed class Evaluator
                 case BoundNodeKind.ThrowStatement:
                     EvaluateThrowStatement((BoundThrowStatement)s);
                     break;
+                case BoundNodeKind.PatternSwitchStatement:
+                    EvaluatePatternSwitchStatement((BoundPatternSwitchStatement)s);
+                    index++;
+                    break;
                 case BoundNodeKind.GoStatement:
                     EvaluateGoStatement((BoundGoStatement)s);
                     index++;
@@ -1097,14 +1101,170 @@ public sealed class Evaluator
                 continue;
             }
 
-            var value = EvaluateExpression(arm.Value);
-            if (object.Equals(discriminant, value))
+            var bindings = new Dictionary<VariableSymbol, object>();
+            if (TryMatchPattern(arm.Pattern, discriminant, bindings))
             {
-                return EvaluateExpression(arm.Result);
+                return EvaluateWithPatternBindings(bindings, () => EvaluateExpression(arm.Result));
             }
         }
 
         return EvaluateExpression(defaultArm.Result);
+    }
+
+    private void EvaluatePatternSwitchStatement(BoundPatternSwitchStatement node)
+    {
+        var discriminant = EvaluateExpression(node.Discriminant);
+        BoundPatternSwitchArm defaultArm = null;
+
+        foreach (var arm in node.Arms)
+        {
+            if (arm.IsDefault)
+            {
+                defaultArm = arm;
+                continue;
+            }
+
+            var bindings = new Dictionary<VariableSymbol, object>();
+            if (TryMatchPattern(arm.Pattern, discriminant, bindings))
+            {
+                EvaluateWithPatternBindings(bindings, () => EvaluateStatement((BoundBlockStatement)arm.Body));
+                return;
+            }
+        }
+
+        if (defaultArm != null)
+        {
+            EvaluateStatement((BoundBlockStatement)defaultArm.Body);
+        }
+    }
+
+    private object EvaluateWithPatternBindings(Dictionary<VariableSymbol, object> bindings, Func<object> evaluate)
+    {
+        var frame = locals.Peek();
+        foreach (var binding in bindings)
+        {
+            frame[binding.Key] = binding.Value;
+        }
+
+        try
+        {
+            return evaluate();
+        }
+        finally
+        {
+            foreach (var binding in bindings)
+            {
+                frame.Remove(binding.Key);
+            }
+        }
+    }
+
+    private bool TryMatchPattern(BoundPattern pattern, object value, Dictionary<VariableSymbol, object> outBindings)
+    {
+        switch (pattern.Kind)
+        {
+            case BoundNodeKind.ConstantPattern:
+                return object.Equals(value, EvaluateExpression(((BoundConstantPattern)pattern).Value));
+            case BoundNodeKind.DiscardPattern:
+                return true;
+            case BoundNodeKind.TypePattern:
+                var typePattern = (BoundTypePattern)pattern;
+                if (!MatchesType(typePattern.TargetType, value))
+                {
+                    return false;
+                }
+
+                outBindings[typePattern.Variable] = value;
+                return true;
+            case BoundNodeKind.PropertyPattern:
+                if (value is not StructValue sv)
+                {
+                    return false;
+                }
+
+                var property = (BoundPropertyPattern)pattern;
+                foreach (var field in property.Fields)
+                {
+                    sv.Fields.TryGetValue(field.Field.Name, out var fieldValue);
+                    if (!TryMatchPattern(field.Pattern, fieldValue, outBindings))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            case BoundNodeKind.RelationalPattern:
+                var relational = (BoundRelationalPattern)pattern;
+                var rhs = EvaluateExpression(relational.Value);
+                return EvaluateRelationalPattern(relational.Op.Kind, value, rhs);
+            case BoundNodeKind.ListPattern:
+                if (value is not System.Array array)
+                {
+                    return false;
+                }
+
+                var list = (BoundListPattern)pattern;
+                if (array.Length != list.Elements.Length)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < list.Elements.Length; i++)
+                {
+                    if (!TryMatchPattern(list.Elements[i], array.GetValue(i), outBindings))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            default:
+                throw new EvaluatorException($"Unexpected pattern node {pattern.Kind}.", pattern);
+        }
+    }
+
+    private static bool MatchesType(TypeSymbol targetType, object value)
+    {
+        if (targetType == TypeSymbol.Error || value == null)
+        {
+            return false;
+        }
+
+        if (value is StructValue sv)
+        {
+            for (var t = sv.StructType; t != null; t = t.BaseClass)
+            {
+                if (t == targetType)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return targetType.ClrType != null && targetType.ClrType.IsInstanceOfType(value);
+    }
+
+    private static bool EvaluateRelationalPattern(BoundBinaryOperatorKind op, object left, object right)
+    {
+        switch (op)
+        {
+            case BoundBinaryOperatorKind.Equals:
+                return object.Equals(left, right);
+            case BoundBinaryOperatorKind.NotEquals:
+                return !object.Equals(left, right);
+            case BoundBinaryOperatorKind.Less:
+                return (int)left < (int)right;
+            case BoundBinaryOperatorKind.LessOrEquals:
+                return (int)left <= (int)right;
+            case BoundBinaryOperatorKind.Greater:
+                return (int)left > (int)right;
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                return (int)left >= (int)right;
+            default:
+                throw new InvalidOperationException($"Unexpected relational pattern operator {op}.");
+        }
     }
 
     private object EvaluateAwaitExpression(BoundAwaitExpression node)

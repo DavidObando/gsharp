@@ -75,17 +75,6 @@ let label = switch v { case ""one"" -> ""one"" default -> ""many"" }
         Assert.Contains(diagnostics, d => d.Message.Contains("Switch case value", System.StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void SwitchExpression_UnsupportedDiscriminant_DiagnosesConvertToInt()
-    {
-        var diagnostics = Bind(@"
-let v = []int{1}
-let label = switch v { default -> ""many"" }
-");
-
-        Assert.Contains(diagnostics, d => d.Message.Contains("Cannot convert", System.StringComparison.Ordinal) && d.Message.Contains("int", System.StringComparison.Ordinal));
-    }
-
     [Theory]
     [InlineData("1", "one")]
     [InlineData("2", "two")]

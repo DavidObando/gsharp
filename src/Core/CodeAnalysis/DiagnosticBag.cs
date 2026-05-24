@@ -715,6 +715,40 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports that a property pattern was used on a non-aggregate type.</summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="type">The discriminant type.</param>
+    public void ReportPropertyPatternRequiresStructOrClass(TextLocation location, TypeSymbol type)
+    {
+        Report(location, $"Property pattern requires a struct or class value, not '{type}'.");
+    }
+
+    /// <summary>Reports that a property pattern references an unknown field.</summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="fieldName">The field name.</param>
+    /// <param name="type">The containing type.</param>
+    public void ReportUndefinedFieldOnType(TextLocation location, string fieldName, TypeSymbol type)
+    {
+        Report(location, $"Type '{type}' does not define a field named '{fieldName}'.");
+    }
+
+    /// <summary>Reports that a relational pattern operator is not defined for a type.</summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="op">The operator kind.</param>
+    /// <param name="type">The operand type.</param>
+    public void ReportRelationalPatternOperatorUndefined(TextLocation location, SyntaxKind op, TypeSymbol type)
+    {
+        Report(location, $"Relational pattern operator '{SyntaxFacts.GetText(op)}' is not defined for type '{type}'.");
+    }
+
+    /// <summary>Reports that a list pattern was used on a non-array/slice type.</summary>
+    /// <param name="location">The text location.</param>
+    /// <param name="type">The discriminant type.</param>
+    public void ReportListPatternRequiresArrayOrSlice(TextLocation location, TypeSymbol type)
+    {
+        Report(location, $"List pattern requires an array or slice value, not '{type}'.");
+    }
+
     /// <summary>
     /// Reports a switch expression without a default arm.
     /// </summary>

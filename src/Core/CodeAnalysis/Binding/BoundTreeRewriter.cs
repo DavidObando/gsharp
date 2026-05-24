@@ -47,6 +47,8 @@ public abstract class BoundTreeRewriter
                 return RewriteTryStatement((BoundTryStatement)node);
             case BoundNodeKind.ThrowStatement:
                 return RewriteThrowStatement((BoundThrowStatement)node);
+            case BoundNodeKind.PatternSwitchStatement:
+                return RewritePatternSwitchStatement((BoundPatternSwitchStatement)node);
             case BoundNodeKind.GoStatement:
                 return RewriteGoStatement((BoundGoStatement)node);
             case BoundNodeKind.ChannelSendStatement:
@@ -554,9 +556,9 @@ public abstract class BoundTreeRewriter
         for (var i = 0; i < node.Arms.Length; i++)
         {
             var arm = node.Arms[i];
-            var value = arm.Value == null ? null : RewriteExpression(arm.Value);
+            var pattern = arm.Pattern == null ? null : RewritePattern(arm.Pattern);
             var result = RewriteExpression(arm.Result);
-            if (builder == null && (value != arm.Value || result != arm.Result))
+            if (builder == null && (pattern != arm.Pattern || result != arm.Result))
             {
                 builder = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(node.Arms.Length);
                 for (var j = 0; j < i; j++)
@@ -565,7 +567,7 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            builder?.Add(new BoundSwitchExpressionArm(value, result));
+            builder?.Add(new BoundSwitchExpressionArm(pattern, result));
         }
 
         if (discriminant == node.Discriminant && builder == null)
@@ -574,6 +576,100 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundSwitchExpression(discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
+    }
+
+    /// <summary>Rewrites a bound pattern switch statement.</summary>
+    /// <param name="node">The pattern switch statement.</param>
+    /// <returns>The rewritten statement.</returns>
+    protected virtual BoundStatement RewritePatternSwitchStatement(BoundPatternSwitchStatement node)
+    {
+        var discriminant = RewriteExpression(node.Discriminant);
+        ImmutableArray<BoundPatternSwitchArm>.Builder builder = null;
+        for (var i = 0; i < node.Arms.Length; i++)
+        {
+            var arm = node.Arms[i];
+            var pattern = arm.Pattern == null ? null : RewritePattern(arm.Pattern);
+            var body = RewriteStatement(arm.Body);
+            if (builder == null && (pattern != arm.Pattern || body != arm.Body))
+            {
+                builder = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(node.Arms.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arms[j]);
+                }
+            }
+
+            builder?.Add(new BoundPatternSwitchArm(pattern, body));
+        }
+
+        if (discriminant == node.Discriminant && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundPatternSwitchStatement(discriminant, builder?.MoveToImmutable() ?? node.Arms);
+    }
+
+    /// <summary>Rewrites a bound pattern.</summary>
+    /// <param name="node">The pattern.</param>
+    /// <returns>The rewritten pattern.</returns>
+    protected virtual BoundPattern RewritePattern(BoundPattern node)
+    {
+        switch (node.Kind)
+        {
+            case BoundNodeKind.ConstantPattern:
+                var constant = (BoundConstantPattern)node;
+                var value = RewriteExpression(constant.Value);
+                return value == constant.Value ? node : new BoundConstantPattern(node.Type, value);
+            case BoundNodeKind.DiscardPattern:
+            case BoundNodeKind.TypePattern:
+                return node;
+            case BoundNodeKind.RelationalPattern:
+                var relational = (BoundRelationalPattern)node;
+                var relValue = RewriteExpression(relational.Value);
+                return relValue == relational.Value ? node : new BoundRelationalPattern(node.Type, relational.Op, relValue);
+            case BoundNodeKind.PropertyPattern:
+                var property = (BoundPropertyPattern)node;
+                ImmutableArray<BoundPropertyPatternField>.Builder fieldsBuilder = null;
+                for (var i = 0; i < property.Fields.Length; i++)
+                {
+                    var field = property.Fields[i];
+                    var pattern = RewritePattern(field.Pattern);
+                    if (fieldsBuilder == null && pattern != field.Pattern)
+                    {
+                        fieldsBuilder = ImmutableArray.CreateBuilder<BoundPropertyPatternField>(property.Fields.Length);
+                        for (var j = 0; j < i; j++)
+                        {
+                            fieldsBuilder.Add(property.Fields[j]);
+                        }
+                    }
+
+                    fieldsBuilder?.Add(new BoundPropertyPatternField(field.Field, pattern));
+                }
+
+                return fieldsBuilder == null ? node : new BoundPropertyPattern(node.Type, fieldsBuilder.MoveToImmutable());
+            case BoundNodeKind.ListPattern:
+                var list = (BoundListPattern)node;
+                ImmutableArray<BoundPattern>.Builder elementsBuilder = null;
+                for (var i = 0; i < list.Elements.Length; i++)
+                {
+                    var element = RewritePattern(list.Elements[i]);
+                    if (elementsBuilder == null && element != list.Elements[i])
+                    {
+                        elementsBuilder = ImmutableArray.CreateBuilder<BoundPattern>(list.Elements.Length);
+                        for (var j = 0; j < i; j++)
+                        {
+                            elementsBuilder.Add(list.Elements[j]);
+                        }
+                    }
+
+                    elementsBuilder?.Add(element);
+                }
+
+                return elementsBuilder == null ? node : new BoundListPattern(node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+            default:
+                throw new Exception($"Unexpected pattern node: {node.Kind}");
+        }
     }
 
     /// <summary>Rewrites a bound go statement (Phase 5.3).</summary>

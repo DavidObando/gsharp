@@ -462,6 +462,16 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatScopeBody = Flatten(scope.Body);
                 builder.Add(new BoundScopeStatement(flatScopeBody));
             }
+            else if (current is BoundPatternSwitchStatement ps)
+            {
+                var flatArms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(ps.Arms.Length);
+                foreach (var arm in ps.Arms)
+                {
+                    flatArms.Add(new BoundPatternSwitchArm(arm.Pattern, Flatten(arm.Body)));
+                }
+
+                builder.Add(new BoundPatternSwitchStatement(ps.Discriminant, flatArms.ToImmutable()));
+            }
             else if (current is BoundSelectStatement sel)
             {
                 // Phase 5.6: flatten each case body for the same reason.

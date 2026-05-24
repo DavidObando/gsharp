@@ -104,6 +104,7 @@ public enum SyntaxKind
     ImportKeyword,
     InterfaceKeyword,
     InternalKeyword,
+    IsKeyword,
     LetKeyword,
     MapKeyword,
     NilKeyword,
@@ -172,6 +173,15 @@ public enum SyntaxKind
     SwitchCase,
     SwitchExpression,
     SwitchExpressionArm,
+
+    // Pattern syntax
+    ConstantPattern,
+    DiscardPattern,
+    TypePattern,
+    PropertyPattern,
+    PropertyPatternField,
+    RelationalPattern,
+    ListPattern,
     TryStatement,
     CatchClause,
     FinallyClause,

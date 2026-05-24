@@ -27,6 +27,8 @@ public enum BoundNodeKind
     ExpressionStatement,
     TryStatement,
     ThrowStatement,
+    PatternSwitchStatement,
+    PatternSwitchArm,
 
     // Expressions
     ErrorExpression,
@@ -64,6 +66,15 @@ public enum BoundNodeKind
     AwaitExpression,
     SwitchExpression,
     SwitchExpressionArm,
+
+    // Patterns
+    ConstantPattern,
+    DiscardPattern,
+    TypePattern,
+    PropertyPattern,
+    PropertyPatternField,
+    RelationalPattern,
+    ListPattern,
     GoStatement,
     MakeChannelExpression,
     ChannelReceiveExpression,
