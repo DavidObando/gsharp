@@ -1154,7 +1154,9 @@ internal sealed class ReflectionMetadataEmitter
             var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
             var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
             var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, il);
+            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, il);
 
             // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -1193,7 +1195,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -1292,11 +1294,24 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
         CollectBlockExpressionLocals(body, locals, localTypes);
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
+
+        // Phase B: pattern switch statements bring three classes of locals
+        // into the host method:
+        //   * one discriminant temp per switch (typed as the discriminant
+        //     expression's type),
+        //   * one object-typed scratch per type pattern (holds the isinst
+        //     result before the brfalse to the next-arm label),
+        //   * any locals declared by arm bodies and by the type-pattern
+        //     arm-local bindings — these need pre-allocation because the
+        //     pre-scan above does not descend into pattern-switch arms.
+        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -1340,6 +1355,141 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(idx.Type);
             mapIndexSlots[idx] = slot;
+        }
+    }
+
+    // Phase B: walks the bound body to find every BoundPatternSwitchStatement
+    // (including those nested inside arm bodies, if/for branches, try/catch
+    // blocks, and BoundBlockExpression statement lists). For each switch,
+    // pre-allocates:
+    //   * one local slot for the discriminant temp,
+    //   * one object-typed scratch slot per TypePattern under any arm,
+    //   * arm-local TypePattern.Variable slots, and
+    //   * any locals declared inside arm body BoundBlockStatements.
+    private static void CollectPatternSwitchSlots(
+        ImmutableArray<BoundStatement> statements,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+    {
+        foreach (var s in statements)
+        {
+            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+        }
+    }
+
+    private static void WalkForPatternSwitches(
+        BoundStatement statement,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+    {
+        switch (statement)
+        {
+            case BoundPatternSwitchStatement ps:
+                {
+                    var discriminantSlot = localTypes.Count;
+                    localTypes.Add(ps.Discriminant.Type);
+                    patternSwitchSlots[ps] = discriminantSlot;
+                    foreach (var arm in ps.Arms)
+                    {
+                        if (arm.Pattern != null)
+                        {
+                            AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
+                        }
+
+                        if (arm.Body is BoundBlockStatement armBlock)
+                        {
+                            foreach (var inner in armBlock.Statements)
+                            {
+                                if (inner is BoundVariableDeclaration decl && !locals.ContainsKey(decl.Variable))
+                                {
+                                    locals[decl.Variable] = localTypes.Count;
+                                    localTypes.Add(decl.Variable.Type);
+                                }
+
+                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                            }
+                        }
+                        else
+                        {
+                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                        }
+                    }
+
+                    break;
+                }
+
+            case BoundBlockStatement block:
+                foreach (var inner in block.Statements)
+                {
+                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                }
+
+                break;
+            case BoundIfStatement ifs:
+                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                if (ifs.ElseStatement != null)
+                {
+                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                }
+
+                break;
+            case BoundTryStatement tryStmt:
+                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                foreach (var clause in tryStmt.CatchClauses)
+                {
+                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                }
+
+                if (tryStmt.FinallyBlock != null)
+                {
+                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                }
+
+                break;
+        }
+    }
+
+    private static void AllocatePatternBindings(
+        BoundPattern pattern,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+    {
+        switch (pattern)
+        {
+            case BoundTypePattern tp:
+                if (!typePatternScratchSlots.ContainsKey(tp))
+                {
+                    var scratch = localTypes.Count;
+                    localTypes.Add(TypeSymbol.FromClrType(typeof(object)));
+                    typePatternScratchSlots[tp] = scratch;
+                }
+
+                if (!locals.ContainsKey(tp.Variable))
+                {
+                    locals[tp.Variable] = localTypes.Count;
+                    localTypes.Add(tp.Variable.Type);
+                }
+
+                break;
+            case BoundPropertyPattern pp:
+                foreach (var field in pp.Fields)
+                {
+                    AllocatePatternBindings(field.Pattern, locals, localTypes, typePatternScratchSlots);
+                }
+
+                break;
+            case BoundListPattern lp:
+                foreach (var elem in lp.Elements)
+                {
+                    AllocatePatternBindings(elem, locals, localTypes, typePatternScratchSlots);
+                }
+
+                break;
         }
     }
 
@@ -2047,6 +2197,11 @@ internal sealed class ReflectionMetadataEmitter
         if (element.ClrType != null)
         {
             return this.GetTypeReference(element.ClrType);
+        }
+
+        if (element is StructSymbol structSym && this.structTypeDefs.TryGetValue(structSym, out var td))
+        {
+            return td;
         }
 
         throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
@@ -2919,6 +3074,8 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
         private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
         private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
+        private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
+        private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -2928,7 +3085,9 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundLabel, LabelHandle> labels,
             Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
             Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
-            Dictionary<BoundIndexExpression, int> mapIndexSlots)
+            Dictionary<BoundIndexExpression, int> mapIndexSlots,
+            Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+            Dictionary<BoundTypePattern, int> typePatternScratchSlots)
         {
             this.outer = outer;
             this.il = il;
@@ -2938,6 +3097,8 @@ internal sealed class ReflectionMetadataEmitter
             this.appendSlots = appendSlots;
             this.structLiteralSlots = structLiteralSlots;
             this.mapIndexSlots = mapIndexSlots;
+            this.patternSwitchSlots = patternSwitchSlots;
+            this.typePatternScratchSlots = typePatternScratchSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -3001,6 +3162,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundThrowStatement throwStmt:
                     this.EmitExpression(throwStmt.Expression);
                     this.il.OpCode(ILOpCode.Throw);
+                    break;
+                case BoundPatternSwitchStatement ps:
+                    this.EmitPatternSwitchStatement(ps);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -4103,6 +4267,252 @@ internal sealed class ReflectionMetadataEmitter
             this.il.MarkLabel(nonNull);
             this.EmitExpression(nc.WhenNotNull);
             this.il.MarkLabel(end);
+        }
+
+        // Phase B: emit IL for a BoundPatternSwitchStatement.
+        //
+        // Lowering shape (mirrors the interpreter's EvaluatePatternSwitchStatement):
+        //   * evaluate the discriminant once into the pre-allocated temp slot;
+        //   * for each non-default arm: emit pattern match — failure branches
+        //     to the next-arm label, success falls through into arm body and
+        //     ends with a branch to the end label;
+        //   * if a default arm is present, emit its body last;
+        //   * mark the end label.
+        //
+        // Pattern matching is delegated to EmitPattern which threads a
+        // "loadValue" delegate so nested patterns (property fields, list
+        // elements) compose without intermediate locals.
+        private void EmitPatternSwitchStatement(BoundPatternSwitchStatement node)
+        {
+            var discriminantSlot = this.patternSwitchSlots[node];
+            this.EmitExpression(node.Discriminant);
+            this.il.StoreLocal(discriminantSlot);
+
+            var endLabel = this.il.DefineLabel();
+            BoundPatternSwitchArm defaultArm = null;
+
+            foreach (var arm in node.Arms)
+            {
+                if (arm.IsDefault)
+                {
+                    defaultArm = arm;
+                    continue;
+                }
+
+                var nextArm = this.il.DefineLabel();
+                this.EmitPattern(
+                    arm.Pattern,
+                    loadValue: () => this.il.LoadLocal(discriminantSlot),
+                    valueType: node.Discriminant.Type,
+                    failLabel: nextArm);
+                this.EmitStatement(arm.Body);
+                this.il.Branch(ILOpCode.Br, endLabel);
+                this.il.MarkLabel(nextArm);
+            }
+
+            if (defaultArm != null)
+            {
+                this.EmitStatement(defaultArm.Body);
+            }
+
+            this.il.MarkLabel(endLabel);
+        }
+
+        // Emit IL that branches to failLabel when the pattern does not match
+        // the value produced by loadValue, and falls through (with any
+        // bindings stored) when it does. valueType is the static type of the
+        // value loadValue pushes.
+        private void EmitPattern(BoundPattern pattern, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
+        {
+            switch (pattern)
+            {
+                case BoundDiscardPattern:
+                    // Always matches; emit nothing.
+                    break;
+                case BoundConstantPattern cp:
+                    this.EmitConstantPattern(cp, loadValue, valueType, failLabel);
+                    break;
+                case BoundTypePattern tp:
+                    this.EmitTypePattern(tp, loadValue, valueType, failLabel);
+                    break;
+                case BoundPropertyPattern pp:
+                    this.EmitPropertyPattern(pp, loadValue, valueType, failLabel);
+                    break;
+                case BoundRelationalPattern rp:
+                    this.EmitRelationalPattern(rp, loadValue, failLabel);
+                    break;
+                case BoundListPattern lp:
+                    this.EmitListPattern(lp, loadValue, failLabel);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Pattern kind '{pattern.Kind}' is not yet supported by the emitter.");
+            }
+        }
+
+        private void EmitConstantPattern(BoundConstantPattern cp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
+        {
+            // Special-case `nil`: compare against null reference.
+            if (cp.Value is BoundLiteralExpression lit && lit.Value is null)
+            {
+                loadValue();
+                this.il.Branch(ILOpCode.Brtrue, failLabel);
+                return;
+            }
+
+            if (valueType == TypeSymbol.String)
+            {
+                loadValue();
+                this.EmitExpression(cp.Value);
+                this.il.Call(this.outer.GetStringEqualsReference());
+                this.il.Branch(ILOpCode.Brfalse, failLabel);
+                return;
+            }
+
+            // int / bool / other primitives lowered to ceq + brfalse.
+            loadValue();
+            this.EmitExpression(cp.Value);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+        }
+
+        private void EmitTypePattern(BoundTypePattern tp, Action loadValue, TypeSymbol sourceType, LabelHandle failLabel)
+        {
+            // Strategy (uniform for ref + value targets):
+            //   loadValue();
+            //   if value-typed source: box;
+            //   isinst targetType;     // [boxed-or-null]
+            //   stloc scratch;
+            //   ldloc scratch;
+            //   brfalse failLabel;     // empty stack on failure path
+            //   ldloc scratch;
+            //   (value type) unbox.any | (ref type) leave as-is;
+            //   stloc Variable
+            var scratch = this.typePatternScratchSlots[tp];
+            loadValue();
+
+            if (IsValueTypeSymbol(sourceType))
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.GetElementTypeToken(sourceType));
+            }
+
+            this.il.OpCode(ILOpCode.Isinst);
+            this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+            this.il.StoreLocal(scratch);
+            this.il.LoadLocal(scratch);
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+
+            // Bind the narrowed value into Variable.
+            this.il.LoadLocal(scratch);
+            if (IsValueTypeSymbol(tp.TargetType))
+            {
+                this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+            }
+
+            this.EmitStoreVariable(tp.Variable);
+        }
+
+        private void EmitPropertyPattern(BoundPropertyPattern pp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
+        {
+            // Property patterns apply to GSharp struct/class discriminants.
+            // If the discriminant is a nullable class reference, the binder
+            // does not narrow on its own; we do not emit a null check here
+            // because a non-nullable static type carries the contract that
+            // the value is non-null. Fields are accessed via ldfld on the
+            // value (struct: ldfld on value, class: ldfld through ref).
+            if (valueType is not StructSymbol)
+            {
+                // Defensive: every property-pattern operand should be a
+                // struct/class; the binder rejects others. Branch to fail
+                // rather than emit a verifier-illegal sequence.
+                this.il.Branch(ILOpCode.Br, failLabel);
+                return;
+            }
+
+            foreach (var field in pp.Fields)
+            {
+                if (!this.outer.structFieldDefs.TryGetValue(field.Field, out var fieldHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Property pattern field '{field.Field.Name}' has no emitted FieldDef.");
+                }
+
+                // Compose: child loader is "load receiver, ldfld FieldHandle".
+                Action loadChild = () =>
+                {
+                    loadValue();
+                    this.il.OpCode(ILOpCode.Ldfld);
+                    this.il.Token(fieldHandle);
+                };
+
+                this.EmitPattern(field.Pattern, loadChild, field.Field.Type, failLabel);
+            }
+        }
+
+        private void EmitRelationalPattern(BoundRelationalPattern rp, Action loadValue, LabelHandle failLabel)
+        {
+            loadValue();
+            this.EmitExpression(rp.Value);
+            switch (rp.Op.Kind)
+            {
+                case BoundBinaryOperatorKind.Equals:
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.NotEquals:
+                    this.il.OpCode(ILOpCode.Ceq);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.Less:
+                    this.il.OpCode(ILOpCode.Clt);
+                    break;
+                case BoundBinaryOperatorKind.LessOrEquals:
+                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundBinaryOperatorKind.Greater:
+                    this.il.OpCode(ILOpCode.Cgt);
+                    break;
+                case BoundBinaryOperatorKind.GreaterOrEquals:
+                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Relational pattern operator '{rp.Op.Kind}' is not supported by the emitter.");
+            }
+
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+        }
+
+        private void EmitListPattern(BoundListPattern lp, Action loadValue, LabelHandle failLabel)
+        {
+            // Match an array (or slice) of exactly N elements. Slice patterns
+            // (`..`) are not yet supported by the binder, so length is
+            // strict-equal to the pattern's element count.
+            loadValue();
+            this.il.OpCode(ILOpCode.Ldlen);
+            this.il.OpCode(ILOpCode.Conv_i4);
+            this.il.LoadConstantI4(lp.Elements.Length);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+
+            for (var i = 0; i < lp.Elements.Length; i++)
+            {
+                var index = i;
+                Action loadElement = () =>
+                {
+                    loadValue();
+                    this.il.LoadConstantI4(index);
+                    this.EmitLoadElement(lp.ElementType);
+                };
+
+                this.EmitPattern(lp.Elements[index], loadElement, lp.ElementType, failLabel);
+            }
         }
 
         private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
