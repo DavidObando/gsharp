@@ -2313,6 +2313,22 @@ internal sealed class ReflectionMetadataEmitter
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
                         CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
+                    case BoundSelectStatement sel:
+                        foreach (var arm in sel.Cases)
+                        {
+                            if (arm.Variable != null && !locals.ContainsKey(arm.Variable))
+                            {
+                                locals[arm.Variable] = localTypes.Count;
+                                localTypes.Add(arm.Variable.Type);
+                            }
+
+                            if (arm.Body is BoundBlockStatement armBlock)
+                            {
+                                CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            }
+                        }
+
+                        break;
                     case BoundTryStatement t:
                         CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
@@ -2354,6 +2370,16 @@ internal sealed class ReflectionMetadataEmitter
                         break;
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
                         CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
+                    case BoundSelectStatement sel:
+                        foreach (var arm in sel.Cases)
+                        {
+                            if (arm.Body is BoundBlockStatement armBlock)
+                            {
+                                CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            }
+                        }
+
                         break;
                     case BoundTryStatement t:
                         CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);

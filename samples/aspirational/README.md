@@ -4,12 +4,13 @@ Per ADR-0010 (aspirational samples policy), this folder holds samples that exerc
 
 A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, discovers every `*.gs` file in this folder that has a paired `*.golden`, parses + binds + evaluates it through the same `Compilation.Evaluate(...)` path as the in-repo unit tests, and compares captured stdout against the golden.
 
-## Current contents (Phase 5 exit)
+## Current contents (post Phase A–G emit closure)
 
 | Sample | Demonstrates |
 | --- | --- |
-| `PortScan.gs` | `chan T`, `make`/`close`, send/receive, `go`, `scope { ... }`, `select` with timeout arm. |
-| `AsyncTask.gs` | `async func`, `await`, BCL `Task.Delay` interop, `scope { go asyncEntry() }` driver pattern for top-level async. |
+| `AsyncTask.gs` | `async func`, `await`, BCL `Task.Delay` interop, `scope { go asyncEntry() }` driver pattern for top-level async. Emit of `async`/`await` is the only remaining Phase 5 surface that does not yet route through the emit backend (ADR-0023 Strategy A — multi-month bespoke `IAsyncStateMachine` rewrite). |
+
+Other Phase 5 samples (`PortScan.gs` exercising `chan` + `go` + `scope` + `select`, and `Patterns.gs` / `SwitchExpression.gs` exercising pattern matching) now live under top-level `samples/` and run on both backends after the Phase A–G emit work.
 
 ## When to add a sample here
 

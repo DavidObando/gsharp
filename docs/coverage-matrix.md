@@ -153,9 +153,9 @@ Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval
 
 | Exit criterion | Status | Evidence |
 | --- | --- | --- |
-| Meaningful concurrent sample fan-out + fan-in + timeout | ✅ interp | `samples/aspirational/PortScan.gs` — chan + go + scope + select with timeout arm; covered by `AspirationalSamplesTests`. |
-| Pure async/await sample interoperating with BCL `Task` | ✅ interp | `samples/aspirational/AsyncTask.gs` — `async func` + `await` against `Task.Delay`, driven from a top-level `scope { go ... }`. |
-| Coverage matrix ✅ on the entire concurrency section | ✅ interp / ❌ emit | All concurrency rows above are ✅ at Interp; Emit is deferred per ADR-0022 / ADR-0023. |
+| Meaningful concurrent sample fan-out + fan-in + timeout | ✅ both | `samples/PortScan.gs` — chan + go + scope + select with timeout arm; runs on both backends after the Phase A–G emit work and is covered by `SampleConformanceTests` (emit) as well as remaining interpreter unit tests. |
+| Pure async/await sample interoperating with BCL `Task` | ✅ interp | `samples/aspirational/AsyncTask.gs` — `async func` + `await` against `Task.Delay`, driven from a top-level `scope { go ... }`. Emit of `async`/`await` is deferred per ADR-0023. |
+| Coverage matrix ✅ on the entire concurrency section | ✅ interp / ✅ emit (except async) | Channels + go + scope + select all emit; only `async func` / `await` / `await for` remain emit-deferred (ADR-0023 Strategy A multi-month rewrite). |
 
 **Open Phase-5 polish follow-ups** (carried into Phase 6/7):
 
