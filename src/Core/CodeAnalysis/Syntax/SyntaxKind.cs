@@ -109,6 +109,7 @@ public enum SyntaxKind
     MapKeyword,
     NilKeyword,
     OpenKeyword,
+    OperatorKeyword,
     OverrideKeyword,
     PackageKeyword,
     PrivateKeyword,

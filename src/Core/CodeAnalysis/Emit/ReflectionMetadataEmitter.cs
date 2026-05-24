@@ -1285,6 +1285,15 @@ internal sealed class ReflectionMetadataEmitter
         //   override (sealed):  Virtual | Final            (reuses base slot, no further override)
         //   open override:      Virtual                    (reuses base slot, still overridable)
         var methodAttrs = visibility | MethodAttributes.HideBySig;
+
+        // Stream D: extension functions whose name follows the CLR `op_*`
+        // convention came from `func (a T) operator +(...)` and should round-
+        // trip as SpecialName so consumers (e.g. C#) see them as operators.
+        if (function.IsExtension && function.Name != null && function.Name.StartsWith("op_"))
+        {
+            methodAttrs |= MethodAttributes.SpecialName;
+        }
+
         if (function.IsInstanceMethod)
         {
             methodAttrs |= MethodAttributes.Virtual;

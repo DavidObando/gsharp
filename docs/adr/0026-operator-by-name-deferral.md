@@ -1,6 +1,6 @@
 # ADR-0026: Operator-by-name on user types — deferred
 
-- **Status**: Accepted (deferral). Imported-CLR `op_*` consumption shipped in ADR-0034; user-type operator overloading still deferred.
+- **Status**: Superseded by ADR-0035 for receiver-form binary and unary operators on GSharp types. Imported-CLR `op_*` consumption shipped in ADR-0034. Free-function form, conversions (`operator implicit` / `operator explicit`), `++` / `--`, and `op_True` / `op_False` short-circuit support remain deferred.
 - **Date**: 2026-05-24
 - **Phase**: Phase 6
 - **Related**: ADR-0019 (extension functions); ADR-0024 (methods vs extensions canonical style); ADR-0029 (data struct synthesized members); ADR-0034 (imported CLR interop); execution plan §6.5
