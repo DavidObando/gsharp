@@ -120,6 +120,39 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
+        // Reference upcast: a class implicitly converts to any interface in
+        // its (transitive) implements-list or to any of its (transitive)
+        // base classes. The interpreter stores instances as objects of the
+        // concrete class, and on the CLR the upcast is a no-op reference
+        // conversion, so no representation change is needed.
+        if (from is StructSymbol fromClass && fromClass.IsClass)
+        {
+            if (to is InterfaceSymbol toInterface)
+            {
+                for (var c = fromClass; c != null; c = c.BaseClass)
+                {
+                    foreach (var i in c.Interfaces)
+                    {
+                        if (i == toInterface)
+                        {
+                            return Conversion.Implicit;
+                        }
+                    }
+                }
+            }
+
+            if (to is StructSymbol toClass && toClass.IsClass)
+            {
+                for (var c = fromClass.BaseClass; c != null; c = c.BaseClass)
+                {
+                    if (c == toClass)
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+            }
+        }
+
         return Conversion.None;
     }
 }
