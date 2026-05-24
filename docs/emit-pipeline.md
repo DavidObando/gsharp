@@ -50,7 +50,7 @@ The end-to-end correctness of this pipeline is gated by [`build/multitarget-e2e.
 
 ## Where Roslyn fits in
 
-The current emit path does **not** depend on Roslyn at runtime — `ReflectionMetadataEmitter` writes PE bytes directly via `System.Reflection.Metadata`. The Roslyn fork lives under [`src/Roslyn`](../src/Roslyn) and is staged for future work where a richer semantic model is required (cross-assembly type inference, debugger expression evaluation, IDE features beyond what the language server already exposes). The currently open Roslyn-backend tasks (`p1-symbols`, `p1-compilation`, `p1-pemodule` in the plan) are intentionally deferred until a concrete consumer requires them.
+The emit path does **not** depend on Roslyn — `ReflectionMetadataEmitter` writes PE bytes directly via `System.Reflection.Metadata`, and v1.0 ships on this path. [ADR-0027](adr/0027-roslyn-fork-decision.md) records the decision to close the Roslyn-fork track (issue #51) as `wontfix` for v1.0; NuGet-distributable libraries and full cross-language debugger support (Portable PDB, Source Link, embedded sources) are delivered by extending the bespoke emitter rather than by adopting Roslyn. The vendored tree under [`src/Roslyn`](../src/Roslyn) remains in the repo as inactive reference material and is excluded from `GSharp.sln`; revival is possible if any of the four triggers in issue #51 (analyzer `ISymbol` interop, shared Roslyn workspaces, in-GSharp source generators, shared metadata-import at scale) materialises post-v1.0.
 
 ## Interpreter vs. emit
 
