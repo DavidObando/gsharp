@@ -8,6 +8,10 @@ package GSharp.Samples.SwitchExpression
 import System
 
 let count = 2
-let label = switch count { case 0 -> "zero" case 1 -> "one" default -> "many" }
+let label = switch count {
+  case 0 -> "zero"
+  case 1 -> "one"
+  default -> "many"
+}
 
 Console.WriteLine("count is $label")
