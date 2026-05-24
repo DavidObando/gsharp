@@ -236,6 +236,7 @@ public sealed class Lowerer : BoundTreeRewriter
             ForRangeKind.Indexed => LowerIndexedRange(node),
             ForRangeKind.Dictionary => LowerCollectionRange(node, isDictionary: true),
             ForRangeKind.Enumerable => LowerCollectionRange(node, isDictionary: false),
+            ForRangeKind.PatternEnumerator => LowerCollectionRange(node, isDictionary: false),
             _ => throw new System.InvalidOperationException($"Unknown ForRangeKind {node.IterationKind}"),
         };
 
@@ -258,11 +259,11 @@ public sealed class Lowerer : BoundTreeRewriter
         //   gotoTrue (__i < len(__coll)) body
         //   break:
         // }
-        var collectionSymbol = new LocalVariableSymbol("__coll", isReadOnly: true, type: node.Collection.Type);
+        var collectionSymbol = new LocalVariableSymbol("$coll", isReadOnly: true, type: node.Collection.Type);
         var collectionDecl = new BoundVariableDeclaration(collectionSymbol, node.Collection);
         var collectionExpr = new BoundVariableExpression(collectionSymbol);
 
-        var indexSymbol = new LocalVariableSymbol("__i", isReadOnly: false, type: TypeSymbol.Int);
+        var indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
         var indexDecl = new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0));
         var indexExpr = new BoundVariableExpression(indexSymbol);
 
@@ -324,28 +325,19 @@ public sealed class Lowerer : BoundTreeRewriter
         //   gotoTrue __enum.MoveNext() body
         //   break:
         // }
-        var collClrType = node.Collection.Type.ClrType;
-        var getEnumerator = collClrType.GetMethod("GetEnumerator", System.Type.EmptyTypes);
-        if (getEnumerator == null)
+        if (!TryBuildGetEnumeratorCall(node.Collection, out var getEnumCall, out var enumeratorType))
         {
             // Defensive: bail out unchanged if we can't resolve. The
             // binder already validated this case, so this shouldn't fire.
             return new BoundExpressionStatement(new BoundErrorExpression());
         }
 
-        var enumeratorClr = getEnumerator.ReturnType;
-        var moveNext = enumeratorClr.GetMethod("MoveNext", System.Type.EmptyTypes)
-                       ?? typeof(System.Collections.IEnumerator).GetMethod("MoveNext", System.Type.EmptyTypes);
-        var currentProp = enumeratorClr.GetProperty("Current")
-                          ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
+        if (!TryBuildMoveNextAndCurrent(enumeratorType, out var moveNextCallFactory, out var currentAccessFactory))
+        {
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
 
-        var enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
-        var enumeratorSymbol = new LocalVariableSymbol("__enum", isReadOnly: true, type: enumeratorType);
-        var getEnumCall = new BoundImportedInstanceCallExpression(
-            node.Collection,
-            getEnumerator,
-            enumeratorType,
-            ImmutableArray<BoundExpression>.Empty);
+        var enumeratorSymbol = new LocalVariableSymbol("$enum", isReadOnly: true, type: enumeratorType);
         var enumeratorDecl = new BoundVariableDeclaration(enumeratorSymbol, getEnumCall);
         var enumeratorExpr = new BoundVariableExpression(enumeratorSymbol);
 
@@ -358,24 +350,21 @@ public sealed class Lowerer : BoundTreeRewriter
         LocalVariableSymbol indexSymbol = null;
         if (!isDictionary && node.KeyVariable != null)
         {
-            indexSymbol = new LocalVariableSymbol("__i", isReadOnly: false, type: TypeSymbol.Int);
+            indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
             statements.Add(new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0)));
         }
 
         statements.Add(new BoundGotoStatement(startLabel));
         statements.Add(new BoundLabelStatement(bodyLabel));
 
-        var currentAccess = new BoundClrPropertyAccessExpression(
-            enumeratorExpr,
-            currentProp,
-            TypeSymbol.FromClrType(currentProp.PropertyType));
+        var currentAccess = currentAccessFactory(enumeratorExpr);
 
         if (isDictionary)
         {
-            var kvpClr = currentProp.PropertyType;
+            var kvpClr = currentAccess.Type.ClrType;
             var keyProp = kvpClr.GetProperty("Key");
             var valueProp = kvpClr.GetProperty("Value");
-            var kvpSymbol = new LocalVariableSymbol("__kvp", isReadOnly: true, type: TypeSymbol.FromClrType(kvpClr));
+            var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: TypeSymbol.FromClrType(kvpClr));
             statements.Add(new BoundVariableDeclaration(kvpSymbol, currentAccess));
             var kvpExpr = new BoundVariableExpression(kvpSymbol);
 
@@ -416,14 +405,116 @@ public sealed class Lowerer : BoundTreeRewriter
         }
 
         statements.Add(new BoundLabelStatement(startLabel));
-        var moveNextCall = new BoundImportedInstanceCallExpression(
-            enumeratorExpr,
-            moveNext,
-            TypeSymbol.Bool,
-            ImmutableArray<BoundExpression>.Empty);
-        statements.Add(new BoundConditionalGotoStatement(bodyLabel, moveNextCall, jumpIfTrue: true));
+        statements.Add(new BoundConditionalGotoStatement(bodyLabel, moveNextCallFactory(enumeratorExpr), jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(node.BreakLabel));
         return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private static bool TryBuildGetEnumeratorCall(
+        BoundExpression collection,
+        out BoundExpression getEnumeratorCall,
+        out TypeSymbol enumeratorType)
+    {
+        var clrType = collection.Type.ClrType;
+        if (clrType != null)
+        {
+            var getEnumerator = clrType.GetMethod(
+                "GetEnumerator",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+            if (getEnumerator != null)
+            {
+                enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
+                getEnumeratorCall = new BoundImportedInstanceCallExpression(
+                    collection,
+                    getEnumerator,
+                    enumeratorType,
+                    ImmutableArray<BoundExpression>.Empty);
+                return true;
+            }
+        }
+
+        if (collection.Type is StructSymbol userType &&
+            userType.TryGetMethodIncludingInherited("GetEnumerator", out var userGetEnumerator) &&
+            userGetEnumerator.Parameters.Length == 0)
+        {
+            enumeratorType = userGetEnumerator.Type;
+            getEnumeratorCall = new BoundUserInstanceCallExpression(
+                collection,
+                userGetEnumerator,
+                ImmutableArray<BoundExpression>.Empty);
+            return true;
+        }
+
+        getEnumeratorCall = null;
+        enumeratorType = null;
+        return false;
+    }
+
+    private static bool TryBuildMoveNextAndCurrent(
+        TypeSymbol enumeratorType,
+        out System.Func<BoundExpression, BoundExpression> moveNextCallFactory,
+        out System.Func<BoundExpression, BoundExpression> currentAccessFactory)
+    {
+        var enumeratorClr = enumeratorType.ClrType;
+        if (enumeratorClr != null)
+        {
+            var moveNext = enumeratorClr.GetMethod(
+                "MoveNext",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null)
+                ?? typeof(System.Collections.IEnumerator).GetMethod("MoveNext", System.Type.EmptyTypes);
+            var currentMember = (System.Reflection.MemberInfo)enumeratorClr.GetProperty(
+                    "Current",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                ?? (System.Reflection.MemberInfo)enumeratorClr.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
+            if (moveNext != null && currentMember != null)
+            {
+                moveNextCallFactory = receiver => new BoundImportedInstanceCallExpression(
+                    receiver,
+                    moveNext,
+                    TypeSymbol.Bool,
+                    ImmutableArray<BoundExpression>.Empty);
+                currentAccessFactory = receiver => new BoundClrPropertyAccessExpression(
+                    receiver,
+                    currentMember,
+                    GetClrMemberType(currentMember));
+                return true;
+            }
+        }
+
+        if (enumeratorType is StructSymbol userEnumerator &&
+            userEnumerator.TryGetMethodIncludingInherited("MoveNext", out var userMoveNext) &&
+            userMoveNext.Parameters.Length == 0 &&
+            userMoveNext.Type == TypeSymbol.Bool &&
+            userEnumerator.TryGetField("Current", out var currentField))
+        {
+            moveNextCallFactory = receiver => new BoundUserInstanceCallExpression(
+                receiver,
+                userMoveNext,
+                ImmutableArray<BoundExpression>.Empty);
+            currentAccessFactory = receiver => new BoundFieldAccessExpression(receiver, userEnumerator, currentField);
+            return true;
+        }
+
+        moveNextCallFactory = null;
+        currentAccessFactory = null;
+        return false;
+    }
+
+    private static TypeSymbol GetClrMemberType(System.Reflection.MemberInfo member)
+    {
+        return member switch
+        {
+            System.Reflection.PropertyInfo property => TypeSymbol.FromClrType(property.PropertyType),
+            System.Reflection.FieldInfo field => TypeSymbol.FromClrType(field.FieldType),
+            _ => TypeSymbol.Error,
+        };
     }
 
     private static BoundBlockStatement Flatten(BoundStatement statement)
