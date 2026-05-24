@@ -667,6 +667,42 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, message);
     }
 
+    /// <summary>Reports that copy/with syntax was applied to a non-data-struct value.</summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="type">The actual receiver type.</param>
+    public void ReportCopyOrWithNotDataStruct(TextLocation location, TypeSymbol type)
+    {
+        var message = $"copy/with requires a data struct receiver, but got '{type}'.";
+        Report(location, message);
+    }
+
+    /// <summary>Reports that named arguments were used outside the scoped data-struct copy syntax.</summary>
+    /// <param name="location">The text location where the error was found.</param>
+    public void ReportNamedArgumentOnlyValidForCopy(TextLocation location)
+    {
+        var message = "Named arguments are only supported for data-struct .copy(...).";
+        Report(location, message);
+    }
+
+    /// <summary>Reports that a deconstruction target has the wrong number of elements.</summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="expected">The expected number of elements.</param>
+    /// <param name="actual">The actual number of elements.</param>
+    public void ReportDeconstructionFieldCountMismatch(TextLocation location, int expected, int actual)
+    {
+        var message = $"Deconstruction requires {expected} fields but was given {actual}.";
+        Report(location, message);
+    }
+
+    /// <summary>Reports that positional deconstruction needs a tuple or data struct.</summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="type">The actual initializer type.</param>
+    public void ReportDeconstructionRequiresTupleOrDataStruct(TextLocation location, TypeSymbol type)
+    {
+        var message = $"Deconstruction requires a tuple or data struct initializer, but got '{type}'.";
+        Report(location, message);
+    }
+
     /// <summary>
     /// Reports that top-level statements appear in more than one source file in
     /// the same compilation, which is not allowed.

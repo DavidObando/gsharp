@@ -469,6 +469,7 @@ public sealed class Evaluator
                 BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
+                BoundNodeKind.BlockExpression => EvaluateBlockExpression((BoundBlockExpression)node),
                 BoundNodeKind.ConstructorCallExpression => EvaluateConstructorCallExpression((BoundConstructorCallExpression)node),
                 BoundNodeKind.UserInstanceCallExpression => EvaluateUserInstanceCallExpression((BoundUserInstanceCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
@@ -637,6 +638,22 @@ public sealed class Evaluator
         System.Array.Copy(src, dst, src.Length);
         dst.SetValue(element, src.Length);
         return dst;
+    }
+
+    private object EvaluateBlockExpression(BoundBlockExpression node)
+    {
+        foreach (var statement in node.Statements)
+        {
+            if (statement is BoundVariableDeclaration declaration)
+            {
+                EvaluateVariableDeclaration(declaration);
+                continue;
+            }
+
+            throw new EvaluatorException($"Unexpected block-expression statement {statement.Kind}", statement);
+        }
+
+        return EvaluateExpression(node.Expression);
     }
 
     private object EvaluateStructLiteralExpression(BoundStructLiteralExpression node)

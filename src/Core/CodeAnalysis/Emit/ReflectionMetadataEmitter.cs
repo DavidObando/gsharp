@@ -1062,6 +1062,7 @@ internal sealed class ReflectionMetadataEmitter
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
+        CollectBlockExpressionLocals(body, locals, localTypes);
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
@@ -1106,6 +1107,20 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(idx.Type);
             mapIndexSlots[idx] = slot;
+        }
+    }
+
+    private static void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
+    {
+        var collector = new BlockExpressionLocalCollector();
+        collector.RewriteStatement(body);
+        foreach (var variable in collector.Variables)
+        {
+            if (!locals.ContainsKey(variable))
+            {
+                locals[variable] = localTypes.Count;
+                localTypes.Add(variable.Type);
+            }
         }
     }
 
@@ -1287,6 +1302,14 @@ internal sealed class ReflectionMetadataEmitter
                     WalkForStructLiterals(init.Value, sink);
                 }
 
+                break;
+            case BoundBlockExpression blockExpr:
+                foreach (var statement in blockExpr.Statements)
+                {
+                    WalkForStructLiterals(statement, sink);
+                }
+
+                WalkForStructLiterals(blockExpr.Expression, sink);
                 break;
             case BoundFieldAccessExpression fa:
                 WalkForStructLiterals(fa.Receiver, sink);
@@ -1515,6 +1538,14 @@ internal sealed class ReflectionMetadataEmitter
                 WalkForAppends(app.Slice, sink);
                 WalkForAppends(app.Element, sink);
                 break;
+            case BoundBlockExpression blockExpr:
+                foreach (var statement in blockExpr.Statements)
+                {
+                    WalkForAppends(statement, sink);
+                }
+
+                WalkForAppends(blockExpr.Expression, sink);
+                break;
             case BoundLenExpression len:
                 WalkForAppends(len.Operand, sink);
                 break;
@@ -1637,6 +1668,14 @@ internal sealed class ReflectionMetadataEmitter
                 sink.Add(nc);
                 WalkForNullConditional(nc.Receiver, sink);
                 WalkForNullConditional(nc.WhenNotNull, sink);
+                break;
+            case BoundBlockExpression blockExpr:
+                foreach (var statement in blockExpr.Statements)
+                {
+                    WalkForNullConditional(statement, sink);
+                }
+
+                WalkForNullConditional(blockExpr.Expression, sink);
                 break;
             case BoundBlockStatement blk:
                 foreach (var s in blk.Statements)
@@ -2544,6 +2583,24 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class BlockExpressionLocalCollector : BoundTreeRewriter
+    {
+        public List<VariableSymbol> Variables { get; } = new List<VariableSymbol>();
+
+        protected override BoundExpression RewriteBlockExpression(BoundBlockExpression node)
+        {
+            foreach (var statement in node.Statements)
+            {
+                if (statement is BoundVariableDeclaration declaration)
+                {
+                    this.Variables.Add(declaration.Variable);
+                }
+            }
+
+            return base.RewriteBlockExpression(node);
+        }
+    }
+
     private sealed class LambdaCollector : BoundTreeRewriter
     {
         private readonly List<BoundFunctionLiteralExpression> sink;
@@ -2621,6 +2678,16 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.EmitStatement(statement);
             }
+        }
+
+        private void EmitBlockExpression(BoundBlockExpression blockExpression)
+        {
+            foreach (var statement in blockExpression.Statements)
+            {
+                this.EmitStatement(statement);
+            }
+
+            this.EmitExpression(blockExpression.Expression);
         }
 
         private void EmitStatement(BoundStatement statement)
@@ -2805,6 +2872,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundStructLiteralExpression structLit:
                     this.EmitStructLiteral(structLit);
+                    break;
+                case BoundBlockExpression blockExpr:
+                    this.EmitBlockExpression(blockExpr);
                     break;
                 case BoundConstructorCallExpression ctorCall:
                     this.EmitConstructorCall(ctorCall);

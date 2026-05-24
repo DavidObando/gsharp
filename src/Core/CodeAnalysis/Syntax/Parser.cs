@@ -1,4 +1,4 @@
-﻿// <copyright file="Parser.cs" company="GSharp">
+// <copyright file="Parser.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -1331,11 +1331,46 @@ public class Parser
             return new TupleDeconstructionStatementSyntax(syntaxTree, keyword, openParen, idents, closeParen, equalsTok, init);
         }
 
+        if (expected == SyntaxKind.LetKeyword && Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var fields = ParseNamedDeconstructionFields();
+            var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            var equalsTok = MatchToken(SyntaxKind.EqualsToken);
+            var init = ParseExpression();
+            return new NamedDeconstructionStatementSyntax(syntaxTree, keyword, openBrace, fields, closeBrace, equalsTok, init);
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
         var equals = MatchToken(SyntaxKind.EqualsToken);
         var initializer = ParseExpression();
         return new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
+    }
+
+    private SeparatedSyntaxList<NamedDeconstructionFieldSyntax> ParseNamedDeconstructionFields()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var field = MatchToken(SyntaxKind.IdentifierToken);
+            var equals = MatchToken(SyntaxKind.EqualsToken);
+            var local = MatchToken(SyntaxKind.IdentifierToken);
+            nodesAndSeparators.Add(new NamedDeconstructionFieldSyntax(syntaxTree, field, equals, local));
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<NamedDeconstructionFieldSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private StatementSyntax ParseIfStatement()
@@ -2173,6 +2208,18 @@ public class Parser
             left = new BinaryExpressionSyntax(syntaxTree, left, operatorToken, right);
         }
 
+        if (parentPrecedence == 0)
+        {
+            while (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "with" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                var withToken = MatchToken(SyntaxKind.IdentifierToken);
+                var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+                var initializers = ParseFieldEqualsInitializers();
+                var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+                left = new WithExpressionSyntax(left, withToken, openBrace, initializers, closeBrace);
+            }
+        }
+
         return left;
     }
 
@@ -2675,7 +2722,19 @@ public class Parser
                Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            var expression = ParseExpression();
+            ExpressionSyntax expression;
+            if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken)
+            {
+                var name = MatchToken(SyntaxKind.IdentifierToken);
+                var equals = MatchToken(SyntaxKind.EqualsToken);
+                var value = ParseExpression();
+                expression = new NamedArgumentExpressionSyntax(syntaxTree, name, equals, value);
+            }
+            else
+            {
+                expression = ParseExpression();
+            }
+
             nodesAndSeparators.Add(expression);
 
             if (Current.Kind == SyntaxKind.CommaToken)
@@ -2753,6 +2812,31 @@ public class Parser
         var colon = MatchToken(SyntaxKind.ColonToken);
         var value = ParseExpression();
         return new FieldInitializerSyntax(syntaxTree, fieldId, colon, value);
+    }
+
+    private SeparatedSyntaxList<FieldInitializerSyntax> ParseFieldEqualsInitializers()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var fieldId = MatchToken(SyntaxKind.IdentifierToken);
+            var equals = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseExpression();
+            nodesAndSeparators.Add(new FieldInitializerSyntax(syntaxTree, fieldId, equals, value));
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private ExpressionSyntax ParseParenthesizedExpression()
