@@ -128,6 +128,17 @@ Implicit and explicit conversions: `BindConversion` exists but the emitter (`Emi
 
 Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval.gs`): a `class` value implicitly converts to any interface it implements and to any of its (transitive) base classes. The interpreter treats the upcast as a no-op (the boxed instance keeps its concrete class identity), so `Lit{Value: 1}` flowing into an `Expr`-typed parameter or composite-literal field works end-to-end on the interpreter. Emit support for the upcast is deferred and shares the same posture as the rest of Phase 6.
 
+## Language server coverage
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Document sync diagnostics | ✅ | Open/change publish parse + global-scope diagnostics for responsiveness; save publishes the full binding-stage pipeline. |
+| Folding ranges | ✅ | Top-level function bodies. |
+| Hover | ✅ | Markdown signature hovers for variables, functions, structs/classes, enums, fields, enum members, and known types. |
+| Find references | ✅ | Single-document references through the current document cache; cross-file/package references are a future enhancement. |
+| Rename | ✅ | Single-document workspace edits for user-code symbols; invalid identifiers and CLR/built-in symbols are rejected. |
+| Code actions | ✅ | Sort imports refactor is wired through `textDocument/codeAction`. |
+
 ## Top-line takeaways
 
 1. **The dominant gap is parser → binder**, not binder → emit. The emitter implements essentially every bound node the binder can currently produce; failures show up as parser-rejections or binder "operator/conversion not supported" diagnostics.

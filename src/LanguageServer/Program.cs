@@ -30,7 +30,11 @@ public class Program
                 .ConfigureLogging(builder => builder.SetMinimumLevel(LogLevel.Trace))
                 .WithServices(ConfigureServices)
                 .WithHandler<DocumentSyncHandler>()
-                .WithHandler<FoldingHandler>());
+                .WithHandler<FoldingHandler>()
+                .WithHandler<HoverHandler>()
+                .WithHandler<ReferencesHandler>()
+                .WithHandler<RenameHandler>()
+                .WithHandler<CodeActionHandler>());
 
         await server.WaitForExit;
     }
