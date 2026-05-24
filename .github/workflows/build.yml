@@ -23,13 +23,18 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore GSharp.sln
 
       - name: Build
-        run: dotnet build --configuration Release --no-restore
+        # Build the solution explicitly with the static project graph so each
+        # project (notably Compiler, which is referenced by Compiler.Tests) is
+        # built exactly once. A bare `dotnet build` schedules projects in
+        # parallel against a shared OutputPath and can race on
+        # GenerateRuntimeConfigurationFiles writing `gsc.runtimeconfig.json`.
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
 
       - name: Test
-        run: dotnet test --configuration Release --no-build --logger "trx" --results-directory TestResults
+        run: dotnet test GSharp.sln --configuration Release --no-build --logger "trx" --results-directory TestResults
 
       - name: Upload test results
         if: always()

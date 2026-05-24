@@ -57,15 +57,22 @@
 
   <!-- Publish the gsc compiler (and its full closure) into a staging dir, then
        pack everything under tools/compiler/. We must use Publish (not Build) so
-       the framework-dependent app's full file set lands in one place. -->
+       the framework-dependent app's full file set lands in one place.
+
+       The publish is routed into an SDK-local OutDir (and matching obj dir) so
+       it does not race with the regular Compiler build node — both ran against
+       the shared OutputPath defined in build/gsharp.build.props, which caused
+       intermittent CI failures while two MSBuild nodes wrote
+       gsc.runtimeconfig.json concurrently. -->
   <Target Name="PackGsharpCompiler" BeforeTargets="_GetPackageFiles">
     <PropertyGroup>
       <_GsharpCompilerPublishDir>$(IntermediateOutputPath)gsc-publish\</_GsharpCompilerPublishDir>
+      <_GsharpCompilerStagingOutDir>$(IntermediateOutputPath)gsc-staging\bin\</_GsharpCompilerStagingOutDir>
     </PropertyGroup>
     <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="Exists('$(_GsharpCompilerPublishDir)')" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
     <ItemGroup>
       <_GsharpCompilerPayload Include="$(_GsharpCompilerPublishDir)**\*" />
     </ItemGroup>
