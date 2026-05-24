@@ -25,9 +25,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// Phase 2 (p2-langcov) coverage: locals, parameters, unary/binary operators,
 /// assignments, label/goto/conditional-goto, user-defined function calls
 /// (emitted as static methods on <c>&lt;Program&gt;</c>), and the imported-call
-/// surface inherited from Phase 1. The pure-Roslyn-subclass backend in
-/// <c>Gsharp.CodeAnalysis</c> remains the long-term home for cross-assembly
-/// semantic-model needs.
+/// surface inherited from Phase 1. Per ADR-0027 the bespoke emitter is the
+/// production path for v1.0; the Roslyn-fork escape valve referenced in
+/// earlier comments here has been removed from the tree.
 /// </remarks>
 internal sealed class ReflectionMetadataEmitter
 {
