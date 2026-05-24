@@ -1037,6 +1037,8 @@ public class Parser
                 return ParseUsingStatement();
             case SyntaxKind.GoKeyword:
                 return ParseGoStatement();
+            case SyntaxKind.SelectKeyword:
+                return ParseSelectStatement();
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -1688,6 +1690,100 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.GoKeyword);
         var expression = ParseExpression();
         return new GoStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseSelectStatement()
+    {
+        // Phase 5.6 / ADR-0022: `select { case <-ch { … } case ch <- v { … }
+        //                                  case v := <-ch { … } default { … } }`.
+        var selectKeyword = MatchToken(SyntaxKind.SelectKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var cases = ImmutableArray.CreateBuilder<SelectCaseSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+            cases.Add(ParseSelectCase());
+
+            // Defensive: avoid infinite loops if ParseSelectCase failed to advance.
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new SelectStatementSyntax(syntaxTree, selectKeyword, openBrace, cases.ToImmutable(), closeBrace);
+    }
+
+    private SelectCaseSyntax ParseSelectCase()
+    {
+        if (Current.Kind == SyntaxKind.DefaultKeyword)
+        {
+            var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
+            var body = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                defaultKeyword,
+                SelectCaseKind.Default,
+                identifier: null,
+                channel: null,
+                value: null,
+                body);
+        }
+
+        var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
+
+        // case <-ch { ... } — receive, discard.
+        if (Current.Kind == SyntaxKind.LeftArrowToken)
+        {
+            NextToken(); // consume `<-`
+            var channel = ParseExpression();
+            var body = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.ReceiveDiscard,
+                identifier: null,
+                channel,
+                value: null,
+                body);
+        }
+
+        // case v := <-ch { ... } — receive, bind.
+        if (Current.Kind == SyntaxKind.IdentifierToken &&
+            Peek(1).Kind == SyntaxKind.ColonEqualsToken &&
+            Peek(2).Kind == SyntaxKind.LeftArrowToken)
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            MatchToken(SyntaxKind.ColonEqualsToken);
+            MatchToken(SyntaxKind.LeftArrowToken);
+            var channel = ParseExpression();
+            var body = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.ReceiveBind,
+                identifier,
+                channel,
+                value: null,
+                body);
+        }
+
+        // case ch <- v { ... } — send.
+        var sendChannel = ParseExpression();
+        MatchToken(SyntaxKind.LeftArrowToken);
+        var sendValue = ParseExpression();
+        var sendBody = ParseBlockStatement();
+        return new SelectCaseSyntax(
+            syntaxTree,
+            caseKeyword,
+            SelectCaseKind.Send,
+            identifier: null,
+            sendChannel,
+            sendValue,
+            sendBody);
     }
 
     private ExpressionStatementSyntax ParseExpressionStatement()

@@ -187,6 +187,8 @@ public enum SyntaxKind
     MakeChannelExpression,
     ChannelReceiveExpression,
     ChannelSendStatement,
+    SelectStatement,
+    SelectCase,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -130,7 +130,9 @@ RangeKeyword
 ReturnKeyword
 ReturnStatement
 SealedKeyword
+SelectCase
 SelectKeyword
+SelectStatement
 SemicolonToken
 ShiftLeftEqualsToken
 ShiftLeftToken
@@ -210,6 +212,7 @@ MapDeleteExpression
 MapLiteralExpression
 NullConditionalAccessExpression
 ReturnStatement
+SelectStatement
 StructLiteralExpression
 ThrowStatement
 TryStatement

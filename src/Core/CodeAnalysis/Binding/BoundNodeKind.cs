@@ -67,6 +67,7 @@ public enum BoundNodeKind
     ChannelReceiveExpression,
     ChannelSendStatement,
     ChannelCloseExpression,
+    SelectStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
