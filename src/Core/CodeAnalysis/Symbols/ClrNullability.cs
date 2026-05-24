@@ -21,6 +21,8 @@ public static class ClrNullability
 {
     private const string NullableAttributeFullName = "System.Runtime.CompilerServices.NullableAttribute";
     private const string NullableContextAttributeFullName = "System.Runtime.CompilerServices.NullableContextAttribute";
+    private const string NotNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute";
+    private const string MaybeNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute";
 
     /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a method's return
@@ -47,6 +49,16 @@ public static class ClrNullability
     {
         var baseSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
         return ApplyReferenceNullability(baseSymbol, parameter.ParameterType, parameter, parameter.Member);
+    }
+
+    internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)
+    {
+        return TryGetBoolAttributeValue(parameter, NotNullWhenAttributeFullName, out returnValue);
+    }
+
+    internal static bool TryGetMaybeNullWhen(ParameterInfo parameter, out bool returnValue)
+    {
+        return TryGetBoolAttributeValue(parameter, MaybeNullWhenAttributeFullName, out returnValue);
     }
 
     private static TypeSymbol ApplyReferenceNullability(TypeSymbol baseSymbol, Type clrType, ICustomAttributeProvider declaration, MemberInfo enclosingMember)
@@ -125,6 +137,27 @@ public static class ClrNullability
         }
 
         flag = 0;
+        return false;
+    }
+
+    private static bool TryGetBoolAttributeValue(ParameterInfo parameter, string attributeFullName, out bool value)
+    {
+        var attrs = SafeGetCustomAttributesData(parameter);
+        if (attrs != null)
+        {
+            foreach (var ad in attrs)
+            {
+                if (ad.AttributeType?.FullName == attributeFullName
+                    && ad.ConstructorArguments.Count == 1
+                    && ad.ConstructorArguments[0].Value is bool boolValue)
+                {
+                    value = boolValue;
+                    return true;
+                }
+            }
+        }
+
+        value = false;
         return false;
     }
 
