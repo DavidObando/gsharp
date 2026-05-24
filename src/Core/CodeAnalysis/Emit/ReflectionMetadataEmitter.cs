@@ -4027,6 +4027,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundSelectStatement select:
                     this.EmitSelectStatement(select);
                     break;
+                case BoundAwaitForRangeStatement:
+                    throw new NotSupportedException(
+                        "await for emit not yet supported — see ADR-0034 §Open follow-ups");
                 default:
                     throw new NotSupportedException(
                         $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
