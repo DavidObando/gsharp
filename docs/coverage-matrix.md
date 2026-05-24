@@ -21,6 +21,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `[` / `]` | ✅ | ❌ | No syntax node consumes them; indexing/slicing unreachable. |
 | `;` | ✅ | ❌ | Only synthesized internally; no statement separator role in source. |
 | `<-` (channel send/recv arrow) | ✅ | ✅ | Phase 5.4 / 5.5 / ADR-0022 (interpreter). Receive `<-ch` parses as a unary expression; the binder special-cases the `<-` token to a `BoundChannelReceiveExpression` typed as the channel element type. Send `ch <- v` is recognised at statement scope (an expression followed by `<-` becomes a `ChannelSendStatementSyntax`) and binds to `BoundChannelSendStatement`. Non-channel operands diagnose. Emit deferred. |
+| `->` (switch-expression arm arrow) | ✅ | ✅ | Phase 6.1: separates `case` / `default` arms from result expressions in `switch` expressions. |
 | `&^` (Go bit-clear) | ✅ | ✅ | End-to-end for `int` operands; emitter implements as `not; and`. |
 
 ## Top-level constructs
@@ -84,6 +85,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Type assertion / conversion (`x.(T)`, `T(x)`) | 🟡 | 🟡 | — | 🟡 | Built-in type names invoked as `int(x)` route through `BindCallExpression` → `BindConversion`; emit currently only handles bool↔int. Go-style `x.(T)` does not exist. |
 | Address-of `&x` / dereference `*x` | 🟡 | ❌ | — | — | Parsed as unary, but no `BoundUnaryOperator` entry → binder rejects. The `Loop.gs` design sample's `*count` is **unimplementable today**. |
 | Channel receive `<-ch` | ✅ | ✅ | — | ✅ | See "Send statement / receive" row above. Phase 5.5 / ADR-0022 (interpreter). |
+| `switch` expression (`let x = switch v { case A -> r1 default -> r2 }`) | ✅ | ✅ | — | ✅ | Phase 6.1. Discriminant must be `int` / `string` / `bool`. Exactly one `default` arm required. All arm result expressions unify to a single type (type of the first arm). Interpreter evaluates arms in source order; emit deferred (interp-only precedent matches Phase 5 surface). |
 | Higher-order call `f()(args)` / function values | ✅ | ✅ | ✅ | ✅ | Phase 4.7 — first-class function types (`func(T) R`), indirect-call expressions, function-typed locals/params/returns. |
 | Function literal / lambda | ✅ | ✅ | ✅ | ✅ | Phase 4.7 (`func(...) {...}` literal); Phase 4.9 adds Kotlin-style trailing-lambda call syntax — `f(args) func(...) {...}` desugars to `f(args, func(...) {...})` at parse time. |
 
@@ -114,6 +116,7 @@ Implicit and explicit conversions: `BindConversion` exists but the emitter (`Emi
 4. **The emitter caps literals at `int`/`string`/`bool`.** Adding any new literal kind (float, char/rune, null) requires coordinated lexer + binder + `EmitLiteral` changes.
 5. **`int ↔ bool` is the only conversion path that emits.** Before adding numeric types or imported-type conversions to the binder, `EmitConversion` must be extended; otherwise valid programs will compile under the interpreter and crash the emitter.
 6. **Phase 5 concurrency is interp-only by design.** Per ADR-0022 §Consequences and ADR-0023 §Emit, `go` / `chan` / `select` / `scope` / `async` / `await` / `await for` all show `—` in the Emit column; emit lands as a Phase-7 follow-up alongside the async state-machine decision (ADR-0027). The Phase-5 exit samples (`samples/aspirational/PortScan.gs`, `samples/aspirational/AsyncTask.gs`) demonstrate the surface end-to-end on the interpreter; `test/Core.Tests/LanguageConformance/AspirationalSamplesTests` runs them on every PR.
+7. **Phase 6.1 switch expressions follow the same interp-only posture.** `switch` expressions parse, bind, and evaluate on the interpreter; emit remains deferred until expression lowering / codegen is designed for this surface.
 
 ## Phase 5 exit-criteria status (concurrency)
 

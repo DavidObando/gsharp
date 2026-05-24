@@ -479,6 +479,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrIndexExpression => EvaluateClrIndexExpression((BoundClrIndexExpression)node),
                 BoundNodeKind.ClrIndexAssignmentExpression => EvaluateClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node),
                 BoundNodeKind.AwaitExpression => EvaluateAwaitExpression((BoundAwaitExpression)node),
+                BoundNodeKind.SwitchExpression => EvaluateSwitchExpression((BoundSwitchExpression)node),
                 BoundNodeKind.MakeChannelExpression => EvaluateMakeChannelExpression((BoundMakeChannelExpression)node),
                 BoundNodeKind.ChannelReceiveExpression => EvaluateChannelReceiveExpression((BoundChannelReceiveExpression)node),
                 BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),
@@ -1076,6 +1077,29 @@ public sealed class Evaluator
         var clr = declaredReturn.ClrType ?? typeof(object);
         var method = typeof(Task).GetMethod(nameof(Task.FromResult)).MakeGenericMethod(clr);
         return method.Invoke(null, new[] { value });
+    }
+
+    private object EvaluateSwitchExpression(BoundSwitchExpression node)
+    {
+        var discriminant = EvaluateExpression(node.Discriminant);
+        BoundSwitchExpressionArm defaultArm = null;
+
+        foreach (var arm in node.Arms)
+        {
+            if (arm.IsDefault)
+            {
+                defaultArm = arm;
+                continue;
+            }
+
+            var value = EvaluateExpression(arm.Value);
+            if (object.Equals(discriminant, value))
+            {
+                return EvaluateExpression(arm.Result);
+            }
+        }
+
+        return EvaluateExpression(defaultArm.Result);
     }
 
     private object EvaluateAwaitExpression(BoundAwaitExpression node)

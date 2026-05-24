@@ -1774,6 +1774,103 @@ public sealed class Binder
         return new BoundBlockStatement(statements.ToImmutable());
     }
 
+    private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
+    {
+        var discriminant = BindExpression(syntax.Expression);
+        var switchType = discriminant.Type;
+
+        if (switchType == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression();
+        }
+
+        if (switchType != TypeSymbol.Int &&
+            switchType != TypeSymbol.String &&
+            switchType != TypeSymbol.Bool)
+        {
+            Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
+            return new BoundErrorExpression();
+        }
+
+        if (syntax.Arms.Length == 0)
+        {
+            Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
+            return new BoundErrorExpression();
+        }
+
+        var hasDefault = false;
+        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundExpression Value, BoundExpression Result)>();
+
+        foreach (var armSyntax in syntax.Arms)
+        {
+            BoundExpression value = null;
+            if (armSyntax.IsDefault)
+            {
+                if (hasDefault)
+                {
+                    Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location);
+                }
+
+                hasDefault = true;
+            }
+            else
+            {
+                var caseValue = BindExpression(armSyntax.Value);
+                var conversion = Conversion.Classify(caseValue.Type, switchType);
+                if (!conversion.Exists || conversion.IsExplicit)
+                {
+                    if (caseValue.Type != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportSwitchCaseTypeMismatch(armSyntax.Value.Location, caseValue.Type, switchType);
+                    }
+
+                    value = new BoundErrorExpression();
+                }
+                else if (conversion.IsIdentity)
+                {
+                    value = caseValue;
+                }
+                else
+                {
+                    value = new BoundConversionExpression(switchType, caseValue);
+                }
+            }
+
+            var result = BindExpression(armSyntax.Result);
+            boundArmBuilders.Add((armSyntax, value, result));
+        }
+
+        if (!hasDefault)
+        {
+            Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
+        }
+
+        var resultType = boundArmBuilders[0].Result.Type;
+        var arms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(boundArmBuilders.Count);
+        foreach (var arm in boundArmBuilders)
+        {
+            var result = arm.Result;
+            var conversion = Conversion.Classify(result.Type, resultType);
+            if (!conversion.Exists || conversion.IsExplicit)
+            {
+                if (result.Type != TypeSymbol.Error && resultType != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportSwitchExpressionArmTypeMismatch(arm.Syntax.Result.Location, result.Type, resultType);
+                }
+
+                result = new BoundErrorExpression();
+            }
+            else if (!conversion.IsIdentity)
+            {
+                result = new BoundConversionExpression(resultType, result);
+            }
+
+            arms.Add(new BoundSwitchExpressionArm(arm.Value, result));
+        }
+
+        return new BoundSwitchExpression(discriminant, arms.ToImmutable(), resultType);
+    }
+
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
         var tryBlock = BindBlockStatement(syntax.TryBlock);
@@ -2468,6 +2565,8 @@ public sealed class Binder
                 return BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
             case SyntaxKind.AwaitExpression:
                 return BindAwaitExpression((AwaitExpressionSyntax)syntax);
+            case SyntaxKind.SwitchExpression:
+                return BindSwitchExpression((SwitchExpressionSyntax)syntax);
             case SyntaxKind.MakeChannelExpression:
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:

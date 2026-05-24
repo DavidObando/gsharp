@@ -1987,6 +1987,9 @@ public class Parser
             case SyntaxKind.FuncKeyword:
                 return ParseFunctionLiteralExpression();
 
+            case SyntaxKind.SwitchKeyword:
+                return ParseSwitchExpression();
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
@@ -2003,6 +2006,46 @@ public class Parser
         var returnType = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
         return new FunctionLiteralExpressionSyntax(syntaxTree, funcKeyword, openParen, parameters, closeParen, returnType, body);
+    }
+
+    private ExpressionSyntax ParseSwitchExpression()
+    {
+        var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
+        var expression = ParseExpression();
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var arms = ImmutableArray.CreateBuilder<SwitchExpressionArmSyntax>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+            arms.Add(ParseSwitchExpressionArm());
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new SwitchExpressionSyntax(syntaxTree, switchKeyword, expression, openBrace, arms.ToImmutable(), closeBrace);
+    }
+
+    private SwitchExpressionArmSyntax ParseSwitchExpressionArm()
+    {
+        if (Current.Kind == SyntaxKind.DefaultKeyword)
+        {
+            var defaultKeyword = MatchToken(SyntaxKind.DefaultKeyword);
+            var defaultArrow = MatchToken(SyntaxKind.RightArrowToken);
+            var defaultResult = ParseExpression();
+            return new SwitchExpressionArmSyntax(syntaxTree, defaultKeyword, value: null, defaultArrow, defaultResult);
+        }
+
+        var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
+        var value = ParseExpression();
+        var arrow = MatchToken(SyntaxKind.RightArrowToken);
+        var result = ParseExpression();
+        return new SwitchExpressionArmSyntax(syntaxTree, caseKeyword, value, arrow, result);
     }
 
     private ExpressionSyntax ParseMapCreationExpression()
