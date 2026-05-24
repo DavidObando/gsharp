@@ -1130,6 +1130,8 @@ public class Parser
                 return ParseThrowStatement();
             case SyntaxKind.UsingKeyword:
                 return ParseUsingStatement();
+            case SyntaxKind.DeferKeyword:
+                return ParseDeferStatement();
             case SyntaxKind.GoKeyword:
                 return ParseGoStatement();
             case SyntaxKind.SelectKeyword:
@@ -1880,6 +1882,13 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.GoKeyword);
         var expression = ParseExpression();
         return new GoStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseDeferStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.DeferKeyword);
+        var expression = ParseExpression();
+        return new DeferStatementSyntax(syntaxTree, keyword, expression);
     }
 
     private StatementSyntax ParseScopeStatement()
