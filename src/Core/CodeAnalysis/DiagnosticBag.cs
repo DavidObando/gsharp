@@ -143,6 +143,15 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the <c>record</c> alias cannot be combined with the <c>data</c> contextual keyword.
+    /// </summary>
+    /// <param name="location">The text location of the <c>data</c> keyword.</param>
+    public void ReportRecordCannotBeCombinedWithDataKeyword(TextLocation location)
+    {
+        Report(location, "'record' is an alias for 'data struct' and cannot be combined with 'data'.");
+    }
+
+    /// <summary>
     /// Reports that an enum declaration contains no members.
     /// </summary>
     /// <param name="location">The text location of the enum identifier.</param>

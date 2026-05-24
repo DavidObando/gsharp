@@ -209,11 +209,21 @@ public class Parser
         // as generic function declarations.
         var typeParameterList = ParseOptionalTypeParameterList();
 
-        // `data` is a context-sensitive keyword (ADR-0029): only acts as the
-        // data-struct marker when followed directly by `struct`. Elsewhere it
-        // is an ordinary identifier.
+        // `record` is a context-sensitive keyword (ADR-0025): in a type
+        // declaration header it aliases `data struct` only when followed by a
+        // body. Elsewhere it remains an ordinary identifier.
+        SyntaxToken preconsumedStructOrClassKeyword = null;
         SyntaxToken dataKeyword = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        {
+            dataKeyword = NextToken();
+            preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, dataKeyword.Position, "struct", null);
+        }
+
+        // `data` is a context-sensitive keyword (ADR-0029): only acts as the
+        // data-struct marker when followed directly by `struct` or `enum`.
+        // Elsewhere it is an ordinary identifier.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data" && (Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || Peek(1).Text == "record"))
         {
             dataKeyword = NextToken();
         }
@@ -223,7 +233,7 @@ public class Parser
         // can be subclassed. `open` before `struct` is diagnosed in the
         // struct parser (structs cannot be subclassed in CLR).
         SyntaxToken openModifier = null;
-        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
+        if (Current.Kind == SyntaxKind.OpenKeyword && (Peek(1).Kind == SyntaxKind.ClassKeyword || Peek(1).Kind == SyntaxKind.StructKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "record")))
         {
             openModifier = NextToken();
         }
@@ -232,19 +242,35 @@ public class Parser
         // `sealed interface` restricts implementors to the same package
         // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
         SyntaxToken sealedModifier = null;
-        if (Current.Kind == SyntaxKind.SealedKeyword && (Peek(1).Kind == SyntaxKind.InterfaceKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword))
+        if (Current.Kind == SyntaxKind.SealedKeyword && (Peek(1).Kind == SyntaxKind.InterfaceKeyword || Peek(1).Kind == SyntaxKind.EnumKeyword || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "record")))
         {
             sealedModifier = NextToken();
         }
 
-        if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword)
+        if (dataKeyword != null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record")
+        {
+            Diagnostics.ReportRecordCannotBeCombinedWithDataKeyword(dataKeyword.Location);
+            if (Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                var recordToken = NextToken();
+                preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, recordToken.Position, "struct", null);
+            }
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        {
+            dataKeyword = NextToken();
+            preconsumedStructOrClassKeyword = new SyntaxToken(syntaxTree, SyntaxKind.StructKeyword, dataKeyword.Position, "struct", null);
+        }
+
+        if (Current.Kind == SyntaxKind.StructKeyword || Current.Kind == SyntaxKind.ClassKeyword || preconsumedStructOrClassKeyword != null)
         {
             if (sealedModifier != null)
             {
                 Diagnostics.ReportUnexpectedToken(sealedModifier.Location, SyntaxKind.SealedKeyword, SyntaxKind.InterfaceKeyword);
             }
 
-            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier);
+            var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, openModifier, preconsumedStructOrClassKeyword);
             structDecl.TypeParameterList = typeParameterList;
             return structDecl;
         }
@@ -362,11 +388,12 @@ public class Parser
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
         SyntaxToken dataKeyword,
-        SyntaxToken openModifier)
+        SyntaxToken openModifier,
+        SyntaxToken preconsumedStructOrClassKeyword = null)
     {
-        var structOrClassKeyword = Current.Kind == SyntaxKind.ClassKeyword
+        var structOrClassKeyword = preconsumedStructOrClassKeyword ?? (Current.Kind == SyntaxKind.ClassKeyword
             ? MatchToken(SyntaxKind.ClassKeyword)
-            : MatchToken(SyntaxKind.StructKeyword);
+            : MatchToken(SyntaxKind.StructKeyword));
 
         if (dataKeyword != null && structOrClassKeyword.Kind == SyntaxKind.ClassKeyword)
         {
@@ -735,7 +762,7 @@ public class Parser
                 || follow.Kind == SyntaxKind.InterfaceKeyword
                 || follow.Kind == SyntaxKind.SealedKeyword
                 || follow.Kind == SyntaxKind.OpenKeyword
-                || (follow.Kind == SyntaxKind.IdentifierToken && follow.Text == "data"))
+                || (follow.Kind == SyntaxKind.IdentifierToken && (follow.Text == "data" || follow.Text == "record")))
             {
                 return true;
             }
