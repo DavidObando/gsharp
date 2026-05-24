@@ -760,6 +760,30 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports a non-exhaustive switch expression over a closed discriminant.
+    /// </summary>
+    /// <param name="location">The text location of the switch expression.</param>
+    /// <param name="discriminantTypeName">The discriminant type description.</param>
+    /// <param name="missingNames">The missing variant names.</param>
+    public void ReportSwitchExpressionNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
+    {
+        var message = $"Switch expression on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a non-exhaustive switch statement over a closed discriminant.
+    /// </summary>
+    /// <param name="location">The text location of the switch statement.</param>
+    /// <param name="discriminantTypeName">The discriminant type description.</param>
+    /// <param name="missingNames">The missing variant names.</param>
+    public void ReportSwitchStatementNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
+    {
+        var message = $"Switch statement on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports a switch-expression arm whose result type does not match the unified result type.
     /// </summary>
     /// <param name="location">The text location of the offending arm.</param>
@@ -849,6 +873,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
     {
         Report(location, $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
+    }
+
+    private static string FormatMissingNames(IEnumerable<string> missingNames)
+    {
+        var displayed = new List<string>();
+        var count = 0;
+        foreach (var name in missingNames)
+        {
+            if (count < 3)
+            {
+                displayed.Add($"'{name}'");
+            }
+
+            count++;
+        }
+
+        if (count > 3)
+        {
+            displayed.Add("…");
+        }
+
+        return string.Join(", ", displayed);
     }
 
     private void Report(TextLocation location, string message)
