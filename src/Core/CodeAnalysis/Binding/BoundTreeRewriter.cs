@@ -53,6 +53,8 @@ public abstract class BoundTreeRewriter
                 return RewriteChannelSendStatement((BoundChannelSendStatement)node);
             case BoundNodeKind.SelectStatement:
                 return RewriteSelectStatement((BoundSelectStatement)node);
+            case BoundNodeKind.ScopeStatement:
+                return RewriteScopeStatement((BoundScopeStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -596,6 +598,20 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundSelectStatement(builder.MoveToImmutable());
+    }
+
+    /// <summary>Rewrites a bound scope statement (Phase 5.7).</summary>
+    /// <param name="node">The scope statement to rewrite.</param>
+    /// <returns>The rewritten scope statement.</returns>
+    protected virtual BoundStatement RewriteScopeStatement(BoundScopeStatement node)
+    {
+        var body = RewriteStatement(node.Body);
+        if (body == node.Body)
+        {
+            return node;
+        }
+
+        return new BoundScopeStatement(body);
     }
 
     /// <summary>Rewrites a bound make-channel expression (Phase 5.4).</summary>

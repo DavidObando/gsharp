@@ -114,6 +114,7 @@ public enum SyntaxKind
     ReturnKeyword,
     SealedKeyword,
     SelectKeyword,
+    ScopeKeyword,
     StructKeyword,
     SwitchKeyword,
     ThrowKeyword,
@@ -189,6 +190,7 @@ public enum SyntaxKind
     ChannelSendStatement,
     SelectStatement,
     SelectCase,
+    ScopeStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

@@ -129,6 +129,8 @@ QuestionToken
 RangeKeyword
 ReturnKeyword
 ReturnStatement
+ScopeKeyword
+ScopeStatement
 SealedKeyword
 SelectCase
 SelectKeyword
@@ -212,6 +214,7 @@ MapDeleteExpression
 MapLiteralExpression
 NullConditionalAccessExpression
 ReturnStatement
+ScopeStatement
 SelectStatement
 StructLiteralExpression
 ThrowStatement
