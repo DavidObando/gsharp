@@ -1,0 +1,9 @@
+-3 -> neg
+0 -> zero
+1 -> small-pos
+5 -> small-pos
+101 -> huge
+circle
+square
+bookended
+diag77

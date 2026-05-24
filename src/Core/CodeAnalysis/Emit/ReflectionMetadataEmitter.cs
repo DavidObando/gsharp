@@ -1156,7 +1156,8 @@ internal sealed class ReflectionMetadataEmitter
             var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
             var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
             var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, il);
+            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, il);
 
             // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -1195,7 +1196,7 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots);
+            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -1296,6 +1297,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -1311,7 +1313,7 @@ internal sealed class ReflectionMetadataEmitter
         //   * any locals declared by arm bodies and by the type-pattern
         //     arm-local bindings — these need pre-allocation because the
         //     pre-scan above does not descend into pattern-switch arms.
-        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -1371,11 +1373,12 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
     {
         foreach (var s in statements)
         {
-            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
         }
     }
 
@@ -1384,7 +1387,8 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
     {
         switch (statement)
         {
@@ -1393,11 +1397,13 @@ internal sealed class ReflectionMetadataEmitter
                     var discriminantSlot = localTypes.Count;
                     localTypes.Add(ps.Discriminant.Type);
                     patternSwitchSlots[ps] = discriminantSlot;
+                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                     foreach (var arm in ps.Arms)
                     {
                         if (arm.Pattern != null)
                         {
                             AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
+                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                         }
 
                         if (arm.Body is BoundBlockStatement armBlock)
@@ -1410,12 +1416,12 @@ internal sealed class ReflectionMetadataEmitter
                                     localTypes.Add(decl.Variable.Type);
                                 }
 
-                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                             }
                         }
                         else
                         {
-                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                         }
                     }
 
@@ -1425,28 +1431,153 @@ internal sealed class ReflectionMetadataEmitter
             case BoundBlockStatement block:
                 foreach (var inner in block.Statements)
                 {
-                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 }
 
                 break;
             case BoundIfStatement ifs:
-                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 if (ifs.ElseStatement != null)
                 {
-                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 }
 
                 break;
             case BoundTryStatement tryStmt:
-                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 foreach (var clause in tryStmt.CatchClauses)
                 {
-                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 }
 
                 if (tryStmt.FinallyBlock != null)
                 {
-                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots);
+                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                break;
+            case BoundExpressionStatement es:
+                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundVariableDeclaration vd:
+                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundReturnStatement rs:
+                if (rs.Expression != null)
+                {
+                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                break;
+            case BoundConditionalGotoStatement cg:
+                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+        }
+    }
+
+    // Walks any BoundExpression to discover nested BoundSwitchExpression nodes
+    // (which can appear in let initializers, return values, call arguments,
+    // arm result expressions of an enclosing switch expression, etc.). Each
+    // discovered switch expression gets a result temp + discriminant temp
+    // pre-allocated and its arms recurse so type-pattern scratches and
+    // arm-locals are also reserved.
+    private static void WalkExpressionForSwitches(
+        BoundExpression expression,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+    {
+        if (expression == null)
+        {
+            return;
+        }
+
+        switch (expression)
+        {
+            case BoundSwitchExpression sx:
+                if (!switchExpressionSlots.ContainsKey(sx))
+                {
+                    var resultSlot = localTypes.Count;
+                    localTypes.Add(sx.Type);
+                    var discrSlot = localTypes.Count;
+                    localTypes.Add(sx.Discriminant.Type);
+                    switchExpressionSlots[sx] = (resultSlot, discrSlot);
+                }
+
+                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                foreach (var arm in sx.Arms)
+                {
+                    if (arm.Pattern != null)
+                    {
+                        AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
+                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                    }
+
+                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                break;
+            case BoundBinaryExpression be:
+                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundUnaryExpression ue:
+                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundAssignmentExpression ae:
+                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundCallExpression ce:
+                foreach (var a in ce.Arguments)
+                {
+                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                break;
+            case BoundConversionExpression cv:
+                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundBlockExpression bex:
+                foreach (var s in bex.Statements)
+                {
+                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+        }
+    }
+
+    private static void WalkPatternForSwitchExpressions(
+        BoundPattern pattern,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
+    {
+        switch (pattern)
+        {
+            case BoundConstantPattern cp:
+                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundRelationalPattern rp:
+                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                break;
+            case BoundPropertyPattern pp:
+                foreach (var f in pp.Fields)
+                {
+                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
+                }
+
+                break;
+            case BoundListPattern lp:
+                foreach (var e in lp.Elements)
+                {
+                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots);
                 }
 
                 break;
@@ -3076,6 +3207,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
         private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
+        private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -3087,7 +3219,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
             Dictionary<BoundIndexExpression, int> mapIndexSlots,
             Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-            Dictionary<BoundTypePattern, int> typePatternScratchSlots)
+            Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+            Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots)
         {
             this.outer = outer;
             this.il = il;
@@ -3099,6 +3232,7 @@ internal sealed class ReflectionMetadataEmitter
             this.mapIndexSlots = mapIndexSlots;
             this.patternSwitchSlots = patternSwitchSlots;
             this.typePatternScratchSlots = typePatternScratchSlots;
+            this.switchExpressionSlots = switchExpressionSlots;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -3307,6 +3441,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundBlockExpression blockExpr:
                     this.EmitBlockExpression(blockExpr);
+                    break;
+                case BoundSwitchExpression switchExpr:
+                    this.EmitSwitchExpression(switchExpr);
                     break;
                 case BoundConstructorCallExpression ctorCall:
                     this.EmitConstructorCall(ctorCall);
@@ -4316,6 +4453,50 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.il.MarkLabel(endLabel);
+        }
+
+        // Phase C: switch-expression emit. Mirrors the pattern-switch
+        // statement shape, but each arm body is a single result expression
+        // that is stored into a pre-allocated result temp before branching
+        // to the end label. The result temp is loaded once at the end to
+        // produce the expression's value.
+        private void EmitSwitchExpression(BoundSwitchExpression node)
+        {
+            var (resultSlot, discrSlot) = this.switchExpressionSlots[node];
+            this.EmitExpression(node.Discriminant);
+            this.il.StoreLocal(discrSlot);
+
+            var endLabel = this.il.DefineLabel();
+            BoundSwitchExpressionArm defaultArm = null;
+
+            foreach (var arm in node.Arms)
+            {
+                if (arm.IsDefault)
+                {
+                    defaultArm = arm;
+                    continue;
+                }
+
+                var nextArm = this.il.DefineLabel();
+                this.EmitPattern(
+                    arm.Pattern,
+                    loadValue: () => this.il.LoadLocal(discrSlot),
+                    valueType: node.Discriminant.Type,
+                    failLabel: nextArm);
+                this.EmitExpression(arm.Result);
+                this.il.StoreLocal(resultSlot);
+                this.il.Branch(ILOpCode.Br, endLabel);
+                this.il.MarkLabel(nextArm);
+            }
+
+            if (defaultArm != null)
+            {
+                this.EmitExpression(defaultArm.Result);
+                this.il.StoreLocal(resultSlot);
+            }
+
+            this.il.MarkLabel(endLabel);
+            this.il.LoadLocal(resultSlot);
         }
 
         // Emit IL that branches to failLabel when the pattern does not match
