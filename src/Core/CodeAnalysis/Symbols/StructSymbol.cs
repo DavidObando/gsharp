@@ -10,9 +10,9 @@ using GSharp.Core.CodeAnalysis.Syntax;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Represents a user-defined struct type (Phase 3.B.1). Structs are CLR value
-/// types with public-by-default fields and no methods of their own. Methods are
-/// added via extension functions in a later sub-phase.
+/// Represents a user-defined aggregate type (Phase 3.B). Structs are CLR value
+/// types; classes are CLR reference types. Methods may be declared inside class
+/// bodies or added later through same-package receiver declarations.
 /// </summary>
 public sealed class StructSymbol : TypeSymbol
 {
@@ -196,11 +196,23 @@ public sealed class StructSymbol : TypeSymbol
         Interfaces = interfaces;
     }
 
-    /// <summary>Sets <see cref="Methods"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
-    /// <param name="methods">The bound method symbols owned by this class.</param>
+    /// <summary>Sets <see cref="Methods"/> after binding class-body methods.</summary>
+    /// <param name="methods">The bound method symbols owned by this type.</param>
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Appends additional methods after the initial declaration binding pass.</summary>
+    /// <param name="methods">The receiver-clause methods to append.</param>
+    public void AddMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        if (methods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        Methods = Methods.IsDefaultOrEmpty ? methods : Methods.AddRange(methods);
     }
 
     /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3 / ADR-0020). Intended to be called once by the binder during <c>BindStructDeclaration</c> before any constructed instance is materialized.</summary>

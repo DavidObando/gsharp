@@ -1565,9 +1565,10 @@ public sealed class Evaluator
             [method.ThisParameter] = receiverValue,
         };
 
+        var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
         for (int i = 0; i < node.Arguments.Length; i++)
         {
-            var parameter = method.Parameters[i];
+            var parameter = method.Parameters[i + parameterOffset];
             var value = EvaluateExpression(node.Arguments[i]);
             frame.Add(parameter, value);
         }

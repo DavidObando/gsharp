@@ -77,6 +77,11 @@ public sealed class Binder
 
             foreach (var p in function.Parameters)
             {
+                if (ReferenceEquals(p, function.ThisParameter))
+                {
+                    continue;
+                }
+
                 scope.TryDeclareVariable(p);
             }
 
@@ -221,8 +226,6 @@ public sealed class Binder
             binder.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage);
         }
 
-        binder.VerifyInterfaceImplementations();
-
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
@@ -230,6 +233,8 @@ public sealed class Binder
             var owningPackage = packageByTree[function.SyntaxTree];
             binder.BindFunctionDeclaration(function, owningPackage);
         }
+
+        binder.VerifyInterfaceImplementations();
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -799,7 +804,7 @@ public sealed class Binder
                 foreach (var imethod in iface.Methods)
                 {
                     if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)
-                        || !SignaturesMatch(imethod, impl.Parameters, impl.Type))
+                        || !SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type))
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
@@ -992,19 +997,34 @@ public sealed class Binder
 
         try
         {
-            // Phase 3.B.6 / ADR-0019: receiver clause becomes parameters[0].
-            TypeSymbol extensionReceiverType = null;
+            // Phase 3.B.6 / ADR-0019 and Phase 6.4 / ADR-0024: receiver
+            // clauses become parameters[0]. Same-package struct/class receivers
+            // are methods; all other valid receivers remain extension functions.
+            TypeSymbol receiverType = null;
+            ParameterSymbol explicitReceiverParameter = null;
+            StructSymbol methodReceiverStruct = null;
             if (syntax.IsExtension)
             {
                 var recvName = syntax.Receiver.Identifier.Text;
-                extensionReceiverType = BindTypeClause(syntax.Receiver.Type);
-                if (extensionReceiverType == null)
+                receiverType = BindTypeClause(syntax.Receiver.Type);
+                if (receiverType == null)
                 {
-                    extensionReceiverType = TypeSymbol.Error;
+                    receiverType = TypeSymbol.Error;
                 }
 
+                explicitReceiverParameter = new ParameterSymbol(recvName, receiverType);
                 seenParameterNames.Add(recvName);
-                parameters.Add(new ParameterSymbol(recvName, extensionReceiverType));
+                parameters.Add(explicitReceiverParameter);
+
+                if (receiverType is StructSymbol receiverStruct && string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
+                {
+                    methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
+                }
+                else if (IsSamePackageNonAggregateReceiver(syntax.Receiver.Type, receiverType, package))
+                {
+                    Diagnostics.ReportMethodReceiverMustBeStructOrClass(syntax.Receiver.Type.Location, receiverType.Name);
+                    return;
+                }
             }
 
             foreach (var parameterSyntax in syntax.Parameters)
@@ -1043,14 +1063,39 @@ public sealed class Binder
             var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
 
             var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
-            var function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+            FunctionSymbol function;
+            if (methodReceiverStruct != null)
+            {
+                var methodName = syntax.Identifier.Text;
+                if (methodReceiverStruct.TryGetField(methodName, out _) || methodReceiverStruct.TryGetMethod(methodName, out _))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName);
+                    return;
+                }
+
+                function = new FunctionSymbol(
+                    methodName,
+                    parameters.ToImmutable(),
+                    type,
+                    syntax,
+                    package,
+                    accessibility,
+                    methodReceiverStruct,
+                    explicitReceiverParameter);
+                function.TypeParameters = typeParameters;
+                function.IsAsync = syntax.IsAsync;
+                methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
+                return;
+            }
+
+            function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync;
 
             if (syntax.IsExtension)
             {
                 function.IsExtension = true;
-                function.ExtensionReceiverType = extensionReceiverType;
+                function.ExtensionReceiverType = receiverType;
                 if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
@@ -1069,6 +1114,29 @@ public sealed class Binder
             currentTypeParameters = previousTypeParameters;
         }
     }
+
+    private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
+    {
+        if (receiverType is InterfaceSymbol iface)
+        {
+            return string.Equals(iface.PackageName, package.Name, StringComparison.Ordinal);
+        }
+
+        if (receiverType is EnumSymbol enumSymbol)
+        {
+            return string.Equals(enumSymbol.PackageName, package.Name, StringComparison.Ordinal);
+        }
+
+        var receiverName = receiverSyntax?.Identifier?.Text;
+        return receiverName != null
+            && !IsPrimitiveTypeName(receiverName)
+            && scope.TryLookupTypeAlias(receiverName, out var aliased)
+            && ReferenceEquals(aliased, receiverType)
+            && receiverType is not StructSymbol;
+    }
+
+    private static bool IsPrimitiveTypeName(string name)
+        => name == "bool" || name == "int" || name == "string" || name == "float64";
 
     private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
     {
@@ -1143,14 +1211,15 @@ public sealed class Binder
             return false;
         }
 
-        if (baseMethod.Parameters.Length != derivedParams.Length)
+        var baseParams = GetCallableParameters(baseMethod);
+        if (baseParams.Length != derivedParams.Length)
         {
             return false;
         }
 
         for (var i = 0; i < derivedParams.Length; i++)
         {
-            if (baseMethod.Parameters[i].Type != derivedParams[i].Type)
+            if (baseParams[i].Type != derivedParams[i].Type)
             {
                 return false;
             }
@@ -1158,6 +1227,9 @@ public sealed class Binder
 
         return true;
     }
+
+    private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
+        => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
     private static Accessibility ResolveAccessibility(SyntaxToken modifier)
     {
@@ -4465,9 +4537,11 @@ public sealed class Binder
 
     private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
     {
-        if (arguments.Length != method.Parameters.Length)
+        var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
+        var callableParameterCount = method.Parameters.Length - parameterOffset;
+        if (arguments.Length != callableParameterCount)
         {
-            Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
+            Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, callableParameterCount, arguments.Length);
             return new BoundErrorExpression();
         }
 
@@ -4481,7 +4555,7 @@ public sealed class Binder
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            var paramType = method.Parameters[i].Type;
+            var paramType = method.Parameters[i + parameterOffset].Type;
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
             convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
         }

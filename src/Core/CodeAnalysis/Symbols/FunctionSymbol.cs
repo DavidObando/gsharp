@@ -100,6 +100,32 @@ public sealed class FunctionSymbol : Symbol
         TypeSymbol receiverType,
         bool isOpen = false,
         bool isOverride = false)
+        : this(name, parameters, type, declaration, package, accessibility, receiverType, explicitReceiverParameter: null, isOpen, isOverride)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="FunctionSymbol"/> class for a receiver-clause method whose receiver parameter is source-visible.</summary>
+    /// <param name="name">The function name.</param>
+    /// <param name="parameters">The function parameters, including <paramref name="explicitReceiverParameter"/> at index zero.</param>
+    /// <param name="type">The return type.</param>
+    /// <param name="declaration">The declaring syntax.</param>
+    /// <param name="package">The owning package.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="receiverType">The receiver type for instance methods.</param>
+    /// <param name="explicitReceiverParameter">The source receiver parameter from <c>func (r R) M</c>, or <c>null</c>.</param>
+    /// <param name="isOpen">Whether the method is declared <c>open</c> (overridable).</param>
+    /// <param name="isOverride">Whether the method overrides an inherited base method.</param>
+    public FunctionSymbol(
+        string name,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol type,
+        FunctionDeclarationSyntax declaration,
+        PackageSymbol package,
+        Accessibility accessibility,
+        TypeSymbol receiverType,
+        ParameterSymbol explicitReceiverParameter,
+        bool isOpen = false,
+        bool isOverride = false)
         : base(name)
     {
         Parameters = parameters;
@@ -108,7 +134,8 @@ public sealed class FunctionSymbol : Symbol
         Package = package;
         Accessibility = accessibility;
         ReceiverType = receiverType;
-        ThisParameter = receiverType != null ? new ParameterSymbol("this", receiverType) : null;
+        ExplicitReceiverParameter = explicitReceiverParameter;
+        ThisParameter = explicitReceiverParameter ?? (receiverType != null ? new ParameterSymbol("this", receiverType) : null);
         IsOpen = isOpen;
         IsOverride = isOverride;
     }
@@ -154,6 +181,9 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets the synthesized <c>this</c> parameter for instance methods, or <c>null</c> for non-instance functions. Always at IL parameter slot 0 when emitted.</summary>
     public ParameterSymbol ThisParameter { get; }
+
+    /// <summary>Gets the source receiver parameter for <c>func (r R) M</c> methods-with-receivers; <c>null</c> for in-body methods and non-method functions.</summary>
+    public ParameterSymbol ExplicitReceiverParameter { get; }
 
     /// <summary>Gets a value indicating whether this method is declared <c>open</c> — overridable per ADR-0017 (Phase 3.B.3 sub-step 3).</summary>
     public bool IsOpen { get; }
