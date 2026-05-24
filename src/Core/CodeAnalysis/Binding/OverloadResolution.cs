@@ -41,6 +41,18 @@ internal static class OverloadResolution
         ["System.Single"] = new[] { "System.Double" },
     };
 
+    // C# §7.5.3.4 "Better conversion target" — signed integral T1 beats unsigned
+    // integral T2 in this map. Used only as a secondary signed/unsigned tie-break
+    // when the implicit-conversion direction between T1 and T2 does not resolve
+    // the ordering (e.g. int vs. uint: neither implicitly converts to the other).
+    private static readonly Dictionary<string, HashSet<string>> SignedBeatsUnsigned = new(StringComparer.Ordinal)
+    {
+        ["System.SByte"] = new(StringComparer.Ordinal) { "System.Byte", "System.UInt16", "System.UInt32", "System.UInt64" },
+        ["System.Int16"] = new(StringComparer.Ordinal) { "System.UInt16", "System.UInt32", "System.UInt64" },
+        ["System.Int32"] = new(StringComparer.Ordinal) { "System.UInt32", "System.UInt64" },
+        ["System.Int64"] = new(StringComparer.Ordinal) { "System.UInt64" },
+    };
+
     /// <summary>
     /// Classification of an implicit conversion from one CLR type to another.
     /// Lower ordinal values are "better" conversions and win in tie-breaking.
@@ -166,7 +178,7 @@ internal static class OverloadResolution
     public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes)
         where T : MethodBase
     {
-        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions)>();
+        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
         foreach (var candidate in candidates)
         {
             var parameters = candidate.GetParameters();
@@ -176,10 +188,12 @@ internal static class OverloadResolution
             }
 
             var conversions = new ImplicitConversionKind[parameters.Length];
+            var paramTypes = new Type[parameters.Length];
             var ok = true;
             for (var i = 0; i < parameters.Length; i++)
             {
-                var conv = ClassifyImplicit(parameters[i].ParameterType, argTypes[i]);
+                paramTypes[i] = parameters[i].ParameterType;
+                var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
                 if (conv == ImplicitConversionKind.None)
                 {
                     ok = false;
@@ -191,7 +205,7 @@ internal static class OverloadResolution
 
             if (ok)
             {
-                applicable.Add((candidate, conversions));
+                applicable.Add((candidate, conversions, paramTypes));
             }
         }
 
@@ -208,7 +222,7 @@ internal static class OverloadResolution
         // Better-function-member pass: a candidate wins iff for all arguments
         // its conversion is no worse than every other applicable candidate's,
         // and for at least one argument it is strictly better.
-        var winners = new List<(T Method, ImplicitConversionKind[] Conversions)>();
+        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
         foreach (var c in applicable)
         {
             var isWinner = true;
@@ -219,7 +233,7 @@ internal static class OverloadResolution
                     continue;
                 }
 
-                if (!IsAtLeastAsGoodAs(c.Conversions, other.Conversions))
+                if (!IsAtLeastAsGoodAs(c.Conversions, c.ParamTypes, other.Conversions, other.ParamTypes, argTypes))
                 {
                     isWinner = false;
                     break;
@@ -259,23 +273,111 @@ internal static class OverloadResolution
         return Result<T>.AmbiguousResult(ambiguous);
     }
 
-    private static bool IsAtLeastAsGoodAs(ImplicitConversionKind[] a, ImplicitConversionKind[] b)
+    /// <summary>
+    /// Compares two candidate conversion targets for the same source type per
+    /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
+    /// <paramref name="t1"/> is the better target, a positive value when
+    /// <paramref name="t2"/> is better, or zero when neither dominates.
+    /// </summary>
+    /// <param name="t1">The first candidate target type.</param>
+    /// <param name="t2">The second candidate target type.</param>
+    /// <param name="source">The source argument type.</param>
+    /// <returns>-1, 0, or +1 per the description above.</returns>
+    public static int CompareNumericTargets(Type t1, Type t2, Type source)
+    {
+        if (t1 is null || t2 is null || source is null)
+        {
+            return 0;
+        }
+
+        if (ClrTypeUtilities.AreSame(t1, t2))
+        {
+            return 0;
+        }
+
+        // Identity always wins over widening — caller handles that via the
+        // conversion-kind comparison; here we only break ties between two
+        // widenings, so identity to either target is not in scope.
+        var t1ToT2 = ClassifyImplicit(t2, t1) != ImplicitConversionKind.None;
+        var t2ToT1 = ClassifyImplicit(t1, t2) != ImplicitConversionKind.None;
+
+        // T1 is a better target than T2 if an implicit conversion T1→T2 exists
+        // and none exists T2→T1 (T1 is the "smaller"/closer numeric type).
+        if (t1ToT2 && !t2ToT1)
+        {
+            return -1;
+        }
+
+        if (t2ToT1 && !t1ToT2)
+        {
+            return 1;
+        }
+
+        // Signed integral T1 beats unsigned integral T2 (and vice versa) per
+        // the signed-vs-unsigned subclause when neither dominates by the
+        // conversion-direction rule above (e.g. int vs. uint).
+        if (t1.FullName is { } t1Name && t2.FullName is { } t2Name)
+        {
+            if (SignedBeatsUnsigned.TryGetValue(t1Name, out var t1Beats) && t1Beats.Contains(t2Name))
+            {
+                return -1;
+            }
+
+            if (SignedBeatsUnsigned.TryGetValue(t2Name, out var t2Beats) && t2Beats.Contains(t1Name))
+            {
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    private static bool IsAtLeastAsGoodAs(
+        ImplicitConversionKind[] a,
+        Type[] paramsA,
+        ImplicitConversionKind[] b,
+        Type[] paramsB,
+        IReadOnlyList<Type> sources)
     {
         var hasStrictlyBetter = false;
         for (var i = 0; i < a.Length; i++)
         {
-            if ((int)a[i] > (int)b[i])
+            var cmp = CompareConversions(a[i], paramsA[i], b[i], paramsB[i], sources[i]);
+            if (cmp > 0)
             {
                 return false;
             }
 
-            if ((int)a[i] < (int)b[i])
+            if (cmp < 0)
             {
                 hasStrictlyBetter = true;
             }
         }
 
         return hasStrictlyBetter;
+    }
+
+    private static int CompareConversions(
+        ImplicitConversionKind ka,
+        Type paramA,
+        ImplicitConversionKind kb,
+        Type paramB,
+        Type source)
+    {
+        if (ka != kb)
+        {
+            return ((int)ka).CompareTo((int)kb);
+        }
+
+        // Same conversion kind: tie-break by "better conversion target" for
+        // numeric widenings (C# §7.5.3.4). Other kinds fall back to "equal";
+        // upstream IsAtLeastAsSpecific then breaks pure reference ties.
+        if (ka == ImplicitConversionKind.NumericWidening)
+        {
+            return CompareNumericTargets(paramA, paramB, source);
+        }
+
+        return 0;
     }
 
     private static bool IsAtLeastAsSpecific(MethodBase a, MethodBase b)

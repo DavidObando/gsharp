@@ -12,4 +12,8 @@
     <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Core.Tests" />
+  </ItemGroup>
+
 </Project>
