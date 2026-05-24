@@ -77,6 +77,10 @@ internal sealed class ReflectionMetadataEmitter
     // list so it threads through the existing class TypeDef/method/field
     // row planning naturally.
     private readonly Dictionary<BoundFunctionLiteralExpression, ClosureInfo> closureInfos = new Dictionary<BoundFunctionLiteralExpression, ClosureInfo>();
+
+    // Phase F: each `go` site is lowered through a synthesized display class
+    // with an InvokeAction instance method that Task.Run can bind to an Action.
+    private readonly Dictionary<BoundGoStatement, ClosureInfo> goClosureInfos = new Dictionary<BoundGoStatement, ClosureInfo>();
     private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
     private int closureCounter;
 
@@ -171,10 +175,12 @@ internal sealed class ReflectionMetadataEmitter
         // field row planning. The host package for both is the entry-point
         // package (which always exists for compilable programs that run).
         var lambdaLiterals = this.CollectFunctionLiterals();
+        var goStatements = this.CollectGoStatements();
         var hostPackageGuess = this.program.EntryPoint?.Package
             ?? this.program.EntryPointPackage
             ?? (this.program.Packages.IsDefaultOrEmpty ? null : this.program.Packages[0]);
         this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+        this.SynthesizeGoClosures(goStatements, hostPackageGuess);
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
@@ -1159,7 +1165,24 @@ internal sealed class ReflectionMetadataEmitter
             var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
             var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-            CollectLocalsAndLabels(body, function, locals, localTypes, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, il);
+            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            CollectLocalsAndLabels(
+                body,
+                function,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                goEnclosingScopes,
+                il);
 
             // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -1198,7 +1221,21 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            var emitter = new BodyEmitter(this, il, locals, parameters, labels, appendSlots, structLiteralSlots, mapIndexSlots, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+            var emitter = new BodyEmitter(
+                this,
+                il,
+                locals,
+                parameters,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                goEnclosingScopes);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -1301,6 +1338,8 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         InstructionEncoder il)
     {
         CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -1316,7 +1355,16 @@ internal sealed class ReflectionMetadataEmitter
         //   * any locals declared by arm bodies and by the type-pattern
         //     arm-local bindings — these need pre-allocation because the
         //     pre-scan above does not descend into pattern-switch arms.
-        CollectPatternSwitchSlots(body.Statements, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+        CollectPatternSwitchSlots(
+            body.Statements,
+            locals,
+            localTypes,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            goEnclosingScopes);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -1378,11 +1426,23 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes)
     {
         foreach (var s in statements)
         {
-            WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+            WalkForPatternSwitches(
+                s,
+                locals,
+                localTypes,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                goEnclosingScopes,
+                currentScope: null);
         }
     }
 
@@ -1393,7 +1453,10 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        BoundScopeStatement currentScope)
     {
         switch (statement)
         {
@@ -1402,13 +1465,13 @@ internal sealed class ReflectionMetadataEmitter
                     var discriminantSlot = localTypes.Count;
                     localTypes.Add(ps.Discriminant.Type);
                     patternSwitchSlots[ps] = discriminantSlot;
-                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                     foreach (var arm in ps.Arms)
                     {
                         if (arm.Pattern != null)
                         {
                             AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                         }
 
                         if (arm.Body is BoundBlockStatement armBlock)
@@ -1421,12 +1484,12 @@ internal sealed class ReflectionMetadataEmitter
                                     localTypes.Add(decl.Variable.Type);
                                 }
 
-                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                             }
                         }
                         else
                         {
-                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                         }
                     }
 
@@ -1436,54 +1499,85 @@ internal sealed class ReflectionMetadataEmitter
             case BoundBlockStatement block:
                 foreach (var inner in block.Statements)
                 {
-                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundIfStatement ifs:
-                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
-                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
+                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 if (ifs.ElseStatement != null)
                 {
-                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundTryStatement tryStmt:
-                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 foreach (var clause in tryStmt.CatchClauses)
                 {
-                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 if (tryStmt.FinallyBlock != null)
                 {
-                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundExpressionStatement es:
-                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundVariableDeclaration vd:
-                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundReturnStatement rs:
                 if (rs.Expression != null)
                 {
-                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundConditionalGotoStatement cg:
-                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
+                break;
+            case BoundGoStatement go:
+                if (currentScope != null)
+                {
+                    goEnclosingScopes[go] = currentScope;
+                }
+
+                WalkExpressionForSwitches(go.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
+                break;
+            case BoundScopeStatement scope:
+                AllocateScopeFrameSlots(scope, localTypes, scopeFrameSlots);
+                WalkForPatternSwitches(scope.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, scope);
                 break;
             case BoundChannelSendStatement chs:
                 AllocateChannelSendSlots(chs, localTypes, channelOpSlots);
-                WalkExpressionForSwitches(chs.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
-                WalkExpressionForSwitches(chs.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(chs.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
+                WalkExpressionForSwitches(chs.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
         }
+    }
+
+    private static void AllocateScopeFrameSlots(
+        BoundScopeStatement node,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots)
+    {
+        if (scopeFrameSlots.ContainsKey(node))
+        {
+            return;
+        }
+
+        var tasks = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(typeof(List<System.Threading.Tasks.Task>)));
+        var cts = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.CancellationTokenSource)));
+        var awaiter = localTypes.Count;
+        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
+        scopeFrameSlots[node] = (tasks, cts, awaiter);
     }
 
     private static void AllocateChannelSendSlots(
@@ -1540,7 +1634,10 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        BoundScopeStatement currentScope)
     {
         if (expression == null)
         {
@@ -1559,58 +1656,58 @@ internal sealed class ReflectionMetadataEmitter
                     switchExpressionSlots[sx] = (resultSlot, discrSlot);
                 }
 
-                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 foreach (var arm in sx.Arms)
                 {
                     if (arm.Pattern != null)
                     {
                         AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                     }
 
-                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundBinaryExpression be:
-                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
-                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
+                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundUnaryExpression ue:
-                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundAssignmentExpression ae:
-                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundCallExpression ce:
                 foreach (var a in ce.Arguments)
                 {
-                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundConversionExpression cv:
-                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundBlockExpression bex:
                 foreach (var s in bex.Statements)
                 {
-                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
-                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundChannelReceiveExpression chr:
                 AllocateChannelReceiveSlots(chr, localTypes, channelOpSlots);
-                WalkExpressionForSwitches(chr.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(chr.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundChannelCloseExpression chc:
-                WalkExpressionForSwitches(chc.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(chc.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundMakeChannelExpression mkCh:
                 if (mkCh.Capacity != null)
                 {
-                    WalkExpressionForSwitches(mkCh.Capacity, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkExpressionForSwitches(mkCh.Capacity, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
@@ -1624,27 +1721,30 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        BoundScopeStatement currentScope)
     {
         switch (pattern)
         {
             case BoundConstantPattern cp:
-                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundRelationalPattern rp:
-                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundPropertyPattern pp:
                 foreach (var f in pp.Fields)
                 {
-                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
             case BoundListPattern lp:
                 foreach (var e in lp.Elements)
                 {
-                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots);
+                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, goEnclosingScopes, currentScope);
                 }
 
                 break;
@@ -1726,6 +1826,18 @@ internal sealed class ReflectionMetadataEmitter
     {
         var sink = new List<BoundFunctionLiteralExpression>();
         var collector = new LambdaCollector(sink);
+        foreach (var kvp in this.program.Functions)
+        {
+            collector.RewriteStatement(kvp.Value);
+        }
+
+        return sink;
+    }
+
+    private List<BoundGoStatement> CollectGoStatements()
+    {
+        var sink = new List<BoundGoStatement>();
+        var collector = new GoStatementCollector(sink);
         foreach (var kvp in this.program.Functions)
         {
             collector.RewriteStatement(kvp.Value);
@@ -1823,54 +1935,100 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var closureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
-            var packageName = hostPackage?.Name ?? string.Empty;
+            var info = this.SynthesizeDisplayClass(
+                closureName,
+                literal.CapturedVariables,
+                literal.Function.Parameters,
+                literal.Function.Type,
+                literal.Body,
+                hostPackage,
+                invokeName: "Invoke");
 
-            var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(literal.CapturedVariables.Length);
-            var captureFields = new Dictionary<VariableSymbol, FieldSymbol>();
-            foreach (var captured in literal.CapturedVariables)
-            {
-                var field = new FieldSymbol(captured.Name, captured.Type, Accessibility.Public);
-                fieldBuilder.Add(field);
-                captureFields[captured] = field;
-            }
-
-            var closureClass = new StructSymbol(
-                name: closureName,
-                fields: fieldBuilder.MoveToImmutable(),
-                accessibility: Accessibility.Internal,
-                declaration: null,
-                packageName: packageName,
-                isData: false,
-                isInline: false,
-                isClass: true);
-
-            // The invoke method reuses the lambda's parameter symbols so the
-            // rewritten body's BoundVariableExpression(parameter) nodes still
-            // resolve to the same ParameterSymbols (which EmitFunction maps
-            // to IL arg slots).
-            var invokeMethod = new FunctionSymbol(
-                name: "Invoke",
-                parameters: literal.Function.Parameters,
-                type: literal.Function.Type,
-                declaration: null,
-                package: hostPackage,
-                accessibility: Accessibility.Public,
-                receiverType: (TypeSymbol)closureClass);
-
-            closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
-
-            var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
-            var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(literal.Body);
-            if (rewriter.UnsupportedCapture != null)
-            {
-                throw new NotSupportedException(
-                    $"Function literal '{literal.Function.Name}' captures '{rewriter.UnsupportedCapture.Name}' from a kind ('{rewriter.UnsupportedCaptureKind}') the emitter cannot currently rewrite. Run under the interpreter for now.");
-            }
-
-            this.lambdaBodies[invokeMethod] = rewrittenBody;
-            this.synthesizedClosureClasses.Add(closureClass);
-            this.closureInfos[literal] = new ClosureInfo(closureClass, invokeMethod, captureFields);
+            this.closureInfos[literal] = info;
         }
+    }
+
+    private void SynthesizeGoClosures(List<BoundGoStatement> goStatements, PackageSymbol hostPackage)
+    {
+        foreach (var go in goStatements)
+        {
+            var captured = CollectCapturedVariables(go.Expression);
+            var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(go.Expression)));
+            var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+            var info = this.SynthesizeDisplayClass(
+                closureName,
+                captured,
+                ImmutableArray<ParameterSymbol>.Empty,
+                TypeSymbol.Void,
+                body,
+                hostPackage,
+                invokeName: "InvokeAction");
+
+            this.goClosureInfos[go] = info;
+        }
+    }
+
+    private ClosureInfo SynthesizeDisplayClass(
+        string closureName,
+        ImmutableArray<VariableSymbol> capturedVariables,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol returnType,
+        BoundBlockStatement body,
+        PackageSymbol hostPackage,
+        string invokeName)
+    {
+        var packageName = hostPackage?.Name ?? string.Empty;
+        var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(capturedVariables.Length);
+        var captureFields = new Dictionary<VariableSymbol, FieldSymbol>();
+        foreach (var captured in capturedVariables)
+        {
+            var field = new FieldSymbol(captured.Name, captured.Type, Accessibility.Public);
+            fieldBuilder.Add(field);
+            captureFields[captured] = field;
+        }
+
+        var closureClass = new StructSymbol(
+            name: closureName,
+            fields: fieldBuilder.MoveToImmutable(),
+            accessibility: Accessibility.Internal,
+            declaration: null,
+            packageName: packageName,
+            isData: false,
+            isInline: false,
+            isClass: true);
+
+        var invokeMethod = new FunctionSymbol(
+            name: invokeName,
+            parameters: parameters,
+            type: returnType,
+            declaration: null,
+            package: hostPackage,
+            accessibility: Accessibility.Public,
+            receiverType: (TypeSymbol)closureClass);
+
+        closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
+
+        var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
+        var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
+        if (rewriter.UnsupportedCapture != null)
+        {
+            throw new NotSupportedException(
+                $"Synthesized closure '{closureName}' captures '{rewriter.UnsupportedCapture.Name}' from a kind ('{rewriter.UnsupportedCaptureKind}') the emitter cannot currently rewrite. Run under the interpreter for now.");
+        }
+
+        this.lambdaBodies[invokeMethod] = rewrittenBody;
+        this.synthesizedClosureClasses.Add(closureClass);
+        return new ClosureInfo(closureClass, invokeMethod, captureFields);
+    }
+
+    private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundExpression expression)
+    {
+        var seen = new HashSet<VariableSymbol>();
+        var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
+        var declared = new HashSet<VariableSymbol>();
+        var collector = new GoCapturedVariableCollector(seen, declared, captured);
+        collector.Collect(expression);
+        return captured.ToImmutable();
     }
 
     private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
@@ -2040,6 +2198,9 @@ internal sealed class ReflectionMetadataEmitter
                         }
 
                         break;
+                    case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
+                        CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
                     case BoundTryStatement t:
                         CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
@@ -2078,6 +2239,9 @@ internal sealed class ReflectionMetadataEmitter
                             labels[cg.Label] = il.DefineLabel();
                         }
 
+                        break;
+                    case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
+                        CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                     case BoundTryStatement t:
                         CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
@@ -3307,6 +3471,80 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class GoStatementCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundGoStatement> sink;
+
+        public GoStatementCollector(List<BoundGoStatement> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundStatement RewriteGoStatement(BoundGoStatement node)
+        {
+            this.sink.Add(node);
+            return base.RewriteGoStatement(node);
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            this.RewriteStatement(node.Body);
+            return node;
+        }
+    }
+
+    private sealed class GoCapturedVariableCollector : BoundTreeRewriter
+    {
+        private readonly HashSet<VariableSymbol> seen;
+        private readonly HashSet<VariableSymbol> declared;
+        private readonly ImmutableArray<VariableSymbol>.Builder captured;
+
+        public GoCapturedVariableCollector(
+            HashSet<VariableSymbol> seen,
+            HashSet<VariableSymbol> declared,
+            ImmutableArray<VariableSymbol>.Builder captured)
+        {
+            this.seen = seen;
+            this.declared = declared;
+            this.captured = captured;
+        }
+
+        public void Collect(BoundExpression expression)
+        {
+            this.RewriteExpression(expression);
+        }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        {
+            this.CaptureIfFree(node.Variable);
+            return node;
+        }
+
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            this.CaptureIfFree(node.Variable);
+            return base.RewriteAssignmentExpression(node);
+        }
+
+        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        {
+            var initializer = this.RewriteExpression(node.Initializer);
+            this.declared.Add(node.Variable);
+            return initializer == node.Initializer
+                ? node
+                : new BoundVariableDeclaration(node.Variable, initializer);
+        }
+
+        private void CaptureIfFree(VariableSymbol variable)
+        {
+            if (!this.declared.Contains(variable)
+                && this.seen.Add(variable))
+            {
+                this.captured.Add(variable);
+            }
+        }
+    }
+
     private sealed class MapIndexReadCollector : BoundTreeRewriter
     {
         private readonly List<BoundIndexExpression> sink;
@@ -3344,6 +3582,8 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
+        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
+        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -3357,7 +3597,9 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
             Dictionary<BoundTypePattern, int> typePatternScratchSlots,
             Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
+            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes)
         {
             this.outer = outer;
             this.il = il;
@@ -3371,6 +3613,8 @@ internal sealed class ReflectionMetadataEmitter
             this.typePatternScratchSlots = typePatternScratchSlots;
             this.switchExpressionSlots = switchExpressionSlots;
             this.channelOpSlots = channelOpSlots;
+            this.scopeFrameSlots = scopeFrameSlots;
+            this.goEnclosingScopes = goEnclosingScopes;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -3437,6 +3681,12 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundPatternSwitchStatement ps:
                     this.EmitPatternSwitchStatement(ps);
+                    break;
+                case BoundGoStatement go:
+                    this.EmitGoStatement(go);
+                    break;
+                case BoundScopeStatement scope:
+                    this.EmitScopeStatement(scope);
                     break;
                 case BoundChannelSendStatement cs:
                     this.EmitChannelSendStatement(cs);
@@ -5218,6 +5468,185 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             return false;
+        }
+
+        private void EmitGoStatement(BoundGoStatement node)
+        {
+            var hasScope = this.goEnclosingScopes.TryGetValue(node, out var scope);
+            if (hasScope)
+            {
+                this.il.LoadLocal(this.scopeFrameSlots[scope].Tasks);
+            }
+
+            this.EmitGoAction(node);
+
+            var run = typeof(System.Threading.Tasks.Task).GetMethod(
+                nameof(System.Threading.Tasks.Task.Run),
+                new[] { typeof(Action) });
+            this.il.Call(this.outer.GetMethodEntityHandle(run));
+
+            if (hasScope)
+            {
+                var listType = typeof(List<System.Threading.Tasks.Task>);
+                var add = listType.GetMethod(nameof(List<System.Threading.Tasks.Task>.Add), new[] { typeof(System.Threading.Tasks.Task) });
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(this.outer.GetMethodReference(add));
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Pop);
+            }
+        }
+
+        private void EmitGoAction(BoundGoStatement node)
+        {
+            if (!this.outer.goClosureInfos.TryGetValue(node, out var closure))
+            {
+                throw new InvalidOperationException("Go statement has no synthesized display class.");
+            }
+
+            if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Go display class '{closure.ClassSym.Name}' has no emitted constructor.");
+            }
+
+            if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Go display invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
+            }
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(ctorHandle);
+
+            foreach (var captured in closure.CaptureFields.Keys)
+            {
+                var field = closure.CaptureFields[captured];
+                if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Go display field '{field.Name}' has no emitted FieldDef.");
+                }
+
+                this.il.OpCode(ILOpCode.Dup);
+                this.EmitExpression(new BoundVariableExpression(captured));
+                this.il.OpCode(ILOpCode.Stfld);
+                this.il.Token(fieldHandle);
+            }
+
+            var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
+            this.il.OpCode(ILOpCode.Ldftn);
+            this.il.Token(invokeHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(actionCtor));
+        }
+
+        private void EmitScopeStatement(BoundScopeStatement node)
+        {
+            var slots = this.scopeFrameSlots[node];
+            var listType = typeof(List<System.Threading.Tasks.Task>);
+            var listCtor = listType.GetConstructor(Type.EmptyTypes);
+            var ctsCtor = typeof(System.Threading.CancellationTokenSource).GetConstructor(Type.EmptyTypes);
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(listCtor));
+            this.il.StoreLocal(slots.Tasks);
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctsCtor));
+            this.il.StoreLocal(slots.Cts);
+
+            var tryStart = this.il.DefineLabel();
+            var finallyStart = this.il.DefineLabel();
+            var finallyEnd = this.il.DefineLabel();
+            var endLabel = this.il.DefineLabel();
+
+            this.il.MarkLabel(tryStart);
+            this.EmitStatement(node.Body);
+            this.il.Branch(ILOpCode.Leave, endLabel);
+
+            this.il.MarkLabel(finallyStart);
+            this.EmitScopeWaitAndDispose(slots);
+            this.il.OpCode(ILOpCode.Endfinally);
+            this.il.MarkLabel(finallyEnd);
+            this.il.MarkLabel(endLabel);
+
+            this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        }
+
+        private void EmitScopeWaitAndDispose((int Tasks, int Cts, int Awaiter) slots)
+        {
+            var outerTryStart = this.il.DefineLabel();
+            var innerTryStart = this.il.DefineLabel();
+            var innerTryEnd = this.il.DefineLabel();
+            var catchStart = this.il.DefineLabel();
+            var catchEnd = this.il.DefineLabel();
+            var disposeStart = this.il.DefineLabel();
+            var disposeEnd = this.il.DefineLabel();
+            var afterNested = this.il.DefineLabel();
+
+            this.il.MarkLabel(outerTryStart);
+            this.il.MarkLabel(innerTryStart);
+            this.EmitScopeWait(slots);
+            this.il.Branch(ILOpCode.Leave, afterNested);
+            this.il.MarkLabel(innerTryEnd);
+
+            this.il.MarkLabel(catchStart);
+            this.il.OpCode(ILOpCode.Pop);
+            var cancel = typeof(System.Threading.CancellationTokenSource).GetMethod(
+                nameof(System.Threading.CancellationTokenSource.Cancel),
+                Type.EmptyTypes);
+            this.il.LoadLocal(slots.Cts);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(cancel));
+            this.il.OpCode(ILOpCode.Rethrow);
+            this.il.MarkLabel(catchEnd);
+
+            this.il.MarkLabel(disposeStart);
+            var dispose = typeof(System.Threading.CancellationTokenSource).GetMethod(
+                nameof(System.Threading.CancellationTokenSource.Dispose),
+                Type.EmptyTypes);
+            this.il.LoadLocal(slots.Cts);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(dispose));
+            this.il.OpCode(ILOpCode.Endfinally);
+            this.il.MarkLabel(disposeEnd);
+            this.il.MarkLabel(afterNested);
+
+            this.il.ControlFlowBuilder.AddCatchRegion(
+                innerTryStart,
+                innerTryEnd,
+                catchStart,
+                catchEnd,
+                (EntityHandle)this.outer.GetTypeReference(typeof(Exception)));
+            this.il.ControlFlowBuilder.AddFinallyRegion(outerTryStart, disposeStart, disposeStart, disposeEnd);
+        }
+
+        private void EmitScopeWait((int Tasks, int Cts, int Awaiter) slots)
+        {
+            var listType = typeof(List<System.Threading.Tasks.Task>);
+            var toArray = listType.GetMethod(nameof(List<System.Threading.Tasks.Task>.ToArray), Type.EmptyTypes);
+            var whenAll = typeof(System.Threading.Tasks.Task).GetMethod(
+                nameof(System.Threading.Tasks.Task.WhenAll),
+                new[] { typeof(System.Threading.Tasks.Task[]) });
+            var getAwaiter = typeof(System.Threading.Tasks.Task).GetMethod(
+                nameof(System.Threading.Tasks.Task.GetAwaiter),
+                Type.EmptyTypes);
+            var getResult = typeof(System.Runtime.CompilerServices.TaskAwaiter).GetMethod(
+                nameof(System.Runtime.CompilerServices.TaskAwaiter.GetResult),
+                Type.EmptyTypes);
+
+            this.il.LoadLocal(slots.Tasks);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(toArray));
+            this.il.Call(this.outer.GetMethodEntityHandle(whenAll));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(getAwaiter));
+            this.il.StoreLocal(slots.Awaiter);
+            this.il.LoadLocalAddress(slots.Awaiter);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(getResult));
         }
 
         // ──────────────────────────────────────────────────────────────
