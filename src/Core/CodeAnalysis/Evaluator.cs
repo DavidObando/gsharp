@@ -124,6 +124,10 @@ public sealed class Evaluator
                     EvaluateScopeStatement((BoundScopeStatement)s);
                     index++;
                     break;
+                case BoundNodeKind.AwaitForRangeStatement:
+                    EvaluateAwaitForRangeStatement((BoundAwaitForRangeStatement)s);
+                    index++;
+                    break;
                 default:
                     throw new EvaluatorException($"Unexpected node {s.Kind}", s);
             }
@@ -250,6 +254,128 @@ public sealed class Evaluator
             }
 
             throw;
+        }
+    }
+
+    private void EvaluateAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+    {
+        // Phase 5.8 / ADR-0023: `await for v := range stream { … }`. The
+        // interpreter realizes each underlying `MoveNextAsync` /
+        // `DisposeAsync` synchronously via `GetAwaiter().GetResult()` —
+        // the same pragma Phase 5.1 uses for `await`. Per ADR-0023, when
+        // we are lexically inside a `scope { … }` we plumb the scope's
+        // cancellation token into `GetAsyncEnumerator`; otherwise we
+        // pass `CancellationToken.None`.
+        var stream = EvaluateExpression(node.Stream);
+        if (stream == null)
+        {
+            throw new EvaluatorException("'await for' stream evaluated to null.", node);
+        }
+
+        var streamType = stream.GetType();
+        Type asyncEnumerableInterface = null;
+        foreach (var iface in streamType.GetInterfaces())
+        {
+            if (iface.IsGenericType &&
+                iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+            {
+                asyncEnumerableInterface = iface;
+                break;
+            }
+        }
+
+        if (asyncEnumerableInterface == null && streamType.IsGenericType &&
+            streamType.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+        {
+            asyncEnumerableInterface = streamType;
+        }
+
+        if (asyncEnumerableInterface == null)
+        {
+            throw new EvaluatorException(
+                $"'await for' operand of CLR type '{streamType}' does not implement IAsyncEnumerable<T>.",
+                node);
+        }
+
+        var cancellationToken = scopeFrames.Count > 0
+            ? scopeFrames.Peek().Cts.Token
+            : System.Threading.CancellationToken.None;
+
+        var getEnumerator = asyncEnumerableInterface.GetMethod(
+            "GetAsyncEnumerator",
+            new[] { typeof(System.Threading.CancellationToken) });
+        var enumerator = getEnumerator.Invoke(stream, new object[] { cancellationToken });
+        if (enumerator == null)
+        {
+            throw new EvaluatorException("'await for' GetAsyncEnumerator returned null.", node);
+        }
+
+        var enumeratorInterface = typeof(System.Collections.Generic.IAsyncEnumerator<>)
+            .MakeGenericType(asyncEnumerableInterface.GetGenericArguments()[0]);
+        var moveNextAsync = enumeratorInterface.GetMethod("MoveNextAsync", Type.EmptyTypes);
+        var currentProperty = enumeratorInterface.GetProperty("Current");
+        var disposeAsync = typeof(System.IAsyncDisposable).GetMethod("DisposeAsync", Type.EmptyTypes);
+
+        try
+        {
+            while (true)
+            {
+                var moveNextTask = moveNextAsync.Invoke(enumerator, null);
+                var hasMore = (bool)BlockOnValueTask(moveNextTask);
+                if (!hasMore)
+                {
+                    break;
+                }
+
+                var current = currentProperty.GetValue(enumerator);
+                Assign(node.ValueVariable, current);
+                EvaluateStatement((BoundBlockStatement)node.Body);
+            }
+        }
+        finally
+        {
+            if (disposeAsync != null)
+            {
+                var disposeTask = disposeAsync.Invoke(enumerator, null);
+                BlockOnValueTask(disposeTask);
+            }
+        }
+    }
+
+    private static object BlockOnValueTask(object valueTask)
+    {
+        // Works uniformly for `Task`, `Task<T>`, `ValueTask`, and
+        // `ValueTask<T>`. ValueTask awaiters cannot be polled
+        // synchronously for an incomplete task — convert via `AsTask()`
+        // when available so the underlying `Task` awaiter is the one we
+        // call `GetResult()` on. Matches Phase 5.1's `await` pragma.
+        if (valueTask == null)
+        {
+            return null;
+        }
+
+        var type = valueTask.GetType();
+        var asTask = type.GetMethod("AsTask", Type.EmptyTypes);
+        object awaitable = asTask != null ? asTask.Invoke(valueTask, null) : valueTask;
+        if (awaitable == null)
+        {
+            return null;
+        }
+
+        var awaiter = awaitable.GetType().GetMethod("GetAwaiter", Type.EmptyTypes)?.Invoke(awaitable, null);
+        if (awaiter == null)
+        {
+            return null;
+        }
+
+        var getResult = awaiter.GetType().GetMethod("GetResult", Type.EmptyTypes);
+        try
+        {
+            return getResult?.Invoke(awaiter, null);
+        }
+        catch (TargetInvocationException tie) when (tie.InnerException != null)
+        {
+            throw tie.InnerException;
         }
     }
 

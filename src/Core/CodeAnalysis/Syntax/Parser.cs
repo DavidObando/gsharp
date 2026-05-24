@@ -1041,6 +1041,13 @@ public class Parser
                 return ParseSelectStatement();
             case SyntaxKind.ScopeKeyword:
                 return ParseScopeStatement();
+            case SyntaxKind.AwaitKeyword:
+                if (Peek(1).Kind == SyntaxKind.ForKeyword)
+                {
+                    return ParseAwaitForRangeStatement();
+                }
+
+                goto default;
             default:
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
@@ -1700,6 +1707,20 @@ public class Parser
         var scopeKeyword = MatchToken(SyntaxKind.ScopeKeyword);
         var body = ParseBlockStatement();
         return new ScopeStatementSyntax(syntaxTree, scopeKeyword, body);
+    }
+
+    private StatementSyntax ParseAwaitForRangeStatement()
+    {
+        // Phase 5.8 / ADR-0023: `await for v := range stream { … }`.
+        var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
+        var forKeyword = MatchToken(SyntaxKind.ForKeyword);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var colonEquals = MatchToken(SyntaxKind.ColonEqualsToken);
+        var rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
+        var stream = ParseExpression();
+        var body = ParseBlockStatement();
+        return new AwaitForRangeStatementSyntax(
+            syntaxTree, awaitKeyword, forKeyword, identifier, colonEquals, rangeKeyword, stream, body);
     }
 
     private StatementSyntax ParseSelectStatement()

@@ -362,6 +362,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of an <c>await for v := range stream</c> statement is not an <c>IAsyncEnumerable[T]</c> (Phase 5.8 / ADR-0023).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    /// <param name="actualType">The actual type of the operand.</param>
+    public void ReportTypeIsNotAsyncEnumerable(TextLocation location, TypeSymbol actualType)
+    {
+        var message = $"Expression of type '{actualType}' cannot be iterated with 'await for'; expected an 'IAsyncEnumerable[T]'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a <c>go</c> statement is not a call expression (Phase 5.3 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>

@@ -13,6 +13,7 @@ ArrayCreationExpression
 AssignmentExpression
 AsyncKeyword
 AwaitExpression
+AwaitForRangeStatement
 AwaitKeyword
 BadToken
 BangBangToken
@@ -176,6 +177,7 @@ AppendExpression
 ArrayCreationExpression
 AssignmentExpression
 AwaitExpression
+AwaitForRangeStatement
 BinaryExpression
 BlockStatement
 CallExpression

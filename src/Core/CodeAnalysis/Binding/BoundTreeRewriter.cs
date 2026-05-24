@@ -55,6 +55,8 @@ public abstract class BoundTreeRewriter
                 return RewriteSelectStatement((BoundSelectStatement)node);
             case BoundNodeKind.ScopeStatement:
                 return RewriteScopeStatement((BoundScopeStatement)node);
+            case BoundNodeKind.AwaitForRangeStatement:
+                return RewriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -612,6 +614,21 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundScopeStatement(body);
+    }
+
+    /// <summary>Rewrites a bound <c>await for v := range stream</c> statement (Phase 5.8).</summary>
+    /// <param name="node">The await-for-range statement to rewrite.</param>
+    /// <returns>The rewritten await-for-range statement.</returns>
+    protected virtual BoundStatement RewriteAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+    {
+        var stream = RewriteExpression(node.Stream);
+        var body = RewriteStatement(node.Body);
+        if (stream == node.Stream && body == node.Body)
+        {
+            return node;
+        }
+
+        return new BoundAwaitForRangeStatement(node.ValueVariable, stream, body);
     }
 
     /// <summary>Rewrites a bound make-channel expression (Phase 5.4).</summary>
