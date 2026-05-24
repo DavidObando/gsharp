@@ -46,12 +46,12 @@ GSharp-side `operator` keyword (declaring `operator +` on a user type) is **expl
 ## Alternatives considered
 
 - **Per-operator built-in tables for popular BCL types.** Rejected — does not scale to NuGet types, and would duplicate the CLR's own `op_*` metadata.
-- **Pattern-match the C# spec exactly for numeric overload ranking.** Partially rejected for this PR — the existing classifier covers the common cases; full §7.5.3.2 tie-breaking on numeric widening chains is a follow-up.
+- **Pattern-match the C# spec exactly for numeric overload ranking.** Partially rejected for the original PR; shipped as a follow-up under [ADR-0037](0037-numeric-tiebreaking.md), which adds the C# §7.5.3.4 "better conversion target" tie-break to `OverloadResolution`.
 - **One ADR per stream (A–E).** Rejected as noise — the streams are mutually reinforcing (overload resolution underpins both operators and conversions), and the docs are simpler with a single combined ADR.
 
 ## Follow-ups
 
 - ~~Stream B′: event subscription via `+=` / `-=` (parser-side `FieldCompoundAssignmentExpressionSyntax`).~~ **Shipped in ADR-0036** (via a new `EventSubscriptionExpressionSyntax`).
 - Stream D: `operator` keyword on GSharp-defined types (supersedes ADR-0026). Requires lexer/parser surgery, symbol routing to CLR `op_*` names, emit as `static specialname`, and a dispatch table in the interpreter.
-- Numeric tie-breaking: implement the full "better numeric target" rule (int → long preferred over int → double).
+- ~~Numeric tie-breaking: implement the full "better numeric target" rule (int → long preferred over int → double).~~ **Shipped in [ADR-0037](0037-numeric-tiebreaking.md).**
 - Generic-method overload resolution: imported open-generic methods (`Enumerable.Select<T,R>`) still require explicit type arguments.
