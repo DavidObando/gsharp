@@ -45,6 +45,7 @@ ContinueKeyword
 ContinueStatement
 DefaultKeyword
 DeferKeyword
+DeferStatement
 DiscardPattern
 DotToken
 EllipsisToken

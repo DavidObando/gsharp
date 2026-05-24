@@ -438,6 +438,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the operand of a <c>defer</c> statement is not a call expression (Phase 7.1 / ADR-0030).
+    /// </summary>
+    /// <param name="location">The text location of the operand.</param>
+    public void ReportDeferOperandIsNotACall(TextLocation location)
+    {
+        var message = "'defer' must be followed by a function or method call.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>

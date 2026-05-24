@@ -29,6 +29,7 @@ public sealed class Binder
     private int labelCounter;
     private int nullConditionalCaptureCounter;
     private int syntheticLocalCounter;
+    private int deferArgumentCounter;
     private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
     private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
@@ -1297,6 +1298,8 @@ public sealed class Binder
                 return BindThrowStatement((ThrowStatementSyntax)syntax);
             case SyntaxKind.UsingStatement:
                 return BindUsingStatement((UsingStatementSyntax)syntax);
+            case SyntaxKind.DeferStatement:
+                return BindDeferStatement((DeferStatementSyntax)syntax);
             case SyntaxKind.GoStatement:
                 return BindGoStatement((GoStatementSyntax)syntax);
             case SyntaxKind.ChannelSendStatement:
@@ -1319,8 +1322,59 @@ public sealed class Binder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         scope = new BoundScope(scope);
 
-        foreach (var statementSyntax in syntax.Statements)
+        BindBlockStatements(syntax.Statements, 0, statements);
+
+        scope = scope.Parent;
+
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private void BindBlockStatements(ImmutableArray<StatementSyntax> statementSyntaxes, int startIndex, ImmutableArray<BoundStatement>.Builder statements)
+    {
+        for (var i = startIndex; i < statementSyntaxes.Length; i++)
         {
+            var statementSyntax = statementSyntaxes[i];
+
+            if (statementSyntax is DeferStatementSyntax deferSyntax)
+            {
+                var defer = BindDeferStatementInBlock(deferSyntax);
+                statements.AddRange(defer.PrefixStatements);
+                if (defer.Cleanup == null)
+                {
+                    statements.Add(defer.ErrorStatement);
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                    continue;
+                }
+
+                InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup));
+                return;
+            }
+
+            if (statementSyntax is UsingStatementSyntax usingSyntax)
+            {
+                var usingLowering = BindUsingStatementInBlock(usingSyntax);
+                if (usingLowering.Declaration != null)
+                {
+                    statements.Add(usingLowering.Declaration);
+                }
+
+                if (usingLowering.Cleanup == null)
+                {
+                    statements.Add(usingLowering.ErrorStatement);
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                    continue;
+                }
+
+                InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
+                return;
+            }
+
             var statement = BindStatement(statementSyntax);
             statements.Add(statement);
 
@@ -1330,10 +1384,13 @@ public sealed class Binder
             // block see the variable at its declared (nullable) type again.
             InvalidateNarrowingsForAssignedVariables(statementSyntax);
         }
+    }
 
-        scope = scope.Parent;
-
-        return new BoundBlockStatement(statements.ToImmutable());
+    private BoundTryStatement BuildCleanupTryStatement(ImmutableArray<BoundStatement> protectedStatements, BoundExpression cleanup)
+    {
+        var tryBlock = new BoundBlockStatement(protectedStatements);
+        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(cleanup)));
+        return new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
     }
 
     private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
@@ -2259,25 +2316,105 @@ public sealed class Binder
 
     private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
     {
-        // Lower `using let x = expr` to `let x = expr; try { } finally { x.Dispose() }`.
-        // Because the rest of the enclosing block is not available here, the user's
-        // intent is captured by emitting a try/finally that protects an empty block.
-        // The disposal still happens at scope exit because the finally always runs.
-        // Note: this is a minimal Phase 3.D shape; a future iteration will reshape
-        // the enclosing block so the protected region covers the remaining statements.
-        var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
+        var usingLowering = BindUsingStatementInBlock(syntax);
+        if (usingLowering.Cleanup == null)
+        {
+            return usingLowering.ErrorStatement;
+        }
 
+        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, usingLowering.Cleanup);
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
+    }
+
+    private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
+    {
+        var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
         var disposeCall = TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
         if (disposeCall == null)
         {
-            return BindErrorStatement();
+            return (declaration, null, BindErrorStatement());
         }
 
-        var tryBlock = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
-        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(disposeCall)));
-        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+        return (declaration, disposeCall, null);
+    }
 
-        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declaration, tryStmt));
+    private BoundStatement BindDeferStatement(DeferStatementSyntax syntax)
+    {
+        var defer = BindDeferStatementInBlock(syntax);
+        if (defer.Cleanup == null)
+        {
+            return defer.ErrorStatement;
+        }
+
+        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, defer.Cleanup);
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.AddRange(defer.PrefixStatements);
+        statements.Add(tryStmt);
+        return new BoundBlockStatement(statements.ToImmutable());
+    }
+
+    private (ImmutableArray<BoundStatement> PrefixStatements, BoundExpression Cleanup, BoundStatement ErrorStatement) BindDeferStatementInBlock(DeferStatementSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression, canBeVoid: true);
+        if (expression is BoundErrorExpression)
+        {
+            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(expression));
+        }
+
+        if (!IsDeferableCall(expression))
+        {
+            Diagnostics.ReportDeferOperandIsNotACall(syntax.Expression.Location);
+            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(new BoundErrorExpression()));
+        }
+
+        var prefix = ImmutableArray.CreateBuilder<BoundStatement>();
+        var capturedCall = CaptureDeferArguments(expression, prefix);
+        return (prefix.ToImmutable(), capturedCall, null);
+    }
+
+    private static bool IsDeferableCall(BoundExpression expression)
+        => expression is BoundCallExpression or
+            BoundIndirectCallExpression or
+            BoundUserInstanceCallExpression or
+            BoundImportedCallExpression or
+            BoundImportedInstanceCallExpression;
+
+    private BoundExpression CaptureDeferArguments(BoundExpression expression, ImmutableArray<BoundStatement>.Builder prefix)
+    {
+        switch (expression)
+        {
+            case BoundCallExpression call:
+                return new BoundCallExpression(call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType);
+            case BoundIndirectCallExpression call:
+                return new BoundIndirectCallExpression(call.Target, call.FunctionType, CaptureArguments(call.Arguments, prefix));
+            case BoundUserInstanceCallExpression call:
+                return new BoundUserInstanceCallExpression(call.Receiver, call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
+            case BoundImportedCallExpression call:
+                return new BoundImportedCallExpression(call.Function, CaptureArguments(call.Arguments, prefix));
+            case BoundImportedInstanceCallExpression call:
+                return new BoundImportedInstanceCallExpression(call.Receiver, call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
+            default:
+                throw new InvalidOperationException($"Unexpected deferred expression: {expression.Kind}");
+        }
+    }
+
+    private ImmutableArray<BoundExpression> CaptureArguments(ImmutableArray<BoundExpression> arguments, ImmutableArray<BoundStatement>.Builder prefix)
+    {
+        if (arguments.IsEmpty)
+        {
+            return arguments;
+        }
+
+        var capturedArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        foreach (var argument in arguments)
+        {
+            var variable = new LocalVariableSymbol($"$defer$arg${deferArgumentCounter++}", isReadOnly: true, argument.Type ?? TypeSymbol.Error);
+            scope.TryDeclareVariable(variable);
+            prefix.Add(new BoundVariableDeclaration(variable, argument));
+            capturedArguments.Add(new BoundVariableExpression(variable));
+        }
+
+        return capturedArguments.ToImmutable();
     }
 
     private BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)

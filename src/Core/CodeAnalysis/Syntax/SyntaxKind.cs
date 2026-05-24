@@ -187,6 +187,7 @@ public enum SyntaxKind
     FinallyClause,
     ThrowStatement,
     UsingStatement,
+    DeferStatement,
     CatchKeyword,
     FinallyKeyword,
     StructDeclaration,
