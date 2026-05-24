@@ -777,7 +777,17 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(
                 method.Parameters.Length,
-                r => EncodeReturnSymbol(r, method.Type),
+                r =>
+                {
+                    if (method.IsAsync)
+                    {
+                        EncodeReturnClr(r, GetEmittedReturnClr(method));
+                    }
+                    else
+                    {
+                        EncodeReturnSymbol(r, method.Type);
+                    }
+                },
                 ps =>
                 {
                     foreach (var p in method.Parameters)
@@ -1256,7 +1266,17 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: function.IsInstanceMethod)
             .Parameters(
                 signatureParameterCount,
-                r => EncodeReturnSymbol(r, function.Type),
+                r =>
+                {
+                    if (function.IsAsync)
+                    {
+                        EncodeReturnClr(r, GetEmittedReturnClr(function));
+                    }
+                    else
+                    {
+                        EncodeReturnSymbol(r, function.Type);
+                    }
+                },
                 ps =>
                 {
                     foreach (var p in function.Parameters)
@@ -3282,6 +3302,25 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EncodeTypeSymbol(encoder.Type(), type);
         }
+    }
+
+    private static Type GetEmittedReturnClr(FunctionSymbol function)
+    {
+        if (!function.IsAsync)
+        {
+            return function.Type == TypeSymbol.Void
+                ? typeof(void)
+                : function.Type.ClrType ?? throw new NotSupportedException($"Cannot emit CLR return type for '{function.Type.Name}'.");
+        }
+
+        if (function.Type == TypeSymbol.Void)
+        {
+            return typeof(System.Threading.Tasks.Task);
+        }
+
+        var resultClr = function.Type.ClrType
+            ?? throw new NotSupportedException($"Cannot emit async return type for '{function.Type.Name}'.");
+        return typeof(System.Threading.Tasks.Task<>).MakeGenericType(resultClr);
     }
 
     // Phase 4 emit parity (F1): used by call sites to decide whether a value
