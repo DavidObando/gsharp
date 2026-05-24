@@ -1602,6 +1602,15 @@ public sealed class Evaluator
             // representation is identical to the underlying type.
             return value;
         }
+        else if (node.Type is InterfaceSymbol
+            || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass))
+        {
+            // Reference upcast (class → implemented interface, or derived
+            // class → base class). The interpreter stores instances as
+            // boxed objects of the concrete class, so the upcast is a no-op
+            // at runtime — only the bind-time static type changes.
+            return value;
+        }
         else
         {
             throw new EvaluatorException($"Unexpected type {node.Type}", node);

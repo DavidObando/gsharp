@@ -120,8 +120,11 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | unary `+` `-` `^` | ✅ | — | — | ❌ |
 | unary `!` | — | ✅ | — | — |
 | unary `*` `&` `<-` | ❌ | ❌ | ❌ | ❌ |
+| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): a method named `plus` on a user type stays a regular method, not an implicit `op_Addition`. Re-opening criteria recorded in ADR-0026. |
 
-Implicit and explicit conversions: `BindConversion` exists but the emitter (`EmitConversion`) currently implements **only** `int ↔ bool` round-trips. Any other conversion the binder considers legal (e.g., to/from imported CLR types) will throw `NotSupportedException` at emit time. This is the largest binder/emit asymmetry in the codebase.
+Implicit and explicit conversions: `BindConversion` exists but the emitter (`EmitConversion`) currently implements **only** `int ↔ bool` round-trips. Any other conversion the binder considers legal (e.g., to/from imported CLR types, or the Phase-6-exit reference upcasts described next) will throw `NotSupportedException` at emit time. This is the largest binder/emit asymmetry in the codebase.
+
+Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval.gs`): a `class` value implicitly converts to any interface it implements and to any of its (transitive) base classes. The interpreter treats the upcast as a no-op (the boxed instance keeps its concrete class identity), so `Lit{Value: 1}` flowing into an `Expr`-typed parameter or composite-literal field works end-to-end on the interpreter. Emit support for the upcast is deferred and shares the same posture as the rest of Phase 6.
 
 ## Top-line takeaways
 

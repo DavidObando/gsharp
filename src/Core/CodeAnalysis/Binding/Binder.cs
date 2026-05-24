@@ -3484,7 +3484,8 @@ public sealed class Binder
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
-            if (argument.Type != parameter.Type)
+            if (argument.Type != parameter.Type
+                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
                 if (argument.Type != TypeSymbol.Error)
                 {
@@ -3690,7 +3691,9 @@ public sealed class Binder
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
 
-            if (argument.Type != expectedType && !(substitution != null && parameter.Type is TypeParameterSymbol))
+            if (argument.Type != expectedType
+                && !(substitution != null && parameter.Type is TypeParameterSymbol)
+                && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
                 if (argument.Type != TypeSymbol.Error)
                 {
