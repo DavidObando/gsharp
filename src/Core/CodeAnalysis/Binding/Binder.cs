@@ -1648,13 +1648,17 @@ public sealed class Binder
         {
             var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
 
-            // Phase 3.C.4: minimal smart-cast narrowing for `x != nil` and
-            // `x == nil` guards. The non-nil arm sees `x` as the underlying
-            // type; the nil arm sees it as the bottom `TypeSymbol.Null`.
-            var (nonNilNarrow, nilNarrow) = TryClassifyNilGuard(condition);
+            // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
+            // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
+            // is intentionally deferred.
+            var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
+            if (thenNarrow == null && elseNarrow == null)
+            {
+                (thenNarrow, elseNarrow) = TryClassifyBoolCallNarrowing(condition);
+            }
 
-            var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, nonNilNarrow);
-            var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, nilNarrow);
+            var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
+            var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
             return new BoundIfStatement(condition, thenStatement, elseStatement);
         }
 
@@ -1717,9 +1721,88 @@ public sealed class Binder
         return (nonNilFrame, nilFrame);
     }
 
+    private (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) TryClassifyBoolCallNarrowing(BoundExpression condition)
+    {
+        var negate = false;
+        var inner = condition;
+        if (inner is BoundUnaryExpression unary && unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation)
+        {
+            negate = true;
+            inner = unary.Operand;
+        }
+
+        if (inner is not BoundImportedCallExpression call || call.Type != TypeSymbol.Bool)
+        {
+            return (null, null);
+        }
+
+        var parameters = call.Function.Method.GetParameters();
+        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
+        Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
+        var count = Math.Min(parameters.Length, call.Arguments.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var parameter = parameters[i];
+            if (ClrNullability.TryGetMaybeNullWhen(parameter, out _))
+            {
+                // [MaybeNullWhen] only weakens postconditions; it cannot prove
+                // an argument is non-null, so it is intentionally not narrowed.
+                continue;
+            }
+
+            if (!ClrNullability.TryGetNotNullWhen(parameter, out var returnValue)
+                || call.Arguments[i] is not BoundVariableExpression variableExpression
+                || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
+            {
+                continue;
+            }
+
+            var narrowThen = returnValue != negate;
+            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+            frame[variableExpression.Variable] = nullable.UnderlyingType;
+        }
+
+        return (thenFrame, elseFrame);
+    }
+
     private static bool IsNilLiteral(BoundExpression expr)
     {
+        while (expr is BoundConversionExpression conversion)
+        {
+            expr = conversion.Expression;
+        }
+
         return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
+    }
+
+    private static Dictionary<VariableSymbol, TypeSymbol> TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern pattern)
+    {
+        if (discriminant is not BoundVariableExpression variableExpression || pattern == null)
+        {
+            return null;
+        }
+
+        var variable = variableExpression.Variable;
+        TypeSymbol narrowedType = null;
+        switch (pattern)
+        {
+            case BoundTypePattern typePattern:
+                narrowedType = typePattern.TargetType;
+                break;
+            case BoundConstantPattern constantPattern when variable.Type is NullableTypeSymbol nullable && !IsNilLiteral(constantPattern.Value):
+                narrowedType = nullable.UnderlyingType;
+                break;
+            case BoundDiscardPattern:
+                break;
+            case BoundRelationalPattern:
+            case BoundPropertyPattern:
+            case BoundListPattern:
+                // These patterns can imply non-nullness in some cases, but this
+                // phase keeps narrowing to simple type and non-nil constant arms.
+                break;
+        }
+
+        return narrowedType == null ? null : new Dictionary<VariableSymbol, TypeSymbol> { [variable] = narrowedType };
     }
 
     private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
@@ -1733,6 +1816,24 @@ public sealed class Binder
         try
         {
             return BindStatement(syntax);
+        }
+        finally
+        {
+            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+        }
+    }
+
+    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (frame == null)
+        {
+            return BindExpression(syntax);
+        }
+
+        narrowedVariables.Add(frame);
+        try
+        {
+            return BindExpression(syntax);
         }
         finally
         {
@@ -1844,7 +1945,8 @@ public sealed class Binder
                 hasDefault = true;
             }
 
-            var body = BindBlockStatement(caseSyntax.Body);
+            var frame = TryClassifyPatternNarrowing(discriminant, pattern);
+            var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
             scope = scope.Parent;
             arms.Add(new BoundPatternSwitchArm(pattern, body));
         }
@@ -1920,7 +2022,8 @@ public sealed class Binder
                 hasDefault = true;
             }
 
-            var armResult = BindExpression(armSyntax.Result);
+            var frame = TryClassifyPatternNarrowing(discriminant, pattern);
+            var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame);
             scope = scope.Parent;
             boundArmBuilders.Add((armSyntax, pattern, armResult));
         }
@@ -2001,6 +2104,13 @@ public sealed class Binder
 
         var value = conversion.IsIdentity ? expression : new BoundConversionExpression(discriminantType, expression);
         var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, discriminantType);
+        if (op == null && discriminantType is NullableTypeSymbol nullable)
+        {
+            var comparisonType = IsNilLiteral(expression) ? TypeSymbol.Null : nullable.UnderlyingType;
+            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, comparisonType)
+                ?? BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, nullable.UnderlyingType, nullable.UnderlyingType);
+        }
+
         if (op == null && expression.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
@@ -4170,7 +4280,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    receiver = new BoundVariableExpression(variable);
+                    receiver = new BoundVariableExpression(variable, TryGetNarrowedType(variable));
                 }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)
@@ -4369,12 +4479,13 @@ public sealed class Binder
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
                     return new BoundErrorExpression();
                 }
-                else if (receiver != null && receiver.Type is ImportedTypeSymbol && receiver.Type.ClrType != null)
+                else if (receiver != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
-                    // ImportedClassSymbol; this path covers instances.
+                    // ImportedClassSymbol; this path covers instances. Nullable
+                    // receivers must be narrowed or use `?.` before this path.
                     var clrReceiverType = receiver.Type.ClrType;
                     var memberName = ne.IdentifierToken.Text;
                     var prop = clrReceiverType.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
