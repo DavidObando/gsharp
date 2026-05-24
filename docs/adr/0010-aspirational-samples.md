@@ -20,6 +20,10 @@ This pattern — design samples ahead of the compiler — is useful as a forcing
 - Every later phase's exit criteria include re-expanding `samples/` to exercise the features that phase shipped. E.g., Phase 1 re-introduces interpolation (`"$i"`); Phase 2 re-introduces `i--` and C-style `for`; Phase 3 re-introduces indexing.
 - A `samples/aspirational/` folder MAY hold unparseable-but-pedagogical samples explicitly marked "future state." These are excluded from the conformance suite (ADR introduces this exclusion when the folder is created).
 
+### Phase 5 amendment
+
+`samples/aspirational/` was first populated at Phase 5 exit. Its purpose is broader than the original "unparseable, future-state" framing: it now also holds **interpreter-runnable** samples whose surface compiles and binds today but whose **emit is deferred** (Phase 5 concurrency / async per ADR-0022, ADR-0023). The Compiler-side conformance suite (`test/Compiler.Tests`'s `SampleConformanceTests`) explicitly skips the directory; an interpreter-side counterpart (`test/Core.Tests/LanguageConformance/AspirationalSamplesTests`) discovers every `*.gs` here that has a sibling `*.golden` and runs it through `Compilation.Evaluate(...)`, matching captured stdout against the golden. When emit catches up for a sample's feature set, that sample MAY be promoted out of `aspirational/` to the top level so the regular conformance suite covers it on both backends.
+
 ## Consequences
 
 Positive:
