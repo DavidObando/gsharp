@@ -34,6 +34,21 @@ public sealed class Binder
     private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
 
+    // SA1202 exempt: static initializer placement matches Binder's design.
+#pragma warning disable SA1642
+    /// <summary>
+    /// Static-initializer hook for <see cref="Binder"/>.
+    /// </summary>
+#pragma warning restore SA1642
+    static Binder()
+    {
+        // Stream E: let overload-resolution see user-defined op_Implicit when
+        // built-in conversions don't apply. Implicit-only here — explicit
+        // conversions never participate in overload tie-breaking.
+        OverloadResolution.UserDefinedImplicitConversionLookup ??= (source, target) =>
+            ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Binder"/> class.
     /// </summary>
@@ -3700,11 +3715,65 @@ public sealed class Binder
     private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
     {
         var receiverName = syntax.Receiver.Text;
+
+        // Stream B: imported class name on LHS → static field/property write.
+        // Probe the import table FIRST so we don't shadow with a variable lookup
+        // diagnostic.
+        if (scope.TryLookupImportedClass(receiverName, declaration: null, out var importedClass))
+        {
+            var staticValue = BindExpression(syntax.Value);
+            if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
+            {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+                return new BoundErrorExpression();
+            }
+
+            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticWritable))
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                return new BoundErrorExpression();
+            }
+
+            _ = staticWritable;
+            var staticConverted = BindConversion(syntax.Value.Location, staticValue, TypeSymbol.FromClrType(staticTargetType));
+            return new BoundClrPropertyAssignmentExpression(receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
+        }
+
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
         var value = BindExpression(syntax.Value);
         if (variable == null)
         {
             return value;
+        }
+
+        // Stream B: instance-CLR receiver → property/field write via reflection.
+        if (variable.Type is not StructSymbol && variable.Type is not NullableTypeSymbol && variable.Type?.ClrType != null)
+        {
+            var clrReceiverType = variable.Type.ClrType;
+            var fieldName = syntax.FieldIdentifier.Text;
+            MemberInfo instanceMember = clrReceiverType.GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
+            {
+                instanceMember = null;
+            }
+
+            instanceMember ??= clrReceiverType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember == null)
+            {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+                return new BoundErrorExpression();
+            }
+
+            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instWritable))
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                return new BoundErrorExpression();
+            }
+
+            _ = instWritable;
+            var instReceiver = new BoundVariableExpression(variable);
+            var instConverted = BindConversion(syntax.Value.Location, value, TypeSymbol.FromClrType(instTargetType));
+            return new BoundClrPropertyAssignmentExpression(instReceiver, instanceMember, instConverted, TypeSymbol.FromClrType(instTargetType));
         }
 
         if (!(variable.Type is StructSymbol structSymbol))
@@ -3733,6 +3802,25 @@ public sealed class Binder
         return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
     }
 
+    private static bool TryGetWritableClrMember(MemberInfo member, out Type targetType, out bool writable)
+    {
+        switch (member)
+        {
+            case PropertyInfo p:
+                targetType = p.PropertyType;
+                writable = p.CanWrite && p.GetSetMethod(nonPublic: false) != null;
+                return writable;
+            case FieldInfo f:
+                targetType = f.FieldType;
+                writable = !f.IsInitOnly && !f.IsLiteral;
+                return writable;
+            default:
+                targetType = null;
+                writable = false;
+                return false;
+        }
+    }
+
     private BoundExpression BindUnaryExpression(UnaryExpressionSyntax syntax)
     {
         // Phase 5.5 / ADR-0022: prefix `<-ch` is a channel-receive expression,
@@ -3754,6 +3842,24 @@ public sealed class Binder
 
         if (boundOperator == null)
         {
+            // Stream C: fall back to a public-static unary `op_*` method on
+            // the operand's CLR type (`-time`, `~bits`, ...).
+            var ambiguous = false;
+            if (boundOperand.Type?.ClrType != null
+                && ClrOperatorResolution.TryResolveUnary(syntax.OperatorToken.Kind, boundOperand.Type, out var clrMethod, out ambiguous))
+            {
+                return new BoundClrUnaryOperatorExpression(
+                    syntax.OperatorToken.Kind,
+                    boundOperand,
+                    clrMethod,
+                    TypeSymbol.FromClrType(clrMethod.ReturnType));
+            }
+            else if (ambiguous)
+            {
+                Diagnostics.ReportAmbiguousOverload(syntax.OperatorToken.Location, syntax.OperatorToken.Text, candidateCount: 2);
+                return new BoundErrorExpression();
+            }
+
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundOperand.Type);
             return new BoundErrorExpression();
         }
@@ -3792,6 +3898,25 @@ public sealed class Binder
 
         if (boundOperator == null)
         {
+            // Stream C: fall back to a public-static `op_*` method on either
+            // operand's CLR type (TimeSpan + TimeSpan, BigInteger * int, ...).
+            var ambiguous = false;
+            if ((boundLeft.Type?.ClrType != null || boundRight.Type?.ClrType != null)
+                && ClrOperatorResolution.TryResolveBinary(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type, out var clrMethod, out ambiguous))
+            {
+                return new BoundClrBinaryOperatorExpression(
+                    syntax.OperatorToken.Kind,
+                    boundLeft,
+                    boundRight,
+                    clrMethod,
+                    TypeSymbol.FromClrType(clrMethod.ReturnType));
+            }
+            else if (ambiguous)
+            {
+                Diagnostics.ReportAmbiguousOverload(syntax.OperatorToken.Location, syntax.OperatorToken.Text, candidateCount: 2);
+                return new BoundErrorExpression();
+            }
+
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
             return new BoundErrorExpression();
         }
@@ -4649,32 +4774,39 @@ public sealed class Binder
             boundArguments.Add(BindExpression(syntax.Arguments[i]));
         }
 
-        // Pick a constructor by arity + argument-type assignability. Mirrors
-        // the matching loop in ImportedClassSymbol.TryLookupFunction.
-        ConstructorInfo bestCtor = null;
-        foreach (var ctor in clrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        // Phase A (overload resolution): pick a constructor via the shared
+        // "better function member" resolver. Ambiguity surfaces a hard
+        // binder diagnostic and the call falls back to the surrounding
+        // pipeline (which will diagnose a missing match).
+        var ctors = clrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        var argTypes = new System.Type[boundArguments.Count];
+        var argsAllTyped = true;
+        for (var i = 0; i < boundArguments.Count; i++)
         {
-            var parameters = ctor.GetParameters();
-            if (parameters.Length != boundArguments.Count)
+            var t = boundArguments[i].Type?.ClrType;
+            if (t == null)
             {
-                continue;
-            }
-
-            var matches = true;
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                var argType = boundArguments[i].Type?.ClrType;
-                if (argType == null || !ClrTypeUtilities.IsAssignableByName(parameters[i].ParameterType, argType))
-                {
-                    matches = false;
-                    break;
-                }
-            }
-
-            if (matches)
-            {
-                bestCtor = ctor;
+                argsAllTyped = false;
                 break;
+            }
+
+            argTypes[i] = t;
+        }
+
+        ConstructorInfo bestCtor = null;
+        if (argsAllTyped)
+        {
+            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            switch (resolution.Outcome)
+            {
+                case OverloadResolution.ResolutionOutcome.Resolved:
+                    bestCtor = resolution.Best;
+                    break;
+                case OverloadResolution.ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(syntax.Location, name, resolution.Ambiguous.Length);
+                    return false;
+                default:
+                    break;
             }
         }
 
@@ -4896,11 +5028,29 @@ public sealed class Binder
             case NameExpressionSyntax ne:
                 if (classSymbol != null)
                 {
-                    var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out _);
+                    var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out var staticMember);
                     if (!foundMember)
                     {
                         Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                        return new BoundErrorExpression();
                     }
+
+                    // Stream B: static field/property read on imported type.
+                    // `Receiver == null` flags the access as static. Literal
+                    // (const) fields aren't real runtime fields, so we inline
+                    // their constant value rather than emit `ldsfld`.
+                    if (staticMember is FieldInfo litField && litField.IsLiteral)
+                    {
+                        return new BoundLiteralExpression(litField.GetRawConstantValue(), TypeSymbol.FromClrType(litField.FieldType));
+                    }
+
+                    var staticType = staticMember switch
+                    {
+                        PropertyInfo sp => TypeSymbol.FromClrType(sp.PropertyType),
+                        FieldInfo sf => TypeSymbol.FromClrType(sf.FieldType),
+                        _ => TypeSymbol.Error,
+                    };
+                    return new BoundClrPropertyAccessExpression(null, staticMember, staticType);
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
                 {
@@ -4996,9 +5146,15 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous))
             {
                 return new BoundImportedCallExpression(staticFn, arguments);
+            }
+
+            if (staticAmbiguous)
+            {
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, candidateCount: 2);
+                return new BoundErrorExpression();
             }
 
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
@@ -5050,35 +5206,39 @@ public sealed class Binder
         }
 
         var clrType = receiver.Type.ClrType;
-        var candidates = clrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-        foreach (var candidate in candidates)
+        var candidates = clrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Where(m => m.Name == methodName)
+            .ToList();
+        if (candidates.Count > 0)
         {
-            if (candidate.Name != methodName)
+            var argTypes = new System.Type[arguments.Length];
+            var argsAllTyped = true;
+            for (var i = 0; i < arguments.Length; i++)
             {
-                continue;
-            }
-
-            var parameters = candidate.GetParameters();
-            if (parameters.Length != arguments.Length)
-            {
-                continue;
-            }
-
-            var match = true;
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                var argType = arguments[i].Type?.ClrType;
-                if (argType == null || !ClrTypeUtilities.IsAssignableByName(parameters[i].ParameterType, argType))
+                var t = arguments[i].Type?.ClrType;
+                if (t == null)
                 {
-                    match = false;
+                    argsAllTyped = false;
                     break;
                 }
+
+                argTypes[i] = t;
             }
 
-            if (match)
+            if (argsAllTyped)
             {
-                var returnType = TypeSymbol.FromClrType(candidate.ReturnType);
-                return new BoundImportedInstanceCallExpression(receiver, candidate, returnType, arguments);
+                var resolution = OverloadResolution.Resolve(candidates, argTypes);
+                switch (resolution.Outcome)
+                {
+                    case OverloadResolution.ResolutionOutcome.Resolved:
+                        var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                        return new BoundImportedInstanceCallExpression(receiver, resolution.Best, returnType, arguments);
+                    case OverloadResolution.ResolutionOutcome.Ambiguous:
+                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                        return new BoundErrorExpression();
+                    default:
+                        break;
+                }
             }
         }
 
@@ -5385,6 +5545,15 @@ public sealed class Binder
 
         if (!conversion.Exists)
         {
+            // Stream E: fall back to a user-defined op_Implicit (and
+            // op_Explicit when allowed) on either source or target CLR type.
+            if (expression.Type?.ClrType != null && type?.ClrType != null
+                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
+            {
+                _ = isExplicit;
+                return new BoundClrConversionCallExpression(expression, convMethod, type);
+            }
+
             if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
             {
                 Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);

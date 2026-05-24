@@ -205,10 +205,14 @@ CapExpression
 ChannelCloseExpression
 ChannelReceiveExpression
 ChannelSendStatement
+ClrBinaryOperatorExpression
 ClrConstructorCallExpression
+ClrConversionCallExpression
 ClrIndexAssignmentExpression
 ClrIndexExpression
 ClrPropertyAccessExpression
+ClrPropertyAssignmentExpression
+ClrUnaryOperatorExpression
 ConditionalGotoStatement
 ConstantPattern
 ConstructorCallExpression

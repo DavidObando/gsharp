@@ -192,6 +192,18 @@ public static class BoundNodePrinter
             case BoundNodeKind.ClrPropertyAccessExpression:
                 WriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node, writer);
                 break;
+            case BoundNodeKind.ClrPropertyAssignmentExpression:
+                WriteClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node, writer);
+                break;
+            case BoundNodeKind.ClrBinaryOperatorExpression:
+                WriteClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node, writer);
+                break;
+            case BoundNodeKind.ClrUnaryOperatorExpression:
+                WriteClrUnaryOperatorExpression((BoundClrUnaryOperatorExpression)node, writer);
+                break;
+            case BoundNodeKind.ClrConversionCallExpression:
+                WriteClrConversionCallExpression((BoundClrConversionCallExpression)node, writer);
+                break;
             case BoundNodeKind.ClrIndexExpression:
                 WriteClrIndexExpression((BoundClrIndexExpression)node, writer);
                 break;
@@ -1051,9 +1063,59 @@ public static class BoundNodePrinter
 
     private static void WriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node, IndentedTextWriter writer)
     {
-        node.Receiver.WriteTo(writer);
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+        }
+        else if (node.Member.DeclaringType != null)
+        {
+            writer.WriteIdentifier(node.Member.DeclaringType.Name);
+        }
+
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Member.Name);
+    }
+
+    private static void WriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node, IndentedTextWriter writer)
+    {
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+        }
+        else if (node.Member.DeclaringType != null)
+        {
+            writer.WriteIdentifier(node.Member.DeclaringType.Name);
+        }
+
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Member.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
+    }
+
+    private static void WriteClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node, IndentedTextWriter writer)
+    {
+        node.Left.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(node.OperatorKind);
+        writer.WriteSpace();
+        node.Right.WriteTo(writer);
+    }
+
+    private static void WriteClrUnaryOperatorExpression(BoundClrUnaryOperatorExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(node.OperatorKind);
+        node.Operand.WriteTo(writer);
+    }
+
+    private static void WriteClrConversionCallExpression(BoundClrConversionCallExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteIdentifier(node.Type.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+        node.Source.WriteTo(writer);
     }
 
     private static void WriteClrIndexExpression(BoundClrIndexExpression node, IndentedTextWriter writer)

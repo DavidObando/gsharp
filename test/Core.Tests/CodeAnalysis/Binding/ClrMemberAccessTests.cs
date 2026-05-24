@@ -102,6 +102,78 @@ var x = sb.NotAReal
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void StaticProperty_Read_Binds()
+    {
+        // Stream B: bare `Foo.SomeStaticProperty` should bind via
+        // ImportedClassSymbol.TryLookupMember and evaluate without diagnostics.
+        var source = @"
+import System
+
+var maxInt = Int32.MaxValue
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(int.MaxValue, result.Value);
+    }
+
+    [Fact]
+    public void StaticField_Read_Binds()
+    {
+        var source = @"
+import System
+
+var e = String.Empty
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(string.Empty, result.Value);
+    }
+
+    [Fact]
+    public void StaticProperty_UnknownMember_Diagnoses()
+    {
+        var source = @"
+import System
+
+var x = Int32.NotAReal
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InstanceProperty_Write_RoundTrips()
+    {
+        // Stream B: writing a settable CLR instance property routes through
+        // BoundClrPropertyAssignmentExpression and updates the underlying
+        // receiver. Reading it back via the existing read path verifies the
+        // round-trip on the interpreter.
+        var source = @"
+import System.Text
+
+var sb = StringBuilder()
+sb.Capacity = 64
+var c = sb.Capacity
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(64, result.Value);
+    }
+
+    [Fact]
+    public void InstanceProperty_ReadOnly_Diagnoses()
+    {
+        var source = @"
+import System.Collections.Generic
+
+var lst = List[int]()
+lst.Count = 5
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

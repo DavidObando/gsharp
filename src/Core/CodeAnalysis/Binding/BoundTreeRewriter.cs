@@ -379,6 +379,14 @@ public abstract class BoundTreeRewriter
                 return RewriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node);
             case BoundNodeKind.ClrPropertyAccessExpression:
                 return RewriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node);
+            case BoundNodeKind.ClrPropertyAssignmentExpression:
+                return RewriteClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node);
+            case BoundNodeKind.ClrBinaryOperatorExpression:
+                return RewriteClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node);
+            case BoundNodeKind.ClrUnaryOperatorExpression:
+                return RewriteClrUnaryOperatorExpression((BoundClrUnaryOperatorExpression)node);
+            case BoundNodeKind.ClrConversionCallExpression:
+                return RewriteClrConversionCallExpression((BoundClrConversionCallExpression)node);
             case BoundNodeKind.ClrIndexExpression:
                 return RewriteClrIndexExpression((BoundClrIndexExpression)node);
             case BoundNodeKind.ClrIndexAssignmentExpression:
@@ -1147,8 +1155,71 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
     {
+        if (node.Receiver == null)
+        {
+            return node;
+        }
+
         var receiver = RewriteExpression(node.Receiver);
         return receiver == node.Receiver ? node : new BoundClrPropertyAccessExpression(receiver, node.Member, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR property/field write (static or instance).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+    {
+        var receiver = node.Receiver == null ? null : RewriteExpression(node.Receiver);
+        var value = RewriteExpression(node.Value);
+        if (receiver == node.Receiver && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundClrPropertyAssignmentExpression(receiver, node.Member, value, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR binary operator call (Stream C).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node)
+    {
+        var left = RewriteExpression(node.Left);
+        var right = RewriteExpression(node.Right);
+        if (left == node.Left && right == node.Right)
+        {
+            return node;
+        }
+
+        return new BoundClrBinaryOperatorExpression(node.OperatorKind, left, right, node.Method, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR unary operator call (Stream C).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrUnaryOperatorExpression(BoundClrUnaryOperatorExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        if (operand == node.Operand)
+        {
+            return node;
+        }
+
+        return new BoundClrUnaryOperatorExpression(node.OperatorKind, operand, node.Method, node.Type);
+    }
+
+    /// <summary>Rewrites a CLR conversion call (Stream E).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrConversionCallExpression(BoundClrConversionCallExpression node)
+    {
+        var source = RewriteExpression(node.Source);
+        if (source == node.Source)
+        {
+            return node;
+        }
+
+        return new BoundClrConversionCallExpression(source, node.Method, node.Type);
     }
 
     /// <summary>Rewrites a CLR indexer read.</summary>

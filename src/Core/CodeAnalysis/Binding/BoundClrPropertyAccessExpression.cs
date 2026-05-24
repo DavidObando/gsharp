@@ -11,10 +11,11 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Reads a public instance <see cref="PropertyInfo"/> or <see cref="FieldInfo"/>
-/// on a CLR receiver (Phase 4 exit). Examples: <c>lst.Count</c>,
-/// <c>sb.Length</c>, <c>kvp.Key</c>. Interpreter-only — the evaluator dispatches
-/// via <c>PropertyInfo.GetValue</c> / <c>FieldInfo.GetValue</c>.
+/// Reads a public <see cref="PropertyInfo"/> or <see cref="FieldInfo"/> on a
+/// CLR receiver. When <see cref="Receiver"/> is <see langword="null"/>, the
+/// member is static; otherwise it is dispatched against the instance
+/// receiver. Examples: <c>lst.Count</c>, <c>sb.Length</c>, <c>kvp.Key</c>,
+/// <c>Console.Out</c> (static, since Stream B).
 /// </summary>
 public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
