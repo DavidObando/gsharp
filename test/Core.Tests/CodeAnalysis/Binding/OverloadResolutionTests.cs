@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
 using Xunit;
@@ -93,6 +94,98 @@ public class OverloadResolutionTests
         Assert.Equal(0, OverloadResolution.CompareNumericTargets(typeof(int), typeof(int), typeof(short)));
     }
 
+    [Fact]
+    public void InferTypeArguments_Identity_BindsTFromArgument()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(string) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(string) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_PairWithConsistentBounds_Succeeds()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_PairWithConflictingBounds_Fails()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
+        Assert.False(ok);
+        Assert.Null(typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_TwoParam_BindsBothIndependently()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_TwoParam), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int), typeof(string) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Array_UnwrapsElementType()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Array), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Enumerable_FromList_WalksInterface()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(System.Collections.Generic.List<int>) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Dictionary_BindsBothKeyAndValue()
+    {
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_DictionaryFromValues), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(
+            open,
+            new[] { typeof(System.Collections.Generic.Dictionary<string, int>) },
+            out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(string), typeof(int) }, typeArgs);
+    }
+
+    [Fact]
+    public void Resolve_ClosesOpenGenericMethod_FromInferableArgs()
+    {
+        // Enumerable.Repeat<TResult>(TResult element, int count) is open
+        // generic. Passing (int, int) should infer TResult = int and return
+        // the closed MethodInfo with the correct return type.
+        var open = typeof(System.Linq.Enumerable)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(System.Linq.Enumerable.Repeat) && m.IsGenericMethodDefinition);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethodDefinition);
+        Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
+        Assert.Equal(typeof(System.Collections.Generic.IEnumerable<int>), result.Best.ReturnType);
+    }
+
+    [Fact]
+    public void Resolve_DropsOpenGenericWhenInferenceFails()
+    {
+        // G_Pair<T>(T, T) called with (int, string) cannot infer T — the
+        // candidate must be dropped silently (NoneApplicable, not Ambiguous).
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
     private static MethodInfo Resolve(string a, string b, Type[] argTypes)
     {
         var first = typeof(Fixture).GetMethod(a, BindingFlags.Public | BindingFlags.Static);
@@ -123,5 +216,18 @@ public class OverloadResolutionTests
         public static void F_Long_Long(long a, long b) { _ = a; _ = b; }
 
         public static void F_Float_Float(float a, float b) { _ = a; _ = b; }
+
+        // Generic fixtures for TryInferTypeArguments tests below.
+        public static T G_Identity<T>(T x) => x;
+
+        public static void G_Pair<T>(T a, T b) { _ = a; _ = b; }
+
+        public static void G_TwoParam<TA, TB>(TA a, TB b) { _ = a; _ = b; }
+
+        public static void G_Array<T>(T[] xs) { _ = xs; }
+
+        public static void G_Enumerable<T>(System.Collections.Generic.IEnumerable<T> xs) { _ = xs; }
+
+        public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
     }
 }

@@ -54,4 +54,4 @@ GSharp-side `operator` keyword (declaring `operator +` on a user type) is **expl
 - ~~Stream B′: event subscription via `+=` / `-=` (parser-side `FieldCompoundAssignmentExpressionSyntax`).~~ **Shipped in ADR-0036** (via a new `EventSubscriptionExpressionSyntax`).
 - Stream D: `operator` keyword on GSharp-defined types (supersedes ADR-0026). Requires lexer/parser surgery, symbol routing to CLR `op_*` names, emit as `static specialname`, and a dispatch table in the interpreter.
 - ~~Numeric tie-breaking: implement the full "better numeric target" rule (int → long preferred over int → double).~~ **Shipped in [ADR-0037](0037-numeric-tiebreaking.md).**
-- Generic-method overload resolution: imported open-generic methods (`Enumerable.Select<T,R>`) still require explicit type arguments.
+- ~~Generic-method overload resolution: imported open-generic methods (`Enumerable.Select<T,R>`) still require explicit type arguments.~~ **Shipped in [ADR-0038](0038-generic-method-inference.md)** (first-phase input-type inference; lambda/delegate-output inference deferred).

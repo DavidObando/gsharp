@@ -41,5 +41,5 @@ Conversion-kind ordering itself is unchanged — identity still beats widening, 
 
 ## Follow-ups
 
-- Generic-method overload resolution for imported open-generic methods (`Enumerable.Select<T,R>`) still requires explicit type arguments. Tracked separately.
+- Generic-method overload resolution for imported open-generic methods (`Enumerable.Select<T,R>`) — **shipped in ADR-0038** (input-type inference; lambda-output inference still deferred).
 - `op_True` / `op_False` short-circuit for `&&` / `||` against imports.

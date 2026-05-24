@@ -179,8 +179,37 @@ internal static class OverloadResolution
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
-        foreach (var candidate in candidates)
+        foreach (var rawCandidate in candidates)
         {
+            // Stream F follow-up: when the candidate is an open generic method
+            // definition, attempt to infer its type arguments from the supplied
+            // arg types. A successful inference yields a closed MethodInfo that
+            // then participates in the same applicability + ranking pass as a
+            // non-generic candidate. Inference failures or constraint
+            // violations drop the candidate silently (matches C# §7.5.2 "if
+            // type inference fails, the method is not applicable").
+            T candidate = rawCandidate;
+            if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+            {
+                if (!TryInferTypeArguments(mi, argTypes, out var typeArgs))
+                {
+                    continue;
+                }
+
+                MethodInfo closed;
+                try
+                {
+                    closed = mi.MakeGenericMethod(typeArgs);
+                }
+                catch (ArgumentException)
+                {
+                    // Generic constraints not satisfied — drop this candidate.
+                    continue;
+                }
+
+                candidate = (T)(MethodBase)closed;
+            }
+
             var parameters = candidate.GetParameters();
             if (parameters.Length != argTypes.Count)
             {
@@ -332,6 +361,68 @@ internal static class OverloadResolution
         return 0;
     }
 
+    /// <summary>
+    /// Attempts to infer the type arguments of an open generic method
+    /// definition from the supplied argument types. Implements a deliberately
+    /// scoped subset of C# §7.5.2 "Type inference": only the input-type
+    /// inference phase against argument CLR types, plus exact unification on
+    /// recursive generic / array shapes. Lambdas and unbound delegate-typed
+    /// arguments are not considered. Returns <see langword="true"/> with
+    /// <paramref name="typeArgs"/> populated when every method type parameter
+    /// receives a single consistent bound; <see langword="false"/> otherwise.
+    /// </summary>
+    /// <param name="openMethod">An open generic method definition (i.e. <see cref="MethodBase.IsGenericMethodDefinition"/> is <see langword="true"/>).</param>
+    /// <param name="argTypes">CLR types of the supplied arguments.</param>
+    /// <param name="typeArgs">On success, the inferred type arguments in declaration order.</param>
+    /// <returns>Whether inference succeeded.</returns>
+    public static bool TryInferTypeArguments(MethodInfo openMethod, IReadOnlyList<Type> argTypes, out Type[] typeArgs)
+    {
+        typeArgs = null;
+        if (openMethod is null || !openMethod.IsGenericMethodDefinition)
+        {
+            return false;
+        }
+
+        var parameters = openMethod.GetParameters();
+        if (parameters.Length != argTypes.Count)
+        {
+            return false;
+        }
+
+        var typeParams = openMethod.GetGenericArguments();
+        var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var arg = argTypes[i];
+            if (arg is null)
+            {
+                continue;
+            }
+
+            // Unify the parameter against the argument; soft-fail (skip this
+            // arg) when shapes don't line up, hard-fail only on a true
+            // bound-conflict for a method type parameter.
+            if (!UnifyForInference(parameters[i].ParameterType, arg, bounds))
+            {
+                return false;
+            }
+        }
+
+        var result = new Type[typeParams.Length];
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            if (!bounds.TryGetValue(typeParams[i].Name, out var bound))
+            {
+                return false;
+            }
+
+            result[i] = bound;
+        }
+
+        typeArgs = result;
+        return true;
+    }
+
     private static bool IsAtLeastAsGoodAs(
         ImplicitConversionKind[] a,
         Type[] paramsA,
@@ -429,6 +520,133 @@ internal static class OverloadResolution
 
         var underlying = target.GetGenericArguments()[0];
         return ClrTypeUtilities.AreSame(underlying, source);
+    }
+
+    private static bool UnifyForInference(Type parameterType, Type argumentType, Dictionary<string, Type> bounds)
+    {
+        if (parameterType is null || argumentType is null)
+        {
+            return true;
+        }
+
+        if (parameterType.IsGenericParameter)
+        {
+            if (bounds.TryGetValue(parameterType.Name, out var existing))
+            {
+                if (ClrTypeUtilities.AreSame(existing, argumentType))
+                {
+                    return true;
+                }
+
+                // Promote toward the common base: keep the more general type
+                // when one is assignable from the other. Otherwise the bounds
+                // genuinely conflict and inference fails.
+                try
+                {
+                    if (existing.IsAssignableFrom(argumentType))
+                    {
+                        return true;
+                    }
+
+                    if (argumentType.IsAssignableFrom(existing))
+                    {
+                        bounds[parameterType.Name] = argumentType;
+                        return true;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // MLC cross-context: treat as inconclusive.
+                    return false;
+                }
+
+                return false;
+            }
+
+            bounds[parameterType.Name] = argumentType;
+            return true;
+        }
+
+        if (parameterType.IsArray)
+        {
+            if (argumentType.IsArray)
+            {
+                UnifyForInference(parameterType.GetElementType(), argumentType.GetElementType(), bounds);
+            }
+
+            // If the argument isn't an array, the classifier will reject the
+            // candidate later; inference itself doesn't fail.
+            return true;
+        }
+
+        if (parameterType.IsByRef)
+        {
+            return UnifyForInference(parameterType.GetElementType(), argumentType, bounds);
+        }
+
+        if (parameterType.IsGenericType && !parameterType.IsGenericTypeDefinition)
+        {
+            var openDef = parameterType.GetGenericTypeDefinition();
+            var paramArgs = parameterType.GetGenericArguments();
+
+            // Find the argument type (or any of its base types or interfaces)
+            // matching the parameter's open generic definition. Walk class
+            // hierarchy first, then interfaces.
+            var matched = FindClosedGeneric(argumentType, openDef);
+            if (matched != null)
+            {
+                var matchedArgs = matched.GetGenericArguments();
+                for (var i = 0; i < paramArgs.Length && i < matchedArgs.Length; i++)
+                {
+                    if (!UnifyForInference(paramArgs[i], matchedArgs[i], bounds))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            // If no matching closed generic is found we don't fail inference
+            // here — the applicability pass will reject the candidate.
+            return true;
+        }
+
+        return true;
+    }
+
+    private static Type FindClosedGeneric(Type type, Type openDefinition)
+    {
+        if (openDefinition is null)
+        {
+            return null;
+        }
+
+        for (var t = type; t != null; t = t.BaseType)
+        {
+            if (t.IsGenericType && ReferenceEquals(t.GetGenericTypeDefinition(), openDefinition))
+            {
+                return t;
+            }
+        }
+
+        Type[] ifaces;
+        try
+        {
+            ifaces = type.GetInterfaces();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        foreach (var iface in ifaces)
+        {
+            if (iface.IsGenericType && ReferenceEquals(iface.GetGenericTypeDefinition(), openDefinition))
+            {
+                return iface;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -142,6 +142,29 @@ public class ClrInteropEmitTests
         Assert.Equal("done\n", output);
     }
 
+    [Fact]
+    public void GenericMethodInference_EnumerableRepeat_EmitsClosedMethodSpec()
+    {
+        // Stream F follow-up: Enumerable.Repeat<TResult>(TResult, int) is an
+        // open generic method. With argument-driven inference, GSharp resolves
+        // TResult=int from (int, int) without explicit type arguments. The
+        // emitter must encode the call as a MethodSpec over the open Repeat
+        // definition so the produced PE loads and runs against System.Linq.
+        var source = """
+            package P
+            import System
+            import System.Linq
+
+            let seq = Enumerable.Repeat(7, 3)
+            Console.WriteLine(seq)
+            """;
+
+        var output = CompileAndRun(source);
+        // RepeatIterator's ToString returns its CLR type name; we just need
+        // to confirm the program produced *some* output without crashing.
+        Assert.Contains("RepeatIterator", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;
