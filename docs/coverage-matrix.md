@@ -51,7 +51,7 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | `for k, v := range coll` | ✅ | ✅ | ✅ | ❌ | Phase 4 exit: binder + interpreter support iterating over arrays/slices (index-based), CLR `IDictionary[K,V]` (key/value), and CLR `IEnumerable[T]` (element-with-counter). Lowerer rewrites to existing `BoundIndexExpression`/`BoundLenExpression` for arrays and to `GetEnumerator`/`MoveNext`/`Current` reflection calls for CLR collections. Emit gap remains. |
 | `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
 | `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
-| `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: discriminant over `int`/`string`/`bool`; Phase 6.8 also accepts enum types with case values written as `<EnumType>.Member`. Each case body is a brace block; binder lowers to a chain of if/else around the bound discriminant. Multiple case values per arm and pattern-matching variants land in Phase 6. |
+| `switch` / `case` / `default` | ✅ | ✅ | — | ✅ | Phase 2.6: statement switch; Phase 6.2 case values now bind as patterns (constant, discard, type, property, relational, list) and the interpreter dispatches a `BoundPatternSwitchStatement`. Each case body is a brace block. Emit for pattern-bearing switch statements is deferred. |
 | `fallthrough` | ❌ | — | — | — | ADR-0013 rejects Go-style implicit case fallthrough. The keyword remains reserved; the parser emits a diagnostic if it appears. |
 | `defer` | ❌ | — | — | — | Keyword reserved. |
 | `go` (goroutine) | ✅ | ✅ | — | ✅ | Phase 5.3 / ADR-0022 (interpreter). `go <call>` schedules the call on a fire-and-forget `Task.Run`. Only call expressions are accepted as operands. The interpreter serializes body execution with a monitor on the evaluator to keep the shared locals/globals stacks safe; concurrency is observational rather than parallel. Emit deferred. |
@@ -86,9 +86,20 @@ Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the N
 | Type assertion / conversion (`x.(T)`, `T(x)`) | 🟡 | 🟡 | — | 🟡 | Built-in type names invoked as `int(x)` route through `BindCallExpression` → `BindConversion`; emit currently only handles bool↔int. Go-style `x.(T)` does not exist. |
 | Address-of `&x` / dereference `*x` | 🟡 | ❌ | — | — | Parsed as unary, but no `BoundUnaryOperator` entry → binder rejects. The `Loop.gs` design sample's `*count` is **unimplementable today**. |
 | Channel receive `<-ch` | ✅ | ✅ | — | ✅ | See "Send statement / receive" row above. Phase 5.5 / ADR-0022 (interpreter). |
-| `switch` expression (`let x = switch v { case A -> r1 default -> r2 }`) | ✅ | ✅ | — | ✅ | Phase 6.1. Discriminant must be `int` / `string` / `bool`; Phase 6.8 also accepts enum types with case values written as `<EnumType>.Member`. Exactly one `default` arm required. All arm result expressions unify to a single type (type of the first arm). Interpreter evaluates arms in source order; emit deferred (interp-only precedent matches Phase 5 surface). |
+| `switch` expression (`let x = switch v { case A -> r1 default -> r2 }`) | ✅ | ✅ | — | ✅ | Phase 6.1 expression form; Phase 6.2 case values now bind as patterns (constant, discard, type, property, relational, list). Exactly one `default` arm required. All arm result expressions unify to a single type. Interpreter evaluates arms in source order; emit deferred. |
 | Higher-order call `f()(args)` / function values | ✅ | ✅ | ✅ | ✅ | Phase 4.7 — first-class function types (`func(T) R`), indirect-call expressions, function-typed locals/params/returns. |
 | Function literal / lambda | ✅ | ✅ | ✅ | ✅ | Phase 4.7 (`func(...) {...}` literal); Phase 4.9 adds Kotlin-style trailing-lambda call syntax — `f(args) func(...) {...}` desugars to `f(args, func(...) {...})` at parse time. |
+
+## Patterns
+
+| Pattern | Parser | Binder | Emit | Interp | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Constant pattern (`case 1`) | ✅ | ✅ | — | ✅ | Legacy case expression spelling now wraps as `ConstantPatternSyntax`; equality uses `object.Equals` in the interpreter. Emit deferred with pattern switch lowering. |
+| Discard pattern (`case _`) | ✅ | ✅ | — | ✅ | Matches any discriminant value; top-level discard behaves like a lenient default arm. Emit deferred. |
+| Type pattern (`case v is User`) | ✅ | ✅ | — | ✅ | Introduces read-only arm-local binding `v`; interpreter supports GSharp struct/class values and imported CLR instances. Emit deferred. |
+| Property pattern (`case { Name: "x" }`) | ✅ | ✅ | — | ✅ | Applies to GSharp struct/class discriminants; field values recurse into nested patterns. Emit deferred. |
+| Relational pattern (`case > 0`) | ✅ | ✅ | — | ✅ | Operators bind through `BoundBinaryOperator`; `==` / `!=` are accepted. Emit deferred. |
+| List pattern (`case [1, _, 3]`) | ✅ | ✅ | — | ✅ | Applies to arrays/slices with exact length matching; `..` slice patterns are deferred. Emit deferred. |
 
 ## Operators (semantic coverage)
 

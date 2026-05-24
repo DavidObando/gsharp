@@ -81,6 +81,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ThrowStatement:
                 WriteThrowStatement((BoundThrowStatement)node, writer);
                 break;
+            case BoundNodeKind.PatternSwitchStatement:
+                WritePatternSwitchStatement((BoundPatternSwitchStatement)node, writer);
+                break;
             case BoundNodeKind.GoStatement:
                 WriteGoStatement((BoundGoStatement)node, writer);
                 break;
@@ -576,6 +579,101 @@ public static class BoundNodePrinter
         node.Expression.WriteTo(writer);
     }
 
+    private static void WritePatternSwitchStatement(BoundPatternSwitchStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.SwitchKeyword);
+        writer.WriteSpace();
+        node.Discriminant.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        writer.WriteLine();
+        writer.Indent++;
+        foreach (var arm in node.Arms)
+        {
+            if (arm.IsDefault)
+            {
+                writer.WriteKeyword(SyntaxKind.DefaultKeyword);
+            }
+            else
+            {
+                writer.WriteKeyword(SyntaxKind.CaseKeyword);
+                writer.WriteSpace();
+                WritePattern(arm.Pattern, writer);
+            }
+
+            writer.WriteLine();
+            writer.WriteNestedStatement(arm.Body);
+        }
+
+        writer.Indent--;
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+        writer.WriteLine();
+    }
+
+    private static void WritePattern(BoundPattern pattern, IndentedTextWriter writer)
+    {
+        switch (pattern.Kind)
+        {
+            case BoundNodeKind.ConstantPattern:
+                ((BoundConstantPattern)pattern).Value.WriteTo(writer);
+                break;
+            case BoundNodeKind.DiscardPattern:
+                writer.WriteIdentifier("_");
+                break;
+            case BoundNodeKind.TypePattern:
+                var typePattern = (BoundTypePattern)pattern;
+                writer.WriteIdentifier(typePattern.Variable.Name);
+                writer.WriteSpace();
+                writer.WriteKeyword(SyntaxKind.IsKeyword);
+                writer.WriteSpace();
+                writer.WriteIdentifier(typePattern.TargetType.Name);
+                break;
+            case BoundNodeKind.RelationalPattern:
+                var relational = (BoundRelationalPattern)pattern;
+                writer.WritePunctuation(relational.Op.SyntaxKind);
+                writer.WriteSpace();
+                relational.Value.WriteTo(writer);
+                break;
+            case BoundNodeKind.PropertyPattern:
+                var property = (BoundPropertyPattern)pattern;
+                writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+                for (var i = 0; i < property.Fields.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        writer.WritePunctuation(SyntaxKind.CommaToken);
+                        writer.WriteSpace();
+                    }
+
+                    writer.WriteIdentifier(property.Fields[i].Field.Name);
+                    writer.WritePunctuation(SyntaxKind.ColonToken);
+                    writer.WriteSpace();
+                    WritePattern(property.Fields[i].Pattern, writer);
+                }
+
+                writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+                break;
+            case BoundNodeKind.ListPattern:
+                var list = (BoundListPattern)pattern;
+                writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+                for (var i = 0; i < list.Elements.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        writer.WritePunctuation(SyntaxKind.CommaToken);
+                        writer.WriteSpace();
+                    }
+
+                    WritePattern(list.Elements[i], writer);
+                }
+
+                writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+                break;
+            default:
+                throw new Exception($"Unexpected pattern node {pattern.Kind}");
+        }
+    }
+
     private static void WriteSwitchExpression(BoundSwitchExpression node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(SyntaxKind.SwitchKeyword);
@@ -604,7 +702,7 @@ public static class BoundNodePrinter
         {
             writer.WriteKeyword(SyntaxKind.CaseKeyword);
             writer.WriteSpace();
-            arm.Value.WriteTo(writer);
+            WritePattern(arm.Pattern, writer);
         }
 
         writer.WriteSpace();

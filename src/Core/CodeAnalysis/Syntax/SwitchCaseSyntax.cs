@@ -15,12 +15,12 @@ public sealed class SwitchCaseSyntax : SyntaxNode
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="keyword">The <c>case</c> or <c>default</c> keyword.</param>
-    /// <param name="value">The case value expression (null for <c>default</c>).</param>
+    /// <param name="value">The case value pattern (null for <c>default</c>).</param>
     /// <param name="body">The case body block.</param>
     public SwitchCaseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
-        ExpressionSyntax value,
+        PatternSyntax value,
         BlockStatementSyntax body)
         : base(syntaxTree)
     {
@@ -38,9 +38,9 @@ public sealed class SwitchCaseSyntax : SyntaxNode
     public SyntaxToken Keyword { get; }
 
     /// <summary>
-    /// Gets the case value expression, or null when this arm is <c>default</c>.
+    /// Gets the case value pattern, or null when this arm is <c>default</c>.
     /// </summary>
-    public ExpressionSyntax Value { get; }
+    public PatternSyntax Value { get; }
 
     /// <summary>
     /// Gets the case body block.

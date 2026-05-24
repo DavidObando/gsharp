@@ -14,13 +14,13 @@ public sealed class SwitchExpressionArmSyntax : SyntaxNode
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="keyword">The <c>case</c> or <c>default</c> keyword.</param>
-    /// <param name="value">The case value expression, or null for <c>default</c>.</param>
+    /// <param name="value">The case value pattern, or null for <c>default</c>.</param>
     /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
     /// <param name="result">The result expression for this arm.</param>
     public SwitchExpressionArmSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
-        ExpressionSyntax value,
+        PatternSyntax value,
         SyntaxToken arrowToken,
         ExpressionSyntax result)
         : base(syntaxTree)
@@ -37,8 +37,8 @@ public sealed class SwitchExpressionArmSyntax : SyntaxNode
     /// <summary>Gets the <c>case</c> or <c>default</c> keyword.</summary>
     public SyntaxToken Keyword { get; }
 
-    /// <summary>Gets the case value expression, or null when this arm is <c>default</c>.</summary>
-    public ExpressionSyntax Value { get; }
+    /// <summary>Gets the case value pattern, or null when this arm is <c>default</c>.</summary>
+    public PatternSyntax Value { get; }
 
     /// <summary>Gets the <c>-&gt;</c> token.</summary>
     public SyntaxToken ArrowToken { get; }

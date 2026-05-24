@@ -169,6 +169,8 @@ public static class SyntaxFacts
                 return SyntaxKind.InterfaceKeyword;
             case "internal":
                 return SyntaxKind.InternalKeyword;
+            case "is":
+                return SyntaxKind.IsKeyword;
             case "let":
                 return SyntaxKind.LetKeyword;
             case "map":
@@ -411,6 +413,8 @@ public static class SyntaxFacts
                 return "interface";
             case SyntaxKind.InternalKeyword:
                 return "internal";
+            case SyntaxKind.IsKeyword:
+                return "is";
             case SyntaxKind.LetKeyword:
                 return "let";
             case SyntaxKind.MapKeyword:

@@ -1738,92 +1738,46 @@ public sealed class Binder
     {
         var discriminant = BindExpression(syntax.Expression);
         var switchType = discriminant.Type;
-
-        if (switchType != TypeSymbol.Error &&
-            switchType != TypeSymbol.Int &&
-            switchType != TypeSymbol.String &&
-            switchType != TypeSymbol.Bool &&
-            switchType is not EnumSymbol)
+        if (switchType == TypeSymbol.Error)
         {
-            Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
             return BindErrorStatement();
         }
 
-        var tempName = $"<>switch_{syntax.SwitchKeyword.Position}";
-        var tempVar = function == null
-            ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, switchType)
-            : new LocalVariableSymbol(tempName, isReadOnly: true, switchType);
-        scope.TryDeclareVariable(tempVar);
+        var arms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(syntax.Cases.Length);
+        var hasDefault = false;
 
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundVariableDeclaration(tempVar, discriminant));
-
-        BoundStatement defaultBody = null;
-        TextLocation? duplicateDefaultLocation = null;
-
-        // First pass: locate the default body (and flag duplicates) so the case
-        // chain can be threaded through it regardless of source position.
-        for (var i = 0; i < syntax.Cases.Length; i++)
+        foreach (var caseSyntax in syntax.Cases)
         {
-            var caseSyntax = syntax.Cases[i];
-            if (!caseSyntax.IsDefault)
-            {
-                continue;
-            }
-
-            if (defaultBody != null)
-            {
-                duplicateDefaultLocation = caseSyntax.Keyword.Location;
-            }
-            else
-            {
-                defaultBody = BindBlockStatement(caseSyntax.Body);
-            }
-        }
-
-        BoundStatement chain = defaultBody;
-
-        for (var i = syntax.Cases.Length - 1; i >= 0; i--)
-        {
-            var caseSyntax = syntax.Cases[i];
             if (caseSyntax.IsDefault)
             {
+                if (hasDefault)
+                {
+                    Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Keyword.Location);
+                }
+
+                hasDefault = true;
+                arms.Add(new BoundPatternSwitchArm(pattern: null, BindBlockStatement(caseSyntax.Body)));
                 continue;
             }
 
-            var caseBody = BindBlockStatement(caseSyntax.Body);
-            var caseValue = BindExpression(caseSyntax.Value);
-            var converted = BindConversion(caseSyntax.Value.Location, caseValue, switchType, allowExplicit: false);
-            var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, switchType, switchType);
-            if (op == null)
+            scope = new BoundScope(scope);
+            var pattern = BindPattern(caseSyntax.Value, switchType);
+            if (pattern is BoundDiscardPattern)
             {
-                Diagnostics.ReportSwitchCaseTypeMismatch(caseSyntax.Value.Location, caseValue.Type, switchType);
-                continue;
+                if (hasDefault)
+                {
+                    Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Value.Location);
+                }
+
+                hasDefault = true;
             }
 
-            var condition = new BoundBinaryExpression(new BoundVariableExpression(tempVar), op, converted);
-            chain = new BoundIfStatement(condition, caseBody, chain);
+            var body = BindBlockStatement(caseSyntax.Body);
+            scope = scope.Parent;
+            arms.Add(new BoundPatternSwitchArm(pattern, body));
         }
 
-        if (duplicateDefaultLocation.HasValue)
-        {
-            Diagnostics.ReportDuplicateSwitchDefault(duplicateDefaultLocation.Value);
-        }
-
-        if (chain == null)
-        {
-            // No non-default cases at all -- just run the default (if any).
-            if (defaultBody != null)
-            {
-                statements.Add(defaultBody);
-            }
-        }
-        else
-        {
-            statements.Add(chain);
-        }
-
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundPatternSwitchStatement(discriminant, arms.ToImmutable());
     }
 
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
@@ -1836,15 +1790,6 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        if (switchType != TypeSymbol.Int &&
-            switchType != TypeSymbol.String &&
-            switchType != TypeSymbol.Bool &&
-            switchType is not EnumSymbol)
-        {
-            Diagnostics.ReportCannotConvert(syntax.Expression.Location, switchType, TypeSymbol.Int);
-            return new BoundErrorExpression();
-        }
-
         if (syntax.Arms.Length == 0)
         {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
@@ -1852,11 +1797,11 @@ public sealed class Binder
         }
 
         var hasDefault = false;
-        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundExpression Value, BoundExpression Result)>();
+        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Result)>();
 
         foreach (var armSyntax in syntax.Arms)
         {
-            BoundExpression value = null;
+            BoundPattern pattern = null;
             if (armSyntax.IsDefault)
             {
                 if (hasDefault)
@@ -1865,32 +1810,26 @@ public sealed class Binder
                 }
 
                 hasDefault = true;
+                var result = BindExpression(armSyntax.Result);
+                boundArmBuilders.Add((armSyntax, pattern, result));
+                continue;
             }
-            else
+
+            scope = new BoundScope(scope);
+            pattern = BindPattern(armSyntax.Value, switchType);
+            if (pattern is BoundDiscardPattern)
             {
-                var caseValue = BindExpression(armSyntax.Value);
-                var conversion = Conversion.Classify(caseValue.Type, switchType);
-                if (!conversion.Exists || conversion.IsExplicit)
+                if (hasDefault)
                 {
-                    if (caseValue.Type != TypeSymbol.Error)
-                    {
-                        Diagnostics.ReportSwitchCaseTypeMismatch(armSyntax.Value.Location, caseValue.Type, switchType);
-                    }
+                    Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Value.Location);
+                }
 
-                    value = new BoundErrorExpression();
-                }
-                else if (conversion.IsIdentity)
-                {
-                    value = caseValue;
-                }
-                else
-                {
-                    value = new BoundConversionExpression(switchType, caseValue);
-                }
+                hasDefault = true;
             }
 
-            var result = BindExpression(armSyntax.Result);
-            boundArmBuilders.Add((armSyntax, value, result));
+            var armResult = BindExpression(armSyntax.Result);
+            scope = scope.Parent;
+            boundArmBuilders.Add((armSyntax, pattern, armResult));
         }
 
         if (!hasDefault)
@@ -1918,10 +1857,129 @@ public sealed class Binder
                 result = new BoundConversionExpression(resultType, result);
             }
 
-            arms.Add(new BoundSwitchExpressionArm(arm.Value, result));
+            arms.Add(new BoundSwitchExpressionArm(arm.Pattern, result));
         }
 
         return new BoundSwitchExpression(discriminant, arms.ToImmutable(), resultType);
+    }
+
+    private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        switch (syntax.Kind)
+        {
+            case SyntaxKind.ConstantPattern:
+                return BindConstantPattern((ConstantPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.DiscardPattern:
+                return new BoundDiscardPattern(discriminantType);
+            case SyntaxKind.TypePattern:
+                return BindTypePattern((TypePatternSyntax)syntax, discriminantType);
+            case SyntaxKind.PropertyPattern:
+                return BindPropertyPattern((PropertyPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.RelationalPattern:
+                return BindRelationalPattern((RelationalPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.ListPattern:
+                return BindListPattern((ListPatternSyntax)syntax, discriminantType);
+            default:
+                throw new Exception($"Unexpected pattern syntax {syntax.Kind}");
+        }
+    }
+
+    private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        var expression = BindExpression(syntax.Expression);
+        var conversion = Conversion.Classify(expression.Type, discriminantType);
+        if (!conversion.Exists || conversion.IsExplicit)
+        {
+            if (expression.Type != TypeSymbol.Error && discriminantType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
+            }
+
+            return new BoundConstantPattern(discriminantType, new BoundErrorExpression());
+        }
+
+        var value = conversion.IsIdentity ? expression : new BoundConversionExpression(discriminantType, expression);
+        var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, discriminantType);
+        if (op == null && expression.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
+        }
+
+        return new BoundConstantPattern(discriminantType, value);
+    }
+
+    private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        var targetType = BindTypeClause(syntax.Type) ?? TypeSymbol.Error;
+        var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType);
+        if (!scope.TryDeclareVariable(variable))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+        }
+
+        return new BoundTypePattern(discriminantType, targetType, variable);
+    }
+
+    private BoundPattern BindPropertyPattern(PropertyPatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        var fields = ImmutableArray.CreateBuilder<BoundPropertyPatternField>();
+        if (discriminantType is not StructSymbol structType)
+        {
+            Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
+            return new BoundPropertyPattern(discriminantType, fields.ToImmutable());
+        }
+
+        foreach (var fieldSyntax in syntax.Fields)
+        {
+            if (!structType.TryGetFieldIncludingInherited(fieldSyntax.Identifier.Text, out var field, out _))
+            {
+                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
+                fields.Add(new BoundPropertyPatternField(new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
+                continue;
+            }
+
+            fields.Add(new BoundPropertyPatternField(field, BindPattern(fieldSyntax.Pattern, field.Type)));
+        }
+
+        return new BoundPropertyPattern(discriminantType, fields.ToImmutable());
+    }
+
+    private BoundPattern BindRelationalPattern(RelationalPatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        var value = BindConversion(syntax.Expression, discriminantType, allowExplicit: false);
+        var op = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, discriminantType, discriminantType);
+        if (op == null)
+        {
+            Diagnostics.ReportRelationalPatternOperatorUndefined(syntax.OperatorToken.Location, syntax.OperatorToken.Kind, discriminantType);
+            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int);
+        }
+
+        return new BoundRelationalPattern(discriminantType, op, value);
+    }
+
+    private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
+    {
+        TypeSymbol elementType = TypeSymbol.Error;
+        if (discriminantType is ArrayTypeSymbol arrayType)
+        {
+            elementType = arrayType.ElementType;
+        }
+        else if (discriminantType is SliceTypeSymbol sliceType)
+        {
+            elementType = sliceType.ElementType;
+        }
+        else
+        {
+            Diagnostics.ReportListPatternRequiresArrayOrSlice(syntax.OpenSquareBracketToken.Location, discriminantType);
+        }
+
+        var elements = ImmutableArray.CreateBuilder<BoundPattern>();
+        foreach (var elementSyntax in syntax.Elements)
+        {
+            elements.Add(BindPattern(elementSyntax, elementType));
+        }
+
+        return new BoundListPattern(discriminantType, elements.ToImmutable(), elementType);
     }
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
