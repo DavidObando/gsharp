@@ -130,6 +130,7 @@ QuestionToken
 RangeKeyword
 ReturnKeyword
 ReturnStatement
+RightArrowToken
 ScopeKeyword
 ScopeStatement
 SealedKeyword
@@ -150,6 +151,8 @@ StructDeclaration
 StructKeyword
 StructLiteralExpression
 SwitchCase
+SwitchExpression
+SwitchExpressionArm
 SwitchKeyword
 SwitchStatement
 ThrowKeyword
@@ -219,6 +222,8 @@ ReturnStatement
 ScopeStatement
 SelectStatement
 StructLiteralExpression
+SwitchExpression
+SwitchExpressionArm
 ThrowStatement
 TryStatement
 TupleElementAccessExpression

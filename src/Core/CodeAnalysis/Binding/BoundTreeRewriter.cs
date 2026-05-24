@@ -381,6 +381,8 @@ public abstract class BoundTreeRewriter
                 return RewriteClrIndexAssignmentExpression((BoundClrIndexAssignmentExpression)node);
             case BoundNodeKind.AwaitExpression:
                 return RewriteAwaitExpression((BoundAwaitExpression)node);
+            case BoundNodeKind.SwitchExpression:
+                return RewriteSwitchExpression((BoundSwitchExpression)node);
             case BoundNodeKind.MakeChannelExpression:
                 return RewriteMakeChannelExpression((BoundMakeChannelExpression)node);
             case BoundNodeKind.ChannelReceiveExpression:
@@ -539,6 +541,39 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundAwaitExpression(expression, node.Type);
+    }
+
+    /// <summary>Rewrites a bound switch expression.</summary>
+    /// <param name="node">The switch expression to rewrite.</param>
+    /// <returns>The rewritten switch expression.</returns>
+    protected virtual BoundExpression RewriteSwitchExpression(BoundSwitchExpression node)
+    {
+        var discriminant = RewriteExpression(node.Discriminant);
+        ImmutableArray<BoundSwitchExpressionArm>.Builder builder = null;
+
+        for (var i = 0; i < node.Arms.Length; i++)
+        {
+            var arm = node.Arms[i];
+            var value = arm.Value == null ? null : RewriteExpression(arm.Value);
+            var result = RewriteExpression(arm.Result);
+            if (builder == null && (value != arm.Value || result != arm.Result))
+            {
+                builder = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(node.Arms.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arms[j]);
+                }
+            }
+
+            builder?.Add(new BoundSwitchExpressionArm(value, result));
+        }
+
+        if (discriminant == node.Discriminant && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundSwitchExpression(discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
     }
 
     /// <summary>Rewrites a bound go statement (Phase 5.3).</summary>

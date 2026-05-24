@@ -88,6 +88,11 @@ public sealed class Lexer
                     kind = SyntaxKind.MinusMinusToken;
                     position++;
                 }
+                else if (Current == '>')
+                {
+                    kind = SyntaxKind.RightArrowToken;
+                    position++;
+                }
                 else
                 {
                     kind = SyntaxKind.MinusToken;

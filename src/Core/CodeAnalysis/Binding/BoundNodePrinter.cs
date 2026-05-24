@@ -195,6 +195,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.AwaitExpression:
                 WriteAwaitExpression((BoundAwaitExpression)node, writer);
                 break;
+            case BoundNodeKind.SwitchExpression:
+                WriteSwitchExpression((BoundSwitchExpression)node, writer);
+                break;
+            case BoundNodeKind.SwitchExpressionArm:
+                WriteSwitchExpressionArm((BoundSwitchExpressionArm)node, writer);
+                break;
             case BoundNodeKind.MakeChannelExpression:
                 WriteMakeChannelExpression((BoundMakeChannelExpression)node, writer);
                 break;
@@ -564,6 +570,43 @@ public static class BoundNodePrinter
         writer.WriteKeyword(SyntaxKind.AwaitKeyword);
         writer.WriteSpace();
         node.Expression.WriteTo(writer);
+    }
+
+    private static void WriteSwitchExpression(BoundSwitchExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.SwitchKeyword);
+        writer.WriteSpace();
+        node.Discriminant.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        writer.WriteSpace();
+
+        foreach (var arm in node.Arms)
+        {
+            WriteSwitchExpressionArm(arm, writer);
+            writer.WriteSpace();
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteSwitchExpressionArm(BoundSwitchExpressionArm arm, IndentedTextWriter writer)
+    {
+        if (arm.IsDefault)
+        {
+            writer.WriteKeyword(SyntaxKind.DefaultKeyword);
+        }
+        else
+        {
+            writer.WriteKeyword(SyntaxKind.CaseKeyword);
+            writer.WriteSpace();
+            arm.Value.WriteTo(writer);
+        }
+
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.RightArrowToken);
+        writer.WriteSpace();
+        arm.Result.WriteTo(writer);
     }
 
     private static void WriteChannelSendStatement(BoundChannelSendStatement node, IndentedTextWriter writer)

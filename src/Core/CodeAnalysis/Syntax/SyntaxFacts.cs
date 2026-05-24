@@ -345,6 +345,8 @@ public static class SyntaxFacts
                 return "<=";
             case SyntaxKind.LeftArrowToken:
                 return "<-";
+            case SyntaxKind.RightArrowToken:
+                return "->";
             case SyntaxKind.ShiftLeftToken:
                 return "<<";
             case SyntaxKind.ShiftLeftEqualsToken:

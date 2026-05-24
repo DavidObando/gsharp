@@ -62,6 +62,8 @@ public enum BoundNodeKind
     ClrIndexExpression,
     ClrIndexAssignmentExpression,
     AwaitExpression,
+    SwitchExpression,
+    SwitchExpressionArm,
     GoStatement,
     MakeChannelExpression,
     ChannelReceiveExpression,

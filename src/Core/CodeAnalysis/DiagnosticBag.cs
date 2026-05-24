@@ -681,6 +681,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports a switch expression without a default arm.
+    /// </summary>
+    /// <param name="location">The text location of the switch expression.</param>
+    public void ReportSwitchExpressionMissingDefault(TextLocation location)
+    {
+        var message = "Switch expression must have a 'default' arm.";
+        Report(location, message);
+    }
+
+    /// <summary>
+    /// Reports a switch-expression arm whose result type does not match the unified result type.
+    /// </summary>
+    /// <param name="location">The text location of the offending arm.</param>
+    /// <param name="armType">The arm result type.</param>
+    /// <param name="expectedType">The expected result type.</param>
+    public void ReportSwitchExpressionArmTypeMismatch(TextLocation location, TypeSymbol armType, TypeSymbol expectedType)
+    {
+        var message = $"All switch-expression arms must produce the same type; expected '{expectedType}' but arm produces '{armType}'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports an accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>) appearing on a construct that does not accept one.
     /// </summary>
     /// <param name="location">The text location of the modifier token.</param>
