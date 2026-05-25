@@ -208,4 +208,13 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets or sets a value indicating whether this function is declared <c>async</c> (Phase 5.1 / ADR-0023). When true, callers observe the function's return as <c>Task[T]</c> (or <c>Task</c> when no return type was declared) and the body may use <c>await</c>.</summary>
     public bool IsAsync { get; set; }
+
+    /// <summary>Gets or sets the synthesized state-machine type that hosts
+    /// this method's lowered body, when the async state-machine rewriter has
+    /// run on this method. <c>null</c> when the method is not async or when
+    /// the rewriter has not yet visited it. The owning property is typed as
+    /// <see cref="object"/> to avoid a project-layer cycle (state-machine
+    /// types live under <c>Lowering.Async</c>); callers cast to
+    /// <c>SynthesizedStateMachineType</c>.</summary>
+    public object StateMachineType { get; set; }
 }
