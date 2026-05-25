@@ -31,6 +31,55 @@ GSharp has two execution backends. The interpreter (`Evaluator`) walks the bound
 | Compiler driver | `gsc` (`src/Compiler`) | Parse command-line args (`/out`, `/r`, `/target`, `/targetframework`, response files), produce the PE, and write `<name>.runtimeconfig.json` for executable outputs. |
 | MSBuild SDK | `Gsharp.NET.Sdk` | Wire `CoreCompile` into `Microsoft.NET.Sdk` so `.gsproj` files participate in the standard build pipeline. The SDK's task DLL is `netstandard2.0`; the compiler payload is `net10.0` invoked as `dotnet gsc.dll`. |
 
+## Async / iterator lowering pipeline
+
+Async methods, async lambdas, sync iterators (`sequence[T]`), and async iterators (`IAsyncEnumerable[T]`) require a state-machine transformation before IL emission. This lowering runs inside `Compilation.LowerForEmit`, after binding and before `EmitAssembly`. The entry point is `AsyncStateMachineRewriter.Rewrite` (for async methods/lambdas) or the sibling `IteratorRewriter` / `AsyncIteratorRewriter` (for sync/async iterators respectively).
+
+### Pass ordering (async methods and async lambdas)
+
+Inside `AsyncStateMachineRewriter.Rewrite`, the bound body is transformed through a fixed sequence of passes:
+
+1. **`AsyncExceptionHandlerRewriter`** — rewrites `try`/`catch`/`finally` blocks containing `await` into a form the state machine can resume into (spec §8).
+2. **`SpillSequenceSpiller`** — lifts `await` expressions out of compound sub-expressions into spill-sequence temporaries, ensuring each await is at statement level.
+3. **`RefInitializationHoister`** — decomposes `ref` locals that span await points into addressable fields.
+4. **`AsyncCaptureWalker`** — walks the rewritten body to compute the hoist set (locals and parameters that live across await points).
+5. **State-machine rewriter** — synthesizes the `IAsyncStateMachine` struct, builder field, state field, hoisted-local fields, and the `MoveNext()` body. The **MoveNext body rewriter** is a sub-pass that converts each `await` into a yield/resume pair with state transitions, and inserts sequence-point markers.
+
+### Sync and async iterators
+
+`IteratorRewriter` (sync) and `AsyncIteratorRewriter` (async) run as siblings of the async-state-machine rewriter in `LowerForEmit`. They produce **class** state machines (not structs) because the iterator object serves as both `IEnumerable[T]` and `IEnumerator[T]` for the first enumeration. Each `yield` statement becomes a `current = value; state = K; return true` transition in the generated `MoveNext()`.
+
+### Sequence-point markers
+
+The MoveNext body rewriter inserts `AwaitYieldPoint` (before suspending) and `AwaitResumePoint` (at the resume label) markers. Today these emit as single `nop` IL bytes — placeholders for a future PDB writer that will map them to source-level sequence points for debugger step-through.
+
+### Nested-type layout
+
+All synthesized state-machine types nest privately inside their kickoff method's declaring type, following the Roslyn convention for debugger and reflection discovery:
+
+- Top-level functions: state machine nests inside `<Program>`.
+- Lambdas with captures: state machine nests inside the closure class.
+
+The typedef ordering within the module is:
+
+```
+<Module>
+├── Interfaces
+├── Classes
+│   ├── <Program>
+│   │   └── <async-method-SM>d__N (struct, nested)
+│   ├── SyncIterator_SM (class, nested in declaring type)
+│   └── AsyncIterator_SM (class, nested in declaring type)
+├── Structs
+│   └── (async-lambda struct SMs nested in closure class)
+└── Nested SMs follow their enclosing type's row
+```
+
+### Design references
+
+- [ADR-0023](adr/0023-async-state-machine.md) — async state-machine strategy and implementation summary.
+- [ADR-0040](adr/0040-sequence-type-and-yield.md) — `sequence[T]` type alias and `yield` statement.
+
 ## Entry-point synthesis
 
 GSharp supports C# 9-style top-level statements. The binder lowers a file's top-level statements into a single hidden `MethodSymbol` (logically `<TopLevel>$.<Main>$(string[] args)`). The emitter marks that method as the assembly entry point. An explicit `func Main()` is supported and takes precedence; mixing both in the same compilation is an error. See [`Gsharp-design-v0.1.md`](../design/Gsharp-design-v0.1.md) for the language-level contract.
