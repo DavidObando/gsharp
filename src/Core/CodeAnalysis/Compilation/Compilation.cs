@@ -201,6 +201,8 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
+        Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References);
+
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
         {
@@ -255,6 +257,8 @@ public class Compilation
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
+
+        Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References);
 
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
