@@ -1015,6 +1015,15 @@ public class Parser
             return ParseChanTypeClause();
         }
 
+        // ADR-0039: pointer type `*T` in type-annotation position.
+        if (Current.Kind == SyntaxKind.StarToken)
+        {
+            var star = NextToken();
+            var pointee = ParseTypeClause();
+            var ptrQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+            return TypeClauseSyntax.CreatePointer(syntaxTree, star, pointee, ptrQuestion);
+        }
+
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
@@ -1166,7 +1175,8 @@ public class Parser
             Current.Kind != SyntaxKind.OpenSquareBracketToken &&
             Current.Kind != SyntaxKind.OpenParenthesisToken &&
             Current.Kind != SyntaxKind.FuncKeyword &&
-            Current.Kind != SyntaxKind.MapKeyword)
+            Current.Kind != SyntaxKind.MapKeyword &&
+            Current.Kind != SyntaxKind.StarToken)
         {
             return null;
         }

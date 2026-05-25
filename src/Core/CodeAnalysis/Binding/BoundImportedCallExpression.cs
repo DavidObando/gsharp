@@ -17,10 +17,12 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// </summary>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
-    public BoundImportedCallExpression(ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments)
+    /// <param name="argumentRefKinds">Per-argument ref-kind annotations (default all-None).</param>
+    public BoundImportedCallExpression(ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default)
     {
         Function = function;
         Arguments = arguments;
+        ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
     }
 
     /// <inheritdoc/>
@@ -38,4 +40,9 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// Gets the provided arguments.
     /// </summary>
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    /// <summary>
+    /// Gets the per-argument ref-kind annotations. May be default (all-None).
+    /// </summary>
+    public ImmutableArray<RefKind> ArgumentRefKinds { get; }
 }

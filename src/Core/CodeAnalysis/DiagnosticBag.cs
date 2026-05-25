@@ -989,6 +989,55 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
     }
 
+    /// <summary>GS9001: Cannot take address of a non-lvalue expression.</summary>
+    /// <param name="location">The text location of the <c>&amp;</c> operator.</param>
+    /// <param name="expressionText">A textual representation of the offending expression.</param>
+    public void ReportCannotTakeAddressOfNonLvalue(TextLocation location, string expressionText)
+    {
+        Report(location, $"GS9001: Cannot take address of '{expressionText}': expression is not an lvalue.");
+    }
+
+    /// <summary>GS9002: Argument must be passed by reference.</summary>
+    /// <param name="location">The text location of the argument.</param>
+    /// <param name="argumentIndex">The 1-based argument position.</param>
+    /// <param name="methodName">The target method name.</param>
+    public void ReportArgumentMustBePassedByRef(TextLocation location, int argumentIndex, string methodName)
+    {
+        Report(location, $"GS9002: Argument {argumentIndex} to '{methodName}' must be passed by reference (`&`).");
+    }
+
+    /// <summary>GS9003: Variable must be definitely assigned before being passed by ref.</summary>
+    /// <param name="location">The text location of the argument.</param>
+    /// <param name="variableName">The variable name.</param>
+    public void ReportVariableNotDefinitelyAssignedForRef(TextLocation location, string variableName)
+    {
+        Report(location, $"GS9003: Variable '{variableName}' must be definitely assigned before being passed by `ref`.");
+    }
+
+    /// <summary>GS9004: By-ref value cannot escape its declaring scope.</summary>
+    /// <param name="location">The text location of the escape attempt.</param>
+    /// <param name="reason">Description of the escape (capture in lambda, return, store in field).</param>
+    public void ReportByRefCannotEscape(TextLocation location, string reason)
+    {
+        Report(location, $"GS9004: By-ref value cannot escape: {reason}.");
+    }
+
+    /// <summary>GS9005: Cannot take address of a constant.</summary>
+    /// <param name="location">The text location of the <c>&amp;</c> operator.</param>
+    /// <param name="constantName">The constant name.</param>
+    public void ReportCannotTakeAddressOfConstant(TextLocation location, string constantName)
+    {
+        Report(location, $"GS9005: Cannot take address of constant '{constantName}'.");
+    }
+
+    /// <summary>GS9006: Pointer type cannot be used as a field type.</summary>
+    /// <param name="location">The text location of the field declaration.</param>
+    /// <param name="typeName">The pointer type name.</param>
+    public void ReportPointerTypeCannotBeFieldType(TextLocation location, string typeName)
+    {
+        Report(location, $"GS9006: Pointer type '{typeName}' cannot be used as a field type.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

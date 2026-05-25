@@ -1705,6 +1705,18 @@ public sealed class Binder
             return ChannelTypeSymbol.Get(elementType);
         }
 
+        // ADR-0039: pointer type clause `*T`.
+        if (syntax.IsPointer)
+        {
+            var pointeeType = BindTypeClause(syntax.PointerPointeeType);
+            if (pointeeType == null)
+            {
+                return null;
+            }
+
+            return ByRefTypeSymbol.Get(pointeeType);
+        }
+
         // Phase 4.4 / ADR-0020: if the type clause carries a type-argument list,
         // first try to resolve the identifier as an open generic CLR type via
         // imports (mangled name `Name`N`). This lets users write `List[int]` or
@@ -3943,6 +3955,18 @@ public sealed class Binder
             return BindChannelReceiveExpression(syntax);
         }
 
+        // ADR-0039: `&expr` — address-of (managed by-ref pointer).
+        if (syntax.OperatorToken.Kind == SyntaxKind.AmpersandToken)
+        {
+            return BindAddressOfExpression(syntax);
+        }
+
+        // ADR-0039: `*expr` — dereference a by-ref pointer.
+        if (syntax.OperatorToken.Kind == SyntaxKind.StarToken)
+        {
+            return BindDereferenceExpression(syntax);
+        }
+
         var boundOperand = BindExpression(syntax.Operand);
 
         if (boundOperand.Type == TypeSymbol.Error)
@@ -4008,6 +4032,138 @@ public sealed class Binder
         }
 
         return new BoundUnaryExpression(boundOperator, boundOperand);
+    }
+
+    /// <summary>ADR-0039: Binds <c>&amp;expr</c> — takes managed pointer to an lvalue.</summary>
+    private BoundExpression BindAddressOfExpression(UnaryExpressionSyntax syntax)
+    {
+        var operand = BindExpression(syntax.Operand);
+        if (operand is BoundErrorExpression)
+        {
+            return operand;
+        }
+
+        // GS9005: cannot take address of a constant binding.
+        if (operand is BoundVariableExpression bve && bve.Variable.IsReadOnly)
+        {
+            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, bve.Variable.Name);
+            return new BoundErrorExpression();
+        }
+
+        // Lvalue check.
+        if (!IsLvalue(operand))
+        {
+            var exprText = syntax.Operand.ToString();
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.OperatorToken.Location, exprText);
+            return new BoundErrorExpression();
+        }
+
+        return new BoundAddressOfExpression(operand);
+    }
+
+    /// <summary>ADR-0039: Binds <c>*expr</c> — dereferences a managed pointer.</summary>
+    private BoundExpression BindDereferenceExpression(UnaryExpressionSyntax syntax)
+    {
+        var operand = BindExpression(syntax.Operand);
+        if (operand is BoundErrorExpression)
+        {
+            return operand;
+        }
+
+        if (operand.Type is not ByRefTypeSymbol)
+        {
+            Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, operand.Type);
+            return new BoundErrorExpression();
+        }
+
+        return new BoundDereferenceExpression(operand);
+    }
+
+    /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
+    private static bool IsLvalue(BoundExpression expression)
+    {
+        return expression is BoundVariableExpression
+            or BoundFieldAccessExpression
+            or BoundIndexExpression
+            or BoundDereferenceExpression;
+    }
+
+    /// <summary>ADR-0039: Computes per-argument <see cref="RefKind"/> from CLR parameter metadata.</summary>
+    private static ImmutableArray<RefKind> ComputeArgumentRefKinds(System.Reflection.ParameterInfo[] parameters)
+    {
+        var hasAnyRef = false;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].ParameterType.IsByRef)
+            {
+                hasAnyRef = true;
+                break;
+            }
+        }
+
+        if (!hasAnyRef)
+        {
+            return default;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<RefKind>(parameters.Length);
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+            if (!p.ParameterType.IsByRef)
+            {
+                builder.Add(RefKind.None);
+            }
+            else if (p.IsOut && !p.IsIn)
+            {
+                builder.Add(RefKind.Out);
+            }
+            else if (p.IsIn && !p.IsOut)
+            {
+                builder.Add(RefKind.In);
+            }
+            else
+            {
+                builder.Add(RefKind.Ref);
+            }
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>ADR-0039: Validates that ref/out arguments are wrapped in <c>BoundAddressOfExpression</c>.</summary>
+    private ImmutableArray<BoundExpression> ValidateRefArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> refKinds,
+        string methodName,
+        TextLocation callLocation)
+    {
+        if (refKinds.IsDefault || refKinds.Length == 0)
+        {
+            return arguments;
+        }
+
+        var builder = arguments.ToBuilder();
+        for (int i = 0; i < refKinds.Length && i < arguments.Length; i++)
+        {
+            var rk = refKinds[i];
+            if (rk == RefKind.None)
+            {
+                continue;
+            }
+
+            if (rk == RefKind.Ref || rk == RefKind.Out)
+            {
+                if (arguments[i] is not BoundAddressOfExpression)
+                {
+                    Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
+                }
+            }
+
+            // For `in`: accept either &expr or plain value (emitter spills temp).
+        }
+
+        return builder.ToImmutable();
     }
 
     private BoundExpression BindChannelReceiveExpression(UnaryExpressionSyntax syntax)
@@ -5005,11 +5161,19 @@ public sealed class Binder
             return false;
         }
 
+        var ctorRefKinds = ComputeArgumentRefKinds(bestCtor.GetParameters());
+        var ctorArgs = boundArguments.MoveToImmutable();
+        if (!ctorRefKinds.IsDefault)
+        {
+            ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
+        }
+
         result = new BoundClrConstructorCallExpression(
             clrType,
             bestCtor,
-            boundArguments.MoveToImmutable(),
-            TypeSymbol.FromClrType(clrType));
+            ctorArgs,
+            TypeSymbol.FromClrType(clrType),
+            ctorRefKinds);
         return true;
     }
 
@@ -5338,7 +5502,9 @@ public sealed class Binder
         {
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous))
             {
-                return new BoundImportedCallExpression(staticFn, arguments);
+                var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
+                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
+                return new BoundImportedCallExpression(staticFn, arguments, refKinds);
             }
 
             if (staticAmbiguous)
@@ -5422,7 +5588,9 @@ public sealed class Binder
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
-                        return new BoundImportedInstanceCallExpression(receiver, resolution.Best, returnType, arguments);
+                        var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
+                        ValidateRefArguments(arguments, instRefKinds, methodName, ce.Location);
+                        return new BoundImportedInstanceCallExpression(receiver, resolution.Best, returnType, arguments, instRefKinds);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression();

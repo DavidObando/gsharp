@@ -72,6 +72,8 @@ public enum BoundNodeKind
     SwitchExpression,
     SwitchExpressionArm,
     BlockExpression,
+    AddressOfExpression,
+    DereferenceExpression,
 
     // Patterns
     ConstantPattern,

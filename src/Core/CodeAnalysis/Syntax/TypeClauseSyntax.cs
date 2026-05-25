@@ -177,6 +177,22 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a pointer type (ADR-0039).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken starToken,
+        TypeClauseSyntax pointeeType,
+        SyntaxToken questionToken,
+        bool isPointer)
+        : base(syntaxTree)
+    {
+        PointerStarToken = starToken;
+        PointerPointeeType = pointeeType;
+        QuestionToken = questionToken;
+    }
+#pragma warning restore SA1642
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -266,4 +282,28 @@ public sealed class TypeClauseSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this clause denotes a channel type <c>chan T</c> (Phase 5.4 / ADR-0022).</summary>
     public bool IsChannel => ChanKeyword != null;
+
+    /// <summary>Gets the <c>*</c> token for pointer types, or <c>null</c> (ADR-0039).</summary>
+    public SyntaxToken PointerStarToken { get; }
+
+    /// <summary>Gets the pointee type clause for pointer types, or <c>null</c> (ADR-0039).</summary>
+    public TypeClauseSyntax PointerPointeeType { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a pointer type <c>*T</c> (ADR-0039).</summary>
+    public bool IsPointer => PointerStarToken != null;
+
+    /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="starToken">The <c>*</c> prefix token.</param>
+    /// <param name="pointeeType">The pointee type clause.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>A pointer type clause.</returns>
+    public static TypeClauseSyntax CreatePointer(
+        SyntaxTree syntaxTree,
+        SyntaxToken starToken,
+        TypeClauseSyntax pointeeType,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, starToken, pointeeType, questionToken, isPointer: true);
+    }
 }

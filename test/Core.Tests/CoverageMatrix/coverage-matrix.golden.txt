@@ -194,6 +194,7 @@ WhitespaceToken
 WithExpression
 
 [BoundNodeKind]
+AddressOfExpression
 AppendExpression
 ArrayCreationExpression
 AssignmentExpression
@@ -220,6 +221,7 @@ ConditionalGotoStatement
 ConstantPattern
 ConstructorCallExpression
 ConversionExpression
+DereferenceExpression
 DiscardPattern
 ErrorExpression
 ExpressionStatement
