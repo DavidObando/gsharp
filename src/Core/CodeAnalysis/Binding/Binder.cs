@@ -1125,14 +1125,14 @@ public sealed class Binder
                     methodReceiverStruct,
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
-                function.IsAsync = syntax.IsAsync;
+                function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
                 methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
                 return;
             }
 
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
-            function.IsAsync = syntax.IsAsync;
+            function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
 
             if (syntax.IsExtension)
             {
@@ -2823,9 +2823,35 @@ public sealed class Binder
             {
                 return true;
             }
+
+            // Async iterators: IAsyncEnumerable<T> / IAsyncEnumerator<T>
+            if (def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Checks if the return type is IAsyncEnumerable[T] or IAsyncEnumerator[T].
+    /// Functions with such return types are implicitly async iterators and allow
+    /// both yield and await without requiring the 'async' keyword.
+    /// </summary>
+    private static bool IsAsyncIteratorReturnType(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var def = clr.GetGenericTypeDefinition();
+        var fullName = def?.FullName;
+        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
     private static TypeSymbol GetIteratorElementType(TypeSymbol type)
@@ -2846,6 +2872,13 @@ public sealed class Binder
             var def = clr.GetGenericTypeDefinition();
             if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
                 def == typeof(System.Collections.Generic.IEnumerator<>))
+            {
+                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            }
+
+            // Async iterators: IAsyncEnumerable<T> / IAsyncEnumerator<T>
+            if (def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
+                def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
             {
                 return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
             }
@@ -4779,7 +4812,7 @@ public sealed class Binder
         if (substitution != null)
         {
             var returnType = SubstituteType(function.Type, substitution);
-            if (function.IsAsync)
+            if (function.IsAsync && !IsAsyncIteratorReturnType(function.Type))
             {
                 returnType = WrapAsTask(returnType);
             }
@@ -4787,7 +4820,7 @@ public sealed class Binder
             return new BoundCallExpression(function, boundArguments.ToImmutable(), returnType);
         }
 
-        if (function.IsAsync)
+        if (function.IsAsync && !IsAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = WrapAsTask(function.Type);
             return new BoundCallExpression(function, boundArguments.ToImmutable(), asyncReturn);
@@ -4892,7 +4925,7 @@ public sealed class Binder
     {
         var operand = BindExpression(syntax.Expression);
 
-        if (function == null || !function.IsAsync)
+        if (function == null || (!function.IsAsync && !IsAsyncIteratorReturnType(function.Type)))
         {
             Diagnostics.ReportAwaitOutsideAsyncFunction(syntax.AwaitKeyword.Location);
             return new BoundErrorExpression();

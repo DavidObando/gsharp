@@ -379,6 +379,8 @@ public abstract class BoundTreeRewriter
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
             case BoundNodeKind.ClrConstructorCallExpression:
                 return RewriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node);
+            case BoundNodeKind.ClrStaticCallExpression:
+                return RewriteClrStaticCallExpression((BoundClrStaticCallExpression)node);
             case BoundNodeKind.ClrPropertyAccessExpression:
                 return RewriteClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node);
             case BoundNodeKind.ClrPropertyAssignmentExpression:
@@ -411,6 +413,8 @@ public abstract class BoundTreeRewriter
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             case BoundNodeKind.StateMachineAwaitOnCompleted:
                 return RewriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node);
+            case BoundNodeKind.StateMachineBuilderMoveNext:
+                return node;
             case BoundNodeKind.SpillSequenceExpression:
                 return RewriteSpillSequenceExpression((BoundSpillSequenceExpression)node);
             case BoundNodeKind.DefaultExpression:
@@ -1257,6 +1261,34 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundClrConstructorCallExpression(node.ClrType, node.Constructor, builder.ToImmutable(), node.Type);
+    }
+
+    /// <summary>Rewrites a CLR static method call expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrStaticCallExpression(BoundClrStaticCallExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        return builder == null ? node : new BoundClrStaticCallExpression(node.Method, node.Type, builder.ToImmutable(), node.ArgumentRefKinds);
     }
 
     /// <summary>Rewrites a CLR property/field access on a CLR receiver.</summary>

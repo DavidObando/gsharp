@@ -218,6 +218,7 @@ ClrIndexAssignmentExpression
 ClrIndexExpression
 ClrPropertyAccessExpression
 ClrPropertyAssignmentExpression
+ClrStaticCallExpression
 ClrUnaryOperatorExpression
 ConditionalGotoStatement
 ConstantPattern
@@ -260,6 +261,7 @@ ScopeStatement
 SelectStatement
 SpillSequenceExpression
 StateMachineAwaitOnCompleted
+StateMachineBuilderMoveNext
 StructLiteralExpression
 SwitchExpression
 SwitchExpressionArm
