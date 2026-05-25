@@ -246,6 +246,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.SpillSequenceExpression:
                 WriteSpillSequenceExpression((BoundSpillSequenceExpression)node, writer);
                 break;
+            case BoundNodeKind.DefaultExpression:
+                WriteDefaultExpression((BoundDefaultExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -1358,5 +1361,13 @@ public static class BoundNodePrinter
         writer.WriteLine();
         writer.Indent--;
         writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+    }
+
+    private static void WriteDefaultExpression(BoundDefaultExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword("default");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteIdentifier(node.Type.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 }
