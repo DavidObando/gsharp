@@ -3959,7 +3959,7 @@ internal sealed class ReflectionMetadataEmitter
                         this.EmitExpression(arg);
                     }
 
-                    this.il.Call(this.outer.GetMethodReference(impCall.Function.Method));
+                    this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method));
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                     this.EmitInstanceReceiver(instCall.Receiver);
@@ -3968,7 +3968,7 @@ internal sealed class ReflectionMetadataEmitter
                         this.EmitExpression(arg);
                     }
 
-                    this.il.Call(this.outer.GetMethodReference(instCall.Method));
+                    this.il.Call(this.outer.GetMethodEntityHandle(instCall.Method));
                     break;
                 case BoundConversionExpression conv:
                     this.EmitConversion(conv);
