@@ -8,7 +8,7 @@ A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, 
 
 | Sample | Demonstrates |
 | --- | --- |
-| `AsyncTask.gs` | `async func`, `await`, BCL `Task.Delay` interop, `scope { go asyncEntry() }` driver pattern for top-level async. Emit of `async`/`await` is the only remaining Phase 5 surface that does not yet route through the emit backend (ADR-0023 Strategy A — multi-month bespoke `IAsyncStateMachine` rewrite). |
+| *(AsyncTask.gs was promoted to top-level `samples/` in #135 after async emit shipped end-to-end — see ADR-0023.)* | |
 
 Other Phase 5 samples (`PortScan.gs` exercising `chan` + `go` + `scope` + `select`, and `Patterns.gs` / `SwitchExpression.gs` exercising pattern matching) now live under top-level `samples/` and run on both backends after the Phase A–G emit work.
 

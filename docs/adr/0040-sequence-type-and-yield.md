@@ -1,7 +1,7 @@
 # ADR-0040: `sequence[T]` type alias and `yield` statement
 
-- **Status**: Proposed
-- **Date**: 2026-05-26
+- **Status**: Shipped (sync iterators); async iterators shipped in #128
+- **Date**: 2026-05-25
 - **Phase**: Phase 7 follow-up — iterator support
 - **Related**: ADR-0023 (async state machine), ADR-0031 (canonical `for x in collection`), ADR-0034 (imported CLR interop), ADR-0039 (by-ref pointers)
 
@@ -35,9 +35,9 @@ A function containing any `yield` statement becomes an *iterator function*. The 
 
 This slice does not implement `yield break`. The GSharp answer for early termination of an iterator is plain `return` — running off the end of the function body or executing `return` causes `MoveNext()` to return `false`. This is consistent with Go's approach where `return` is the single exit mechanism, and avoids a two-keyword statement form that has no analog in Go or Kotlin.
 
-### 4. Async iterators deferred
+### 4. Async iterators
 
-`IAsyncEnumerable[T]` and `await foreach`-style async iteration are a separate future slice. The `sequence[T]` alias is sync-only; an `async_sequence[T]` or equivalent will be designed when that work begins.
+`IAsyncEnumerable[T]` with mixed `yield` + `await` shipped in #128 as part of the ADR-0023 async emitter rollout. The `asyncSequence[T]` alias is deferred to a future ADR; users spell the type as `IAsyncEnumerable[T]` directly today.
 
 ## Surface syntax
 
@@ -107,9 +107,9 @@ This reuses architectural patterns from the async state-machine pipeline (`Synth
 
 ## Open questions
 
-1. **Async iterators**: `IAsyncEnumerable[T]` support is deferred. Will likely introduce `async_sequence[T]` or reuse `sequence[T]` in async context.
+1. **Async iterator alias**: `IAsyncEnumerable[T]` support shipped in #128 but no `asyncSequence[T]` alias exists yet. Future ADR will decide the ergonomic spelling.
 2. **Try/finally in iterators**: this slice does not support `try`/`finally` within iterator bodies (would require `Dispose()` to resume into finally blocks). A diagnostic is emitted if detected.
-3. **Interpreter parity**: the interpreter (`Evaluator.cs`) does not gain `yield` support in this slice. Iterator functions are emit-only. This is a known gap — the interpreter is authoritative per `docs/emit-pipeline.md` but iterator state machines are inherently an emit concern. Interpreter parity is tracked as follow-up work.
+3. **Interpreter parity**: the interpreter (`Evaluator.cs`) does not gain `yield` support in this slice. Iterator functions are emit-only. This is a known gap tracked as #138 — the interpreter is authoritative per `docs/emit-pipeline.md` but iterator state machines are inherently an emit concern.
 
 ## Alternatives considered
 
@@ -127,4 +127,4 @@ Rejected in favor of bare `yield <expr>` for brevity and Go/Kotlin flavor. The `
 
 ## Summary
 
-This ADR introduces producer-side iterator support via `sequence[T]` (alias for `IEnumerable[T]`) and `yield <expr>`. The feature uses a synthesized state-machine class following the well-established C# iterator pattern, reuses architectural patterns from the existing async pipeline, and composes naturally with the already-shipped `for x in` consumption syntax. `yield break` is omitted in favor of plain `return`; async iterators are deferred.
+This ADR introduces producer-side iterator support via `sequence[T]` (alias for `IEnumerable[T]`) and `yield <expr>`. The feature uses a synthesized state-machine class following the well-established C# iterator pattern, reuses architectural patterns from the existing async pipeline, and composes naturally with the already-shipped `for x in` consumption syntax. `yield break` is omitted in favor of plain `return`. Async iterators (`IAsyncEnumerable[T]` with mixed `yield` + `await`) shipped in #128 as a follow-on to this ADR.

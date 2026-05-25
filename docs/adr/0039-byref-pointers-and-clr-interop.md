@@ -3,7 +3,7 @@
 - **Status**: Proposed
 - **Date**: 2026-05-25
 - **Phase**: Phase 7 follow-up — async emitter milestone (state-machine kickoff / MoveNext); also closes CLR interop gaps tracked since ADR-0034
-- **Related**: ADR-0023 (async state machine — deferred emit), ADR-0034 (imported CLR interop), ADR-0035 (user operator overloads), ADR-0038 (generic method inference); async emitter plan (field-map, kickoff, MoveNext)
+- **Related**: ADR-0023 (async state machine), ADR-0034 (imported CLR interop), ADR-0035 (user operator overloads), ADR-0038 (generic method inference); async emitter plan (field-map, kickoff, MoveNext)
 
 ## Context
 

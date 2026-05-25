@@ -1,9 +1,9 @@
 # ADR-0023: `async func` / `await` — state-machine strategy
 
-- **Status**: Accepted (interpreter); deferred (emit)
-- **Date**: 2026-05-23
+- **Status**: Shipped (interpreter and emit)
+- **Date**: 2026-05-25
 - **Phase**: Phase 5 (lock before 5.1)
-- **Related**: ADR-0002 (concurrency model), ADR-0022 (go/chan/select lowering); execution plan §§5.1 – 5.2, 5.8; issue #51 (Roslyn-fork option)
+- **Related**: ADR-0002 (concurrency model), ADR-0022 (go/chan/select lowering), ADR-0040 (`sequence[T]` + `yield`); execution plan §§5.1 – 5.2, 5.8; issue #51 (Roslyn-fork option)
 
 ## Context
 
@@ -44,19 +44,87 @@ This pragma keeps the interpreter simple and avoids implementing a continuation-
 
 ### Emit
 
-Emit is **deferred** out of this PR. The work splits into two strategies; we commit to the choice in Phase 7 alongside the broader Roslyn-fork question (ADR-0027).
+The emit backend implements **Strategy A — bespoke state-machine emit** from the original framing. The async rewriter operates on the bound tree (`BoundTreeRewriter`) without any Roslyn runtime dependency, producing IL that follows the canonical `IAsyncStateMachine` contract: a struct state machine with a builder field, state field, hoisted locals, and a `MoveNext()` dispatch loop. The pipeline lives inside `Compilation.LowerForEmit` and runs after binding but before `EmitAssembly`.
 
-**Strategy A — bespoke state-machine emit.** Replicate Roslyn's `AsyncMethodToStateMachineRewriter` against our `BoundTreeRewriter`. Multi-month effort. Owns the long-tail of edge cases (try/catch around awaits, finally with awaits, loops with awaits, structured locals across await points).
+Key architectural choices:
 
-**Strategy B — Roslyn-borrowed lowering.** Re-host Roslyn's async rewriter on our bound tree (the project already vendors a Roslyn submodule under `src/Roslyn/`). Risk: tight coupling to Roslyn's BoundNode shape; ongoing maintenance against upstream churn.
+- **Struct state machines** for async methods and async lambdas (value-type allocation, boxed only on first incomplete await — matching Roslyn's optimization).
+- **Class state machines** for sync iterators (`IEnumerable[T]`) and async iterators (`IAsyncEnumerable[T]`), following the C# pattern where the iterator object itself serves as both enumerable and enumerator for the initial thread.
+- Lowering passes run in a fixed order: `AsyncExceptionHandlerRewriter` → `SpillSequenceSpiller` → `RefInitializationHoister` → `AsyncCaptureWalker` → state-machine rewriter (with MoveNext body rewriter as a sub-pass).
+- Synthesized state-machine types nest privately inside the declaring type (`<Program>` for top-level functions; closure class for capture-bearing lambdas), matching the Roslyn convention for debugger/reflection discovery.
+- Sequence-point markers (`AwaitYieldPoint` / `AwaitResumePoint`) are emitted as `nop` bytes today, awaiting a future PDB writer.
+- Awaitable-shape resolution is duck-typed: any type exposing a compatible `GetAwaiter()` pattern (including `Task.Yield()`, `ValueTask`, and structural awaitables) is accepted.
 
-The deciding inputs we expect to have by Phase 7:
+See `docs/emit-pipeline.md` for the full pass-ordering diagram and typedef layout.
 
-- Real-world async sample volume (Phase 5 samples + Phase 6/7 user testing).
-- Whether the bespoke emitter has hosted enough lowering features by then to make Strategy A's incremental cost feel finite.
-- The Phase 7 ADR-0027 outcome on issue #51.
+## Implementation summary
 
-Until then the interpreter is the only conformance backend for `async`/`await`. The coverage matrix and conformance harness record this explicitly (✅ interp, ❌ emit) so the gap is visible.
+The async emitter shipped end-to-end across PRs #106–#135, building on the interpreter-side work from the original acceptance and the pre-async gap closure in #98.
+
+### Foundations
+
+- **#98** — interpreter↔emitter gap closure (Phases A–G); async deferred per this ADR.
+- **#106** — foundational lowering scaffolding (ADR-0023 Strategy A).
+- **#107** — `AsyncCaptureWalker` (hoist-set analysis).
+- **#108** — `AsyncStateMachineTypeBuilder` factory.
+- **#109** — `AsyncEmitPrecheck` (clean diagnostic instead of bad IL).
+- **#110** — struct materialization for synthesized state machines.
+- **#111** — state-machine field map.
+- **#112** — resumable state allocator.
+- **#113** — state-machine rewriter scaffold.
+- **#114** — MoveNext body plan.
+- **#115** — kickoff body plan.
+- **#116** — kickoff operation ordering.
+- **#118** — kickoff body emission.
+- **#119** — MoveNext per-await dispatch (straight-line).
+
+### Lowering passes
+
+- **#121** — `SpillSequenceSpiller` (lift await out of sub-expressions).
+- **#122** — `AsyncExceptionHandlerRewriter` (spec §8).
+- **#123** — `RefInitializationHoister` (decompose ref locals across await).
+
+### Producer-side iterators
+
+- **ADR-0040 + #124** — `sequence[T]` type alias and `yield` keyword (sync iterators).
+- **#128** — `IAsyncEnumerable[T]` with mixed `yield` + `await` (async iterators).
+
+### Feature surface
+
+- **#125** — `BoundDefaultExpression` + `initobj` (value-type awaiter clear).
+- **#126** — awaitable-shape generalization (`Task.Yield()` / `ValueTask` / structural awaitables).
+- **#127** — async lambdas.
+
+### Polish
+
+- **#129** — sequence-point markers (§9: `AwaitYieldPoint` / `AwaitResumePoint`).
+- **#130** — `LowerForEmit` consolidation (extract pipeline helper; deduplicate Emit overloads).
+- **#131** — precheck cleanup + reflection invariants.
+- **#133** — nested-private state-machine types (Roslyn convention parity).
+
+### Verification
+
+- **#134** — white-box unit tests for async/iterator lowering rewriter passes.
+- **#135** — interp↔emit parity harness + `AsyncTask.gs` conformance promotion + `go`-on-async fix.
+
+## Known limitations / follow-ups
+
+Filed issues tracking incomplete edges of the async/iterator surface:
+
+- **#132** — `return await X` leaks un-rewritten `BoundAwaitExpression` to emitter.
+- **#136** — async `try`/`catch` around `await` → `InvalidProgramException` at runtime.
+- **#137** — async `try`/`finally` around `await` → `InvalidProgramException` at runtime.
+- **#138** — interpreter lacks `yield` (sync and async iterators); blocks parity for any iterator-using program.
+
+Smaller deferrals carried in commit messages:
+
+- `[EnumeratorCancellation]` parameter forwarding (§10 advanced).
+- `asyncSequence[T]` alias for `IAsyncEnumerable[T]` (future ADR).
+- Iterator `try`/`finally` support (`Dispose()` resuming into finally blocks).
+- Extension-method `GetAwaiter()` resolution.
+- `AsyncMethodBuilderInfo` for `ValueTask`/`ValueTask<T>` return types.
+- Pre-existing parser bug — generic return type + params combo.
+- User-facing `default` syntax (`BoundDefaultExpression` is internal-only today).
 
 ## Consequences
 
@@ -64,7 +132,7 @@ Until then the interpreter is the only conformance backend for `async`/`await`. 
 - New bound forms: `BoundAwaitExpression`. (`async` itself flows through `FunctionSymbol.IsAsync` and does not need its own bound node.)
 - Binder rules: `await` only inside async context; an `async func` declared `T` is callable as `Task[T]` everywhere; `await` is the only legal way to consume a `Task[T]` for its value (other than `.Result` via CLR interop, which we accept as an escape hatch).
 - Interpreter takes a synchronous-blocking `await`. Tests must therefore not assert thread-id continuity across `await`; document the constraint in the conformance harness header.
-- Emit gap is recorded explicitly. Phase 5 exit criterion drops the "both backends" half for async-bearing samples and notes the matrix gap.
+- Both backends (interpreter and emit) now cover `async`/`await`. The coverage matrix reflects ✅ interp, ✅ emit for async-method and async-lambda surfaces. Iterator surfaces are emit-only pending #138.
 
 ## Alternatives considered
 
@@ -74,6 +142,6 @@ Until then the interpreter is the only conformance backend for `async`/`await`. 
 
 ## Open follow-ups
 
-- Async lambdas (`async func(x int) int { … }`) — included in the interpreter pass; emit follow-up tracks them with the rest.
-- `ValueTask` / `ValueTask[T]` — duck-typed via `GetAwaiter()`; explicit support TBD when usage demands.
-- Cancellation token plumbing into `await for` — interpreter uses the enclosing `scope { }`'s CTS when present; standalone `await for` uses `CancellationToken.None`. Revisit in Phase 7.
+- Async lambdas (`async func(x int) int { … }`) — shipped in #127 for both interpreter and emit.
+- `ValueTask` / `ValueTask[T]` — duck-typed via `GetAwaiter()` and accepted at the language level (#126); `AsyncMethodBuilderInfo` for native `ValueTask` return (avoiding the Task wrapper) is deferred.
+- Cancellation token plumbing into `await for` — interpreter uses the enclosing `scope { }`'s CTS when present; standalone `await for` uses `CancellationToken.None`. `[EnumeratorCancellation]` forwarding is deferred.
