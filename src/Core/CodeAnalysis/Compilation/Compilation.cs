@@ -201,7 +201,7 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
-        Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References);
+        var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
 
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
@@ -212,7 +212,7 @@ public class Compilation
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
-            EmitAssembly(program, stream, References);
+            EmitAssembly(program, stream, References, asyncRewriteResult: asyncRewriteResult);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -258,7 +258,7 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
-        Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References);
+        var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
 
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
@@ -270,12 +270,12 @@ public class Compilation
         {
             if (peStream is not null)
             {
-                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false);
+                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: asyncRewriteResult);
             }
 
             if (refStream is not null)
             {
-                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true);
+                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: asyncRewriteResult);
             }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
@@ -288,8 +288,8 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult);
     }
 }

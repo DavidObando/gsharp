@@ -61,8 +61,10 @@ public class AsyncEmitPrecheckTests
     }
 
     [Fact]
-    public void Compile_AsyncFunction_PrechecksCleanly_NotInvalidProgramException()
+    public void Compile_AsyncFunction_EmitsSuccessfully()
     {
+        // Now that the kickoff body emitter is implemented, simple async
+        // functions should compile without the precheck blocking them.
         var source = "package main\nasync func doIt() {}\n";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
@@ -70,8 +72,7 @@ public class AsyncEmitPrecheckTests
         using var peStream = new MemoryStream();
         var result = compilation.Emit(peStream);
 
-        Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, d => d.Message == AsyncEmitPrecheck.AsyncEmitNotImplementedMessage);
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(d => d.Message)));
     }
 
     [Fact]

@@ -41,10 +41,19 @@ public static class AsyncEmitPrecheck
         "Emitting 'async' functions is not yet implemented; tracked in https://github.com/DavidObando/gsharp/issues/52. " +
         "Use the interpreter for async code until the state-machine emitter lands.";
 
+    /// <summary>The diagnostic message reported for async iterators (not yet supported).</summary>
+    public const string AsyncIteratorNotImplementedMessage =
+        "Emitting 'async' iterator functions (IAsyncEnumerable/IAsyncEnumerator) is not yet implemented; tracked in https://github.com/DavidObando/gsharp/issues/52.";
+
+    /// <summary>The diagnostic message reported for async lambdas (not yet supported).</summary>
+    public const string AsyncLambdaNotImplementedMessage =
+        "Emitting 'async' lambdas is not yet implemented; tracked in https://github.com/DavidObando/gsharp/issues/52.";
+
     /// <summary>
     /// Walks <paramref name="program"/> and returns one diagnostic per
-    /// <c>async</c> function. Returns an empty array when the program has
-    /// no async functions.
+    /// <c>async</c> function that the emitter cannot yet handle.
+    /// Now that the kickoff body and MoveNext stub are implemented, only
+    /// async iterators and async lambdas are gated.
     /// </summary>
     /// <param name="program">The bound program (post-binding, pre-emit).</param>
     /// <returns>The diagnostics to surface; empty when emit may proceed.</returns>
@@ -64,16 +73,54 @@ public static class AsyncEmitPrecheck
                 continue;
             }
 
-            var location = LocateAsyncFunction(function);
-            builder.Add(new Diagnostic(location, AsyncEmitNotImplementedMessage));
+            // Gate: async iterators (IAsyncEnumerable<T> / IAsyncEnumerator<T>)
+            if (IsAsyncIterator(function))
+            {
+                var location = LocateAsyncFunction(function);
+                builder.Add(new Diagnostic(location, AsyncIteratorNotImplementedMessage));
+                continue;
+            }
+
+            // Gate: async methods that have no successfully synthesized state machine
+            // (e.g. builder resolution failed). These remain blocked.
+            if (function.StateMachineType == null)
+            {
+                var location = LocateAsyncFunction(function);
+                builder.Add(new Diagnostic(location, AsyncEmitNotImplementedMessage));
+                continue;
+            }
+
+            // TODO(async-lambda): gate async lambdas once they are representable
+            // as FunctionSymbol.IsAsync in the bound program.
         }
 
         if (program.EntryPoint is { } entry && entry.IsAsync && !program.Functions.ContainsKey(entry))
         {
-            builder.Add(new Diagnostic(LocateAsyncFunction(entry), AsyncEmitNotImplementedMessage));
+            if (IsAsyncIterator(entry) || entry.StateMachineType == null)
+            {
+                builder.Add(new Diagnostic(LocateAsyncFunction(entry), AsyncEmitNotImplementedMessage));
+            }
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Determines whether the given async function is an async iterator
+    /// (returns IAsyncEnumerable or IAsyncEnumerator).
+    /// </summary>
+    private static bool IsAsyncIterator(FunctionSymbol function)
+    {
+        var returnClrType = function.Type?.ClrType;
+        if (returnClrType == null || !returnClrType.IsGenericType)
+        {
+            return false;
+        }
+
+        var openDef = returnClrType.GetGenericTypeDefinition();
+        var fullName = openDef?.FullName;
+        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
     private static TextLocation LocateAsyncFunction(FunctionSymbol function)
