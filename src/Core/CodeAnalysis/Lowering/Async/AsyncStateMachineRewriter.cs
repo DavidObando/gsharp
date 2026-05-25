@@ -60,9 +60,10 @@ public static class AsyncStateMachineRewriter
 
             var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, pair.Value);
             var awaitStates = AwaitStateCollector.Allocate(pair.Value);
+            var moveNextPlan = MoveNextBodyBuilder.Build(pair.Value, awaitStates);
             function.StateMachineType = stateMachine;
 
-            plans.Add(new AsyncStateMachinePlan(function, pair.Value, stateMachine, fieldMap, awaitStates));
+            plans.Add(new AsyncStateMachinePlan(function, pair.Value, stateMachine, fieldMap, awaitStates, moveNextPlan));
         }
 
         return new AsyncStateMachineRewriteResult(program, plans.ToImmutable());
@@ -140,18 +141,21 @@ public sealed class AsyncStateMachinePlan
     /// <param name="stateMachine">The synthesized state-machine type.</param>
     /// <param name="fieldMap">The state-machine field map.</param>
     /// <param name="awaitResumeStates">Resume-state numbers keyed by await expression.</param>
+    /// <param name="moveNextPlan">The planned <c>MoveNext</c> body shape.</param>
     public AsyncStateMachinePlan(
         FunctionSymbol kickoffMethod,
         BoundBlockStatement loweredBody,
         SynthesizedStateMachineType stateMachine,
         AsyncStateMachineFieldMap fieldMap,
-        ImmutableDictionary<BoundAwaitExpression, int> awaitResumeStates)
+        ImmutableDictionary<BoundAwaitExpression, int> awaitResumeStates,
+        MoveNextBodyPlan moveNextPlan)
     {
         KickoffMethod = kickoffMethod ?? throw new ArgumentNullException(nameof(kickoffMethod));
         LoweredBody = loweredBody ?? throw new ArgumentNullException(nameof(loweredBody));
         StateMachine = stateMachine ?? throw new ArgumentNullException(nameof(stateMachine));
         FieldMap = fieldMap ?? throw new ArgumentNullException(nameof(fieldMap));
         AwaitResumeStates = awaitResumeStates ?? ImmutableDictionary<BoundAwaitExpression, int>.Empty;
+        MoveNextPlan = moveNextPlan ?? throw new ArgumentNullException(nameof(moveNextPlan));
     }
 
     /// <summary>Gets the original async kickoff method.</summary>
@@ -168,4 +172,7 @@ public sealed class AsyncStateMachinePlan
 
     /// <summary>Gets await resume-state numbers keyed by await expression.</summary>
     public ImmutableDictionary<BoundAwaitExpression, int> AwaitResumeStates { get; }
+
+    /// <summary>Gets the planned <c>MoveNext</c> body shape.</summary>
+    public MoveNextBodyPlan MoveNextPlan { get; }
 }
