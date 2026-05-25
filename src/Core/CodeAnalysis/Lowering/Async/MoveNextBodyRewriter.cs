@@ -476,10 +476,17 @@ public static class MoveNextBodyRewriter
                 stmts.Add(Stmt(new BoundAssignmentExpression(awaiterLocal, reloadedAwaiter)));
 
                 // this.<>u__N = default;
-                var defaultAwaiter = awaiterClrType.IsValueType
-                    ? (BoundExpression)new BoundLiteralExpression(null)
-                    : new BoundLiteralExpression(null);
-                stmts.Add(Stmt(ctx.WriteField(awaiterField, defaultAwaiter)));
+                // For reference-typed awaiters, ldnull;stfld is valid IL and releases the GC root.
+                // For value-typed awaiters, we cannot emit ldnull;stfld <Struct> (invalid IL — the
+                // Linux JIT throws InvalidProgramException, the macOS JIT happens to tolerate it).
+                // Proper `initobj` on the field address requires emitter support not yet in place;
+                // skip the clear for value-type awaiters in this slice. The Task referenced by the
+                // awaiter struct stays GC-rooted until the next await stores into the same field.
+                // TODO(async-emit): emit `ldarg.0; ldflda <>u__N; initobj T` to clear value-type awaiters.
+                if (!awaiterClrType.IsValueType)
+                {
+                    stmts.Add(Stmt(ctx.WriteField(awaiterField, new BoundLiteralExpression(null))));
+                }
 
                 // this.<>1__state = -1;
                 stmts.Add(Stmt(ctx.WriteField(ctx.plan.FieldMap.StateField, Literal(StateMachineStates.NotStartedOrRunningState))));
