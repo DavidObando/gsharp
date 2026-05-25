@@ -58,20 +58,24 @@ public static class AsyncStateMachineRewriter
             // Run the spill spiller to lift sub-expression awaits to statement top-level.
             var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
 
-            var stateMachine = AsyncStateMachineTypeBuilder.Build(function, spilledBody, references, ordinal);
+            // Eliminate ref locals (byref pointers) that cannot be hoisted into
+            // state-machine fields. Inlines operand expressions at each use site.
+            var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
+
+            var stateMachine = AsyncStateMachineTypeBuilder.Build(function, refHoisted, references, ordinal);
             if (stateMachine == null)
             {
                 function.StateMachineType = null;
                 continue;
             }
 
-            var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, spilledBody);
-            var awaitStates = AwaitStateCollector.Allocate(spilledBody);
+            var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, refHoisted);
+            var awaitStates = AwaitStateCollector.Allocate(refHoisted);
             var kickoffPlan = KickoffBodyBuilder.Build(function, fieldMap);
-            var moveNextPlan = MoveNextBodyBuilder.Build(spilledBody, awaitStates);
+            var moveNextPlan = MoveNextBodyBuilder.Build(refHoisted, awaitStates);
             function.StateMachineType = stateMachine;
 
-            plans.Add(new AsyncStateMachinePlan(function, spilledBody, stateMachine, fieldMap, awaitStates, kickoffPlan, moveNextPlan));
+            plans.Add(new AsyncStateMachinePlan(function, refHoisted, stateMachine, fieldMap, awaitStates, kickoffPlan, moveNextPlan));
         }
 
         return new AsyncStateMachineRewriteResult(program, plans.ToImmutable());
