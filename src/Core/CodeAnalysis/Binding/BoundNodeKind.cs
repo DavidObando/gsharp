@@ -93,6 +93,7 @@ public enum BoundNodeKind
     SelectStatement,
     ScopeStatement,
     AwaitForRangeStatement,
+    YieldStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

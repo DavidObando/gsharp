@@ -12,7 +12,9 @@ using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -84,10 +86,15 @@ internal sealed class ReflectionMetadataEmitter
     // with an InvokeAction instance method that Task.Run can bind to an Action.
     private readonly Dictionary<BoundGoStatement, ClosureInfo> goClosureInfos = new Dictionary<BoundGoStatement, ClosureInfo>();
     private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
+    private readonly Dictionary<FunctionSymbol, BoundBlockStatement> iteratorKickoffBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+    private readonly Dictionary<StructSymbol, IteratorStateMachineInfo> iteratorStateMachineInfos = new Dictionary<StructSymbol, IteratorStateMachineInfo>();
     private int closureCounter;
 
     // Async state-machine plans produced by AsyncStateMachineRewriter.
     private ImmutableArray<AsyncStateMachinePlan> asyncStateMachinePlans = ImmutableArray<AsyncStateMachinePlan>.Empty;
+
+    // Iterator state-machine plans produced by IteratorRewriter.
+    private ImmutableArray<IteratorStateMachinePlan> iteratorPlans = ImmutableArray<IteratorStateMachinePlan>.Empty;
 
     private Type coreObjectType;
     private Type coreStringType;
@@ -141,18 +148,28 @@ internal sealed class ReflectionMetadataEmitter
     /// Optional result from the async state-machine rewriter. When non-null,
     /// contains plans for emitting state-machine types and kickoff bodies.
     /// </param>
+    /// <param name="iteratorRewriteResult">
+    /// Optional result from the iterator rewriter. When non-null, contains plans
+    /// for emitting iterator state-machine types and kickoff bodies.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
         ReferenceResolver references = null,
         string assemblyName = null,
         bool metadataOnly = false,
-        AsyncStateMachineRewriteResult asyncRewriteResult = null)
+        AsyncStateMachineRewriteResult asyncRewriteResult = null,
+        IteratorRewriteResult iteratorRewriteResult = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
         if (asyncRewriteResult != null)
         {
             emitter.asyncStateMachinePlans = asyncRewriteResult.StateMachines;
+        }
+
+        if (iteratorRewriteResult != null)
+        {
+            emitter.iteratorPlans = iteratorRewriteResult.Plans;
         }
 
         emitter.EmitCore(peStream);
@@ -196,6 +213,7 @@ internal sealed class ReflectionMetadataEmitter
             ?? (this.program.Packages.IsDefaultOrEmpty ? null : this.program.Packages[0]);
         this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
         this.SynthesizeGoClosures(goStatements, hostPackageGuess);
+        this.SynthesizeIteratorStateMachines(hostPackageGuess);
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
@@ -365,6 +383,11 @@ internal sealed class ReflectionMetadataEmitter
                         this.metadata.AddInterfaceImplementation(this.structTypeDefs[c], ifaceHandle);
                     }
                 }
+            }
+
+            if (this.iteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
+            {
+                this.AddIteratorInterfaceImplementations(c, iteratorInfo);
             }
         }
 
@@ -1602,6 +1625,11 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
+        if (this.iteratorKickoffBodies.TryGetValue(function, out var iteratorKickoffBody))
+        {
+            body = iteratorKickoffBody;
+        }
+
         // Async kickoff body: replace the user body with the kickoff stub
         // that creates the state machine, initializes it, and calls Start.
         AsyncStateMachinePlan asyncPlan = null;
@@ -2578,6 +2606,121 @@ internal sealed class ReflectionMetadataEmitter
 
             this.goClosureInfos[go] = info;
         }
+    }
+
+    private void SynthesizeIteratorStateMachines(PackageSymbol hostPackage)
+    {
+        if (this.iteratorPlans.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var plan in this.iteratorPlans)
+        {
+            var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
+            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int, Accessibility.Public);
+            var currentField = new FieldSymbol("<>2__current", plan.ElementType, Accessibility.Public);
+            var initialThreadField = new FieldSymbol("<>l__initialThreadId", TypeSymbol.Int, Accessibility.Public);
+            var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+            fields.Add(stateField);
+            fields.Add(currentField);
+            fields.Add(initialThreadField);
+
+            var fieldMap = new Dictionary<VariableSymbol, FieldSymbol>();
+            var parameterFields = new Dictionary<ParameterSymbol, FieldSymbol>();
+            foreach (var parameter in plan.Function.Parameters)
+            {
+                var field = new FieldSymbol("<>3__" + parameter.Name, parameter.Type, Accessibility.Public);
+                fields.Add(field);
+                fieldMap[parameter] = field;
+                parameterFields[parameter] = field;
+            }
+
+            var hoistedFields = new Dictionary<VariableSymbol, FieldSymbol>();
+            foreach (var local in plan.HoistedLocals)
+            {
+                if (fieldMap.ContainsKey(local))
+                {
+                    continue;
+                }
+
+                var field = new FieldSymbol("<>5__" + local.Name, local.Type, Accessibility.Public);
+                fields.Add(field);
+                fieldMap[local] = field;
+                hoistedFields[local] = field;
+            }
+
+            var smClass = new StructSymbol(
+                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                fields: fields.ToImmutable(),
+                accessibility: Accessibility.Internal,
+                declaration: null,
+                packageName: packageName,
+                isData: false,
+                isInline: false,
+                isClass: true);
+
+            var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Bool, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getCurrent = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, plan.ElementType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getCurrentObject = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(object)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getEnumeratorType = TypeSymbol.FromClrType(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(plan.ElementType.ClrType ?? typeof(object)));
+            var getEnumerator = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, getEnumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getEnumeratorObject = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(System.Collections.IEnumerator)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var dispose = new FunctionSymbol("Dispose", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var reset = new FunctionSymbol("Reset", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            smClass.SetMethods(ImmutableArray.Create(moveNext, getCurrent, getCurrentObject, getEnumerator, getEnumeratorObject, dispose, reset));
+
+            var moveNextBody = IteratorMoveNextBodyBuilder.BuildWithFieldAccess(plan, stateField, currentField, moveNext.ThisParameter, smClass, fieldMap).Body;
+            this.lambdaBodies[moveNext] = moveNextBody;
+            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(new BoundFieldAccessExpression(new BoundVariableExpression(getCurrent.ThisParameter), smClass, currentField)))));
+            this.lambdaBodies[getCurrentObject] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(new BoundConversionExpression(
+                    TypeSymbol.FromClrType(typeof(object)),
+                    new BoundFieldAccessExpression(new BoundVariableExpression(getCurrentObject.ThisParameter), smClass, currentField))))));
+            this.lambdaBodies[dispose] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(new BoundFieldAssignmentExpression(dispose.ThisParameter, smClass, stateField, new BoundLiteralExpression(-1))),
+                new BoundReturnStatement(null))));
+            this.lambdaBodies[reset] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(new BoundFieldAssignmentExpression(reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(-1))),
+                new BoundReturnStatement(null))));
+            this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(new BoundVariableExpression(getEnumerator.ThisParameter), smClass, parameterFields[p]))))));
+            this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(new BoundVariableExpression(getEnumeratorObject.ThisParameter), smClass, parameterFields[p]))))));
+
+            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(p))))));
+            this.iteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass);
+            this.synthesizedClosureClasses.Add(smClass);
+        }
+    }
+
+    private BoundStructLiteralExpression CreateIteratorStateMachineLiteral(
+        StructSymbol smClass,
+        FieldSymbol stateField,
+        Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
+        ImmutableArray<ParameterSymbol> parameters,
+        Func<ParameterSymbol, BoundExpression> parameterValueFactory)
+    {
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(0)));
+        foreach (var parameter in parameters)
+        {
+            initializers.Add(new BoundFieldInitializer(parameterFields[parameter], parameterValueFactory(parameter)));
+        }
+
+        return new BoundStructLiteralExpression(smClass, initializers.ToImmutable());
+    }
+
+    private void AddIteratorInterfaceImplementations(StructSymbol smClass, IteratorStateMachineInfo info)
+    {
+        var elementClr = info.Plan.ElementType.ClrType ?? typeof(object);
+        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
+        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
+        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
+        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
+        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
     }
 
     private ClosureInfo SynthesizeDisplayClass(
@@ -3979,6 +4122,19 @@ internal sealed class ReflectionMetadataEmitter
         return hostType;
     }
 
+    private sealed class IteratorStateMachineInfo
+    {
+        public IteratorStateMachineInfo(IteratorStateMachinePlan plan, StructSymbol classSym)
+        {
+            this.Plan = plan;
+            this.ClassSym = classSym;
+        }
+
+        public IteratorStateMachinePlan Plan { get; }
+
+        public StructSymbol ClassSym { get; }
+    }
+
     private sealed class ClosureInfo
     {
         public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields)
@@ -4403,6 +4559,8 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundSelectStatement select:
                     this.EmitSelectStatement(select);
                     break;
+                case BoundYieldStatement:
+                    throw new NotSupportedException("Internal error: yield reached the emitter before iterator lowering.");
                 default:
                     throw new NotSupportedException(
                         $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
@@ -4480,7 +4638,10 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundImportedInstanceCallExpression instCall:
                     this.EmitInstanceReceiver(instCall.Receiver);
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
-                    this.il.Call(this.outer.GetMethodEntityHandle(instCall.Method));
+                    var receiverIsValueType = instCall.Receiver.Type?.ClrType?.IsValueType == true;
+                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method);
+                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.Token(instCallHandle);
                     break;
                 case BoundAddressOfExpression addressOf:
                     this.EmitAddressOf(addressOf);
@@ -4670,10 +4831,10 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType == typeof(object))
+            if (to?.ClrType == typeof(object) && IsValueTypeSymbol(from))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(fromStruct));
+                this.il.Token(this.outer.GetElementTypeToken(from));
                 return;
             }
 

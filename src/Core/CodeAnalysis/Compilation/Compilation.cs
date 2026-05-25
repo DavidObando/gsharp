@@ -10,6 +10,7 @@ using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -202,6 +203,7 @@ public class Compilation
         }
 
         var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
+        var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
 
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
@@ -212,7 +214,7 @@ public class Compilation
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
-            EmitAssembly(program, stream, References, asyncRewriteResult: asyncRewriteResult);
+            EmitAssembly(program, stream, References, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -259,6 +261,7 @@ public class Compilation
         }
 
         var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
+        var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
 
         var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
         if (asyncDiagnostics.Any())
@@ -270,12 +273,12 @@ public class Compilation
         {
             if (peStream is not null)
             {
-                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: asyncRewriteResult);
+                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult);
             }
 
             if (refStream is not null)
             {
-                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: asyncRewriteResult);
+                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult);
             }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
@@ -288,8 +291,8 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult);
     }
 }

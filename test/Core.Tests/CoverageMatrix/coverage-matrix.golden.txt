@@ -154,6 +154,7 @@ SelectCase
 SelectKeyword
 SelectStatement
 SemicolonToken
+SequenceKeyword
 ShiftLeftEqualsToken
 ShiftLeftToken
 ShiftRightEqualsToken
@@ -192,6 +193,7 @@ VarKeyword
 VariableDeclaration
 WhitespaceToken
 WithExpression
+YieldStatement
 
 [BoundNodeKind]
 AddressOfExpression
@@ -269,6 +271,7 @@ UnaryExpression
 UserInstanceCallExpression
 VariableDeclaration
 VariableExpression
+YieldStatement
 
 [BoundBinaryOperator]
 AmpersandAmpersandToken LogicalAnd (bool,bool) -> bool

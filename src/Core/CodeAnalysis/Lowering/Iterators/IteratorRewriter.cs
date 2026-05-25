@@ -1,0 +1,221 @@
+// <copyright file="IteratorRewriter.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+#pragma warning disable SA1201 // Elements should appear in the correct order
+#pragma warning disable SA1611 // Element parameters should be documented
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Lowering.Iterators;
+
+/// <summary>
+/// Rewrites iterator functions (those containing <c>yield</c> statements) into
+/// state-machine classes implementing <c>IEnumerable&lt;T&gt;</c> and
+/// <c>IEnumerator&lt;T&gt;</c> (ADR-0040).
+/// </summary>
+public static class IteratorRewriter
+{
+    /// <summary>
+    /// Scans the bound program for iterator functions and builds rewrite plans.
+    /// </summary>
+    /// <param name="program">The bound program.</param>
+    /// <returns>The rewrite result containing plans for each iterator function.</returns>
+    public static IteratorRewriteResult Rewrite(BoundProgram program)
+    {
+        if (program == null)
+        {
+            throw new ArgumentNullException(nameof(program));
+        }
+
+        var plans = ImmutableArray.CreateBuilder<IteratorStateMachinePlan>();
+
+        foreach (var pair in program.Functions.OrderBy(p => p.Key.Name, StringComparer.Ordinal))
+        {
+            var function = pair.Key;
+            var body = pair.Value;
+
+            if (!ContainsYield(body))
+            {
+                continue;
+            }
+
+            var elementType = GetIteratorElementType(function.Type);
+            if (elementType == null)
+            {
+                continue;
+            }
+
+            var plan = BuildPlan(function, body, elementType);
+            plans.Add(plan);
+        }
+
+        return new IteratorRewriteResult(program, plans.ToImmutable());
+    }
+
+    private static bool ContainsYield(BoundStatement statement)
+    {
+        var walker = new YieldWalker();
+        walker.RewriteStatement(statement);
+        return walker.Found;
+    }
+
+    private static TypeSymbol GetIteratorElementType(TypeSymbol type)
+    {
+        if (type is SequenceTypeSymbol seq)
+        {
+            return seq.ElementType;
+        }
+
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return null;
+        }
+
+        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var def = clr.GetGenericTypeDefinition();
+            if (def == typeof(IEnumerable<>) || def == typeof(IEnumerator<>))
+            {
+                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            }
+        }
+
+        if (clr == typeof(System.Collections.IEnumerable) ||
+            clr == typeof(System.Collections.IEnumerator))
+        {
+            return TypeSymbol.FromClrType(typeof(object));
+        }
+
+        return null;
+    }
+
+    private static IteratorStateMachinePlan BuildPlan(
+        FunctionSymbol function,
+        BoundStatement body,
+        TypeSymbol elementType)
+    {
+        // Collect yields and assign states.
+        var yieldCollector = new YieldStateCollector();
+        yieldCollector.RewriteStatement(body);
+        var yieldStates = yieldCollector.States;
+
+        // Collect hoisted locals (locals that are live across yield points).
+        var hoistedLocals = CollectHoistedLocals(body);
+
+        return new IteratorStateMachinePlan(function, body, elementType, yieldStates, hoistedLocals);
+    }
+
+    private static ImmutableArray<VariableSymbol> CollectHoistedLocals(BoundStatement body)
+    {
+        // Simple approach: hoist all locals declared in the body.
+        // A more precise analysis would only hoist those live across yields.
+        var collector = new LocalCollector();
+        collector.RewriteStatement(body);
+        return collector.Locals.ToImmutableArray();
+    }
+
+    private sealed class YieldWalker : BoundTreeRewriter
+    {
+        public bool Found { get; private set; }
+
+        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        {
+            Found = true;
+            return node;
+        }
+    }
+
+    private sealed class YieldStateCollector : BoundTreeRewriter
+    {
+        private int nextState = 1; // State 0 = initial, -1 = finished, -2 = before first enumeration.
+
+        public ImmutableDictionary<BoundYieldStatement, int> States => states.ToImmutable();
+
+        private readonly ImmutableDictionary<BoundYieldStatement, int>.Builder states =
+            ImmutableDictionary.CreateBuilder<BoundYieldStatement, int>();
+
+        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        {
+            states.Add(node, nextState++);
+            return node;
+        }
+    }
+
+    private sealed class LocalCollector : BoundTreeRewriter
+    {
+        public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
+
+        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        {
+            if (!Locals.Contains(node.Variable))
+            {
+                Locals.Add(node.Variable);
+            }
+
+            return base.RewriteVariableDeclaration(node);
+        }
+    }
+}
+
+/// <summary>
+/// Result of running the iterator rewriter.
+/// </summary>
+public sealed class IteratorRewriteResult
+{
+    /// <summary>Initializes a new instance of the <see cref="IteratorRewriteResult"/> class.</summary>
+    public IteratorRewriteResult(BoundProgram program, ImmutableArray<IteratorStateMachinePlan> plans)
+    {
+        Program = program;
+        Plans = plans;
+    }
+
+    /// <summary>Gets the original program.</summary>
+    public BoundProgram Program { get; }
+
+    /// <summary>Gets the iterator state machine plans.</summary>
+    public ImmutableArray<IteratorStateMachinePlan> Plans { get; }
+}
+
+/// <summary>
+/// Holds the plan for rewriting a single iterator function into a state machine.
+/// </summary>
+public sealed class IteratorStateMachinePlan
+{
+    /// <summary>Initializes a new instance of the <see cref="IteratorStateMachinePlan"/> class.</summary>
+    public IteratorStateMachinePlan(
+        FunctionSymbol function,
+        BoundStatement body,
+        TypeSymbol elementType,
+        ImmutableDictionary<BoundYieldStatement, int> yieldStates,
+        ImmutableArray<VariableSymbol> hoistedLocals)
+    {
+        Function = function;
+        Body = body;
+        ElementType = elementType;
+        YieldStates = yieldStates;
+        HoistedLocals = hoistedLocals;
+    }
+
+    /// <summary>Gets the original iterator function.</summary>
+    public FunctionSymbol Function { get; }
+
+    /// <summary>Gets the original function body.</summary>
+    public BoundStatement Body { get; }
+
+    /// <summary>Gets the element type produced by this iterator.</summary>
+    public TypeSymbol ElementType { get; }
+
+    /// <summary>Gets the yield statement to state mapping.</summary>
+    public ImmutableDictionary<BoundYieldStatement, int> YieldStates { get; }
+
+    /// <summary>Gets the locals that must be hoisted to state machine fields.</summary>
+    public ImmutableArray<VariableSymbol> HoistedLocals { get; }
+}

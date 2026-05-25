@@ -59,6 +59,8 @@ public abstract class BoundTreeRewriter
                 return RewriteScopeStatement((BoundScopeStatement)node);
             case BoundNodeKind.AwaitForRangeStatement:
                 return RewriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node);
+            case BoundNodeKind.YieldStatement:
+                return RewriteYieldStatement((BoundYieldStatement)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -780,6 +782,20 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundAwaitForRangeStatement(node.ValueVariable, stream, body);
+    }
+
+    /// <summary>Rewrites a bound yield statement (ADR-0040).</summary>
+    /// <param name="node">The yield statement to rewrite.</param>
+    /// <returns>The rewritten yield statement.</returns>
+    protected virtual BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundYieldStatement(expression);
     }
 
     /// <summary>Rewrites a bound make-channel expression (Phase 5.4).</summary>

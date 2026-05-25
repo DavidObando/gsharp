@@ -199,6 +199,8 @@ public static class SyntaxFacts
                 return SyntaxKind.SealedKeyword;
             case "select":
                 return SyntaxKind.SelectKeyword;
+            case "sequence":
+                return SyntaxKind.SequenceKeyword;
             case "struct":
                 return SyntaxKind.StructKeyword;
             case "switch":
@@ -445,6 +447,8 @@ public static class SyntaxFacts
                 return "scope";
             case SyntaxKind.SelectKeyword:
                 return "select";
+            case SyntaxKind.SequenceKeyword:
+                return "sequence";
             case SyntaxKind.StructKeyword:
                 return "struct";
             case SyntaxKind.SwitchKeyword:

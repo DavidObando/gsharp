@@ -99,6 +99,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.AwaitForRangeStatement:
                 WriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node, writer);
                 break;
+            case BoundNodeKind.YieldStatement:
+                WriteYieldStatement((BoundYieldStatement)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -823,6 +826,13 @@ public static class BoundNodePrinter
         node.Stream.WriteTo(writer);
         writer.WriteSpace();
         node.Body.WriteTo(writer);
+    }
+
+    private static void WriteYieldStatement(BoundYieldStatement node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("yield");
+        writer.WriteSpace();
+        node.Expression.WriteTo(writer);
     }
 
     private static void WriteMakeChannelExpression(BoundMakeChannelExpression node, IndentedTextWriter writer)

@@ -315,7 +315,7 @@ public sealed class Binder
                 var body = binder.BindStatement(function.Declaration.Body);
                 var loweredBody = Lowerer.Lower(body);
 
-                if (function.Type != TypeSymbol.Void && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
                 {
                     binder.Diagnostics.ReportAllPathsMustReturn(function.Declaration.Identifier.Location);
                 }
@@ -344,7 +344,7 @@ public sealed class Binder
                 var body = binder.BindStatement(method.Declaration.Body);
                 var loweredBody = Lowerer.Lower(body);
 
-                if (method.Type != TypeSymbol.Void && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
                 {
                     binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
                 }
@@ -1360,6 +1360,8 @@ public sealed class Binder
                 return BindScopeStatement((ScopeStatementSyntax)syntax);
             case SyntaxKind.AwaitForRangeStatement:
                 return BindAwaitForRangeStatement((AwaitForRangeStatementSyntax)syntax);
+            case SyntaxKind.YieldStatement:
+                return BindYieldStatement((YieldStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             case SyntaxKind.NamedDeconstructionStatement:
@@ -1703,6 +1705,18 @@ public sealed class Binder
             }
 
             return ChannelTypeSymbol.Get(elementType);
+        }
+
+        // ADR-0040: sequence type clause `sequence[T]`.
+        if (syntax.IsSequence)
+        {
+            var elementType = BindTypeClause(syntax.SequenceElementType);
+            if (elementType == null)
+            {
+                return null;
+            }
+
+            return SequenceTypeSymbol.Get(elementType);
         }
 
         // ADR-0039: pointer type clause `*T`.
@@ -2757,6 +2771,88 @@ public sealed class Binder
         return new BoundAwaitForRangeStatement(variable, stream, body);
     }
 
+    private BoundStatement BindYieldStatement(YieldStatementSyntax syntax)
+    {
+        // ADR-0040: `yield <expr>` — only valid in an iterator function.
+        if (function == null || !IsIteratorReturnType(function.Type))
+        {
+            Diagnostics.ReportYieldOutsideIteratorFunction(syntax.YieldKeyword.Location);
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var elementType = GetIteratorElementType(function.Type);
+        var expression = BindExpression(syntax.Expression);
+        if (expression.Type != null && elementType != null && expression.Type != elementType)
+        {
+            expression = BindConversion(syntax.Expression.Location, expression, elementType);
+        }
+
+        return new BoundYieldStatement(expression);
+    }
+
+    private static bool IsIteratorReturnType(TypeSymbol type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (type is SequenceTypeSymbol)
+        {
+            return true;
+        }
+
+        var clr = type.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        if (clr == typeof(System.Collections.IEnumerable) ||
+            clr == typeof(System.Collections.IEnumerator))
+        {
+            return true;
+        }
+
+        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var def = clr.GetGenericTypeDefinition();
+            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
+                def == typeof(System.Collections.Generic.IEnumerator<>))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static TypeSymbol GetIteratorElementType(TypeSymbol type)
+    {
+        if (type is SequenceTypeSymbol seq)
+        {
+            return seq.ElementType;
+        }
+
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return TypeSymbol.FromClrType(typeof(object));
+        }
+
+        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            var def = clr.GetGenericTypeDefinition();
+            if (def == typeof(System.Collections.Generic.IEnumerable<>) ||
+                def == typeof(System.Collections.Generic.IEnumerator<>))
+            {
+                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            }
+        }
+
+        return TypeSymbol.FromClrType(typeof(object));
+    }
+
     private static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
     {
         elementType = null;
@@ -2876,6 +2972,12 @@ public sealed class Binder
                 iterationKind = ForRangeKind.PatternEnumerator;
                 keyType = TypeSymbol.Int;
                 valueType = userElemType;
+                break;
+            case SequenceTypeSymbol seq:
+                // ADR-0040: sequence[T] is IEnumerable[T] — iterate via Enumerable strategy.
+                iterationKind = ForRangeKind.Enumerable;
+                keyType = TypeSymbol.Int;
+                valueType = seq.ElementType;
                 break;
             default:
                 if (collection.Type != TypeSymbol.Error)
