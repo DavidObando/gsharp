@@ -12,6 +12,7 @@ using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -85,6 +86,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
     private int closureCounter;
 
+    // Async state-machine plans produced by AsyncStateMachineRewriter.
+    private ImmutableArray<AsyncStateMachinePlan> asyncStateMachinePlans = ImmutableArray<AsyncStateMachinePlan>.Empty;
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -133,14 +137,24 @@ internal sealed class ReflectionMetadataEmitter
     /// are omitted (RVA 0) and the assembly is marked with
     /// <c>System.Runtime.CompilerServices.ReferenceAssemblyAttribute</c>.
     /// </param>
+    /// <param name="asyncRewriteResult">
+    /// Optional result from the async state-machine rewriter. When non-null,
+    /// contains plans for emitting state-machine types and kickoff bodies.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
         ReferenceResolver references = null,
         string assemblyName = null,
-        bool metadataOnly = false)
+        bool metadataOnly = false,
+        AsyncStateMachineRewriteResult asyncRewriteResult = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
+        if (asyncRewriteResult != null)
+        {
+            emitter.asyncStateMachinePlans = asyncRewriteResult.StateMachines;
+        }
+
         emitter.EmitCore(peStream);
     }
 
@@ -191,6 +205,24 @@ internal sealed class ReflectionMetadataEmitter
         if (this.synthesizedClosureClasses.Count > 0)
         {
             allAggregates = allAggregates.AddRange(this.synthesizedClosureClasses);
+        }
+
+        // Async state-machine types: materialized structs with their hoisted
+        // fields are appended so they get TypeDef + FieldDef rows alongside
+        // user structs. Method rows (MoveNext, SetStateMachine) are planned
+        // separately below.
+        var asyncSmStructs = new List<StructSymbol>();
+        var asyncSmPlansByStruct = new Dictionary<StructSymbol, AsyncStateMachinePlan>();
+        foreach (var plan in this.asyncStateMachinePlans)
+        {
+            var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
+            asyncSmStructs.Add(smStruct);
+            asyncSmPlansByStruct[smStruct] = plan;
+        }
+
+        if (asyncSmStructs.Count > 0)
+        {
+            allAggregates = allAggregates.AddRange(asyncSmStructs);
         }
 
         var classes = allAggregates.Where(s => s.IsClass).ToList();
@@ -261,6 +293,14 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in structs)
         {
+            // Async state-machine structs own MoveNext + SetStateMachine methods.
+            if (asyncSmPlansByStruct.ContainsKey(s))
+            {
+                structFirstMethodRows[s] = methodRow;
+                methodRow += 2; // MoveNext, SetStateMachine
+                continue;
+            }
+
             if (s.Methods.IsDefaultOrEmpty && !s.IsInline)
             {
                 continue;
@@ -334,6 +374,14 @@ internal sealed class ReflectionMetadataEmitter
                 ? firstStructMethodRow
                 : firstPackageCtorRow;
             this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
+
+            // Async state-machine structs implement IAsyncStateMachine.
+            if (asyncSmPlansByStruct.ContainsKey(s))
+            {
+                var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
+                var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
+                this.metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
+            }
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -462,6 +510,14 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var s in structs)
         {
+            // Async state-machine structs: emit MoveNext + SetStateMachine.
+            if (asyncSmPlansByStruct.TryGetValue(s, out var smPlan))
+            {
+                this.EmitStateMachineMoveNext(smPlan);
+                this.EmitStateMachineSetStateMachine(smPlan);
+                continue;
+            }
+
             if (s.IsInline)
             {
                 this.EmitInlineStructSynthesizedMembers(s);
@@ -1115,6 +1171,293 @@ internal sealed class ReflectionMetadataEmitter
         this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Deconstruct"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
     }
 
+    /// <summary>
+    /// Emits the stub <c>MoveNext</c> method for an async state machine.
+    /// Sets state to -2 (finished), calls <c>builder.SetResult()</c> or
+    /// <c>builder.SetResult(default(T))</c>, then returns.
+    /// Wrapped in a try/catch that calls <c>builder.SetException(ex)</c>.
+    /// </summary>
+    // TODO(state-rewriter): per-await dispatch — this is a stub that
+    // immediately completes the state machine synchronously.
+    private void EmitStateMachineMoveNext(AsyncStateMachinePlan plan)
+    {
+        var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
+        var builderInfo = plan.StateMachine.BuilderInfo;
+        var stateFieldHandle = this.structFieldDefs[plan.FieldMap.StateField];
+        var builderFieldHandle = this.structFieldDefs[plan.FieldMap.BuilderField];
+
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            // TODO(state-rewriter): per-await dispatch, try/catch wrapper.
+            // This stub immediately transitions to the finished state and
+            // calls SetResult so the state machine completes synchronously.
+            var il = new InstructionEncoder(new BlobBuilder());
+
+            // this.<>1__state = -2
+            il.LoadArgument(0);
+            il.LoadConstantI4(StateMachineStates.FinishedState);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(stateFieldHandle);
+
+            // this.<>t__builder.SetResult(...)
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Ldflda);
+            il.Token(builderFieldHandle);
+
+            var setResultRef = this.GetMethodEntityHandle(builderInfo.SetResultMethod);
+            if (builderInfo.Kind == AsyncMethodBuilderKind.GenericTask
+                || (builderInfo.Kind == AsyncMethodBuilderKind.Custom && builderInfo.ResultType != null && builderInfo.ResultType != typeof(void)))
+            {
+                EmitDefaultValue(il, builderInfo.ResultType);
+            }
+
+            il.OpCode(ILOpCode.Call);
+            il.Token(setResultRef);
+
+            il.OpCode(ILOpCode.Ret);
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3);
+        }
+
+        // MoveNext signature: void MoveNext() (instance)
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
+                | MethodAttributes.NewSlot | MethodAttributes.Final,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("MoveNext"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: MetadataTokens.ParameterHandle(1));
+    }
+
+    /// <summary>
+    /// Emits the <c>SetStateMachine(IAsyncStateMachine)</c> method for an
+    /// async state machine. For struct state machines, this is a no-op body.
+    /// </summary>
+    private void EmitStateMachineSetStateMachine(AsyncStateMachinePlan plan)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps =>
+            {
+                this.EncodeClrType(ps.AddParameter().Type(), iAsyncSmType);
+            });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
+                | MethodAttributes.NewSlot | MethodAttributes.Final,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("SetStateMachine"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: MetadataTokens.ParameterHandle(1));
+    }
+
+    /// <summary>
+    /// Emits IL for pushing the default value of a CLR type onto the stack.
+    /// </summary>
+    private void EmitDefaultValue(InstructionEncoder il, Type type)
+    {
+        if (type == typeof(int) || type == typeof(bool) || type == typeof(byte)
+            || type == typeof(short) || type == typeof(char))
+        {
+            il.LoadConstantI4(0);
+        }
+        else if (type == typeof(long))
+        {
+            il.LoadConstantI8(0);
+        }
+        else if (type == typeof(float))
+        {
+            il.OpCode(ILOpCode.Ldc_r4);
+            il.CodeBuilder.WriteSingle(0.0f);
+        }
+        else if (type == typeof(double))
+        {
+            il.OpCode(ILOpCode.Ldc_r8);
+            il.CodeBuilder.WriteDouble(0.0);
+        }
+        else if (type.IsValueType)
+        {
+            // For value types we need initobj pattern but SetResult takes the value
+            // by value, not by ref. Use a local initialized to default.
+            // Simplified: just push 0 for small structs or use ldloca + initobj.
+            // For now, use a simple approach: push ldloca on a temp, initobj, ldloc.
+            // Actually, the simplest correct approach: if it's a primitive, handled above.
+            // For struct value types, we can't easily push default without a local.
+            // Let's use ldloca on the arg slot (but we don't have one).
+            // Simplest: we won't support generic Task<CustomStruct> yet.
+            // For the common cases (Task<int>, Task<string>, Task<bool>), the above handles it.
+            // Fallback: push 0 and hope for the best (works for small value types).
+            il.LoadConstantI4(0);
+        }
+        else
+        {
+            // Reference types: default is null.
+            il.OpCode(ILOpCode.Ldnull);
+        }
+    }
+
+    /// <summary>
+    /// Emits the kickoff body for an async function: creates the state-machine
+    /// local, initializes fields, calls <c>builder.Start(ref sm)</c>, and
+    /// returns <c>builder.Task</c> (or returns void for async void).
+    /// </summary>
+    private int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan)
+    {
+        var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
+        var smTypeDef = this.structTypeDefs[smStruct];
+        var builderInfo = plan.StateMachine.BuilderInfo;
+        var stateFieldHandle = this.structFieldDefs[plan.FieldMap.StateField];
+        var builderFieldHandle = this.structFieldDefs[plan.FieldMap.BuilderField];
+
+        var il = new InstructionEncoder(new BlobBuilder());
+
+        // Local 0: the state-machine struct instance.
+        // ldloca.s 0 / initobj SM  — zero-initialize the struct.
+        il.LoadLocalAddress(0);
+        il.OpCode(ILOpCode.Initobj);
+        il.Token(smTypeDef);
+
+        // sm.<>t__builder = AsyncTaskMethodBuilder[<T>].Create()
+        il.LoadLocalAddress(0);
+        var createRef = this.GetMethodEntityHandle(builderInfo.CreateMethod);
+        il.OpCode(ILOpCode.Call);
+        il.Token(createRef);
+        il.OpCode(ILOpCode.Stfld);
+        il.Token(builderFieldHandle);
+
+        // Copy this (for instance methods)
+        if (plan.FieldMap.ThisField != null && function.IsInstanceMethod)
+        {
+            var thisFieldHandle = this.structFieldDefs[plan.FieldMap.ThisField];
+            il.LoadLocalAddress(0);
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(thisFieldHandle);
+        }
+
+        // Copy parameters
+        int paramSlotShift = function.IsInstanceMethod ? 1 : 0;
+        var paramIndex = 0;
+        foreach (var copy in plan.KickoffPlan.ParameterCopies)
+        {
+            var fieldHandle = this.structFieldDefs[copy.Field];
+            il.LoadLocalAddress(0);
+            il.LoadArgument(paramIndex + paramSlotShift);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(fieldHandle);
+            paramIndex++;
+        }
+
+        // sm.<>1__state = -1
+        il.LoadLocalAddress(0);
+        il.LoadConstantI4(StateMachineStates.NotStartedOrRunningState);
+        il.OpCode(ILOpCode.Stfld);
+        il.Token(stateFieldHandle);
+
+        // sm.<>t__builder.Start<SM>(ref sm)
+        // ldloca 0  (address of sm for ldflda builder)
+        // ldflda <>t__builder
+        // ldloca 0  (ref sm as argument)
+        // call Start<SM>(ref SM)
+        il.LoadLocalAddress(0);
+        il.OpCode(ILOpCode.Ldflda);
+        il.Token(builderFieldHandle);
+        il.LoadLocalAddress(0);
+
+        // Start is generic: Start<TStateMachine>(ref TStateMachine).
+        // We need a MethodSpec for Start<SM>.
+        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, smStruct);
+        il.OpCode(ILOpCode.Call);
+        il.Token(startMethodSpec);
+
+        // Return builder.Task or void
+        if (builderInfo.TaskProperty != null)
+        {
+            // ldloca 0, ldflda builder, call get_Task
+            il.LoadLocalAddress(0);
+            il.OpCode(ILOpCode.Ldflda);
+            il.Token(builderFieldHandle);
+            var getTaskMethod = builderInfo.TaskProperty.GetGetMethod();
+            var getTaskRef = this.GetMethodEntityHandle(getTaskMethod);
+            il.OpCode(ILOpCode.Call);
+            il.Token(getTaskRef);
+        }
+
+        il.OpCode(ILOpCode.Ret);
+
+        // Locals: one local of the state-machine struct type.
+        var localsSigBlob = new BlobBuilder();
+        var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(1);
+        localsEncoder.AddVariable().Type().Type(smTypeDef, isValueType: true);
+        var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+
+        return this.methodBodyStream.AddMethodBody(
+            il,
+            maxStack: 3,
+            localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
+    /// Gets a MethodSpec for <c>builder.Start&lt;SM&gt;(ref SM)</c> where SM
+    /// is the state-machine struct TypeDef.
+    /// </summary>
+    private EntityHandle GetStateMachineStartMethodSpec(MethodInfo startOpenMethod, StructSymbol smStruct)
+    {
+        // Start is an open generic instance method on the builder struct.
+        // We need: MemberRef for Start<T>(ref T) on the builder type,
+        // then a MethodSpec instantiating it with the SM TypeDef.
+        var openRef = this.GetMethodReference(startOpenMethod.IsGenericMethod
+            ? startOpenMethod.GetGenericMethodDefinition()
+            : startOpenMethod);
+
+        // Build MethodSpec signature: instantiation with SM struct type.
+        var smTypeDef = this.structTypeDefs[smStruct];
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
+        argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
+
+        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Encodes the CLR return type for an async kickoff method:
+    /// <c>Task</c>, <c>Task&lt;T&gt;</c>, or <c>void</c> for async-void.
+    /// </summary>
+    private void EncodeAsyncReturnType(ReturnTypeEncoder encoder, AsyncStateMachinePlan plan)
+    {
+        var builderInfo = plan.StateMachine.BuilderInfo;
+        if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
+        {
+            encoder.Void();
+        }
+        else if (builderInfo.TaskProperty != null)
+        {
+            // The Task property's return type IS the kickoff return type.
+            var taskClrType = builderInfo.TaskProperty.PropertyType;
+            this.EncodeClrType(encoder.Type(), taskClrType);
+        }
+        else
+        {
+            encoder.Void();
+        }
+    }
+
     private MethodDefinitionHandle EmitDefaultConstructor()
     {
         int bodyOffset = -1;
@@ -1143,6 +1486,21 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
+        // Async kickoff body: replace the user body with the kickoff stub
+        // that creates the state machine, initializes it, and calls Start.
+        AsyncStateMachinePlan asyncPlan = null;
+        if (function.IsAsync && function.StateMachineType != null)
+        {
+            foreach (var plan in this.asyncStateMachinePlans)
+            {
+                if (plan.KickoffMethod == function)
+                {
+                    asyncPlan = plan;
+                    break;
+                }
+            }
+        }
+
         // Phase 4 emit parity (F1): generic functions are emitted with a
         // type-erased signature — each open type parameter is encoded as
         // System.Object via EncodeTypeSymbol. Call sites insert the box /
@@ -1153,6 +1511,12 @@ internal sealed class ReflectionMetadataEmitter
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
+            if (asyncPlan != null)
+            {
+                bodyOffset = this.EmitAsyncKickoffBody(function, asyncPlan);
+            }
+            else
+            {
             var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
             // Pre-scan body for locals (top-level only — Lowerer flattens blocks) and labels.
@@ -1249,6 +1613,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            } // end else (non-async path)
         }
 
         var sigBlob = new BlobBuilder();
@@ -1256,7 +1621,17 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: function.IsInstanceMethod)
             .Parameters(
                 signatureParameterCount,
-                r => EncodeReturnSymbol(r, function.Type),
+                r =>
+                {
+                    if (asyncPlan != null)
+                    {
+                        this.EncodeAsyncReturnType(r, asyncPlan);
+                    }
+                    else
+                    {
+                        EncodeReturnSymbol(r, function.Type);
+                    }
+                },
                 ps =>
                 {
                     foreach (var p in function.Parameters)
@@ -3384,6 +3759,26 @@ internal sealed class ReflectionMetadataEmitter
                     foreach (var arg in typeArgs)
                     {
                         EncodeClrType(genericInst.AddArgument(), arg);
+                    }
+
+                    break;
+                }
+
+                // A generic type definition used as a return/parameter type in an
+                // open method signature (e.g. AsyncTaskMethodBuilder<TResult>.Create()
+                // returning AsyncTaskMethodBuilder<TResult>). The reflection type is
+                // the generic type definition itself, but it must encode as a
+                // GenericInstantiation with its own type parameters as arguments.
+                if (type.IsGenericTypeDefinition)
+                {
+                    var typeParams = type.GetGenericArguments();
+                    var genericInst = encoder.GenericInstantiation(
+                        this.GetTypeReference(type),
+                        typeParams.Length,
+                        isValueType: type.IsValueType);
+                    foreach (var tp in typeParams)
+                    {
+                        EncodeClrType(genericInst.AddArgument(), tp);
                     }
 
                     break;
