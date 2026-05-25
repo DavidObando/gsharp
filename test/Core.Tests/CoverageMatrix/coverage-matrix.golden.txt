@@ -255,6 +255,7 @@ RelationalPattern
 ReturnStatement
 ScopeStatement
 SelectStatement
+SpillSequenceExpression
 StateMachineAwaitOnCompleted
 StructLiteralExpression
 SwitchExpression

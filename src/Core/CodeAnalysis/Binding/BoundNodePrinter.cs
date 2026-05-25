@@ -240,6 +240,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.StateMachineAwaitOnCompleted:
                 WriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node, writer);
                 break;
+            case BoundNodeKind.SpillSequenceExpression:
+                WriteSpillSequenceExpression((BoundSpillSequenceExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -1320,5 +1323,30 @@ public static class BoundNodePrinter
         writer.WriteSpace();
         writer.WriteIdentifier("ref this");
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteSpillSequenceExpression(BoundSpillSequenceExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword("spill_seq");
+        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+        writer.WriteLine();
+        writer.Indent++;
+        foreach (var local in node.Locals)
+        {
+            writer.WriteKeyword("var ");
+            writer.WriteIdentifier(local.Name);
+            writer.WriteLine();
+        }
+
+        foreach (var stmt in node.SideEffects)
+        {
+            stmt.WriteTo(writer);
+            writer.WriteLine();
+        }
+
+        node.Value.WriteTo(writer);
+        writer.WriteLine();
+        writer.Indent--;
+        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
     }
 }
