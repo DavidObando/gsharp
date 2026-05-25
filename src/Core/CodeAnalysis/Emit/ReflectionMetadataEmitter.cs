@@ -1172,52 +1172,92 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
-    /// Emits the stub <c>MoveNext</c> method for an async state machine.
-    /// Sets state to -2 (finished), calls <c>builder.SetResult()</c> or
-    /// <c>builder.SetResult(default(T))</c>, then returns.
-    /// Wrapped in a try/catch that calls <c>builder.SetException(ex)</c>.
+    /// Emits the <c>MoveNext</c> method for an async state machine using the
+    /// rewritten bound-tree body produced by <see cref="MoveNextBodyRewriter"/>.
     /// </summary>
-    // TODO(state-rewriter): per-await dispatch — this is a stub that
-    // immediately completes the state machine synchronously.
     private void EmitStateMachineMoveNext(AsyncStateMachinePlan plan)
     {
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
-        var builderInfo = plan.StateMachine.BuilderInfo;
-        var stateFieldHandle = this.structFieldDefs[plan.FieldMap.StateField];
-        var builderFieldHandle = this.structFieldDefs[plan.FieldMap.BuilderField];
 
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
-            // TODO(state-rewriter): per-await dispatch, try/catch wrapper.
-            // This stub immediately transitions to the finished state and
-            // calls SetResult so the state machine completes synchronously.
-            var il = new InstructionEncoder(new BlobBuilder());
+            var moveNextBody = MoveNextBodyRewriter.Build(plan);
+            var body = moveNextBody.Body;
 
-            // this.<>1__state = -2
-            il.LoadArgument(0);
-            il.LoadConstantI4(StateMachineStates.FinishedState);
-            il.OpCode(ILOpCode.Stfld);
-            il.Token(stateFieldHandle);
+            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
-            // this.<>t__builder.SetResult(...)
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldflda);
-            il.Token(builderFieldHandle);
+            // Pre-scan locals, labels, and the rest for the body emitter.
+            var locals = new Dictionary<VariableSymbol, int>();
+            var labels = new Dictionary<BoundLabel, LabelHandle>();
+            var localTypes = new List<TypeSymbol>();
+            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            CollectLocalsAndLabels(
+                body,
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                il);
 
-            var setResultRef = this.GetMethodEntityHandle(builderInfo.SetResultMethod);
-            if (builderInfo.Kind == AsyncMethodBuilderKind.GenericTask
-                || (builderInfo.Kind == AsyncMethodBuilderKind.Custom && builderInfo.ResultType != null && builderInfo.ResultType != typeof(void)))
+            // MoveNext is instance on the SM struct: arg0 = this.
+            var parameters = new Dictionary<ParameterSymbol, int>
             {
-                EmitDefaultValue(il, builderInfo.ResultType);
+                [moveNextBody.ThisParameter] = 0,
+            };
+
+            StandaloneSignatureHandle localsSignature = default;
+            if (localTypes.Count > 0)
+            {
+                var localsSigBlob = new BlobBuilder();
+                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+                foreach (var t in localTypes)
+                {
+                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                }
+
+                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
-            il.OpCode(ILOpCode.Call);
-            il.Token(setResultRef);
+            var emitter = new BodyEmitter(
+                this,
+                il,
+                locals,
+                parameters,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                structThisParameter: moveNextBody.ThisParameter);
+            emitter.EmitBlock(body);
 
-            il.OpCode(ILOpCode.Ret);
-
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
 
         // MoveNext signature: void MoveNext() (instance)
@@ -1433,6 +1473,82 @@ internal sealed class ReflectionMetadataEmitter
         argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
 
         return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Emits the <c>builder.AwaitUnsafeOnCompleted&lt;TAwaiter, TSM&gt;(ref awaiter, ref this)</c>
+    /// or <c>AwaitOnCompleted</c> call from within MoveNext. Requires manual MethodSpec
+    /// construction because TStateMachine is the synthesized SM TypeDef.
+    /// </summary>
+    private void EmitAwaitOnCompletedCall(
+        InstructionEncoder il,
+        Dictionary<VariableSymbol, int> locals,
+        Dictionary<ParameterSymbol, int> parameters,
+        BoundStateMachineAwaitOnCompleted node)
+    {
+        // Find the current SM plan to get builder field + struct type.
+        // The SM struct must already be materialized at this point.
+        AsyncStateMachinePlan currentPlan = null;
+        foreach (var plan in this.asyncStateMachinePlans)
+        {
+            if (plan.FieldMap.StateField != null)
+            {
+                // Match: find the plan whose awaiterLocal is in scope.
+                // Since MoveNext is only emitted for one plan at a time, use the
+                // one whose builder field is in structFieldDefs.
+                if (this.structFieldDefs.ContainsKey(plan.FieldMap.BuilderField))
+                {
+                    currentPlan = plan;
+                    break;
+                }
+            }
+        }
+
+        if (currentPlan == null)
+        {
+            throw new InvalidOperationException("Cannot emit AwaitOnCompleted: no active async plan.");
+        }
+
+        var builderField = currentPlan.FieldMap.BuilderField;
+        var builderFieldHandle = this.structFieldDefs[builderField];
+        var smStruct = currentPlan.StateMachine.MaterializeAsStructSymbol();
+        var builderInfo = currentPlan.StateMachine.BuilderInfo;
+
+        // ldarg.0 (this)
+        // ldflda builder
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Ldflda);
+        il.Token(builderFieldHandle);
+
+        // ldloca awaiter
+        var awaiterSlot = locals[node.AwaiterLocal];
+        il.LoadLocalAddress(awaiterSlot);
+
+        // ldarg.0 (ref this — the SM struct itself)
+        il.LoadArgument(0);
+
+        // Build MethodSpec for AwaitUnsafeOnCompleted<TAwaiter, TSM> or AwaitOnCompleted<TAwaiter, TSM>
+        var openMethod = node.UseCritical
+            ? builderInfo.AwaitUnsafeOnCompletedMethod
+            : builderInfo.AwaitOnCompletedMethod;
+
+        var openRef = this.GetMethodReference(openMethod.IsGenericMethod
+            ? openMethod.GetGenericMethodDefinition()
+            : openMethod);
+
+        var smTypeDef = this.structTypeDefs[smStruct];
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(2);
+
+        // First type arg: TAwaiter
+        this.EncodeClrType(argsEncoder.AddArgument(), node.AwaiterClrType);
+
+        // Second type arg: TStateMachine (the SM TypeDef)
+        argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
+
+        var methodSpec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        il.OpCode(ILOpCode.Call);
+        il.Token(methodSpec);
     }
 
     /// <summary>
@@ -2732,6 +2848,9 @@ internal sealed class ReflectionMetadataEmitter
                         }
 
                         break;
+                    case BoundBlockStatement nestedBlock:
+                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
                 }
             }
             else
@@ -2777,6 +2896,9 @@ internal sealed class ReflectionMetadataEmitter
                             CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
+                        break;
+                    case BoundBlockStatement nestedBlock:
+                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                 }
             }
@@ -4166,6 +4288,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
+        private readonly ParameterSymbol structThisParameter;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -4182,7 +4305,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes)
+            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+            ParameterSymbol structThisParameter = null)
         {
             this.outer = outer;
             this.il = il;
@@ -4199,6 +4323,7 @@ internal sealed class ReflectionMetadataEmitter
             this.scopeFrameSlots = scopeFrameSlots;
             this.selectStatementSlots = selectStatementSlots;
             this.goEnclosingScopes = goEnclosingScopes;
+            this.structThisParameter = structThisParameter;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -4362,6 +4487,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundDereferenceExpression deref:
                     this.EmitDereference(deref);
+                    break;
+                case BoundStateMachineAwaitOnCompleted awaitOnCompleted:
+                    this.EmitStateMachineAwaitOnCompleted(awaitOnCompleted);
                     break;
                 case BoundConversionExpression conv:
                     this.EmitConversion(conv);
@@ -6190,7 +6318,20 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
             {
-                this.il.LoadArgumentAddress(argIndex);
+                // In a struct instance method, arg0 is already a managed pointer
+                // (ref TStruct). Loading the arg value gives the address directly;
+                // ldarga would give a pointer-to-pointer which is wrong for
+                // ldfld/stfld/ldflda on the struct.
+                if (argIndex == 0 && this.structThisParameter != null
+                    && ReferenceEquals(ps, this.structThisParameter))
+                {
+                    this.il.LoadArgument(0);
+                }
+                else
+                {
+                    this.il.LoadArgumentAddress(argIndex);
+                }
+
                 return true;
             }
 
@@ -6271,6 +6412,15 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(node.Operand);
             var pointeeType = ((ByRefTypeSymbol)node.Operand.Type).PointeeType;
             this.EmitLoadIndirect(pointeeType);
+        }
+
+        /// <summary>
+        /// Emits the <c>builder.AwaitUnsafeOnCompleted&lt;TAwaiter, TSM&gt;(ref awaiter, ref this)</c>
+        /// call that requires a MethodSpec with the synthesized SM TypeDef.
+        /// </summary>
+        private void EmitStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
+        {
+            this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node);
         }
 
         /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>

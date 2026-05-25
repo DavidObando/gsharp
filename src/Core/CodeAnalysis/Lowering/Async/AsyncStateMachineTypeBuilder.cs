@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -139,7 +140,50 @@ public static class AsyncStateMachineTypeBuilder
             sm.AddField(new FieldSymbol(fieldName, local.Type, Accessibility.Public));
         }
 
+        // Awaiter pool fields: one per distinct awaiter type. Reference-typed
+        // awaiters collapse to a single System.Object field.
+        var awaiterFields = CollectAwaiterPoolFields(loweredBody);
+        int awaiterOrdinal = 1;
+        foreach (var (poolKey, fieldType) in awaiterFields)
+        {
+            var fieldName = GeneratedNames.AwaiterField(awaiterOrdinal++);
+            var field = new FieldSymbol(fieldName, fieldType, Accessibility.Public);
+            sm.AddField(field);
+            sm.RegisterAwaiterPoolField(poolKey, field);
+        }
+
         return sm;
+    }
+
+    private static List<(Type PoolKey, TypeSymbol FieldType)> CollectAwaiterPoolFields(BoundStatement body)
+    {
+        var collector = new AwaiterTypeCollector();
+        collector.Walk(body);
+
+        var result = new List<(Type PoolKey, TypeSymbol FieldType)>();
+        var seen = new HashSet<Type>();
+        bool hasReferenceAwaiter = false;
+
+        foreach (var awaiterClrType in collector.AwaiterTypes)
+        {
+            if (awaiterClrType.IsValueType)
+            {
+                if (seen.Add(awaiterClrType))
+                {
+                    result.Add((awaiterClrType, TypeSymbol.FromClrType(awaiterClrType)));
+                }
+            }
+            else
+            {
+                if (!hasReferenceAwaiter)
+                {
+                    hasReferenceAwaiter = true;
+                    result.Add((typeof(object), TypeSymbol.FromClrType(typeof(object))));
+                }
+            }
+        }
+
+        return result;
     }
 
     private static Type ResolveAsyncReturnClrType(FunctionSymbol kickoff, ReferenceResolver references)
@@ -163,5 +207,30 @@ public static class AsyncStateMachineTypeBuilder
         return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
             ? open.MakeGenericType(inner)
             : null;
+    }
+
+    private sealed class AwaiterTypeCollector : BoundTreeRewriter
+    {
+        public List<Type> AwaiterTypes { get; } = new List<Type>();
+
+        public void Walk(BoundStatement body)
+        {
+            RewriteStatement(body);
+        }
+
+        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        {
+            var awaitableClrType = node.Expression?.Type?.ClrType;
+            if (awaitableClrType != null)
+            {
+                var shape = AwaitableShape.Resolve(awaitableClrType);
+                if (shape != null)
+                {
+                    AwaiterTypes.Add(shape.AwaiterType);
+                }
+            }
+
+            return base.RewriteAwaitExpression(node);
+        }
     }
 }
