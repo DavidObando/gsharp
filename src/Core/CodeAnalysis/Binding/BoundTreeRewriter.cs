@@ -413,6 +413,8 @@ public abstract class BoundTreeRewriter
                 return RewriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node);
             case BoundNodeKind.SpillSequenceExpression:
                 return RewriteSpillSequenceExpression((BoundSpillSequenceExpression)node);
+            case BoundNodeKind.DefaultExpression:
+                return RewriteDefaultExpression((BoundDefaultExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -434,6 +436,16 @@ public abstract class BoundTreeRewriter
     /// <param name="node">The literal expression to rewrite.</param>
     /// <returns>The rewritten literal expression.</returns>
     protected virtual BoundExpression RewriteLiteralExpression(BoundLiteralExpression node)
+    {
+        return node;
+    }
+
+    /// <summary>
+    /// Rewrites a default expression. Leaf node — returns as-is by default.
+    /// </summary>
+    /// <param name="node">The default expression to rewrite.</param>
+    /// <returns>The rewritten default expression.</returns>
+    protected virtual BoundExpression RewriteDefaultExpression(BoundDefaultExpression node)
     {
         return node;
     }

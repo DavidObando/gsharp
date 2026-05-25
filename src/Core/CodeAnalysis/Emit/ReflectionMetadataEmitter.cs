@@ -1216,6 +1216,7 @@ internal sealed class ReflectionMetadataEmitter
             var localTypes = new List<TypeSymbol>();
             var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
             var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
             var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
             var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
             var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
@@ -1232,6 +1233,7 @@ internal sealed class ReflectionMetadataEmitter
                 labels,
                 appendSlots,
                 structLiteralSlots,
+                defaultExpressionSlots,
                 mapIndexSlots,
                 patternSwitchSlots,
                 typePatternScratchSlots,
@@ -1269,6 +1271,7 @@ internal sealed class ReflectionMetadataEmitter
                 labels,
                 appendSlots,
                 structLiteralSlots,
+                defaultExpressionSlots,
                 mapIndexSlots,
                 patternSwitchSlots,
                 typePatternScratchSlots,
@@ -1669,6 +1672,7 @@ internal sealed class ReflectionMetadataEmitter
             var localTypes = new List<TypeSymbol>();
             var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
             var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
             var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
             var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
             var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
@@ -1685,6 +1689,7 @@ internal sealed class ReflectionMetadataEmitter
                 labels,
                 appendSlots,
                 structLiteralSlots,
+                defaultExpressionSlots,
                 mapIndexSlots,
                 patternSwitchSlots,
                 typePatternScratchSlots,
@@ -1695,7 +1700,6 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 il);
 
-            // Parameters → arg indices.
             // For instance methods, IL slot 0 is the implicit `this`, so user
             // parameters shift up by one. Both the synthesized `ThisParameter`
             // (slot 0) and the user parameters are registered so emit sites
@@ -1740,6 +1744,7 @@ internal sealed class ReflectionMetadataEmitter
                 labels,
                 appendSlots,
                 structLiteralSlots,
+                defaultExpressionSlots,
                 mapIndexSlots,
                 patternSwitchSlots,
                 typePatternScratchSlots,
@@ -1865,6 +1870,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundLabel, LabelHandle> labels,
         Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
+        Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
@@ -1942,6 +1948,26 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(idx.Type);
             mapIndexSlots[idx] = slot;
+        }
+
+        // BoundDefaultExpression for non-primitive value types needs a temp local
+        // for the ldloca/initobj/ldloc pattern (push-as-value path).
+        foreach (var def in CollectDefaultExpressions(body))
+        {
+            if (!IsValueTypeSymbol(def.Type))
+            {
+                continue;
+            }
+
+            // Primitive value types (int, bool) are handled with ldc.i4.0 — no slot needed.
+            if (def.Type == TypeSymbol.Int || def.Type == TypeSymbol.Bool)
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(def.Type);
+            defaultExpressionSlots[def] = slot;
         }
     }
 
@@ -3062,6 +3088,13 @@ internal sealed class ReflectionMetadataEmitter
         return sink;
     }
 
+    private static IEnumerable<BoundDefaultExpression> CollectDefaultExpressions(BoundNode root)
+    {
+        var sink = new List<BoundDefaultExpression>();
+        new DefaultExpressionCollector(sink).RewriteStatement((BoundStatement)root);
+        return sink;
+    }
+
     private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
     {
         switch (node)
@@ -3345,6 +3378,11 @@ internal sealed class ReflectionMetadataEmitter
 
         if (element.ClrType != null)
         {
+            if (element.ClrType.IsConstructedGenericType)
+            {
+                return this.GetTypeHandleForMember(element.ClrType);
+            }
+
             return this.GetTypeReference(element.ClrType);
         }
 
@@ -4365,6 +4403,22 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class DefaultExpressionCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundDefaultExpression> sink;
+
+        public DefaultExpressionCollector(List<BoundDefaultExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteDefaultExpression(BoundDefaultExpression node)
+        {
+            this.sink.Add(node);
+            return node;
+        }
+    }
+
     private sealed class MapIndexReadCollector : BoundTreeRewriter
     {
         private readonly List<BoundIndexExpression> sink;
@@ -4436,6 +4490,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundLabel, LabelHandle> labels;
         private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
         private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
+        private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots;
         private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
         private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
@@ -4454,6 +4509,7 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundLabel, LabelHandle> labels,
             Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
             Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
+            Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
             Dictionary<BoundIndexExpression, int> mapIndexSlots,
             Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
             Dictionary<BoundTypePattern, int> typePatternScratchSlots,
@@ -4471,6 +4527,7 @@ internal sealed class ReflectionMetadataEmitter
             this.labels = labels;
             this.appendSlots = appendSlots;
             this.structLiteralSlots = structLiteralSlots;
+            this.defaultExpressionSlots = defaultExpressionSlots;
             this.mapIndexSlots = mapIndexSlots;
             this.patternSwitchSlots = patternSwitchSlots;
             this.typePatternScratchSlots = typePatternScratchSlots;
@@ -4778,6 +4835,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundMapDeleteExpression mapDel:
                     this.EmitMapDelete(mapDel);
+                    break;
+                case BoundDefaultExpression defaultExpr:
+                    this.EmitDefault(defaultExpr);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -5162,6 +5222,37 @@ internal sealed class ReflectionMetadataEmitter
                     throw new NotSupportedException(
                         $"Literal of CLR type '{literal.Value?.GetType()}' is not yet supported.");
             }
+        }
+
+        private void EmitDefault(BoundDefaultExpression node)
+        {
+            var type = node.Type;
+
+            // Reference types: ldnull
+            if (!IsValueTypeSymbol(type))
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                return;
+            }
+
+            // Primitive value types: push zero constant
+            if (type == TypeSymbol.Int || type == TypeSymbol.Bool)
+            {
+                this.il.LoadConstantI4(0);
+                return;
+            }
+
+            // Arbitrary value type: ldloca temp; initobj T; ldloc temp
+            if (!this.defaultExpressionSlots.TryGetValue(node, out var slot))
+            {
+                throw new InvalidOperationException(
+                    $"BoundDefaultExpression of value type '{type.Name}' has no preallocated temp slot.");
+            }
+
+            this.il.LoadLocalAddress(slot);
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(this.outer.GetElementTypeToken(type));
+            this.il.LoadLocal(slot);
         }
 
         private void EmitArrayCreation(BoundArrayCreationExpression arr)
@@ -6031,6 +6122,36 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.Token(fieldHandle);
 
                 this.EmitLoadVariable(fas.Receiver);
+                this.il.OpCode(ILOpCode.Ldfld);
+                this.il.Token(fieldHandle);
+                return;
+            }
+
+            // Optimized path: storing default(T) into a value-type field uses
+            // ldflda + initobj instead of pushing a value + stfld. This avoids
+            // the invalid ldnull;stfld<ValueType> pattern and removes the need
+            // for a temp local.
+            if (fas.Value is BoundDefaultExpression defaultExpr && IsValueTypeSymbol(defaultExpr.Type))
+            {
+                // Emit: receiver-address; ldflda field; initobj T
+                if (!this.TryLoadVariableAddress(fas.Receiver))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                }
+
+                this.il.OpCode(ILOpCode.Ldflda);
+                this.il.Token(fieldHandle);
+                this.il.OpCode(ILOpCode.Initobj);
+                this.il.Token(this.outer.GetElementTypeToken(defaultExpr.Type));
+
+                // Leave the assigned value on the stack as the expression result.
+                if (!this.TryLoadVariableAddress(fas.Receiver))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                }
+
                 this.il.OpCode(ILOpCode.Ldfld);
                 this.il.Token(fieldHandle);
                 return;

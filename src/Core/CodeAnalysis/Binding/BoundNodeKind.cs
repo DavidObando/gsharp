@@ -76,6 +76,7 @@ public enum BoundNodeKind
     DereferenceExpression,
     StateMachineAwaitOnCompleted,
     SpillSequenceExpression,
+    DefaultExpression,
 
     // Patterns
     ConstantPattern,

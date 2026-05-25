@@ -223,6 +223,7 @@ ConditionalGotoStatement
 ConstantPattern
 ConstructorCallExpression
 ConversionExpression
+DefaultExpression
 DereferenceExpression
 DiscardPattern
 ErrorExpression
