@@ -36,6 +36,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 public sealed class SynthesizedStateMachineType : TypeSymbol
 {
     private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
+    private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields = new Dictionary<Type, FieldSymbol>();
     private StructSymbol materializedStruct;
 
     /// <summary>
@@ -102,6 +103,42 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
         }
 
         fields.Add(field);
+    }
+
+    /// <summary>Registers a pooled awaiter field keyed by CLR type.
+    /// Value-type awaiters are keyed by their actual type; reference-typed
+    /// awaiters are keyed by <c>typeof(object)</c>.</summary>
+    /// <param name="poolKey">The CLR type key for the awaiter pool.</param>
+    /// <param name="field">The field symbol for the pool slot.</param>
+    public void RegisterAwaiterPoolField(Type poolKey, FieldSymbol field)
+    {
+        if (poolKey == null)
+        {
+            throw new ArgumentNullException(nameof(poolKey));
+        }
+
+        if (field == null)
+        {
+            throw new ArgumentNullException(nameof(field));
+        }
+
+        awaiterPoolFields[poolKey] = field;
+    }
+
+    /// <summary>Gets the pooled awaiter field for the given CLR awaiter type.
+    /// For reference-typed awaiters, pass <c>typeof(object)</c>.</summary>
+    /// <param name="awaiterClrType">The CLR awaiter type (value type) or
+    /// <c>typeof(object)</c> for reference-typed awaiters.</param>
+    /// <returns>The awaiter pool field, or <see langword="null"/> if not registered.</returns>
+    public FieldSymbol GetAwaiterPoolField(Type awaiterClrType)
+    {
+        if (awaiterClrType == null)
+        {
+            return null;
+        }
+
+        var key = awaiterClrType.IsValueType ? awaiterClrType : typeof(object);
+        return awaiterPoolFields.TryGetValue(key, out var field) ? field : null;
     }
 
     /// <summary>

@@ -74,6 +74,7 @@ public enum BoundNodeKind
     BlockExpression,
     AddressOfExpression,
     DereferenceExpression,
+    StateMachineAwaitOnCompleted,
 
     // Patterns
     ConstantPattern,

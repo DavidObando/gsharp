@@ -60,7 +60,7 @@ Console.WriteLine(t.IsCompletedSuccessfully)
     [Fact]
     public void AsyncTaskOfInt_Returns_Default_Value()
     {
-        // The MoveNext stub calls SetResult(default(int)), so result is 0.
+        // The MoveNext body now executes the user code, so result is 42.
         const string Source = @"package AsyncTestInt
 import System
 import System.Threading.Tasks
@@ -75,9 +75,7 @@ Console.WriteLine(t.Result)
 ";
         var output = CompileAndRun(Source, "AsyncTaskInt");
         Assert.Contains("True", output);
-        // NOTE: The MoveNext stub returns default(int) = 0, not 42.
-        // Real return value support requires per-await dispatch in MoveNext.
-        Assert.Contains("0", output);
+        Assert.Contains("42", output);
     }
 
     [Fact]
