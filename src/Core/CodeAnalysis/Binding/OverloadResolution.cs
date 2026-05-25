@@ -122,6 +122,19 @@ internal static class OverloadResolution
             return ImplicitConversionKind.None;
         }
 
+        // ADR-0039: peel by-ref from target (ref/out/in parameter) for matching.
+        // If the user passes &x (source is T&), peel both sides.
+        // If the user passes x (source is T), peel only the target.
+        if (target.IsByRef)
+        {
+            target = target.GetElementType()!;
+        }
+
+        if (source.IsByRef)
+        {
+            source = source.GetElementType()!;
+        }
+
         if (ClrTypeUtilities.AreSame(target, source))
         {
             return ImplicitConversionKind.Identity;

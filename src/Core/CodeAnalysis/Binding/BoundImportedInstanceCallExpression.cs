@@ -21,16 +21,19 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// <param name="method">The <see cref="MethodInfo"/> to invoke.</param>
     /// <param name="returnType">The bound return type.</param>
     /// <param name="arguments">The provided arguments.</param>
+    /// <param name="argumentRefKinds">Per-argument ref-kind annotations (default all-None).</param>
     public BoundImportedInstanceCallExpression(
         BoundExpression receiver,
         MethodInfo method,
         TypeSymbol returnType,
-        ImmutableArray<BoundExpression> arguments)
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds = default)
     {
         Receiver = receiver;
         Method = method;
         Type = returnType;
         Arguments = arguments;
+        ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
     }
 
     /// <inheritdoc/>
@@ -53,4 +56,9 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// Gets the bound arguments.
     /// </summary>
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    /// <summary>
+    /// Gets the per-argument ref-kind annotations. May be default (all-None).
+    /// </summary>
+    public ImmutableArray<RefKind> ArgumentRefKinds { get; }
 }

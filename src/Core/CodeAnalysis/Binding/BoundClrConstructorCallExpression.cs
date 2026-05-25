@@ -19,12 +19,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrConstructorCallExpression : BoundExpression
 {
-    public BoundClrConstructorCallExpression(System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType)
+    public BoundClrConstructorCallExpression(System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType, ImmutableArray<RefKind> argumentRefKinds = default)
     {
         ClrType = clrType;
         Constructor = constructor;
         Arguments = arguments;
         Type = resultType;
+        ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
     }
 
     public System.Type ClrType { get; }
@@ -32,6 +33,8 @@ public sealed class BoundClrConstructorCallExpression : BoundExpression
     public ConstructorInfo Constructor { get; }
 
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    public ImmutableArray<RefKind> ArgumentRefKinds { get; }
 
     public override TypeSymbol Type { get; }
 

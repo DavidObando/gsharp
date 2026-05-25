@@ -3954,21 +3954,19 @@ internal sealed class ReflectionMetadataEmitter
 
                     break;
                 case BoundImportedCallExpression impCall:
-                    foreach (var arg in impCall.Arguments)
-                    {
-                        this.EmitExpression(arg);
-                    }
-
+                    this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
                     this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method));
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                     this.EmitInstanceReceiver(instCall.Receiver);
-                    foreach (var arg in instCall.Arguments)
-                    {
-                        this.EmitExpression(arg);
-                    }
-
+                    this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
                     this.il.Call(this.outer.GetMethodEntityHandle(instCall.Method));
+                    break;
+                case BoundAddressOfExpression addressOf:
+                    this.EmitAddressOf(addressOf);
+                    break;
+                case BoundDereferenceExpression deref:
+                    this.EmitDereference(deref);
                     break;
                 case BoundConversionExpression conv:
                     this.EmitConversion(conv);
@@ -5808,6 +5806,148 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             return false;
+        }
+
+        /// <summary>ADR-0039: Emits arguments for an imported call, respecting <see cref="RefKind"/>.</summary>
+        private void EmitImportedCallArguments(ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> refKinds)
+        {
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                var rk = refKinds.IsDefault || i >= refKinds.Length ? RefKind.None : refKinds[i];
+                var arg = arguments[i];
+
+                if (rk == RefKind.Ref || rk == RefKind.Out || rk == RefKind.In)
+                {
+                    // Argument must be BoundAddressOfExpression; emit the address.
+                    if (arg is BoundAddressOfExpression addrOf)
+                    {
+                        this.EmitAddressOf(addrOf);
+                    }
+                    else
+                    {
+                        // Fallback for in: emit value, but this shouldn't happen
+                        // since binder requires & for all ref-kind arguments in V1.
+                        this.EmitExpression(arg);
+                    }
+                }
+                else
+                {
+                    this.EmitExpression(arg);
+                }
+            }
+        }
+
+        /// <summary>ADR-0039: Emits address-of by dispatching on the operand shape.</summary>
+        private void EmitAddressOf(BoundAddressOfExpression node)
+        {
+            switch (node.Operand)
+            {
+                case BoundVariableExpression bve:
+                    if (!this.TryLoadVariableAddress(bve.Variable))
+                    {
+                        throw new InvalidOperationException($"Cannot take address of variable '{bve.Variable.Name}'.");
+                    }
+
+                    break;
+
+                case BoundFieldAccessExpression fa:
+                    this.EmitFieldAddress(fa);
+                    break;
+
+                case BoundIndexExpression idx:
+                    this.EmitExpression(idx.Target);
+                    this.EmitExpression(idx.Index);
+                    this.EmitLoadElementAddress(idx.Type);
+                    break;
+
+                case BoundDereferenceExpression deref:
+                    // &(*p) = p — just emit the pointer value.
+                    this.EmitExpression(deref.Operand);
+                    break;
+
+                default:
+                    throw new InvalidOperationException($"Cannot take address of expression kind '{node.Operand.GetType().Name}'.");
+            }
+        }
+
+        /// <summary>ADR-0039: Emits a dereference (load indirect) from a managed pointer.</summary>
+        private void EmitDereference(BoundDereferenceExpression node)
+        {
+            this.EmitExpression(node.Operand);
+            var pointeeType = ((ByRefTypeSymbol)node.Operand.Type).PointeeType;
+            this.EmitLoadIndirect(pointeeType);
+        }
+
+        /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>
+        private void EmitFieldAddress(BoundFieldAccessExpression fa)
+        {
+            if (!this.outer.structFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot take address of field '{fa.Field.Name}': no emitted FieldDef.");
+            }
+
+            // Load receiver address, then ldflda.
+            var receiverIsClass = fa.Receiver.Type is StructSymbol rs && rs.IsClass;
+            if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+            {
+                // address already on stack
+            }
+            else
+            {
+                this.EmitExpression(fa.Receiver);
+            }
+
+            this.il.OpCode(ILOpCode.Ldflda);
+            this.il.Token(fieldHandle);
+        }
+
+        /// <summary>ADR-0039: Emits ldelema for array element address.</summary>
+        private void EmitLoadElementAddress(TypeSymbol elementType)
+        {
+            var clrType = elementType?.ClrType ?? typeof(object);
+            var token = this.outer.GetElementTypeToken(elementType ?? TypeSymbol.FromClrType(typeof(object)));
+            this.il.OpCode(ILOpCode.Ldelema);
+            this.il.Token(token);
+        }
+
+        /// <summary>ADR-0039: Emits ldind.* or ldobj for loading a value through a managed pointer.</summary>
+        private void EmitLoadIndirect(TypeSymbol pointeeType)
+        {
+            var clrType = pointeeType?.ClrType;
+            if (clrType == typeof(int) || clrType == typeof(uint))
+            {
+                this.il.OpCode(ILOpCode.Ldind_i4);
+            }
+            else if (clrType == typeof(long) || clrType == typeof(ulong))
+            {
+                this.il.OpCode(ILOpCode.Ldind_i8);
+            }
+            else if (clrType == typeof(float))
+            {
+                this.il.OpCode(ILOpCode.Ldind_r4);
+            }
+            else if (clrType == typeof(double))
+            {
+                this.il.OpCode(ILOpCode.Ldind_r8);
+            }
+            else if (clrType == typeof(short) || clrType == typeof(ushort) || clrType == typeof(char))
+            {
+                this.il.OpCode(ILOpCode.Ldind_i2);
+            }
+            else if (clrType == typeof(byte) || clrType == typeof(sbyte) || clrType == typeof(bool))
+            {
+                this.il.OpCode(ILOpCode.Ldind_i1);
+            }
+            else if (clrType != null && clrType.IsValueType)
+            {
+                this.il.OpCode(ILOpCode.Ldobj);
+                this.il.Token(this.outer.GetElementTypeToken(pointeeType));
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Ldind_ref);
+            }
         }
 
         private void EmitGoStatement(BoundGoStatement node)

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Channels;
@@ -493,6 +494,8 @@ public sealed class Evaluator
                 BoundNodeKind.MakeChannelExpression => EvaluateMakeChannelExpression((BoundMakeChannelExpression)node),
                 BoundNodeKind.ChannelReceiveExpression => EvaluateChannelReceiveExpression((BoundChannelReceiveExpression)node),
                 BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),
+                BoundNodeKind.AddressOfExpression => EvaluateAddressOfExpression((BoundAddressOfExpression)node),
+                BoundNodeKind.DereferenceExpression => EvaluateDereferenceExpression((BoundDereferenceExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -805,12 +808,11 @@ public sealed class Evaluator
     private object EvaluateClrConstructorCallExpression(BoundClrConstructorCallExpression node)
     {
         var args = new object[node.Arguments.Length];
-        for (var i = 0; i < node.Arguments.Length; i++)
-        {
-            args[i] = EvaluateExpression(node.Arguments[i]);
-        }
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
-        return node.Constructor.Invoke(args);
+        var result = node.Constructor.Invoke(args);
+        WriteBackRefSlots(refSlots, args);
+        return result;
     }
 
     private object EvaluateClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
@@ -1703,27 +1705,116 @@ public sealed class Evaluator
 
     private object EvaluateImportedCallExpression(BoundImportedCallExpression node)
     {
-        // Hack: for now we only support static methods.
-        var locals = new List<object>();
-        for (int i = 0; i < node.Arguments.Length; i++)
-        {
-            var value = EvaluateExpression(node.Arguments[i]);
-            locals.Add(value);
-        }
+        var args = new object[node.Arguments.Length];
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
-        return node.Function.Method.Invoke(null, locals.ToArray());
+        var result = node.Function.Method.Invoke(null, args);
+        WriteBackRefSlots(refSlots, args);
+        return result;
     }
 
     private object EvaluateImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         var receiver = EvaluateExpression(node.Receiver);
-        var locals = new object[node.Arguments.Length];
-        for (var i = 0; i < node.Arguments.Length; i++)
+        var args = new object[node.Arguments.Length];
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+
+        var result = node.Method.Invoke(receiver, args);
+        WriteBackRefSlots(refSlots, args);
+        return result;
+    }
+
+    /// <summary>ADR-0039: Evaluates &amp;expr — in the interpreter, returns the current value (the write-back is handled at call sites).</summary>
+    private object EvaluateAddressOfExpression(BoundAddressOfExpression node)
+    {
+        // In the interpreter, &x just evaluates to the value of x.
+        // Write-back is handled by the ref-slot mechanism at call sites.
+        return EvaluateExpression(node.Operand);
+    }
+
+    /// <summary>ADR-0039: Evaluates *p — in the interpreter, this is identity since we don't have real pointers.</summary>
+    private object EvaluateDereferenceExpression(BoundDereferenceExpression node)
+    {
+        return EvaluateExpression(node.Operand);
+    }
+
+    /// <summary>ADR-0039: Builds the argument array and identifies ref/out slot write-back targets.</summary>
+    private List<(int Index, BoundExpression Operand)> BuildRefSlots(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> refKinds,
+        object[] args)
+    {
+        List<(int Index, BoundExpression Operand)> refSlots = null;
+
+        for (int i = 0; i < arguments.Length; i++)
         {
-            locals[i] = EvaluateExpression(node.Arguments[i]);
+            var arg = arguments[i];
+            var rk = refKinds.IsDefault || i >= refKinds.Length ? RefKind.None : refKinds[i];
+
+            if (rk != RefKind.None && arg is BoundAddressOfExpression addrOf)
+            {
+                // Evaluate the operand to get current value.
+                args[i] = EvaluateExpression(addrOf.Operand);
+                if (rk == RefKind.Ref || rk == RefKind.Out)
+                {
+                    refSlots ??= new List<(int, BoundExpression)>();
+                    refSlots.Add((i, addrOf.Operand));
+                }
+            }
+            else
+            {
+                args[i] = EvaluateExpression(arg);
+            }
         }
 
-        return node.Method.Invoke(receiver, locals);
+        return refSlots;
+    }
+
+    /// <summary>ADR-0039: Writes back modified ref/out argument values after a CLR method invocation.</summary>
+    private void WriteBackRefSlots(List<(int Index, BoundExpression Operand)> refSlots, object[] args)
+    {
+        if (refSlots == null)
+        {
+            return;
+        }
+
+        foreach (var (index, operand) in refSlots)
+        {
+            var value = args[index];
+            switch (operand)
+            {
+                case BoundVariableExpression bve:
+                    Assign(bve.Variable, value);
+                    break;
+                case BoundFieldAccessExpression fa:
+                    WriteBackField(fa, value);
+                    break;
+                case BoundIndexExpression idx:
+                    WriteBackIndex(idx, value);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>ADR-0039: Writes back a value into a field after ref/out return.</summary>
+    private void WriteBackField(BoundFieldAccessExpression fa, object value)
+    {
+        var receiver = EvaluateExpression(fa.Receiver);
+        if (receiver is StructValue sv)
+        {
+            sv.Fields[fa.Field.Name] = value;
+        }
+    }
+
+    /// <summary>ADR-0039: Writes back a value into an array element after ref/out return.</summary>
+    private void WriteBackIndex(BoundIndexExpression idx, object value)
+    {
+        var target = EvaluateExpression(idx.Target);
+        var index = EvaluateExpression(idx.Index);
+        if (target is Array arr && index is int i)
+        {
+            arr.SetValue(value, i);
+        }
     }
 
     private object EvaluateNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
