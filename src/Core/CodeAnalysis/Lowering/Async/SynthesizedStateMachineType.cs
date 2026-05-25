@@ -1,0 +1,96 @@
+// <copyright file="SynthesizedStateMachineType.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Symbols;
+
+namespace GSharp.Core.CodeAnalysis.Lowering.Async;
+
+/// <summary>
+/// A compiler-synthesized CLR type that hosts the lowered state machine for
+/// an <c>async</c> method (see <c>~/roslyn-async.md</c> §5). It carries all
+/// hoisted control fields (<c>&lt;&gt;1__state</c>, <c>&lt;&gt;t__builder</c>),
+/// the <c>this</c>-proxy field, parameter proxies, hoisted user locals, and
+/// the per-type pooled awaiter fields.
+/// </summary>
+/// <remarks>
+/// <para>The type is emitted by <see cref="Emit.ReflectionMetadataEmitter"/>
+/// as a nested type on the containing type (or top-level for the script
+/// entry-point's async helpers). Its kind — struct vs class — is fixed at
+/// construction:</para>
+/// <list type="bullet">
+/// <item><description><b>struct</b> by default for <c>async void</c> /
+/// <c>async Task</c> / <c>async Task&lt;T&gt;</c> / custom task-likes; the
+/// no-alloc fast path on synchronously-completing awaits depends on this.</description></item>
+/// <item><description><b>class</b> for async-iterators (always), and as the
+/// fallback when EnC stability is needed (not currently supported by GSharp).</description></item>
+/// </list>
+/// <para>This class is a thin data container. Field population happens in
+/// <c>AsyncStateMachineRewriter</c> (todo: state-rewriter), which decides
+/// hoist set, allocates awaiter slot indices, and registers the synthesized
+/// type with its kickoff <see cref="FunctionSymbol"/>.</para>
+/// </remarks>
+public sealed class SynthesizedStateMachineType : TypeSymbol
+{
+    private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SynthesizedStateMachineType"/> class.
+    /// </summary>
+    /// <param name="name">The mangled type name produced by
+    /// <see cref="GeneratedNames.StateMachineTypeName"/>.</param>
+    /// <param name="containerKind">Whether the type is a <c>struct</c> or
+    /// <c>class</c>; see <see cref="StateMachineContainerKind"/>.</param>
+    /// <param name="kickoffMethod">The original async method whose body
+    /// the state machine implements.</param>
+    /// <param name="builderInfo">The resolved BCL builder for the kickoff
+    /// method's return type.</param>
+    public SynthesizedStateMachineType(
+        string name,
+        StateMachineContainerKind containerKind,
+        FunctionSymbol kickoffMethod,
+        AsyncMethodBuilderInfo builderInfo)
+        : base(name)
+    {
+        ContainerKind = containerKind;
+        KickoffMethod = kickoffMethod;
+        BuilderInfo = builderInfo;
+    }
+
+    /// <summary>Gets the storage kind (struct or class). Spec §5.</summary>
+    public StateMachineContainerKind ContainerKind { get; }
+
+    /// <summary>Gets the original async method whose body the state machine implements.</summary>
+    public FunctionSymbol KickoffMethod { get; }
+
+    /// <summary>Gets the resolved BCL builder information for the kickoff
+    /// method's return type.</summary>
+    public AsyncMethodBuilderInfo BuilderInfo { get; }
+
+    /// <summary>Gets or sets the <c>&lt;&gt;1__state</c> field. Always
+    /// present; populated by the state-machine rewriter.</summary>
+    public FieldSymbol StateField { get; set; }
+
+    /// <summary>Gets or sets the <c>&lt;&gt;t__builder</c> field. Always
+    /// present; typed as <see cref="AsyncMethodBuilderInfo.BuilderType"/>.</summary>
+    public FieldSymbol BuilderField { get; set; }
+
+    /// <summary>Gets or sets the <c>&lt;&gt;4__this</c> field, present only
+    /// when the kickoff method is an instance method that captures <c>this</c>.</summary>
+    public FieldSymbol ThisField { get; set; }
+
+    /// <summary>Gets the read-only sequence of all synthesized fields on
+    /// the state machine, in declaration order. Includes the control
+    /// fields, the parameter proxies, the hoisted user locals, and the
+    /// pooled awaiter slots.</summary>
+    public ImmutableArray<FieldSymbol> Fields => fields.ToImmutableArray();
+
+    /// <summary>Appends a field to the synthesized type. Call order
+    /// determines emit order; the state-machine rewriter pushes control
+    /// fields first, then parameter proxies, then hoisted locals, then
+    /// awaiter slots, matching Roslyn's emit order.</summary>
+    /// <param name="field">The field to append.</param>
+    public void AddField(FieldSymbol field) => fields.Add(field);
+}
