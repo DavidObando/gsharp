@@ -51,20 +51,24 @@ public static class AsyncStateMachineRewriter
             }
 
             var ordinal = AllocateTypeOrdinal(program, function, ordinalsByScopeAndName);
-            var stateMachine = AsyncStateMachineTypeBuilder.Build(function, pair.Value, references, ordinal);
+
+            // Run the spill spiller to lift sub-expression awaits to statement top-level.
+            var spilledBody = SpillSequenceSpiller.Rewrite(pair.Value);
+
+            var stateMachine = AsyncStateMachineTypeBuilder.Build(function, spilledBody, references, ordinal);
             if (stateMachine == null)
             {
                 function.StateMachineType = null;
                 continue;
             }
 
-            var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, pair.Value);
-            var awaitStates = AwaitStateCollector.Allocate(pair.Value);
+            var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, spilledBody);
+            var awaitStates = AwaitStateCollector.Allocate(spilledBody);
             var kickoffPlan = KickoffBodyBuilder.Build(function, fieldMap);
-            var moveNextPlan = MoveNextBodyBuilder.Build(pair.Value, awaitStates);
+            var moveNextPlan = MoveNextBodyBuilder.Build(spilledBody, awaitStates);
             function.StateMachineType = stateMachine;
 
-            plans.Add(new AsyncStateMachinePlan(function, pair.Value, stateMachine, fieldMap, awaitStates, kickoffPlan, moveNextPlan));
+            plans.Add(new AsyncStateMachinePlan(function, spilledBody, stateMachine, fieldMap, awaitStates, kickoffPlan, moveNextPlan));
         }
 
         return new AsyncStateMachineRewriteResult(program, plans.ToImmutable());

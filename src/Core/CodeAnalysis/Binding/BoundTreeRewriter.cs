@@ -409,6 +409,8 @@ public abstract class BoundTreeRewriter
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             case BoundNodeKind.StateMachineAwaitOnCompleted:
                 return RewriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node);
+            case BoundNodeKind.SpillSequenceExpression:
+                return RewriteSpillSequenceExpression((BoundSpillSequenceExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -868,6 +870,34 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
     {
         return node;
+    }
+
+    /// <summary>
+    /// Rewrites a spill-sequence expression.
+    /// </summary>
+    /// <param name="node">The spill-sequence expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteSpillSequenceExpression(BoundSpillSequenceExpression node)
+    {
+        var builder = ImmutableArray.CreateBuilder<BoundStatement>(node.SideEffects.Length);
+        var changed = false;
+        foreach (var stmt in node.SideEffects)
+        {
+            var rewritten = RewriteStatement(stmt);
+            builder.Add(rewritten);
+            if (rewritten != stmt)
+            {
+                changed = true;
+            }
+        }
+
+        var value = RewriteExpression(node.Value);
+        if (!changed && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundSpillSequenceExpression(node.Locals, builder.MoveToImmutable(), value);
     }
 
     /// <summary>
