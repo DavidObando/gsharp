@@ -237,6 +237,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.DereferenceExpression:
                 WriteDereferenceExpression((BoundDereferenceExpression)node, writer);
                 break;
+            case BoundNodeKind.StateMachineAwaitOnCompleted:
+                WriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -1303,5 +1306,19 @@ public static class BoundNodePrinter
     {
         writer.WritePunctuation(SyntaxKind.StarToken);
         node.Operand.WriteTo(writer);
+    }
+
+    private static void WriteStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node, IndentedTextWriter writer)
+    {
+        var method = node.UseCritical ? "AwaitUnsafeOnCompleted" : "AwaitOnCompleted";
+        writer.WriteKeyword("builder.");
+        writer.WriteIdentifier(method);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteIdentifier("ref ");
+        writer.WriteIdentifier(node.AwaiterLocal.Name);
+        writer.WritePunctuation(SyntaxKind.CommaToken);
+        writer.WriteSpace();
+        writer.WriteIdentifier("ref this");
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 }

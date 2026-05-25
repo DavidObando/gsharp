@@ -407,6 +407,8 @@ public abstract class BoundTreeRewriter
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
             case BoundNodeKind.DereferenceExpression:
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
+            case BoundNodeKind.StateMachineAwaitOnCompleted:
+                return RewriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -855,6 +857,17 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundDereferenceExpression(operand);
+    }
+
+    /// <summary>
+    /// Rewrites a state-machine await-on-completed marker. This is a leaf node
+    /// with no rewritable children; default behavior returns the node unchanged.
+    /// </summary>
+    /// <param name="node">The state-machine await-on-completed node.</param>
+    /// <returns>The node, unchanged.</returns>
+    protected virtual BoundExpression RewriteStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
+    {
+        return node;
     }
 
     /// <summary>

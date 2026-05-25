@@ -2848,6 +2848,9 @@ internal sealed class ReflectionMetadataEmitter
                         }
 
                         break;
+                    case BoundBlockStatement nestedBlock:
+                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        break;
                 }
             }
             else
@@ -2893,6 +2896,9 @@ internal sealed class ReflectionMetadataEmitter
                             CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
+                        break;
+                    case BoundBlockStatement nestedBlock:
+                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                 }
             }
