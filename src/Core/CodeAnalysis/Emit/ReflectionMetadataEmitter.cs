@@ -214,6 +214,7 @@ internal sealed class ReflectionMetadataEmitter
         this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
         this.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.SynthesizeIteratorStateMachines(hostPackageGuess);
+        this.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
@@ -1280,7 +1281,9 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 goEnclosingScopes,
-                structThisParameter: moveNextBody.ThisParameter);
+                structThisParameter: moveNextBody.ThisParameter,
+                asyncFieldMap: plan.FieldMap,
+                asyncPlan: plan);
             emitter.EmitBlock(body);
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
@@ -1510,22 +1513,22 @@ internal sealed class ReflectionMetadataEmitter
         InstructionEncoder il,
         Dictionary<VariableSymbol, int> locals,
         Dictionary<ParameterSymbol, int> parameters,
-        BoundStateMachineAwaitOnCompleted node)
+        BoundStateMachineAwaitOnCompleted node,
+        AsyncStateMachinePlan currentPlan = null)
     {
-        // Find the current SM plan to get builder field + struct type.
-        // The SM struct must already be materialized at this point.
-        AsyncStateMachinePlan currentPlan = null;
-        foreach (var plan in this.asyncStateMachinePlans)
+        // Use the explicitly-passed plan when available; fall back to the
+        // legacy search for backward compatibility with top-level async.
+        if (currentPlan == null)
         {
-            if (plan.FieldMap.StateField != null)
+            foreach (var plan in this.asyncStateMachinePlans)
             {
-                // Match: find the plan whose awaiterLocal is in scope.
-                // Since MoveNext is only emitted for one plan at a time, use the
-                // one whose builder field is in structFieldDefs.
-                if (this.structFieldDefs.ContainsKey(plan.FieldMap.BuilderField))
+                if (plan.FieldMap.StateField != null)
                 {
-                    currentPlan = plan;
-                    break;
+                    if (this.structFieldDefs.ContainsKey(plan.FieldMap.BuilderField))
+                    {
+                        currentPlan = plan;
+                        break;
+                    }
                 }
             }
         }
@@ -2747,6 +2750,64 @@ internal sealed class ReflectionMetadataEmitter
         this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
         this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
         this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
+    }
+
+    /// <summary>
+    /// For each async lambda, runs the async state-machine pipeline on its body
+    /// and produces an <see cref="AsyncStateMachinePlan"/>. For no-capture lambdas
+    /// the kickoff method is the lambda's own FunctionSymbol; for capture-bearing
+    /// lambdas the kickoff is the closure class's Invoke method.
+    /// </summary>
+    private void SynthesizeAsyncLambdaStateMachines(List<BoundFunctionLiteralExpression> literals, PackageSymbol hostPackage)
+    {
+        var packageName = hostPackage?.Name ?? this.program.PackageName ?? string.Empty;
+        var plans = this.asyncStateMachinePlans.ToBuilder();
+
+        foreach (var literal in literals)
+        {
+            if (!literal.Function.IsAsync)
+            {
+                continue;
+            }
+
+            FunctionSymbol kickoffFunction;
+            BoundBlockStatement body;
+
+            if (this.closureInfos.TryGetValue(literal, out var closure))
+            {
+                // Capture-bearing async lambda: the closure's Invoke method is the kickoff.
+                kickoffFunction = closure.InvokeMethod;
+                kickoffFunction.IsAsync = true;
+                if (!this.lambdaBodies.TryGetValue(kickoffFunction, out body))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                // No-capture async lambda: the lambda's own function symbol is the kickoff.
+                kickoffFunction = literal.Function;
+                if (!this.lambdaBodies.TryGetValue(kickoffFunction, out body))
+                {
+                    body = literal.Body;
+                }
+            }
+
+            // Lambda bodies are not pre-lowered (the Lowerer doesn't descend into
+            // BoundFunctionLiteralExpression). Lower before the async pipeline.
+            body = (BoundBlockStatement)Lowerer.Lower(body);
+
+            var plan = Lowering.Async.AsyncStateMachineRewriter.RewriteSingle(
+                kickoffFunction, body, this.references, packageName);
+            if (plan == null)
+            {
+                continue;
+            }
+
+            plans.Add(plan);
+        }
+
+        this.asyncStateMachinePlans = plans.ToImmutable();
     }
 
     private ClosureInfo SynthesizeDisplayClass(
@@ -4140,6 +4201,57 @@ internal sealed class ReflectionMetadataEmitter
         return openDef.MakeGenericType(args);
     }
 
+    /// <summary>
+    /// For an async lambda, resolves the delegate CLR type with the return type
+    /// wrapped in Task/Task&lt;T&gt; (matching the actual kickoff method signature).
+    /// </summary>
+    private Type ResolveAsyncDelegateClrType(FunctionTypeSymbol fnType, FunctionSymbol function)
+    {
+        // Find the async plan for this function.
+        AsyncStateMachinePlan plan = null;
+        foreach (var p in this.asyncStateMachinePlans)
+        {
+            if (p.KickoffMethod == function)
+            {
+                plan = p;
+                break;
+            }
+        }
+
+        if (plan == null)
+        {
+            return this.ResolveDelegateClrType(fnType);
+        }
+
+        var builderInfo = plan.StateMachine.BuilderInfo;
+        Type taskClrType;
+        if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
+        {
+            taskClrType = typeof(System.Threading.Tasks.Task);
+        }
+        else if (builderInfo.TaskProperty != null)
+        {
+            taskClrType = builderInfo.TaskProperty.PropertyType;
+        }
+        else
+        {
+            taskClrType = typeof(System.Threading.Tasks.Task);
+        }
+
+        int arity = fnType.ParameterTypes.Length;
+        var typeName = "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var openDef = this.references.GetCoreType(typeName);
+
+        var args = new Type[arity + 1];
+        for (int i = 0; i < arity; i++)
+        {
+            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType);
+        }
+
+        args[arity] = this.MapToReferenceClrType(taskClrType);
+        return openDef.MakeGenericType(args);
+    }
+
     // Map a host-runtime Type onto the MetadataLoadContext type from the
     // emitter's references when an equivalent exists. Returns the input
     // unchanged when no mapping is found — non-primitive host types whose
@@ -4500,6 +4612,8 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
         private readonly ParameterSymbol structThisParameter;
+        private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
+        private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -4518,7 +4632,9 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-            ParameterSymbol structThisParameter = null)
+            ParameterSymbol structThisParameter = null,
+            Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
+            Lowering.Async.AsyncStateMachinePlan asyncPlan = null)
         {
             this.outer = outer;
             this.il = il;
@@ -4537,6 +4653,8 @@ internal sealed class ReflectionMetadataEmitter
             this.selectStatementSlots = selectStatementSlots;
             this.goEnclosingScopes = goEnclosingScopes;
             this.structThisParameter = structThisParameter;
+            this.asyncFieldMap = asyncFieldMap;
+            this.asyncPlan = asyncPlan;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -6471,7 +6589,25 @@ internal sealed class ReflectionMetadataEmitter
         // `(object, IntPtr)` ctor.
         private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
         {
-            EmitFunctionLiteral(literal, overrideDelegateType: null);
+            // For async lambdas, resolve the delegate type with the Task-wrapped return.
+            Type asyncDelegateOverride = null;
+            if (literal.Function.IsAsync)
+            {
+                // For no-capture lambdas, the plan's kickoff is literal.Function.
+                // For capture-bearing lambdas, the plan's kickoff is closure.InvokeMethod.
+                FunctionSymbol planKey = literal.Function;
+                if (this.outer.closureInfos.TryGetValue(literal, out var closureForAsync))
+                {
+                    planKey = closureForAsync.InvokeMethod;
+                }
+
+                if (planKey.StateMachineType != null)
+                {
+                    asyncDelegateOverride = this.outer.ResolveAsyncDelegateClrType(literal.FunctionType, planKey);
+                }
+            }
+
+            EmitFunctionLiteral(literal, overrideDelegateType: asyncDelegateOverride);
         }
 
         private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType)
@@ -6520,7 +6656,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
 
                     this.il.OpCode(ILOpCode.Dup);
-                    this.EmitExpression(new BoundVariableExpression(captured));
+                    this.EmitCapturedVariableLoad(captured);
                     this.il.OpCode(ILOpCode.Stfld);
                     this.il.Token(fieldHandle);
                 }
@@ -6554,6 +6690,29 @@ internal sealed class ReflectionMetadataEmitter
             this.il.Token(methodHandle);
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
+
+        // Phase 4 emit parity: load a captured variable. In a MoveNext body,
+        // the variable may be hoisted to a state-machine field; emit the field
+        // load instead of a local/parameter load in that case.
+        private void EmitCapturedVariableLoad(VariableSymbol captured)
+        {
+            if (this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out var hoistedField))
+            {
+                // Load from the state machine: ldarg.0; ldfld <smStruct>::<hoistedField>
+                if (!this.outer.structFieldDefs.TryGetValue(hoistedField, out var hoistedHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Hoisted field '{hoistedField.Name}' has no emitted FieldDef.");
+                }
+
+                this.il.OpCode(ILOpCode.Ldarg_0);
+                this.il.OpCode(ILOpCode.Ldfld);
+                this.il.Token(hoistedHandle);
+                return;
+            }
+
+            this.EmitExpression(new BoundVariableExpression(captured));
         }
 
         // Phase 4 emit parity (E1): indirect call through a func-typed value.
@@ -6702,7 +6861,7 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         private void EmitStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
         {
-            this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node);
+            this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan);
         }
 
         /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>
