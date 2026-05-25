@@ -5286,6 +5286,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundYieldStatement:
                     throw new NotSupportedException("Internal error: yield reached the emitter before iterator lowering.");
+                case BoundAwaitSequencePoint:
+                    this.il.OpCode(ILOpCode.Nop);
+                    break;
                 default:
                     throw new NotSupportedException(
                         $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");

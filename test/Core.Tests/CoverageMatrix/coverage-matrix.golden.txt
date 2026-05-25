@@ -202,6 +202,8 @@ ArrayCreationExpression
 AssignmentExpression
 AwaitExpression
 AwaitForRangeStatement
+AwaitResumePoint
+AwaitYieldPoint
 BinaryExpression
 BlockExpression
 BlockStatement

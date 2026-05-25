@@ -102,6 +102,10 @@ public static class BoundNodePrinter
             case BoundNodeKind.YieldStatement:
                 WriteYieldStatement((BoundYieldStatement)node, writer);
                 break;
+            case BoundNodeKind.AwaitYieldPoint:
+            case BoundNodeKind.AwaitResumePoint:
+                WriteAwaitSequencePoint((BoundAwaitSequencePoint)node, writer);
+                break;
             case BoundNodeKind.ErrorExpression:
                 WriteErrorExpression((BoundErrorExpression)node, writer);
                 break;
@@ -1369,5 +1373,12 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WriteIdentifier(node.Type.Name);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAwaitSequencePoint(BoundAwaitSequencePoint node, IndentedTextWriter writer)
+    {
+        var label = node.Kind == BoundNodeKind.AwaitYieldPoint ? "AwaitYieldPoint" : "AwaitResumePoint";
+        writer.WriteKeyword($"/* {label}(state={node.State}) */");
+        writer.WriteLine();
     }
 }
