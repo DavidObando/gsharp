@@ -43,7 +43,7 @@ public class AsyncEmitPrecheckTests
 
         var diagnostics = AsyncEmitPrecheck.Check(program);
         var d = Assert.Single(diagnostics);
-        Assert.Equal(AsyncEmitPrecheck.AsyncEmitNotImplementedMessage, d.Message);
+        Assert.Equal(AsyncEmitPrecheck.AsyncStateMachineUnavailableMessage, d.Message);
     }
 
     [Fact]
