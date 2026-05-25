@@ -47,6 +47,9 @@ public class AsyncStateMachineRewriterTests
         Assert.Same(plan.StateMachine, plan.FieldMap.StateMachine);
         Assert.Equal("<doIt>d__0", plan.StateMachine.Name);
         Assert.Empty(plan.AwaitResumeStates);
+        Assert.Same(plan.FieldMap.StructType, plan.KickoffPlan.StateMachineLocal.Type);
+        Assert.Equal(StateMachineStates.NotStartedOrRunningState, plan.KickoffPlan.InitialState);
+        Assert.True(plan.KickoffPlan.ReturnsBuilderTask);
         Assert.Same(body, plan.MoveNextPlan.LoweredBody);
         Assert.Empty(plan.MoveNextPlan.AwaitResumePoints);
     }
