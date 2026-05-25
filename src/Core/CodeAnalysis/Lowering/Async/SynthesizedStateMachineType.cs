@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -35,6 +36,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 public sealed class SynthesizedStateMachineType : TypeSymbol
 {
     private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
+    private StructSymbol materializedStruct;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SynthesizedStateMachineType"/> class.
@@ -92,5 +94,45 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
     /// fields first, then parameter proxies, then hoisted locals, then
     /// awaiter slots, matching Roslyn's emit order.</summary>
     /// <param name="field">The field to append.</param>
-    public void AddField(FieldSymbol field) => fields.Add(field);
+    public void AddField(FieldSymbol field)
+    {
+        if (materializedStruct != null)
+        {
+            throw new InvalidOperationException("Cannot add fields after the synthesized state-machine type has been materialized.");
+        }
+
+        fields.Add(field);
+    }
+
+    /// <summary>
+    /// Materializes this synthesized type as a real <see cref="StructSymbol"/>
+    /// so later async-rewriter slices can reuse existing bound nodes such as
+    /// <see cref="GSharp.Core.CodeAnalysis.Binding.BoundFieldAccessExpression"/>, which require a
+    /// <see cref="StructSymbol"/> receiver type.
+    /// </summary>
+    /// <remarks>
+    /// Calling this method freezes the field list. Struct state machines are
+    /// projected as value types; async-iterator class state machines are
+    /// projected with <see cref="StructSymbol.IsClass"/> set.
+    /// </remarks>
+    /// <returns>The stable aggregate projection for this state-machine type.</returns>
+    public StructSymbol MaterializeAsStructSymbol()
+    {
+        if (materializedStruct != null)
+        {
+            return materializedStruct;
+        }
+
+        materializedStruct = new StructSymbol(
+            name: Name,
+            fields: Fields,
+            accessibility: Accessibility.Private,
+            declaration: null,
+            packageName: KickoffMethod.Package?.Name,
+            isData: false,
+            isInline: false,
+            isClass: ContainerKind == StateMachineContainerKind.Class);
+
+        return materializedStruct;
+    }
 }
