@@ -63,10 +63,10 @@ I want to enable other developers to benefit from the .NET framework without nec
 I want a simple, concise, productive programming language targetting .NET based on the good lessons learned from Go, Kotlin, as well as other programming languages. Modern languages such as Go give the user a simple approach to programming while also providing powerful foundations to deliver applications in all forms and factors.
 
 Here's a few relevant links to bring this point home:
-  - Classes versus Data Structures http://blog.cleancoder.com/uncle-bob/2019/06/16/ObjectsAndDataStructures.html
-  - Why OO sucks http://www.cs.otago.ac.nz/staffpriv/ok/Joe-Hates-OO.htm
-  - Why I prefer go over Java or Python https://yourbasic.org/golang/advantages-over-java-python/
-  - Go is in a trajectory to become the next enterprise language https://hackernoon.com/go-is-on-a-trajectory-to-become-the-next-enterprise-programming-language-3b75d70544e
+  - [Classes versus Data Structures](http://blog.cleancoder.com/uncle-bob/2019/06/16/ObjectsAndDataStructures.html)
+  - [Why OO sucks](http://www.cs.otago.ac.nz/staffpriv/ok/Joe-Hates-OO.htm)
+  - [Why I prefer go over Java or Python](https://yourbasic.org/golang/advantages-over-java-python/)
+  - [Go is in a trajectory to become the next enterprise language](https://hackernoon.com/go-is-on-a-trajectory-to-become-the-next-enterprise-programming-language-3b75d70544e)
 
 Go is also finding its way into unexpected places with projects such as TinyGo https://tinygo.org/.
 
@@ -81,9 +81,7 @@ Note that I'm not thinking about attracting current Go developers necessarily. I
 Contributions to this project are welcome. Before you submit a pull request, open an issue to discuss your idea, the problem it solves, the desired implementation and after that a PR can be considered. This should expedite the PR acceptance process.
 
 ## Name
-The GSharp language takes its name from [CSharp](https://github.com/dotnet/csharplang) and [Go](https://go.googlesource.com/go), reflecting its roots and target (.NET). If there are any trademark issues with calling it that way I'm happy to also call it [AFlat](https://www.uberchord.com/blog/g-sharp-or-a-flat-on-guitar-chord-shapes-major-scale-songs-in-the-key-of-g-sharp-a-flat/).
-
-I also wouldn't mind calling it `Festivus` (a programming language for the restofus).
+The GSharp language takes its name from [CSharp](https://github.com/dotnet/csharplang) and [Go](https://go.googlesource.com/go), reflecting its roots and target (.NET).
 
 #### Other interesting links
   - [An Exhausting List of Differences Between VB.NET & C#](https://anthonydgreen.net/2019/02/12/exhausting-list-of-differences-between-vb-net-c/)
@@ -91,4 +89,4 @@ I also wouldn't mind calling it `Festivus` (a programming language for the resto
   - [The value in Go's simplicity](https://benjamincongdon.me/blog/2019/11/11/The-Value-in-Gos-Simplicity/)
   - [Learn Go in ~5mins](https://gist.github.com/prologic/5f6afe9c1b98016ca278f4d507e65510)
 
-ab0678fa-3a72-487d-8eae-7cdec82efedf
+
