@@ -193,6 +193,26 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a sequence type (ADR-0040).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken sequenceKeyword,
+        SyntaxToken openBracketToken,
+        TypeClauseSyntax elementType,
+        SyntaxToken closeBracketToken,
+        SyntaxToken questionToken,
+        bool isSequence)
+        : base(syntaxTree)
+    {
+        SequenceKeyword = sequenceKeyword;
+        SequenceOpenBracketToken = openBracketToken;
+        SequenceElementType = elementType;
+        SequenceCloseBracketToken = closeBracketToken;
+        QuestionToken = questionToken;
+    }
+#pragma warning restore SA1642
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
@@ -292,6 +312,21 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes a pointer type <c>*T</c> (ADR-0039).</summary>
     public bool IsPointer => PointerStarToken != null;
 
+    /// <summary>Gets the <c>sequence</c> keyword for sequence types, or <c>null</c> (ADR-0040).</summary>
+    public SyntaxToken SequenceKeyword { get; }
+
+    /// <summary>Gets the <c>[</c> opening the sequence element type, or <c>null</c> (ADR-0040).</summary>
+    public SyntaxToken SequenceOpenBracketToken { get; }
+
+    /// <summary>Gets the sequence element type clause, or <c>null</c> (ADR-0040).</summary>
+    public TypeClauseSyntax SequenceElementType { get; }
+
+    /// <summary>Gets the <c>]</c> closing the sequence element type, or <c>null</c> (ADR-0040).</summary>
+    public SyntaxToken SequenceCloseBracketToken { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a sequence type <c>sequence[T]</c> (ADR-0040).</summary>
+    public bool IsSequence => SequenceKeyword != null;
+
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="starToken">The <c>*</c> prefix token.</param>
@@ -305,5 +340,24 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, starToken, pointeeType, questionToken, isPointer: true);
+    }
+
+    /// <summary>Creates a sequence type clause <c>sequence[T]</c> (ADR-0040).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="sequenceKeyword">The <c>sequence</c> keyword.</param>
+    /// <param name="openBracketToken">The <c>[</c> token.</param>
+    /// <param name="elementType">The element type clause.</param>
+    /// <param name="closeBracketToken">The <c>]</c> token.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>A sequence type clause.</returns>
+    public static TypeClauseSyntax CreateSequence(
+        SyntaxTree syntaxTree,
+        SyntaxToken sequenceKeyword,
+        SyntaxToken openBracketToken,
+        TypeClauseSyntax elementType,
+        SyntaxToken closeBracketToken,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
     }
 }

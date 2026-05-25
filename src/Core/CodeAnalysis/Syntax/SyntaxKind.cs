@@ -119,6 +119,7 @@ public enum SyntaxKind
     SealedKeyword,
     SelectKeyword,
     ScopeKeyword,
+    SequenceKeyword,
     StructKeyword,
     SwitchKeyword,
     ThrowKeyword,
@@ -215,6 +216,7 @@ public enum SyntaxKind
     ScopeStatement,
     AwaitForRangeStatement,
     EventSubscriptionExpression,
+    YieldStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

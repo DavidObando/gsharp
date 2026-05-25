@@ -1,176 +1,309 @@
-# GSharp coverage matrix
+# GSharp coverage-matrix snapshot
+# Generated from SyntaxKind, BoundNodeKind, BoundBinaryOperator,
+# and BoundUnaryOperator. Drift fails CoverageMatrixGoldenTests.
 
-Front-end vs. back-end coverage of every distinct surface-language construct, traced from "lexer produces a token" → "parser builds a syntax node" → "binder lowers to a bound node" → "emitter writes IL" (and the interpreter's `Evaluator`, which `design/Gsharp-design-v0.1.md` declares the semantic source of truth).
+[SyntaxKind]
+AccessorExpression
+AmpersandAmpersandToken
+AmpersandEqualsToken
+AmpersandHatEqualsToken
+AmpersandHatToken
+AmpersandToken
+ArrayCreationExpression
+AssignmentExpression
+AsyncKeyword
+AwaitExpression
+AwaitForRangeStatement
+AwaitKeyword
+BadToken
+BangBangToken
+BangEqualsToken
+BangToken
+BinaryExpression
+BlockStatement
+BreakKeyword
+BreakStatement
+CallExpression
+CaseKeyword
+CatchClause
+CatchKeyword
+ChanKeyword
+ChannelReceiveExpression
+ChannelSendStatement
+ClassKeyword
+CloseBraceToken
+CloseParenthesisToken
+CloseSquareBracketToken
+ColonEqualsToken
+ColonToken
+CommaToken
+CommentToken
+CompilationUnit
+ConstKeyword
+ConstantPattern
+ContinueKeyword
+ContinueStatement
+DefaultKeyword
+DeferKeyword
+DeferStatement
+DiscardPattern
+DotToken
+EllipsisToken
+ElseClause
+ElseKeyword
+EndOfFileToken
+EnumDeclaration
+EnumKeyword
+EnumMember
+EqualsEqualsToken
+EqualsToken
+EventSubscriptionExpression
+ExpressionStatement
+FallthroughKeyword
+FalseKeyword
+FieldAccessExpression
+FieldAssignmentExpression
+FieldDeclaration
+FieldInitializer
+FinallyClause
+FinallyKeyword
+ForClauseStatement
+ForConditionStatement
+ForEllipsisStatement
+ForInfiniteStatement
+ForKeyword
+ForRangeStatement
+FuncKeyword
+FunctionDeclaration
+FunctionLiteralExpression
+GlobalStatement
+GoKeyword
+GoStatement
+GotoKeyword
+GreaterOrEqualsToken
+GreaterToken
+HatEqualsToken
+HatToken
+IdentifierToken
+IfKeyword
+IfStatement
+ImportDeclaration
+ImportKeyword
+IndexAssignmentExpression
+IndexExpression
+InterfaceDeclaration
+InterfaceKeyword
+InternalKeyword
+InterpolatedStringExpression
+InterpolatedStringToken
+IsKeyword
+LeftArrowToken
+LessOrEqualsToken
+LessToken
+LetKeyword
+ListPattern
+LiteralExpression
+MakeChannelExpression
+MapCreationExpression
+MapEntry
+MapKeyword
+MinusEqualsToken
+MinusMinusToken
+MinusToken
+MultiAssignmentStatement
+NameExpression
+NamedArgumentExpression
+NamedDeconstructionField
+NamedDeconstructionStatement
+NilKeyword
+NumberToken
+OpenBraceToken
+OpenKeyword
+OpenParenthesisToken
+OpenSquareBracketToken
+OperatorKeyword
+OverrideKeyword
+PackageDeclaration
+PackageKeyword
+Parameter
+ParenthesizedExpression
+PercentEqualsToken
+PercentToken
+PipeEqualsToken
+PipePipeToken
+PipeToken
+PlusEqualsToken
+PlusPlusToken
+PlusToken
+PrivateKeyword
+PropertyPattern
+PropertyPatternField
+PublicKeyword
+QuestionColonToken
+QuestionDotToken
+QuestionToken
+RangeKeyword
+RelationalPattern
+ReturnKeyword
+ReturnStatement
+RightArrowToken
+ScopeKeyword
+ScopeStatement
+SealedKeyword
+SelectCase
+SelectKeyword
+SelectStatement
+SemicolonToken
+SequenceKeyword
+ShiftLeftEqualsToken
+ShiftLeftToken
+ShiftRightEqualsToken
+ShiftRightToken
+SlashEqualsToken
+SlashToken
+StarEqualsToken
+StarToken
+StringToken
+StructDeclaration
+StructKeyword
+StructLiteralExpression
+SwitchCase
+SwitchExpression
+SwitchExpressionArm
+SwitchKeyword
+SwitchStatement
+ThrowKeyword
+ThrowStatement
+TrueKeyword
+TryKeyword
+TryStatement
+TupleDeconstructionStatement
+TupleLiteralExpression
+TypeAliasDeclaration
+TypeArgumentList
+TypeClause
+TypeKeyword
+TypeParameter
+TypeParameterList
+TypePattern
+UnaryExpression
+UsingKeyword
+UsingStatement
+VarKeyword
+VariableDeclaration
+WhitespaceToken
+WithExpression
+YieldStatement
 
-This file is the **golden** for the coverage-matrix introspection test (`test/Core.Tests/CoverageMatrix/`, execution plan §0.5). A new `SyntaxKind`, `BoundNodeKind`, or `BoundBinaryOperator`/`BoundUnaryOperator` entry that lands without an update here will fail that test on CI. The original prose source is `~/gsharp-gaps.md` §5; this file is the in-repo canonical copy.
+[BoundNodeKind]
+AddressOfExpression
+AppendExpression
+ArrayCreationExpression
+AssignmentExpression
+AwaitExpression
+AwaitForRangeStatement
+BinaryExpression
+BlockExpression
+BlockStatement
+CallExpression
+CapExpression
+ChannelCloseExpression
+ChannelReceiveExpression
+ChannelSendStatement
+ClrBinaryOperatorExpression
+ClrConstructorCallExpression
+ClrConversionCallExpression
+ClrEventSubscriptionExpression
+ClrIndexAssignmentExpression
+ClrIndexExpression
+ClrPropertyAccessExpression
+ClrPropertyAssignmentExpression
+ClrUnaryOperatorExpression
+ConditionalGotoStatement
+ConstantPattern
+ConstructorCallExpression
+ConversionExpression
+DereferenceExpression
+DiscardPattern
+ErrorExpression
+ExpressionStatement
+FieldAccessExpression
+FieldAssignmentExpression
+ForEllipsisStatement
+ForInfiniteStatement
+ForRangeStatement
+FunctionLiteralExpression
+GoStatement
+GotoStatement
+IfStatement
+ImportedCallExpression
+ImportedInstanceCallExpression
+IndexAssignmentExpression
+IndexExpression
+IndirectCallExpression
+LabelStatement
+LenExpression
+ListPattern
+LiteralExpression
+MakeChannelExpression
+MapDeleteExpression
+MapLiteralExpression
+NullConditionalAccessExpression
+PatternSwitchArm
+PatternSwitchStatement
+PropertyPattern
+PropertyPatternField
+RelationalPattern
+ReturnStatement
+ScopeStatement
+SelectStatement
+SpillSequenceExpression
+StateMachineAwaitOnCompleted
+StructLiteralExpression
+SwitchExpression
+SwitchExpressionArm
+ThrowStatement
+TryStatement
+TupleElementAccessExpression
+TupleLiteralExpression
+TypePattern
+UnaryExpression
+UserInstanceCallExpression
+VariableDeclaration
+VariableExpression
+YieldStatement
 
-Findings are based on `src/Core/CodeAnalysis/{Syntax/Lexer.cs, Syntax/Parser.cs, Binding/Binder.cs, Binding/BoundBinaryOperator.cs, Binding/BoundUnaryOperator.cs, Emit/ReflectionMetadataEmitter.cs}`.
+[BoundBinaryOperator]
+AmpersandAmpersandToken LogicalAnd (bool,bool) -> bool
+AmpersandHatToken BitClear (int,int) -> int
+AmpersandToken BitwiseAnd (bool,bool) -> bool
+AmpersandToken BitwiseAnd (int,int) -> int
+BangEqualsToken NotEquals (bool,bool) -> bool
+BangEqualsToken NotEquals (int,int) -> bool
+BangEqualsToken NotEquals (string,string) -> bool
+EqualsEqualsToken Equals (bool,bool) -> bool
+EqualsEqualsToken Equals (int,int) -> bool
+EqualsEqualsToken Equals (string,string) -> bool
+GreaterOrEqualsToken GreaterOrEquals (int,int) -> bool
+GreaterToken Greater (int,int) -> bool
+HatToken BitwiseXor (bool,bool) -> bool
+HatToken BitwiseXor (int,int) -> int
+LessOrEqualsToken LessOrEquals (int,int) -> bool
+LessToken Less (int,int) -> bool
+MinusToken Difference (int,int) -> int
+PercentToken Remainder (int,int) -> int
+PipePipeToken LogicalOr (bool,bool) -> bool
+PipeToken BitwiseOr (bool,bool) -> bool
+PipeToken BitwiseOr (int,int) -> int
+PlusToken Sum (int,int) -> int
+PlusToken Sum (string,string) -> string
+ShiftLeftToken ShiftLeft (int,int) -> int
+ShiftRightToken ShiftRight (int,int) -> int
+SlashToken Quotient (int,int) -> int
+StarToken Product (int,int) -> int
 
-Legend: ✅ = supported end-to-end. 🟡 = partially supported (caveats in the Notes column). ❌ = not implemented. — = not applicable at that layer.
-
-## Tokens
-
-| Token / class | Lexer | Reachable by parser? | Notes |
-| --- | --- | --- | --- |
-| Numeric literal | ✅ | ✅ | Decimal, `0x` hex, `0o` octal, `0b` binary (Phase 1.3); `_` allowed between digits and after the prefix. Floats / Go-style leading-zero octal not yet supported. |
-| String literal (double-quoted) | ✅ | ✅ | Includes Kotlin-style interpolation (`$ident`, `${expr}`) lowered to `+`-chain with `Convert.ToString` (Phase 1.1). `$$` escapes a literal `$`. |
-| Raw string literal (backtick) | ✅ | ✅ | Phase 1.2: contents verbatim, no escapes, CRLF/CR normalized to LF, multi-line allowed; embedded backticks not representable. |
-| Identifier | ✅ | ✅ | Unicode-aware via `char.IsLetter`/`char.IsLetterOrDigit` (categories Lu/Ll/Lt/Lm/Lo/Nl + Nd). Surrogate pairs not yet supported. See `docs/lexical.md`. |
-| `++` / `--` | ✅ | ✅ | Statement-only (Phase 2.2); the parser desugars `i++`/`i--` to `i = i ± 1` so the rest of the pipeline is unchanged. `let y = x++` is rejected at parse time. |
-| Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`) | ✅ | ✅ | Phase 2.1: the parser desugars `x op= rhs` to `x = x op rhs`; the binder/lowerer/emitter need no per-operator change. |
-| `[` / `]` | ✅ | ❌ | No syntax node consumes them; indexing/slicing unreachable. |
-| `;` | ✅ | ❌ | Only synthesized internally; no statement separator role in source. |
-| `<-` (channel send/recv arrow) | ✅ | ✅ | Phase 5.4 / 5.5 / ADR-0022. Receive `<-ch` parses as a unary expression; the binder special-cases the `<-` token to a `BoundChannelReceiveExpression` typed as the channel element type. Send `ch <- v` is recognised at statement scope (an expression followed by `<-` becomes a `ChannelSendStatementSyntax`) and binds to `BoundChannelSendStatement`. Non-channel operands diagnose. Emit mirrors the interpreter's `ValueTask.AsTask().GetAwaiter().GetResult()` shape and traps `ChannelClosedException` on receive to yield the element zero value (Phase E). |
-| `->` (switch-expression arm arrow) | ✅ | ✅ | Phase 6.1: separates `case` / `default` arms from result expressions in `switch` expressions. |
-| `&^` (Go bit-clear) | ✅ | ✅ | End-to-end for `int` operands; emitter implements as `not; and`. |
-
-## Top-level constructs
-
-| Construct | Parser | Binder | Emit | Interp | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `package A.B.C` | ✅ | ✅ | ✅ | ✅ | Dotted; no aliases. |
-| `import A.B.C` | ✅ | ✅ | ✅ | ✅ | Aliased form `import alias = path` lands in Phase 1.4. Implicit `import System` is on by default (Phase 1.5; opt-out via `gsc /noimplicitimports`). No parenthesized groups, no string-path imports, no per-file `import` blocks. |
-| Top-level statements | ✅ | ✅ | ✅ | ✅ | Entry point synthesized; one file may carry them. |
-| `func name(params) Ret { … }` | ✅ | ✅ | ✅ | ✅ | Single return type only. Accepts optional `public`/`internal`/`private` modifier (Phase 2.8); default is `public` per ADR-0014. |
-| Multiple return values / named returns | ❌ | — | — | — | |
-| Receiver-clause functions `func (r R) M(...)` | ✅ | ✅ | ✅ | ✅ | Phase 3.B.6 + Phase 6.4: Form A is shared. If `R` is declared in the same package and is a `struct` or `class`, the declaration is appended to `R`'s method set and dispatches like an instance method. If `R` is a cross-package, CLR, or primitive type, it remains an extension function with the receiver as parameter 0. Same-package interface/enum/alias receivers diagnose. |
-| Variadic / generic function parameters | ✅ | ✅ | ✅ | ✅ | Variadic `...T` is supported on function declarations and calls; generic function type parameters use `func Name[T any](...)`. |
-| `public` / `internal` / `private` modifiers | ✅ | ✅ | ✅ (func) | — | Phase 2.8 / ADR-0014: allowed on top-level `func`, `type`, `var`, `let`, `const`. Default is `public`. Emitter maps to `MethodAttributes.Public`/`Assembly`/`Private` for functions; global-variable accessibility is recorded for future field emission. |
-
-## Statements
-
-| Statement | Parser | Binder | Emit | Interp | Notes |
-| --- | --- | --- | --- | --- | --- |
-| Block `{ … }` | ✅ | ✅ | ✅ | ✅ | |
-| `var x [T] = e` / `let x [T] = e` / `const x [T] = e` | ✅ | ✅ | ✅ | ✅ | Single identifier; no `var (…)` group. `let` (since Phase 1.6) is an immutable runtime binding — same binder behavior as `const`. |
-| `x := e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b := 1, 2` declares N variables. Call-form `a, b := f()` still waits on Phase 4 multi-return. |
-| `x = e` | ✅ | ✅ | ✅ | ✅ | Single and multi-target forms (Phase 2.3): `a, b = b, a` evaluates every RHS into a fresh temporary before any assignment lands, matching Go's swap semantics. |
-| `if cond stmt [else stmt]` | ✅ | ✅ | ✅ | ✅ | No `if init; cond` form. |
-| `for { }` (infinite) | ✅ | ✅ | ✅ | ✅ | |
-| `for i := lo ... hi { }` | ✅ | ✅ | ✅ | ✅ | GSharp-specific; not Go's `for i := lo; i < hi; i++`. |
-| `for cond { }` (while-style) | ✅ | ✅ | ✅ | ✅ | Lowered in the binder to `goto checkLabel; body; check: if cond goto body`. |
-| `for init; cond; post { }` (C-style) | ✅ | ✅ | ✅ | ✅ | Header parts are all optional; `for ;; { }` is the infinite form. `continue` jumps to `post` then re-evaluates `cond`. |
-| `for v in coll`; legacy `for k, v := range coll` | ✅ | ✅ | ✅ | ✅ | Phase 7.2 / ADR-0031: canonical `for v in coll` and `for k, v in dict` route to the same `BoundForRangeStatement` as the legacy Phase-4 `:= range` spelling, which continues to bind unchanged. Arrays/slices (index-based), CLR `IDictionary[K,V]` (key/value), CLR `IEnumerable[T]` and non-generic `IEnumerable` (element-with-counter), plus pattern-based `GetEnumerator()` with `bool MoveNext()` and `Current` property/field for imported CLR and user-defined types work through the shared lowerer on both interpreter and emit paths. |
-| `break` / `continue` | ✅ | ✅ | ✅ | ✅ | No labels. |
-| `return [e]` | ✅ | ✅ | ✅ | ✅ | Single expr; line-sensitive. |
-| `switch` / `case` / `default` | ✅ | ✅ | ✅ | ✅ | Phase 2.6: statement switch; Phase 6.2 case values now bind as patterns (constant, discard, type, property, relational, list) and the interpreter dispatches a `BoundPatternSwitchStatement`. Phase 6.3 diagnoses non-exhaustive enum and sealed-interface statement switches when no top-level discard/default arm is present; duplicate-covered variants are accepted until unreachable-arm analysis lands. Phase 6.6 ✅ narrows nullable discriminants inside type-pattern and non-nil constant-pattern arms. Each case body is a brace block. Emit lowers a pattern switch statement directly: the discriminant is evaluated once into a temp; each non-default arm gets its own `nextArm` label and pattern dispatch (constant/discard/type/property/relational/list) branches there on failure or falls through to the arm body; the default arm (if present) is emitted last and falls through to the end label. |
-| `fallthrough` | ❌ | — | — | — | ADR-0013 rejects Go-style implicit case fallthrough. The keyword remains reserved; the parser emits a diagnostic if it appears. |
-| `using let/var/const x = e` | ✅ | ✅ | ✅ | ✅ | Phase 3.D.3, converged in Phase 7.1 / ADR-0030: binds the declaration at the point it appears and wraps subsequent statements in the enclosing block in `try/finally { x.Dispose() }`, so disposal is LIFO and exception-safe. |
-| `defer` | ✅ | ✅ | ✅ | ✅ | Phase 7.1 / ADR-0030: `defer <call>` is block-scoped and LIFO. Arguments are captured eagerly into synthesized immutable locals, then the remaining block lowers to nested `try/finally` cleanup calls. Non-call operands diagnose. |
-| `go` (goroutine) | ✅ | ✅ | ✅ | ✅ | Phase 5.3 / ADR-0022. `go <call>` schedules the call on `Task.Run(Action)`. Only call expressions are accepted as operands. The interpreter serializes body execution with a monitor on the evaluator to keep the shared locals/globals stacks safe; concurrency is observational rather than parallel. Phase F emit synthesizes a per-go-site display class so captured variables are snapshotted into fields and the generated `InvokeAction` method can be registered as an `Action`; when lexically inside `scope`, the returned `Task` is appended to the scope frame. |
-| `select` | ✅ | ✅ | ✅ | ✅ | Phase 5.6 / ADR-0022. Arms: `case <-ch { … }` (recv-discard), `case v := <-ch { … }` (recv-bind — declares `v` typed as the channel's element type, visible only in the arm body), `case ch <- v { … }` (send), and at most one `default { … }`. Body uses brace-block (consistent with GSharp's `switch`), not Go's colon-terminator. Empty `select { }` and duplicate `default` arms diagnose; send/receive operand type-checks reuse the existing channel diagnostics. Evaluator and emitter implement the ADR-0022 algorithm: snapshot channels, source-order readiness checks, take `default` if no arm is ready, otherwise block on `Task.WhenAny` of per-arm `WaitToRead/WriteAsync` and retry. Drained-closed receive surfaces as the element type's zero value. Lowerer flattens each arm body so nested `if`/`for`/etc. inside arms work end-to-end. |
-| `async func` / `await e` | ✅ | ✅ | — | ✅ | Phase 5.1+5.2 / ADR-0023 (interpreter). `async` is a `func` modifier; the call-site return type is wrapped as `Task` / `Task[T]`. `await` is an expression that unwraps the awaited element type. The interpreter realizes an async function as `Task.FromResult(body-result)` and `await` blocks via `GetAwaiter().GetResult()`. Emit deferred to Phase 7 (state machine). |
-| `scope { … }` | ✅ | ✅ | ✅ | ✅ | Phase 5.7 / ADR-0022. `scope { … }` opens a structured-concurrency block; the body binds in a fresh lexical scope. `go` statements lexically inside the body have their backing `Task` registered with the innermost scope frame instead of being fire-and-forget. At scope exit the evaluator awaits `Task.WhenAll` on the frame's tasks; on any failure the scope's `CancellationTokenSource` is cancelled (cooperative shut-down of sibling tasks) and the first failure is rethrown — additional failures attach as `AggregateException.InnerExceptions[1..]`. Nested `scope` blocks compose via a stack of frames. Phase F emit preallocates scope frame locals (`List<Task>`, `CancellationTokenSource`, awaiter), registers nested go tasks, waits in a finally, and disposes the CTS. Source-level `ctx` binding and async-aware lowering remain deferred. |
-| `await for v := range stream` | ✅ | ✅ | — | ✅ | Phase 5.8 / ADR-0023 (interpreter). The stream operand must implement `IAsyncEnumerable[T]`; the loop variable is typed as `T`. The interpreter realizes the iteration by reflectively calling `GetAsyncEnumerator(ct)` → looping `MoveNextAsync()` (blocking each `ValueTask` via `.AsTask().GetAwaiter().GetResult()`, the same pragma Phase 5.1 uses for `await`) → assigning `Current` to the loop variable → evaluating the body → `DisposeAsync()` in a `finally`. When the statement is lexically inside a `scope { … }`, the scope's `CancellationTokenSource` is plumbed into `GetAsyncEnumerator`; otherwise `CancellationToken.None`. Operand type-checks surface a dedicated diagnostic. Lowerer flattens the body so nested `if`/`for`/etc. inside the loop work (Phase 5 exit). `break` / `continue` inside the body, the async-aware lowering, and emit are deferred. |
-| `goto` / labels | ❌ | 🟡 | 🟡 | 🟡 | `BoundGotoStatement` / `BoundLabelStatement` exist as **lowering artifacts** for `for`/`if`; not surfaceable from source. |
-| Send statement `ch <- v` / receive `<-ch` | ✅ | ✅ | ✅ | ✅ | Phase 5.4 / 5.5 / ADR-0022. `ch <- v` is a `ChannelSendStatementSyntax` at statement scope; `<-ch` is a unary-form expression. The binder requires a `chan T` operand and infers the element type. Interpreter realizes channels as `System.Threading.Channels.Channel[T]` — send is `Writer.WriteAsync(v).AsTask().GetAwaiter().GetResult()`, receive is `Reader.ReadAsync().AsTask().GetAwaiter().GetResult()` (catches `ChannelClosedException` and returns the element type's zero value). Phase E emit lowers to the same IL shape using per-call-site `ValueTask`/`TaskAwaiter` scratch slots and a `MethodSpec`-encoded `Channel.CreateUnbounded<T>` / `CreateBounded<T>` call site. Two-value receive (`v, ok := <-ch`) and the async-aware lowering remain deferred. |
-| Increment/decrement statement (`i++`, `i--`) | ✅ | ✅ | ✅ | ✅ | Parser desugars to `i = i ± 1` (Phase 2.2). Statement-only — not valid in expression position. |
-| `type` declaration (alias or defined type) | ✅ | ✅ | — | ✅ | Phase 2.7: `type Name = Other` declares an erased alias resolvable anywhere an `int`/`bool`/`string` (or other alias) is. Defined types (with their own identity) and structural types arrive in Phase 3. |
-| `struct` declaration | ✅ | ✅ | ✅ | ✅ | Phase 3.B.1: `type Name struct { Field Type … }` declares a value-typed aggregate. Emitted as a CLR `ValueType` (sealed, sequential layout) under the declaring package's namespace. Composite literal `Name{Field: …}`, field read `p.Field`, and field assignment `p.Field = …` work on both backends with Go-style value semantics (assignment deep-copies). Field assignment receivers are restricted to simple variables for Phase 3.B.1. Phase 6.4 adds top-level Form A methods (`func (p Point) M()`) for same-package structs; they are equivalent to methods in the aggregate method set. |
-| `data struct` declaration | ✅ | ✅ | ✅ | ✅ | Phase 3.B.2 / ADR-0029: `type Name data struct { Field Type … }` is a struct whose values compare with structural equality via `==` / `!=`. `data` is a context-sensitive keyword (only special before `struct`); empty `data struct` is a binder diagnostic. Phase 7.3 / ADR-0032 adds data-struct ergonomics: `.copy(F = v, …)` and `expr with { F = v }` lower through a synthesized single-eval local into `BoundStructLiteralExpression`, and `let (a, b) = data` plus `let { F = a } = data` deconstruct through synthesized locals by field order or name. Emit lowers `==` / `!=` to a boxed call through `Object.Equals(object, object)`, which routes through the inherited `ValueType.Equals` reflection-based field-by-field comparison — same observable semantics as the interpreter's structural `Equals`/`GetHashCode`/`ToString`. Explicit synthesized `Equals(T)` / `GetHashCode` / `op_Equality` / `Deconstruct` methods on the struct's CLR `TypeDef` are a future iteration. |
-| `inline struct` declaration | ✅ | ✅ | ✅ | ✅ | Phase 7.4 / ADR-0033: `type Name inline struct(value T)` declares a readonly single-field value wrapper. `inline` is contextual and only valid before `struct`; it cannot combine with `data`, `record`, or `open`. The binder enforces exactly one field across primary-constructor parameters and body fields, marks the field readonly, permits positional deconstruction, and keeps nominal type identity so two wrappers over the same underlying type are not assignable or comparable. Emit writes a sealed sequential value type with an init-only public field, `IsReadOnlyAttribute`, and synthesized `Equals(object)`, `Equals(Name)`, `GetHashCode`, `ToString`, equality operators, and `Deconstruct`. |
-| `record` declaration alias | ✅ | ✅ | ✅ | ✅ | Phase 6.7 / ADR-0025: `type Name record { Field Type … }` is a pure parse-time alias for `type Name data struct { Field Type … }`. `record` is contextual and only special in a type-declaration header when followed by `{`; elsewhere it remains an ordinary identifier. The bound tree, symbols, emit, equality semantics, and ADR-0029 synthesized-member behavior are identical to `data struct`. `record class`, positional constructor records, record-specific `with` semantics beyond ADR-0032 data-struct sugar, `open record`, and `sealed record` are out of scope. |
-| `type Name enum { A, B, C }` | ✅ | ✅ | — | ✅ | Phase 6.8. Members auto-number from 0. Underlying type is `System.Int32`. `Color.Red` member access; equality only (no ordering). Usable as switch discriminant in both the statement and expression forms. Phase 6.3 exhaustiveness accepts all members covered by constant patterns or a top-level discard/default. Explicit member values (`Red = 5`) and emit are deferred. |
-| `class` declaration | ✅ | ✅ | ✅ | ✅ | Phase 3.B.3 (sub-steps 1 + 2 primary ctor + 2b methods + 3 single inheritance): `type Name class { Field Type … }` declares a reference-typed aggregate; `type Name class(p1 T1, p2 T2) { … }` additionally declares a Kotlin-style primary constructor whose parameters become public fields of the same name (ADR-0017 lock-in). Composite literal `Name{Field: …}` continues to work for any class (uses the implicit parameterless ctor); `Name(arg1, arg2)` invokes the declared primary ctor positionally. Body fields not listed in the primary ctor are zero-initialized. Reference semantics: assignment shares the instance and field writes mutate in place so all references observe the update. Methods inside the body (`func Name(args) Ret { body }`) and Phase 6.4 same-package top-level receiver methods (`func (c C) Name(args) Ret { body }`) are dispatched via `receiver.Method(args)`; a bare identifier `X` inside either body resolves to `this.X` if `X` is a field of the enclosing class (implicit-`this` field access and assignment). Method declarations inside a `struct` body are diagnosed. Single inheritance per ADR-0017: `open class Base { open func F() T { … } }` declares a subclassable class with an overridable method; `class Derived : Base { override func F() T { … } }` extends it. Sealed-by-default — subclassing a non-`open` class diagnoses `Class 'X' is not open; declare 'open class X' to allow subclassing.`. Method-side: `open` (overridable), `override` (sealed override), `open override` (overridable override). Missing `override` when redefining an inherited open method diagnoses `Method 'B.F' is overridable; add 'override' to redefine it.`. Overriding a non-open method, mismatched signatures, or override of an unknown base all diagnose. Derived fields shadow base fields by name; inherited fields are bare-name accessible inside derived methods. Virtual dispatch routes `(base)d.F()` to the derived override at runtime on both backends. Emit lowers a class as a CLR reference type (TypeAttributes.Sealed when not `open`), BaseType pointing at the user base class TypeDef (else `System.Object`); methods are virtual+newslot+final by default, with `open` clearing Final, `override` clearing NewSlot, and `open override` clearing both; derived `.ctor` chains to the base `.ctor`. Forward base references are not supported — base must be declared before derived. |
-
-## Expressions
-
-| Expression | Parser | Binder | Emit | Interp | Notes |
-| --- | --- | --- | --- | --- | --- |
-| Integer / string / bool literal | ✅ | ✅ | ✅ | ✅ | Emitter literal table covers only `int`/`string`/`bool`. |
-| Name | ✅ | ✅ | ✅ | ✅ | |
-| Call `f(args)` | ✅ | ✅ | ✅ | ✅ | |
-| Member access `a.b.c` | ✅ | ✅ | ✅ | ✅ | `AccessorExpressionSyntax`; resolves through `ReferenceResolver` to imported CLR types. |
-| Parenthesized | ✅ | ✅ | ✅ | ✅ | |
-| Assignment expression `x = e` | ✅ | ✅ | ✅ | ✅ | Identifier LHS only. |
-| Indexing `a[i]` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.3: read and write indexing on fixed-length arrays and slices via `IndexExpressionSyntax` and `IndexAssignmentExpressionSyntax`. Phase 3.A.4 extends to `map[K]V` (key-based; missing keys return the value type's zero value — the comma-ok form is deferred). Sliced reads (`a[lo:hi]`, `a[lo:hi:max]`) are not implemented. |
-| Composite literal `[N]T{…}` / `[]T{…}` / `map[K]V{…}` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.1: fixed-length array literal `ArrayCreationExpressionSyntax`; Phase 3.A.2 extends the same node to variable-length slice literals (length omitted). Phase 3.A.4 adds `MapCreationExpressionSyntax` lowered to `Dictionary[K,V]` — emit issues `newobj` + per-entry `set_Item`. |
-| Built-in `len(x)` / `cap(x)` / `append(s, e)` / `delete(m, k)` | ✅ | ✅ | ✅ | ✅ | Phase 3.A.2: `len` on string/array/slice, `cap` on array/slice (aliases length per ADR-0016), `append` on slice (single trailing element only; variadic Go form deferred to Phase 4). Phase 3.A.4 extends `len` to `map[K]V` (emit: `callvirt get_Count`) and adds `delete(m, k)` (emit: `callvirt Remove`, pop bool). |
-| Built-in `make(chan T)` / `make(chan T, cap)` | ✅ | ✅ | ✅ | ✅ | Phase 5.4 / ADR-0022. `make` is contextual (not a keyword) — recognised when it precedes `(chan …)`. Capacity-less form lowers to `Channel.CreateUnbounded[T]()`; the capacity form lowers to `Channel.CreateBounded[T](new BoundedChannelOptions(cap))`. Phase E emit closes the gap via `MethodSpec` instantiation of the generic `CreateUnbounded`/`CreateBounded` factories. |
-| Built-in `close(ch)` | ✅ | ✅ | ✅ | ✅ | Phase 5.4 / ADR-0022. Intrinsic — operand must be a `chan T`. Lowers to `ch.Writer.Complete()`. Subsequent receives drain buffered values, then return the element type's zero value. Phase E emit calls `ChannelWriter<T>.Complete(null)` directly. |
-| Type assertion / conversion (`x.(T)`, `T(x)`) | 🟡 | 🟡 | — | 🟡 | Built-in type names invoked as `int(x)` route through `BindCallExpression` → `BindConversion`; emit currently only handles bool↔int. Go-style `x.(T)` does not exist. |
-| Address-of `&x` / dereference `*x` | 🟡 | ❌ | — | — | Parsed as unary, but no `BoundUnaryOperator` entry → binder rejects. The `Loop.gs` design sample's `*count` is **unimplementable today**. |
-| Channel receive `<-ch` | ✅ | ✅ | — | ✅ | See "Send statement / receive" row above. Phase 5.5 / ADR-0022 (interpreter). |
-| `switch` expression (`let x = switch v { case A -> r1 default -> r2 }`) | ✅ | ✅ | ✅ | ✅ | Phase 6.1 expression form; Phase 6.2 case values now bind as patterns (constant, discard, type, property, relational, list). Phase 6.3 allows enum and sealed-interface discriminants to omit `default` when all variants are covered; non-exhaustive closed discriminants diagnose missing arms. Phase 6.6 ✅ narrows nullable discriminants inside type-pattern and non-nil constant-pattern arm results. Other discriminants still require `default`. Duplicate-covered variants are accepted; unreachable-arm analysis is deferred. All arm result expressions unify to a single type. Interpreter evaluates arms in source order. Emit allocates a result temp plus a discriminant temp per switch expression and reuses the Phase B pattern-dispatch helpers; arm bodies `stloc` the result before branching to the end label, where the temp is loaded to yield the expression's value. |
-| Higher-order call `f()(args)` / function values | ✅ | ✅ | ✅ | ✅ | Phase 4.7 — first-class function types (`func(T) R`), indirect-call expressions, function-typed locals/params/returns. |
-| Function literal / lambda | ✅ | ✅ | ✅ | ✅ | Phase 4.7 (`func(...) {...}` literal); Phase 4.9 adds Kotlin-style trailing-lambda call syntax — `f(args) func(...) {...}` desugars to `f(args, func(...) {...})` at parse time. |
-
-## Patterns
-
-| Pattern | Parser | Binder | Emit | Interp | Notes |
-| --- | --- | --- | --- | --- | --- |
-| Constant pattern (`case 1`) | ✅ | ✅ | ✅ | ✅ | Legacy case expression spelling now wraps as `ConstantPatternSyntax`; equality uses `object.Equals` in the interpreter. Phase 6.6 ✅ narrows a nullable switch discriminant to its underlying type for non-`nil` constants. Emit reuses the standard equality path on the discriminant temp; `nil` constants emit a `ldnull/ceq` check. |
-| Discard pattern (`case _`) | ✅ | ✅ | ✅ | ✅ | Matches any discriminant value; top-level discard behaves like a lenient default arm. Emit is a no-op (falls through to arm body). |
-| Type pattern (`case v is User`) | ✅ | ✅ | ✅ | ✅ | Introduces read-only arm-local binding `v`; interpreter supports GSharp struct/class values and imported CLR instances. Phase 6.6 ✅ also narrows a nullable switch discriminant to the target type within that arm. Emit boxes value-typed discriminants, executes `isinst Target`, stores the result in a scratch local, branches to the next arm on null, and otherwise stores the narrowed value (with `unbox.any` for value targets) into the arm-local. |
-| Property pattern (`case { Name: "x" }`) | ✅ | ✅ | ✅ | ✅ | Applies to GSharp struct/class discriminants; field values recurse into nested patterns. Emit composes a child value-loader closure per field (`ldfld FieldHandle` on the receiver) and recurses into the nested pattern, branching to the arm-fail label on the first mismatch. |
-| Relational pattern (`case > 0`) | ✅ | ✅ | ✅ | ✅ | Operators bind through `BoundBinaryOperator`; `==` / `!=` are accepted. Emit loads the discriminant, evaluates the operand, and uses the standard `ceq/clt/cgt` (plus negation) sequence followed by `brfalse fail`. |
-| List pattern (`case [1, _, 3]`) | ✅ | ✅ | ✅ | ✅ | Applies to arrays/slices with exact length matching; `..` slice patterns are deferred. Emit checks `Ldlen == N` then recurses per element with a `ldelem`-based child loader. |
-
-## Operators (semantic coverage)
-
-`BoundBinaryOperator` and `BoundUnaryOperator` enumerate every operator the binder will accept. The parser otherwise produces all Go tokens.
-
-| Operator | int | bool | string | Imported types |
-| --- | --- | --- | --- | --- |
-| `+` | ✅ | — | ✅ (string concat via `String.Concat`) | ✅ (Stream C: `op_Addition` on either operand's type) |
-| `-` `*` `/` `%` | ✅ | — | — | ✅ (Stream C: `op_Subtraction`, `op_Multiply`, `op_Division`, `op_Modulus`) |
-| `<<` `>>` | ✅ | — | — | ✅ (Stream C: `op_LeftShift`, `op_RightShift`) |
-| `&` `\|` `^` `&^` | ✅ | partial (`&`/`\|`/`^` ✅, `&^` ❌) | — | ✅ for `&` `\|` `^` (`op_BitwiseAnd`, `op_BitwiseOr`, `op_ExclusiveOr`); `&^` is still GSharp-side only |
-| `&&` `\|\|` | — | ✅ | — | ❌ (requires `op_True`/`op_False` lowering — deferred) |
-| `==` `!=` | ✅ | ✅ | ✅ (via `String.Equals`) | ✅ (Stream C: `op_Equality`/`op_Inequality`) |
-| `<` `<=` `>` `>=` | ✅ | — | — | ✅ (Stream C: `op_LessThan`, `op_LessThanOrEqual`, `op_GreaterThan`, `op_GreaterThanOrEqual`) |
-| unary `+` `-` `^` | ✅ | — | — | ✅ for `+`/`-` (`op_UnaryPlus`, `op_UnaryNegation`); `~` (CLR `op_OnesComplement`) currently maps to GSharp `^` |
-| unary `!` | — | ✅ | — | ✅ (`op_LogicalNot`) |
-| unary `*` `&` `<-` | ❌ | ❌ | ❌ | ❌ |
-| Operator-by-name on user types (`func (p Point) plus`) | — | — | — | ❌ Phase 6.5 / ADR-0026 (deferred): Kotlin-style implicit reinterpretation (e.g. a method named `plus` becoming `op_Addition`) is not adopted. |
-| Explicit `operator` keyword on user types (`func (a T) operator +(b T) T`) | ✅ | ✅ | ✅ | ✅ Stream D / ADR-0035: receiver-form binary (`+ - * / % & | ^ << >> == != < <= > >=`) and unary (`+ - ! ~`) operators on `struct` / `data struct` / `class` types. The parser synthesizes an `op_*` identifier; the binder resolves user operators (struct methods then extension functions) ahead of the imported-CLR `op_*` fallback. Value-type `struct` operators bind and run under the interpreter but share the pre-existing value-type-receiver IL-emit limitation (use `class` for compiled scenarios today). Free-function form, `operator implicit` / `operator explicit`, `++` / `--`, and `op_True` / `op_False` are deferred. |
-
-Operator resolution: when neither operand is a built-in, the binder runs the shared `OverloadResolution` over `op_*` candidates collected from both operand types (and their CLR base chains), deduped by identity. Ambiguous matches surface as a binder diagnostic; no first-match fallback. See `ClrOperatorResolution.cs`.
-
-Numeric overload tie-breaking: when two applicable candidates classify identically as `NumericWidening`, `OverloadResolution` applies C# §7.5.3.4 "better conversion target" — the smaller target (the one with an implicit conversion to the other) wins, and a signed integral target beats the corresponding unsigned peer (`sbyte`/`short`/`int`/`long` beat the matching unsigned types). See ADR-0037.
-
-Generic-method type inference (imported open generic methods, ADR-0038): when an imported method candidate is an open generic definition (`Enumerable.Repeat<TResult>(TResult, int)`), `OverloadResolution.TryInferTypeArguments` walks the parameter-to-argument pairs and records bounds on each method type parameter. Inference handles bare type parameters, arrays (`T[]`), byref (`out T` / `ref T`), and recursive instantiation through the argument's base-class chain and interface table (so `List<int>` binds an `IEnumerable<T>` parameter to `T = int`). With all bounds resolved, the resolver constructs the closed method via `MakeGenericMethod` (catching `ArgumentException` for constraint violations) and re-runs applicability + better-function-member on the closed candidate. Inference is first-phase input-type only; lambda/delegate-output inference and second-phase return-type-context inference remain deferred. Both backends already handle closed generic calls — the emitter wraps the open `MemberRef` in a `MethodSpecification` per ECMA-335 II.23.2.15, and the interpreter dispatches through `MethodInfo.Invoke`.
-
-Implicit and explicit conversions: `BindConversion` first runs the built-in `Conversion.Classify` (covers `int ↔ bool`, `nil` → nullable/reference, reference-compatible `T ↔ T?` for reference `T`, `struct → object` boxing, and reference-compatible upcasts to base classes or interfaces). When that returns `!Exists`, Stream E falls back to `ClrOperatorResolution.TryResolveConversion`, which searches public-static `op_Implicit` on the source and target CLR types, then `op_Explicit` when the call site allows explicit conversions. A successful resolution lowers to `BoundClrConversionCallExpression`; both the interpreter (`MethodInfo.Invoke`) and the emitter (`call` to the conversion method) dispatch the node. User-defined implicits also feed `OverloadResolution.UserDefinedImplicitConversionLookup`, so an `op_Implicit` participates in better-function-member tie-breaking for overload resolution.
-
-Reference upcasts (Phase 6 exit, added with `samples/aspirational/ExpressionEval.gs`): a `class` value implicitly converts to any interface it implements and to any of its (transitive) base classes. The interpreter treats the upcast as a no-op (the boxed instance keeps its concrete class identity), so `Lit{Value: 1}` flowing into an `Expr`-typed parameter or composite-literal field works end-to-end on the interpreter. Emit handles both **class → base-class** and **class → interface** upcasts as no-ops via the `IsReferenceCompatible` walk used by `EmitConversion`: the boxed reference already satisfies the target contract on the CLR, and the encoder threads interface TypeDefs through `EncodeTypeSymbol` so interface-typed slots, parameters, and return types all encode correctly.
-
-## Language server coverage
-
-| Capability | Status | Notes |
-| --- | --- | --- |
-| Document sync diagnostics | ✅ | Open/change publish parse + global-scope diagnostics for responsiveness; save publishes the full binding-stage pipeline. |
-| Folding ranges | ✅ | Top-level function bodies. |
-| Hover | ✅ | Markdown signature hovers for variables, functions, structs/classes, enums, fields, enum members, and known types. |
-| Find references | ✅ | Single-document references through the current document cache; cross-file/package references are a future enhancement. |
-| Rename | ✅ | Single-document workspace edits for user-code symbols; invalid identifiers and CLR/built-in symbols are rejected. |
-| Code actions | ✅ | Sort imports refactor is wired through `textDocument/codeAction`. |
-
-## Top-line takeaways
-
-1. **The dominant gap is parser → binder**, not binder → emit. The emitter implements essentially every bound node the binder can currently produce; failures show up as parser-rejections or binder "operator/conversion not supported" diagnostics.
-2. **Two design samples already exceed the implementation.** `samples/Loop.gs` (pre-Phase-0 rewrite) and `design/Gsharp-design-v0.1.md` use C-style `for init; cond; post`, `args[0]` indexing, `i--`, and `*count` — none of which parse today. The Phase-0 rewrite of `samples/Loop.gs` removes those constructs; the v0.1 design Loop section is annotated as aspirational pointing at `design/Gsharp-design-v0.2.md`.
-3. **String interpolation is real (Phase 1.1).** `"Count value: $i"` lexes as an `InterpolatedStringToken`, parses as `InterpolatedStringExpressionSyntax`, and lowers in the binder to a `+`-chain over `Convert.ToString` calls — emitted unchanged.
-4. **The emitter caps literals at `int`/`string`/`bool`.** Adding any new literal kind (float, char/rune, null) requires coordinated lexer + binder + `EmitLiteral` changes.
-5. **`EmitConversion` covers five built-in shapes plus user-defined CLR conversions.** Built-in: `int ↔ bool`, `nil → reference/nullable`, reference-compatible nullable wrap/unwrap (`T ↔ T?` for reference `T`, metadata-only), `struct → object` boxing, and reference-compatible upcasts (`class → base class` and `class → interface`). On top of that, Stream E lowers any unmatched conversion to `BoundClrConversionCallExpression` when an `op_Implicit` or (for explicit casts) `op_Explicit` exists on the source or target type — both backends dispatch through the resolved `MethodInfo`. Numeric widening / narrowing between unrelated CLR numeric types still requires either a built-in conversion shape or an `op_*` on one of the types.
-6. **Phase 5 concurrency emit covers the core surface.** Channels plus synchronous send/receive/close, `go`, `scope`, and `select` now emit (`samples/Channels.gs`, `samples/GoScope.gs`, `samples/Select.gs`). `async` / `await` emits state-machine kickoff and per-await MoveNext dispatch for straight-line code (no await-in-try/catch); `await for` remains interpreter-only.
-7. **Phase 6.1/6.2 switch on both backends.** `switch` statements with pattern arms (Phase B emit) and `switch` expressions (Phase C emit) lower in the emitter to a discriminant temp plus per-arm pattern-test branches; switch expressions additionally allocate a result temp that holds the chosen arm value. The same `EmitPattern` dispatcher handles every pattern flavor in both forms.
-
-## Phase 5 exit-criteria status (concurrency)
-
-| Exit criterion | Status | Evidence |
-| --- | --- | --- |
-| Meaningful concurrent sample fan-out + fan-in + timeout | ✅ both | `samples/PortScan.gs` — chan + go + scope + select with timeout arm; runs on both backends after the Phase A–G emit work and is covered by `SampleConformanceTests` (emit) as well as remaining interpreter unit tests. |
-| Pure async/await sample interoperating with BCL `Task` | ✅ interp | `samples/aspirational/AsyncTask.gs` — `async func` + `await` against `Task.Delay`, driven from a top-level `scope { go ... }`. Emit of `async`/`await` is deferred per ADR-0023. |
-| Coverage matrix ✅ on the entire concurrency section | ✅ interp / ✅ emit (except async) | Channels + go + scope + select all emit; only `async func` / `await` / `await for` remain emit-deferred (ADR-0023 Strategy A multi-month rewrite). |
-
-**Open Phase-5 polish follow-ups** (carried into Phase 6/7):
-
-- `HttpClient` end-to-end interop in a `.gs` sample: constructable imported types ✅ (Phase 4), instance / static member read+write ✅ (Stream B), imported `op_*` ✅ (Stream C), user-defined CLR conversions ✅ (Stream E), event subscription `+=` / `-=` ✅ (Stream B′ / ADR-0036). An `HttpClient`-using sibling to `AsyncTask.gs` is now unblocked end-to-end.
-- Two-value channel receive `v, ok := <-ch` (ADR-0022 §Open follow-ups).
-- `ctx` source binding to expose a scope's CTS to user code (ADR-0022 §scope; deferred from #78).
-- `break` / `continue` inside `await for` body (deferred from #79).
-- Async-aware lowering of `await` and emit of state machines (Phase 7 / ADR-0027).
-- ~~Event subscription (`obj.Click += handler`, `-=`) and multi-segment compound-assignment LHS (`a.b.c += …`) — Stream B′, parser-side work.~~ **Shipped** in Stream B′ / ADR-0036. A generalized `FunctionTypeSymbol → CLR-delegate` conversion (so function literals can be passed to non-event APIs expecting custom delegates) remains a follow-up.
-- ~~`operator` keyword on GSharp-defined types (declaring `operator +` etc.). Tracked as Stream D; superseding ADR-0026 is part of that follow-up PR.~~ **Shipped** in Stream D / ADR-0035 (receiver-form binary and unary operators). Free-function form, conversions, `++` / `--`, and `op_True` / `op_False` short-circuit remain deferred.
-
+[BoundUnaryOperator]
+BangToken LogicalNegation (bool) -> bool
+HatToken OnesComplement (int) -> int
+MinusToken Negation (int) -> int
+PlusToken Identity (int) -> int

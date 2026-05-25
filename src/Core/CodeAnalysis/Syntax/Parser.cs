@@ -1015,6 +1015,12 @@ public class Parser
             return ParseChanTypeClause();
         }
 
+        // ADR-0040: sequence type `sequence[T]` — alias for IEnumerable[T].
+        if (Current.Kind == SyntaxKind.SequenceKeyword)
+        {
+            return ParseSequenceTypeClause();
+        }
+
         // ADR-0039: pointer type `*T` in type-annotation position.
         if (Current.Kind == SyntaxKind.StarToken)
         {
@@ -1134,6 +1140,17 @@ public class Parser
         return new TypeClauseSyntax(syntaxTree, chanKeyword, elementType, question);
     }
 
+    private TypeClauseSyntax ParseSequenceTypeClause()
+    {
+        // ADR-0040: sequence type clause `sequence[T]` with optional trailing `?`.
+        var sequenceKeyword = MatchToken(SyntaxKind.SequenceKeyword);
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var elementType = ParseTypeClause();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return TypeClauseSyntax.CreateSequence(syntaxTree, sequenceKeyword, openBracket, elementType, closeBracket, question);
+    }
+
     private TypeClauseSyntax ParseFunctionTypeClause()
     {
         // Phase 4.7: function type clause `func(T1, T2, ...) R?`. The return
@@ -1176,6 +1193,8 @@ public class Parser
             Current.Kind != SyntaxKind.OpenParenthesisToken &&
             Current.Kind != SyntaxKind.FuncKeyword &&
             Current.Kind != SyntaxKind.MapKeyword &&
+            Current.Kind != SyntaxKind.ChanKeyword &&
+            Current.Kind != SyntaxKind.SequenceKeyword &&
             Current.Kind != SyntaxKind.StarToken)
         {
             return null;
@@ -1261,6 +1280,35 @@ public class Parser
 
                 goto default;
             default:
+                // ADR-0040: contextual `yield` keyword — parse as yield statement
+                // when `yield` appears at statement start and is not followed by
+                // an assignment operator or other identifier-consuming syntax.
+                if (Current.Kind == SyntaxKind.SequenceKeyword &&
+                    Peek(1).Kind != SyntaxKind.ColonEqualsToken &&
+                    Peek(1).Kind != SyntaxKind.PlusPlusToken &&
+                    Peek(1).Kind != SyntaxKind.MinusMinusToken &&
+                    Peek(1).Kind != SyntaxKind.CommaToken &&
+                    Peek(1).Kind != SyntaxKind.DotToken &&
+                    Peek(1).Kind != SyntaxKind.OpenParenthesisToken &&
+                    Peek(1).Kind != SyntaxKind.EqualsToken)
+                {
+                    // "sequence" at statement start is not a yield — fall through.
+                }
+
+                if (Current.Kind == SyntaxKind.IdentifierToken &&
+                    Current.Text == "yield" &&
+                    Peek(1).Kind != SyntaxKind.ColonEqualsToken &&
+                    Peek(1).Kind != SyntaxKind.PlusPlusToken &&
+                    Peek(1).Kind != SyntaxKind.MinusMinusToken &&
+                    Peek(1).Kind != SyntaxKind.CommaToken &&
+                    Peek(1).Kind != SyntaxKind.DotToken &&
+                    Peek(1).Kind != SyntaxKind.OpenParenthesisToken &&
+                    Peek(1).Kind != SyntaxKind.EqualsToken &&
+                    Peek(1).Kind != SyntaxKind.OpenSquareBracketToken)
+                {
+                    return ParseYieldStatement();
+                }
+
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonEqualsToken)
                 {
@@ -1853,6 +1901,15 @@ public class Parser
         }
 
         return new ReturnStatementSyntax(syntaxTree, keyword, expression);
+    }
+
+    private StatementSyntax ParseYieldStatement()
+    {
+        // ADR-0040: `yield <expr>` statement. The `yield` token is a contextual
+        // identifier (not a reserved keyword) to preserve source compatibility.
+        var yieldToken = MatchToken(SyntaxKind.IdentifierToken);
+        var expression = ParseExpression();
+        return new YieldStatementSyntax(syntaxTree, yieldToken, expression);
     }
 
     private StatementSyntax ParseSwitchStatement()

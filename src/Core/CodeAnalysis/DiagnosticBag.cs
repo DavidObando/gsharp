@@ -462,6 +462,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a <c>yield</c> statement was used outside an iterator function (ADR-0040).
+    /// </summary>
+    /// <param name="location">The text location of the yield keyword.</param>
+    public void ReportYieldOutsideIteratorFunction(TextLocation location)
+    {
+        var message = "'yield' statement is not allowed outside an iterator function (a function returning IEnumerable[T] or sequence[T]).";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a <c>go</c> statement is not a call expression (Phase 5.3 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>
