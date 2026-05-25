@@ -201,6 +201,12 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
+        var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
+        if (asyncDiagnostics.Any())
+        {
+            return new EmitResult(success: false, asyncDiagnostics);
+        }
+
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
@@ -248,6 +254,12 @@ public class Compilation
         if (program.Diagnostics.Any())
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
+        }
+
+        var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
+        if (asyncDiagnostics.Any())
+        {
+            return new EmitResult(success: false, asyncDiagnostics);
         }
 
         try
