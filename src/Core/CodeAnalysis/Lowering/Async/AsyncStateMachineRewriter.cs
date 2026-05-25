@@ -52,8 +52,11 @@ public static class AsyncStateMachineRewriter
 
             var ordinal = AllocateTypeOrdinal(program, function, ordinalsByScopeAndName);
 
+            // Lift awaits out of catch/finally handlers before spilling.
+            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(pair.Value);
+
             // Run the spill spiller to lift sub-expression awaits to statement top-level.
-            var spilledBody = SpillSequenceSpiller.Rewrite(pair.Value);
+            var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
 
             var stateMachine = AsyncStateMachineTypeBuilder.Build(function, spilledBody, references, ordinal);
             if (stateMachine == null)

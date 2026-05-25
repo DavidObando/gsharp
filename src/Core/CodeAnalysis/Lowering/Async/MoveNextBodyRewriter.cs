@@ -358,6 +358,69 @@ public static class MoveNextBodyRewriter
                 return node;
             }
 
+            protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+            {
+                // The emitter stores the caught exception into a LOCAL slot via
+                // EmitStoreVariable(clause.Variable). If the clause variable is
+                // hoisted to a field (because it's referenced elsewhere in the
+                // async body), the body's field-based reads would see the default
+                // value (null) instead of the caught exception. Fix: inject a
+                // local→field copy at the start of each catch body for hoisted
+                // catch variables.
+                var result = (BoundTryStatement)base.RewriteTryStatement(node);
+
+                var needsPatch = false;
+                foreach (var clause in result.CatchClauses)
+                {
+                    if (TryGetHoistedField(clause.Variable, out _))
+                    {
+                        needsPatch = true;
+                        break;
+                    }
+                }
+
+                if (!needsPatch)
+                {
+                    return result;
+                }
+
+                var newClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
+                foreach (var clause in result.CatchClauses)
+                {
+                    if (TryGetHoistedField(clause.Variable, out var field))
+                    {
+                        // Prepend: this.<field> = clause.Variable (load from local slot)
+                        var copyToField = Stmt(ctx.WriteField(
+                            field,
+                            new BoundVariableExpression(clause.Variable)));
+                        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+                        stmts.Add(copyToField);
+                        if (clause.Body is BoundBlockStatement block)
+                        {
+                            stmts.AddRange(block.Statements);
+                        }
+                        else
+                        {
+                            stmts.Add(clause.Body);
+                        }
+
+                        newClauses.Add(new BoundCatchClause(
+                            clause.ExceptionType,
+                            clause.Variable,
+                            new BoundBlockStatement(stmts.ToImmutable())));
+                    }
+                    else
+                    {
+                        newClauses.Add(clause);
+                    }
+                }
+
+                return new BoundTryStatement(
+                    result.TryBlock,
+                    newClauses.ToImmutable(),
+                    result.FinallyBlock);
+            }
+
             protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
             {
                 // If we reach here, the await is embedded as a sub-expression
