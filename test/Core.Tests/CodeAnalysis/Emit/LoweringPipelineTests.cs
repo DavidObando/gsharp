@@ -150,8 +150,8 @@ Console.WriteLine(""sync"")
         // the precheck only fires when StateMachineType is null. We verify
         // the diagnostic message string used by the precheck is stable.
         Assert.Contains(
-            "not yet implemented",
-            AsyncEmitPrecheck.AsyncEmitNotImplementedMessage);
+            "state machine",
+            AsyncEmitPrecheck.AsyncStateMachineUnavailableMessage);
     }
 
     /// <summary>
@@ -177,7 +177,7 @@ async func doIt() {
         // Before rewriting, StateMachineType is null → precheck should report diagnostic
         var preDiags = AsyncEmitPrecheck.Check(program);
         Assert.NotEmpty(preDiags);
-        Assert.Contains(preDiags, d => d.Message == AsyncEmitPrecheck.AsyncEmitNotImplementedMessage);
+        Assert.Contains(preDiags, d => d.Message == AsyncEmitPrecheck.AsyncStateMachineUnavailableMessage);
 
         // After the full Emit pipeline (which runs the rewriter first), the
         // function succeeds because StateMachineType is set by the rewriter.
