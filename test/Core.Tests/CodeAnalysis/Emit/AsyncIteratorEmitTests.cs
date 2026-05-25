@@ -41,7 +41,7 @@ func numbers() IAsyncEnumerable[int] {
         Assert.Equal(new[] { 1, 2, 3 }, items);
     }
 
-    [Fact(Skip = "Requires async plan plumbing for AwaitOnCompleted in async iterator MoveNext — future work")]
+    [Fact]
     public void AsyncIterator_YieldWithAwait_ProducesValues()
     {
         const string Source = @"package AsyncIterYieldAwait
@@ -76,7 +76,7 @@ func empty() IAsyncEnumerable[int] {
         Assert.Empty(items);
     }
 
-    [Fact(Skip = "Blocked by pre-existing parser bug: null TypeClauseSyntax.Identifier when params + generic return type are combined")]
+    [Fact(Skip = "Pre-existing parser bug: null TypeClauseSyntax.Identifier when params + generic return type are combined — file a separate issue")]
     public void AsyncIterator_WithParameters_CapturesArguments()
     {
         const string Source = @"package AsyncIterParams
@@ -122,6 +122,46 @@ func nums() IAsyncEnumerable[int] {
         {
             ctx.Unload();
         }
+    }
+
+    [Fact]
+    public void AsyncIterator_YieldAwaitYield_ConsumedByReflection_Works()
+    {
+        // The headline use case: yield, genuine async suspension, yield.
+        const string Source = @"package AsyncIterHeadline
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+func GetItemsAsync() IAsyncEnumerable[int] {
+    yield 1
+    await Task.Yield()
+    yield 2
+}
+";
+        var items = CompileAndEnumerate<int>(Source, "GetItemsAsync", nameof(AsyncIterator_YieldAwaitYield_ConsumedByReflection_Works));
+        Assert.Equal(new[] { 1, 2 }, items);
+    }
+
+    [Fact]
+    public void AsyncIterator_YieldWithTaskDelay_SuspendsAndResumes()
+    {
+        // Genuine suspension via Task.Delay between yields.
+        const string Source = @"package AsyncIterDelay
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+func delayed() IAsyncEnumerable[int] {
+    yield 100
+    await Task.Delay(1)
+    yield 200
+    await Task.Delay(1)
+    yield 300
+}
+";
+        var items = CompileAndEnumerate<int>(Source, "delayed", nameof(AsyncIterator_YieldWithTaskDelay_SuspendsAndResumes));
+        Assert.Equal(new[] { 100, 200, 300 }, items);
     }
 
     private static List<T> CompileAndEnumerate<T>(string source, string functionName, string contextName)

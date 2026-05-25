@@ -108,6 +108,9 @@ internal sealed class ReflectionMetadataEmitter
     // Maps async iterator SM class to its plan (populated during SynthesizeAsyncIteratorStateMachines).
     private readonly Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan> asyncIteratorInfos = new Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan>();
 
+    // Maps async iterator SM class to the emit-time context needed by EmitAwaitOnCompletedCall.
+    private readonly Dictionary<StructSymbol, AsyncIteratorEmitContext> asyncIteratorEmitContexts = new Dictionary<StructSymbol, AsyncIteratorEmitContext>();
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -1542,11 +1545,12 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<VariableSymbol, int> locals,
         Dictionary<ParameterSymbol, int> parameters,
         BoundStateMachineAwaitOnCompleted node,
-        AsyncStateMachinePlan currentPlan = null)
+        AsyncStateMachinePlan currentPlan = null,
+        AsyncIteratorEmitContext aiCtx = null)
     {
         // Use the explicitly-passed plan when available; fall back to the
         // legacy search for backward compatibility with top-level async.
-        if (currentPlan == null)
+        if (currentPlan == null && aiCtx == null)
         {
             foreach (var plan in this.asyncStateMachinePlans)
             {
@@ -1561,15 +1565,31 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        if (currentPlan == null)
+        FieldSymbol builderField;
+        StructSymbol smStruct;
+        Lowering.Async.AsyncMethodBuilderInfo builderInfo;
+        bool smIsValueType;
+
+        if (aiCtx != null)
+        {
+            builderField = aiCtx.BuilderField;
+            smStruct = aiCtx.SmClass;
+            builderInfo = aiCtx.BuilderInfo;
+            smIsValueType = false; // async iterator SM is a class
+        }
+        else if (currentPlan != null)
+        {
+            builderField = currentPlan.FieldMap.BuilderField;
+            smStruct = currentPlan.StateMachine.MaterializeAsStructSymbol();
+            builderInfo = currentPlan.StateMachine.BuilderInfo;
+            smIsValueType = !smStruct.IsClass;
+        }
+        else
         {
             throw new InvalidOperationException("Cannot emit AwaitOnCompleted: no active async plan.");
         }
 
-        var builderField = currentPlan.FieldMap.BuilderField;
         var builderFieldHandle = this.structFieldDefs[builderField];
-        var smStruct = currentPlan.StateMachine.MaterializeAsStructSymbol();
-        var builderInfo = currentPlan.StateMachine.BuilderInfo;
 
         // ldarg.0 (this)
         // ldflda builder
@@ -1581,8 +1601,17 @@ internal sealed class ReflectionMetadataEmitter
         var awaiterSlot = locals[node.AwaiterLocal];
         il.LoadLocalAddress(awaiterSlot);
 
-        // ldarg.0 (ref this — the SM struct itself)
-        il.LoadArgument(0);
+        // ref this: for struct SM ldarg.0 is already a managed pointer;
+        // for class SM we need ldarga.s 0 (address of the 'this' arg slot).
+        if (smIsValueType)
+        {
+            il.LoadArgument(0);
+        }
+        else
+        {
+            il.OpCode(ILOpCode.Ldarga_s);
+            il.CodeBuilder.WriteByte(0);
+        }
 
         // Build MethodSpec for AwaitUnsafeOnCompleted<TAwaiter, TSM> or AwaitOnCompleted<TAwaiter, TSM>
         var openMethod = node.UseCritical
@@ -1601,7 +1630,7 @@ internal sealed class ReflectionMetadataEmitter
         this.EncodeClrType(argsEncoder.AddArgument(), node.AwaiterClrType);
 
         // Second type arg: TStateMachine (the SM TypeDef)
-        argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
+        argsEncoder.AddArgument().Type(smTypeDef, isValueType: smIsValueType);
 
         var methodSpec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
         il.OpCode(ILOpCode.Call);
@@ -1767,6 +1796,13 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
             }
 
+            // Detect async iterator MoveNext and thread emit context.
+            AsyncIteratorEmitContext aiEmitCtx = null;
+            if (function.Name == "MoveNext" && function.ReceiverType is StructSymbol owningSmClass)
+            {
+                this.asyncIteratorEmitContexts.TryGetValue(owningSmClass, out aiEmitCtx);
+            }
+
             var emitter = new BodyEmitter(
                 this,
                 il,
@@ -1783,7 +1819,8 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
-                goEnclosingScopes);
+                goEnclosingScopes,
+                asyncIteratorEmitCtx: aiEmitCtx);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -2961,6 +2998,11 @@ internal sealed class ReflectionMetadataEmitter
 
             this.asyncIteratorInfos[smClass] = plan;
             this.synthesizedClosureClasses.Add(smClass);
+
+            // Resolve builder info for async iterator emit context.
+            var returnClrType = plan.Function.Type?.ClrType;
+            var aiBuilderInfo = Lowering.Async.AsyncMethodBuilderInfo.Resolve(returnClrType, this.references);
+            this.asyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo);
         }
     }
 
@@ -4770,6 +4812,26 @@ internal sealed class ReflectionMetadataEmitter
         public StructSymbol ClassSym { get; }
     }
 
+    /// <summary>
+    /// Lightweight emit-time context for async iterator MoveNext methods.
+    /// Carries the builder field, SM class, and builder info needed by EmitAwaitOnCompletedCall.
+    /// </summary>
+    private sealed class AsyncIteratorEmitContext
+    {
+        public AsyncIteratorEmitContext(StructSymbol smClass, FieldSymbol builderField, Lowering.Async.AsyncMethodBuilderInfo builderInfo)
+        {
+            this.SmClass = smClass;
+            this.BuilderField = builderField;
+            this.BuilderInfo = builderInfo;
+        }
+
+        public StructSymbol SmClass { get; }
+
+        public FieldSymbol BuilderField { get; }
+
+        public Lowering.Async.AsyncMethodBuilderInfo BuilderInfo { get; }
+    }
+
     private sealed class ClosureInfo
     {
         public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields)
@@ -5099,6 +5161,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly ParameterSymbol structThisParameter;
         private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
         private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
+        private readonly AsyncIteratorEmitContext asyncIteratorEmitCtx;
 
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
@@ -5119,7 +5182,8 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
             ParameterSymbol structThisParameter = null,
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
-            Lowering.Async.AsyncStateMachinePlan asyncPlan = null)
+            Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
+            AsyncIteratorEmitContext asyncIteratorEmitCtx = null)
         {
             this.outer = outer;
             this.il = il;
@@ -5140,6 +5204,7 @@ internal sealed class ReflectionMetadataEmitter
             this.structThisParameter = structThisParameter;
             this.asyncFieldMap = asyncFieldMap;
             this.asyncPlan = asyncPlan;
+            this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
         }
 
         public void EmitBlock(BoundBlockStatement block)
@@ -7353,7 +7418,7 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         private void EmitStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
         {
-            this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan);
+            this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan, this.asyncIteratorEmitCtx);
         }
 
         /// <summary>
