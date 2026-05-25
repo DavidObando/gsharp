@@ -47,6 +47,8 @@ public class AsyncStateMachineRewriterTests
         Assert.Same(plan.StateMachine, plan.FieldMap.StateMachine);
         Assert.Equal("<doIt>d__0", plan.StateMachine.Name);
         Assert.Empty(plan.AwaitResumeStates);
+        Assert.Same(body, plan.MoveNextPlan.LoweredBody);
+        Assert.Empty(plan.MoveNextPlan.AwaitResumePoints);
     }
 
     [Fact]
@@ -83,6 +85,12 @@ public class AsyncStateMachineRewriterTests
         var states = Assert.Single(result.StateMachines).AwaitResumeStates;
         Assert.Equal(0, states[firstAwait]);
         Assert.Equal(1, states[secondAwait]);
+
+        var resumePoints = Assert.Single(result.StateMachines).MoveNextPlan.AwaitResumePoints;
+        Assert.Collection(
+            resumePoints,
+            point => Assert.Same(firstAwait, point.AwaitExpression),
+            point => Assert.Same(secondAwait, point.AwaitExpression));
     }
 
     [Fact]
