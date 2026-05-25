@@ -2,6 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#pragma warning disable SA1028 // trailing whitespace
+#pragma warning disable SA1116 // parameters begin on line after declaration
+#pragma warning disable SA1117 // parameters on same line
+#pragma warning disable SA1214 // readonly fields before non-readonly
+#pragma warning disable SA1515 // single-line comment preceded by blank line
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -96,6 +102,12 @@ internal sealed class ReflectionMetadataEmitter
     // Iterator state-machine plans produced by IteratorRewriter.
     private ImmutableArray<IteratorStateMachinePlan> iteratorPlans = ImmutableArray<IteratorStateMachinePlan>.Empty;
 
+    // Async iterator state-machine plans produced by AsyncIteratorRewriter.
+    private ImmutableArray<Lowering.Iterators.AsyncIteratorPlan> asyncIteratorPlans = ImmutableArray<Lowering.Iterators.AsyncIteratorPlan>.Empty;
+
+    // Maps async iterator SM class to its plan (populated during SynthesizeAsyncIteratorStateMachines).
+    private readonly Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan> asyncIteratorInfos = new Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan>();
+
     private Type coreObjectType;
     private Type coreStringType;
     private Type coreInt32Type;
@@ -152,6 +164,10 @@ internal sealed class ReflectionMetadataEmitter
     /// Optional result from the iterator rewriter. When non-null, contains plans
     /// for emitting iterator state-machine types and kickoff bodies.
     /// </param>
+    /// <param name="asyncIteratorRewriteResult">
+    /// Optional result from the async iterator rewriter. When non-null, contains plans
+    /// for emitting async iterator state-machine types and kickoff bodies.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -159,7 +175,8 @@ internal sealed class ReflectionMetadataEmitter
         string assemblyName = null,
         bool metadataOnly = false,
         AsyncStateMachineRewriteResult asyncRewriteResult = null,
-        IteratorRewriteResult iteratorRewriteResult = null)
+        IteratorRewriteResult iteratorRewriteResult = null,
+        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
         if (asyncRewriteResult != null)
@@ -170,6 +187,11 @@ internal sealed class ReflectionMetadataEmitter
         if (iteratorRewriteResult != null)
         {
             emitter.iteratorPlans = iteratorRewriteResult.Plans;
+        }
+
+        if (asyncIteratorRewriteResult != null)
+        {
+            emitter.asyncIteratorPlans = asyncIteratorRewriteResult.Plans;
         }
 
         emitter.EmitCore(peStream);
@@ -214,6 +236,7 @@ internal sealed class ReflectionMetadataEmitter
         this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
         this.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.SynthesizeIteratorStateMachines(hostPackageGuess);
+        this.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
         this.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
 
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
@@ -389,6 +412,11 @@ internal sealed class ReflectionMetadataEmitter
             if (this.iteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
             {
                 this.AddIteratorInterfaceImplementations(c, iteratorInfo);
+            }
+
+            if (this.asyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
+            {
+                this.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
             }
         }
 
@@ -2752,6 +2780,436 @@ internal sealed class ReflectionMetadataEmitter
         this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
     }
 
+    private void SynthesizeAsyncIteratorStateMachines(PackageSymbol hostPackage)
+    {
+        if (this.asyncIteratorPlans.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var plan in this.asyncIteratorPlans)
+        {
+            var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
+            var elementType = plan.ElementType;
+
+            // Fields
+            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int, Accessibility.Public);
+            var currentField = new FieldSymbol("<>2__current", elementType, Accessibility.Public);
+            var promiseFieldType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>));
+            var promiseField = new FieldSymbol("<>v__promiseOfValueOrEnd", promiseFieldType, Accessibility.Public);
+            var disposeModeField = new FieldSymbol("<>w__disposeMode", TypeSymbol.Bool, Accessibility.Public);
+            var builderFieldType = TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder));
+            var builderField = new FieldSymbol("<>t__builder", builderFieldType, Accessibility.Public);
+
+            var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
+            fields.Add(stateField);
+            fields.Add(currentField);
+            fields.Add(promiseField);
+            fields.Add(disposeModeField);
+            fields.Add(builderField);
+
+            var fieldMap = new Dictionary<VariableSymbol, FieldSymbol>();
+            var parameterFields = new Dictionary<ParameterSymbol, FieldSymbol>();
+            foreach (var parameter in plan.Function.Parameters)
+            {
+                var field = new FieldSymbol("<>3__" + parameter.Name, parameter.Type, Accessibility.Public);
+                fields.Add(field);
+                fieldMap[parameter] = field;
+                parameterFields[parameter] = field;
+            }
+
+            foreach (var local in plan.HoistedLocals)
+            {
+                if (fieldMap.ContainsKey(local))
+                {
+                    continue;
+                }
+
+                var field = new FieldSymbol("<>5__" + local.Name, local.Type, Accessibility.Public);
+                fields.Add(field);
+                fieldMap[local] = field;
+            }
+
+            // Awaiter pool fields
+            var awaiterPoolFields = new Dictionary<Type, FieldSymbol>();
+            int awaiterOrdinal = 1;
+            foreach (var (poolKey, fieldType) in plan.AwaiterTypes)
+            {
+                var fieldName = "<>u__" + awaiterOrdinal++;
+                var field = new FieldSymbol(fieldName, fieldType, Accessibility.Public);
+                fields.Add(field);
+                awaiterPoolFields[poolKey] = field;
+            }
+
+            var smClass = new StructSymbol(
+                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                fields: fields.ToImmutable(),
+                accessibility: Accessibility.Internal,
+                declaration: null,
+                packageName: packageName,
+                isData: false,
+                isInline: false,
+                isClass: true);
+
+            // Methods: MoveNext, get_Current, MoveNextAsync, DisposeAsync, GetAsyncEnumerator
+            var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getCurrent = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, elementType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+
+            var valueTaskBoolType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>));
+            var moveNextAsync = new FunctionSymbol("MoveNextAsync", ImmutableArray<ParameterSymbol>.Empty, valueTaskBoolType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+
+            var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+            var disposeAsync = new FunctionSymbol("DisposeAsync", ImmutableArray<ParameterSymbol>.Empty, valueTaskType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+
+            var methods = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            methods.Add(moveNext);
+            methods.Add(getCurrent);
+            methods.Add(moveNextAsync);
+            methods.Add(disposeAsync);
+
+            FunctionSymbol getAsyncEnumerator = null;
+            if (plan.IsEnumerable)
+            {
+                var enumeratorType = TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType ?? typeof(object)));
+                var ctParam = new ParameterSymbol("cancellationToken", TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken)));
+                getAsyncEnumerator = new FunctionSymbol("GetAsyncEnumerator", ImmutableArray.Create(ctParam), enumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+                methods.Add(getAsyncEnumerator);
+            }
+
+            // IValueTaskSource<bool> methods
+            var shortType = TypeSymbol.FromClrType(typeof(short));
+            var vtsStatusType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus));
+            var getStatusParam = new ParameterSymbol("token", shortType);
+            var getStatus = new FunctionSymbol("GetStatus", ImmutableArray.Create(getStatusParam), vtsStatusType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            methods.Add(getStatus);
+
+            var getResultParam = new ParameterSymbol("token", shortType);
+            var getResult = new FunctionSymbol("GetResult", ImmutableArray.Create(getResultParam), TypeSymbol.Bool, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            methods.Add(getResult);
+
+            var onCompletedParams = ImmutableArray.Create(
+                new ParameterSymbol("continuation", TypeSymbol.FromClrType(typeof(Action<object>))),
+                new ParameterSymbol("state", TypeSymbol.FromClrType(typeof(object))),
+                new ParameterSymbol("token", shortType),
+                new ParameterSymbol("flags", TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags))));
+            var onCompleted = new FunctionSymbol("OnCompleted", onCompletedParams, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            methods.Add(onCompleted);
+
+            // IAsyncStateMachine.SetStateMachine (no-op for class-based SM)
+            var setSmParam = new ParameterSymbol("stateMachine", TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.IAsyncStateMachine)));
+            var setStateMachine = new FunctionSymbol("SetStateMachine", ImmutableArray.Create(setSmParam), TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            methods.Add(setStateMachine);
+
+            smClass.SetMethods(methods.ToImmutable());
+
+            // Build MoveNext body (handles both yield and await).
+            var moveNextBody = Lowering.Iterators.AsyncIteratorMoveNextBodyBuilder.Build(
+                plan, smClass, moveNext.ThisParameter, stateField, currentField,
+                promiseField, disposeModeField, builderField, fieldMap, awaiterPoolFields);
+            this.lambdaBodies[moveNext] = Lowerer.Lower(moveNextBody);
+
+            // get_Current: return this.<>2__current;
+            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(new BoundFieldAccessExpression(new BoundVariableExpression(getCurrent.ThisParameter), smClass, currentField)))));
+
+            // MoveNextAsync: reset promise, call builder.MoveNext(ref this), return ValueTask<bool>
+            // For simplicity: directly set result. The builder calls MoveNext synchronously first;
+            // if it suspends, the continuation will complete the promise.
+            // Implementation: 
+            //   if (state == -2) return new ValueTask<bool>(false);
+            //   promise.Reset();
+            //   builder.MoveNext(ref this);
+            //   short version = promise.Version;
+            //   return new ValueTask<bool>(this, version);
+            // But this requires IValueTaskSource<bool> which we implement.
+            // Simpler approach for this slice: call MoveNext directly and check if
+            // the promise has a result. Actually the simplest correct approach:
+            // Promise-based ValueTask construction requires implementing IValueTaskSource<bool>.
+            // For this slice, we'll use a simpler approach: just run MoveNext and construct
+            // the ValueTask from the result.
+            // Actually the cleanest: use Task.FromResult pattern via the direct promise.
+            this.lambdaBodies[moveNextAsync] = this.BuildMoveNextAsyncBody(
+                moveNextAsync, smClass, stateField, promiseField, builderField, moveNext);
+
+            // DisposeAsync: set disposeMode = true; call MoveNextAsync-style; return ValueTask
+            this.lambdaBodies[disposeAsync] = this.BuildDisposeAsyncBody(
+                disposeAsync, smClass, stateField, disposeModeField, promiseField, builderField, moveNext);
+
+            // GetAsyncEnumerator: return this (with state set to -1)
+            if (getAsyncEnumerator != null)
+            {
+                this.lambdaBodies[getAsyncEnumerator] = this.BuildGetAsyncEnumeratorBody(
+                    getAsyncEnumerator, smClass, stateField, disposeModeField);
+            }
+
+            // IValueTaskSource<bool>.GetStatus(short token): return promise.GetStatus(token);
+            this.lambdaBodies[getStatus] = this.BuildVtsGetStatusBody(getStatus, smClass, promiseField);
+
+            // IValueTaskSource<bool>.GetResult(short token): return promise.GetResult(token);
+            this.lambdaBodies[getResult] = this.BuildVtsGetResultBody(getResult, smClass, promiseField);
+
+            // IValueTaskSource<bool>.OnCompleted(...): promise.OnCompleted(continuation, state, token, flags);
+            this.lambdaBodies[onCompleted] = this.BuildVtsOnCompletedBody(onCompleted, smClass, promiseField);
+
+            // IAsyncStateMachine.SetStateMachine: no-op (just return)
+            this.lambdaBodies[setStateMachine] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null))));
+
+            // Kickoff body: new SM { state = -3, params... }
+            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters)))));
+
+            this.asyncIteratorInfos[smClass] = plan;
+            this.synthesizedClosureClasses.Add(smClass);
+        }
+    }
+
+    private BoundBlockStatement BuildMoveNextAsyncBody(
+        FunctionSymbol moveNextAsync,
+        StructSymbol smClass,
+        FieldSymbol stateField,
+        FieldSymbol promiseField,
+        FieldSymbol builderField,
+        FunctionSymbol moveNextMethod)
+    {
+        var thisParam = moveNextAsync.ThisParameter;
+        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // if (state == -2) return default(ValueTask<bool>); // completed
+        var finishedLabel = new BoundLabel("<>mna_notFinished");
+        stmts.Add(new BoundConditionalGotoStatement(
+            finishedLabel,
+            new BoundBinaryExpression(
+                new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, stateField),
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                new BoundLiteralExpression(StateMachineStates.FinishedState)),
+            jumpIfTrue: false));
+        // Return a completed ValueTask<bool>(false)
+        stmts.Add(new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)))));
+        stmts.Add(new BoundLabelStatement(finishedLabel));
+
+        // promise.Reset();
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var resetMethod = promiseType.GetMethod("Reset");
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        stmts.Add(new BoundExpressionStatement(new BoundImportedInstanceCallExpression(
+            promiseAddr, resetMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty)));
+
+        // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
+        stmts.Add(new BoundExpressionStatement(new BoundStateMachineBuilderMoveNext(builderField, thisParam, smClass)));
+
+        // short version = promise.Version;
+        var versionProp = promiseType.GetProperty("Version");
+        var versionGetter = versionProp.GetGetMethod();
+        var promiseAddr2 = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        var versionCall = new BoundImportedInstanceCallExpression(
+            promiseAddr2, versionGetter, TypeSymbol.FromClrType(typeof(short)), ImmutableArray<BoundExpression>.Empty);
+        var versionLocal = new LocalVariableSymbol("<>version", isReadOnly: false, TypeSymbol.FromClrType(typeof(short)));
+        stmts.Add(new BoundVariableDeclaration(versionLocal, versionCall));
+
+        // return new ValueTask<bool>(this, version);
+        // The ValueTask<bool>(IValueTaskSource<bool>, short) constructor
+        var vtCtor = typeof(System.Threading.Tasks.ValueTask<bool>).GetConstructor(
+            new[] { typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>), typeof(short) });
+        var vtConstruct = new BoundClrConstructorCallExpression(
+            typeof(System.Threading.Tasks.ValueTask<bool>),
+            vtCtor,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundVariableExpression(thisParam),
+                new BoundVariableExpression(versionLocal)),
+            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)));
+        stmts.Add(new BoundReturnStatement(vtConstruct));
+
+        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+    }
+
+    private BoundBlockStatement BuildDisposeAsyncBody(
+        FunctionSymbol disposeAsync,
+        StructSymbol smClass,
+        FieldSymbol stateField,
+        FieldSymbol disposeModeField,
+        FieldSymbol promiseField,
+        FieldSymbol builderField,
+        FunctionSymbol moveNextMethod)
+    {
+        var thisParam = disposeAsync.ThisParameter;
+        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // if (state == -2) return default(ValueTask);
+        var finishedCheck = new BoundBinaryExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, stateField),
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+            new BoundLiteralExpression(StateMachineStates.FinishedState));
+        var earlyReturn = new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
+        stmts.Add(new BoundIfStatement(finishedCheck, earlyReturn, null));
+
+        // this.<>w__disposeMode = true;
+        stmts.Add(new BoundExpressionStatement(
+            new BoundFieldAssignmentExpression(thisParam, smClass, disposeModeField, new BoundLiteralExpression(true))));
+
+        // promise.Reset();
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var resetMethod = promiseType.GetMethod("Reset");
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        stmts.Add(new BoundExpressionStatement(new BoundImportedInstanceCallExpression(
+            promiseAddr, resetMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty)));
+
+        // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
+        stmts.Add(new BoundExpressionStatement(new BoundStateMachineBuilderMoveNext(builderField, thisParam, smClass)));
+
+        // Return default ValueTask (completed).
+        stmts.Add(new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)))));
+
+        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+    }
+
+    private BoundBlockStatement BuildGetAsyncEnumeratorBody(
+        FunctionSymbol getAsyncEnumerator,
+        StructSymbol smClass,
+        FieldSymbol stateField,
+        FieldSymbol disposeModeField)
+    {
+        var thisParam = getAsyncEnumerator.ThisParameter;
+        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // this.<>1__state = -1; (running state)
+        stmts.Add(new BoundExpressionStatement(
+            new BoundFieldAssignmentExpression(thisParam, smClass, stateField,
+                new BoundLiteralExpression(StateMachineStates.NotStartedOrRunningState))));
+
+        // this.<>w__disposeMode = false; (reset dispose flag for re-enumeration)
+        stmts.Add(new BoundExpressionStatement(
+            new BoundFieldAssignmentExpression(thisParam, smClass, disposeModeField,
+                new BoundLiteralExpression(false))));
+
+        // return this;
+        stmts.Add(new BoundReturnStatement(new BoundVariableExpression(thisParam)));
+
+        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+    }
+
+    private BoundBlockStatement BuildVtsGetStatusBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
+    {
+        // return promise.GetStatus(token);
+        var thisParam = func.ThisParameter;
+        var tokenParam = func.Parameters[0];
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var method = promiseType.GetMethod("GetStatus", new[] { typeof(short) });
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        var call = new BoundImportedInstanceCallExpression(
+            promiseAddr, method, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus)),
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(call))));
+    }
+
+    private BoundBlockStatement BuildVtsGetResultBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
+    {
+        // return promise.GetResult(token);
+        var thisParam = func.ThisParameter;
+        var tokenParam = func.Parameters[0];
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        var call = new BoundImportedInstanceCallExpression(
+            promiseAddr, method, TypeSymbol.Bool,
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(call))));
+    }
+
+    private BoundBlockStatement BuildVtsOnCompletedBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
+    {
+        // promise.OnCompleted(continuation, state, token, flags);
+        var thisParam = func.ThisParameter;
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var method = promiseType.GetMethod("OnCompleted");
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        var args = ImmutableArray.Create<BoundExpression>(
+            new BoundVariableExpression(func.Parameters[0]),
+            new BoundVariableExpression(func.Parameters[1]),
+            new BoundVariableExpression(func.Parameters[2]),
+            new BoundVariableExpression(func.Parameters[3]));
+        var call = new BoundImportedInstanceCallExpression(promiseAddr, method, TypeSymbol.Void, args);
+        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(call),
+            new BoundReturnStatement(null))));
+    }
+
+    private BoundBlockStatement BuildVtsGetResultVoidBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
+    {
+        // promise.GetResult(token); // discard bool
+        var thisParam = func.ThisParameter;
+        var tokenParam = func.Parameters[0];
+        var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
+        var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
+        var promiseAddr = new BoundAddressOfExpression(
+            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+        var call = new BoundImportedInstanceCallExpression(
+            promiseAddr, method, TypeSymbol.Bool,
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(call),
+            new BoundReturnStatement(null))));
+    }
+
+    private BoundStructLiteralExpression CreateAsyncIteratorKickoffLiteral(
+        StructSymbol smClass,
+        FieldSymbol stateField,
+        FieldSymbol builderField,
+        Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
+        ImmutableArray<ParameterSymbol> parameters)
+    {
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(StateMachineStates.InitialAsyncIteratorState)));
+
+        // Builder: AsyncIteratorMethodBuilder.Create()
+        var createMethod = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)
+            .GetMethod("Create", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, Type.EmptyTypes, null);
+        initializers.Add(new BoundFieldInitializer(builderField,
+            new BoundClrStaticCallExpression(createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
+
+        foreach (var parameter in parameters)
+        {
+            initializers.Add(new BoundFieldInitializer(parameterFields[parameter], new BoundVariableExpression(parameter)));
+        }
+
+        return new BoundStructLiteralExpression(smClass, initializers.ToImmutable());
+    }
+
+    private void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, Lowering.Iterators.AsyncIteratorPlan plan)
+    {
+        var elementClr = plan.ElementType.ClrType ?? typeof(object);
+        var typeDef = this.structTypeDefs[smClass];
+
+        // IAsyncEnumerator<T>
+        this.metadata.AddInterfaceImplementation(typeDef,
+            this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr)));
+
+        // IAsyncDisposable
+        this.metadata.AddInterfaceImplementation(typeDef,
+            this.GetTypeHandleForMember(typeof(System.IAsyncDisposable)));
+
+        if (plan.IsEnumerable)
+        {
+            // IAsyncEnumerable<T>
+            this.metadata.AddInterfaceImplementation(typeDef,
+                this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr)));
+        }
+
+        // IValueTaskSource<bool>
+        this.metadata.AddInterfaceImplementation(typeDef,
+            this.GetTypeHandleForMember(typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>)));
+
+        // IAsyncStateMachine (required by AsyncIteratorMethodBuilder.MoveNext<TSM> constraint)
+        this.metadata.AddInterfaceImplementation(typeDef,
+            this.GetTypeHandleForMember(typeof(System.Runtime.CompilerServices.IAsyncStateMachine)));
+    }
+
     /// <summary>
     /// For each async lambda, runs the async state-machine pipeline on its body
     /// and produces an <see cref="AsyncStateMachinePlan"/>. For no-capture lambdas
@@ -4065,11 +4523,38 @@ internal sealed class ReflectionMetadataEmitter
             case "System.Boolean":
                 encoder.Boolean();
                 break;
+            case "System.Byte":
+                encoder.Byte();
+                break;
+            case "System.SByte":
+                encoder.SByte();
+                break;
+            case "System.Int16":
+                encoder.Int16();
+                break;
+            case "System.UInt16":
+                encoder.UInt16();
+                break;
             case "System.Int32":
                 encoder.Int32();
                 break;
+            case "System.UInt32":
+                encoder.UInt32();
+                break;
             case "System.Int64":
                 encoder.Int64();
+                break;
+            case "System.UInt64":
+                encoder.UInt64();
+                break;
+            case "System.Single":
+                encoder.Single();
+                break;
+            case "System.Double":
+                encoder.Double();
+                break;
+            case "System.Char":
+                encoder.Char();
                 break;
             case "System.String":
                 encoder.String();
@@ -4810,6 +5295,10 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
                     this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method));
                     break;
+                case BoundClrStaticCallExpression staticCall:
+                    this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
+                    this.il.Call(this.outer.GetMethodEntityHandle(staticCall.Method));
+                    break;
                 case BoundImportedInstanceCallExpression instCall:
                     this.EmitInstanceReceiver(instCall.Receiver);
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
@@ -4826,6 +5315,9 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundStateMachineAwaitOnCompleted awaitOnCompleted:
                     this.EmitStateMachineAwaitOnCompleted(awaitOnCompleted);
+                    break;
+                case BoundStateMachineBuilderMoveNext builderMoveNext:
+                    this.EmitAsyncIteratorBuilderMoveNext(builderMoveNext);
                     break;
                 case BoundConversionExpression conv:
                     this.EmitConversion(conv);
@@ -6862,6 +7354,40 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
         {
             this.outer.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan);
+        }
+
+        /// <summary>
+        /// Emits <c>builder.MoveNext&lt;TSM&gt;(ref this)</c> for async iterator SM classes.
+        /// Constructs a MethodSpec for the generic MoveNext method.
+        /// </summary>
+        private void EmitAsyncIteratorBuilderMoveNext(BoundStateMachineBuilderMoveNext node)
+        {
+            // ldarg.0 (this)
+            // ldflda builder
+            var builderFieldHandle = this.outer.structFieldDefs[node.BuilderField];
+            this.il.OpCode(ILOpCode.Ldarg_0);
+            this.il.OpCode(ILOpCode.Ldflda);
+            this.il.Token(builderFieldHandle);
+
+            // ldarga.0 (ref this — managed pointer to the 'this' parameter slot)
+            this.il.OpCode(ILOpCode.Ldarga_s);
+            this.il.CodeBuilder.WriteByte(0);
+
+            // call instance void AsyncIteratorMethodBuilder::MoveNext<SM>(ref SM)
+            var builderClrType = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder);
+            var openMoveNext = builderClrType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .First(m => m.Name == "MoveNext" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
+            var openRef = this.outer.GetMethodReference(openMoveNext.GetGenericMethodDefinition());
+
+            var smTypeDef = this.outer.structTypeDefs[node.SmClass];
+
+            var sigBlob = new BlobBuilder();
+            var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
+            argsEncoder.AddArgument().Type(smTypeDef, isValueType: false); // class, not struct
+
+            var methodSpec = this.outer.metadata.AddMethodSpecification(openRef, this.outer.metadata.GetOrAddBlob(sigBlob));
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(methodSpec);
         }
 
         /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>

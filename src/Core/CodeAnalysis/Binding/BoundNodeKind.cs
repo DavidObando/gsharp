@@ -75,8 +75,10 @@ public enum BoundNodeKind
     AddressOfExpression,
     DereferenceExpression,
     StateMachineAwaitOnCompleted,
+    StateMachineBuilderMoveNext,
     SpillSequenceExpression,
     DefaultExpression,
+    ClrStaticCallExpression,
 
     // Patterns
     ConstantPattern,

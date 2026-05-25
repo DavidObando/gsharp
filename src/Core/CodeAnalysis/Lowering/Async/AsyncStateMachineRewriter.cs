@@ -50,6 +50,12 @@ public static class AsyncStateMachineRewriter
                 continue;
             }
 
+            // Skip async iterators — they are handled by the async iterator rewriter.
+            if (IsAsyncIteratorFunction(function))
+            {
+                continue;
+            }
+
             var ordinal = AllocateTypeOrdinal(program, function, ordinalsByScopeAndName);
 
             // Lift awaits out of catch/finally handlers before spilling.
@@ -144,6 +150,20 @@ public static class AsyncStateMachineRewriter
         var packageName = function.Package?.Name ?? program.PackageName ?? string.Empty;
         var parameterTypes = string.Join(",", function.Parameters.Select(parameter => parameter.Type?.Name ?? string.Empty));
         return packageName + ":" + function.Name + ":" + function.Parameters.Length + ":" + parameterTypes;
+    }
+
+    private static bool IsAsyncIteratorFunction(FunctionSymbol function)
+    {
+        var clr = function.Type?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var def = clr.GetGenericTypeDefinition();
+        var fullName = def?.FullName;
+        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
     private sealed class AwaitStateCollector : BoundTreeRewriter

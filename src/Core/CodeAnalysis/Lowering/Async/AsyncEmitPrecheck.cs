@@ -73,11 +73,9 @@ public static class AsyncEmitPrecheck
                 continue;
             }
 
-            // Gate: async iterators (IAsyncEnumerable<T> / IAsyncEnumerator<T>)
+            // Async iterators are now supported — no gate needed.
             if (IsAsyncIterator(function))
             {
-                var location = LocateAsyncFunction(function);
-                builder.Add(new Diagnostic(location, AsyncIteratorNotImplementedMessage));
                 continue;
             }
 
@@ -96,7 +94,7 @@ public static class AsyncEmitPrecheck
 
         if (program.EntryPoint is { } entry && entry.IsAsync && !program.Functions.ContainsKey(entry))
         {
-            if (IsAsyncIterator(entry) || entry.StateMachineType == null)
+            if (!IsAsyncIterator(entry) && entry.StateMachineType == null)
             {
                 builder.Add(new Diagnostic(LocateAsyncFunction(entry), AsyncEmitNotImplementedMessage));
             }
