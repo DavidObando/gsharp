@@ -62,10 +62,14 @@ Console.WriteLine(t.Result)
             var setStateMachine = smType.GetMethod("SetStateMachine", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(setStateMachine);
 
-            // Note: GSharp emits SM types at top level (not nested).
-            // Roslyn convention is nested-private. This is a known deviation;
-            // follow-up tracked separately.
+            // Roslyn convention: SM types are nested-private inside declaring type.
+            Assert.True(smType.IsNested, "SM type should be nested");
+            Assert.True(smType.IsNestedPrivate, "SM type should be nested-private");
             Assert.True(smType.IsValueType, "SM type should be a struct");
+
+            // Declaring type is the per-package <Program> class.
+            Assert.NotNull(smType.DeclaringType);
+            Assert.Equal("<Program>", smType.DeclaringType!.Name);
         }
         finally
         {
@@ -108,6 +112,12 @@ Console.WriteLine(t.Result)
             var smType = smTypes[0];
             var moveNext = smType.GetMethod("MoveNext", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(moveNext);
+
+            // No-capture async lambda SM nests inside <Program>.
+            Assert.True(smType.IsNested, "SM type should be nested");
+            Assert.True(smType.IsNestedPrivate, "SM type should be nested-private");
+            Assert.NotNull(smType.DeclaringType);
+            Assert.Equal("<Program>", smType.DeclaringType!.Name);
         }
         finally
         {
@@ -150,6 +160,12 @@ func numbers() IAsyncEnumerable[int] {
             Assert.Contains("System.Collections.Generic.IAsyncEnumerable`1", interfaces);
             Assert.Contains("System.Collections.Generic.IAsyncEnumerator`1", interfaces);
             Assert.Contains("System.IAsyncDisposable", interfaces);
+
+            // Async iterator SM is nested-private inside <Program>.
+            Assert.True(smType.IsNested, "Async iterator SM should be nested");
+            Assert.True(smType.IsNestedPrivate, "Async iterator SM should be nested-private");
+            Assert.NotNull(smType.DeclaringType);
+            Assert.Equal("<Program>", smType.DeclaringType!.Name);
         }
         finally
         {
@@ -202,6 +218,145 @@ Console.WriteLine(t.Result)
             }
 
             Assert.Contains("hello world", captured.ToString());
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void AsyncLambdaWithCapture_StateMachine_NestsInsideClosureClass()
+    {
+        const string Source = @"package SmClosureNestTest
+import System
+import System.Threading.Tasks
+
+var x = 42
+var f = async func() int {
+    await Task.CompletedTask
+    return x
+}
+
+var t = f()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream);
+        Assert.True(result.Success, "Compilation failed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(nameof(AsyncLambdaWithCapture_StateMachine_NestsInsideClosureClass), isCollectible: true);
+        try
+        {
+            var asm = loadContext.LoadFromStream(peStream);
+
+            var smType = asm.GetTypes().FirstOrDefault(t => t.GetInterfaces().Contains(typeof(IAsyncStateMachine)));
+            Assert.NotNull(smType);
+
+            // Capture-bearing async lambda SM nests inside its closure class.
+            Assert.True(smType!.IsNested, "SM type should be nested");
+            Assert.True(smType.IsNestedPrivate, "SM type should be nested-private");
+            Assert.NotNull(smType.DeclaringType);
+
+            // The declaring type should be the closure class (not <Program>).
+            Assert.NotEqual("<Program>", smType.DeclaringType!.Name);
+            Assert.True(smType.DeclaringType.IsClass, "Declaring type should be a class (the closure)");
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void SyncIterator_StateMachine_IsNestedPrivate()
+    {
+        const string Source = @"package SmSyncIterTest
+import System
+import System.Collections.Generic
+
+func items() IEnumerable[int] {
+    yield 1
+    yield 2
+    yield 3
+}
+";
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream);
+        Assert.True(result.Success, "Compilation failed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(nameof(SyncIterator_StateMachine_IsNestedPrivate), isCollectible: true);
+        try
+        {
+            var asm = loadContext.LoadFromStream(peStream);
+            var smType = asm.GetTypes().FirstOrDefault(t => t.Name.Contains("<items>d__"));
+            Assert.NotNull(smType);
+
+            // Sync iterator SM is nested-private inside <Program>.
+            Assert.True(smType!.IsNested, "Sync iterator SM should be nested");
+            Assert.True(smType.IsNestedPrivate, "Sync iterator SM should be nested-private");
+            Assert.NotNull(smType.DeclaringType);
+            Assert.Equal("<Program>", smType.DeclaringType!.Name);
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void AsyncMethod_NestedSm_RoundTrips_EmitAndInvoke()
+    {
+        // Runtime behavior test: ensures nesting doesn't break member resolution.
+        const string Source = @"package SmRoundTripTest
+import System
+import System.Threading.Tasks
+
+async func compute() int {
+    await Task.CompletedTask
+    return 100 + 23
+}
+
+var t = compute()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream);
+        Assert.True(result.Success, "Compilation failed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(nameof(AsyncMethod_NestedSm_RoundTrips_EmitAndInvoke), isCollectible: true);
+        try
+        {
+            var asm = loadContext.LoadFromStream(peStream);
+            var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");
+            Assert.NotNull(programType);
+            var entry = programType!.GetMethod("<Main>$", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.NotNull(entry);
+
+            var stdout = Console.Out;
+            var captured = new StringWriter();
+            Console.SetOut(captured);
+            try
+            {
+                entry!.Invoke(null, parameters: null);
+            }
+            finally
+            {
+                Console.SetOut(stdout);
+            }
+
+            Assert.Contains("123", captured.ToString());
         }
         finally
         {
