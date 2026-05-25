@@ -2968,13 +2968,23 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var go in goStatements)
         {
             var captured = CollectCapturedVariables(go.Expression);
-            var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(go.Expression)));
+
+            // When the go target is async (returns Task/Task<T>), the closure must
+            // return Task so that Task.Run(Func<Task>) properly awaits completion.
+            var exprClr = go.Expression.Type?.ClrType;
+            var isAsync = exprClr != null && typeof(System.Threading.Tasks.Task).IsAssignableFrom(exprClr);
+            var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
+            BoundStatement bodyStatement = isAsync
+                ? new BoundReturnStatement(go.Expression)
+                : new BoundExpressionStatement(go.Expression);
+            var body = new BoundBlockStatement(ImmutableArray.Create(bodyStatement));
+
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
             var info = this.SynthesizeDisplayClass(
                 closureName,
                 captured,
                 ImmutableArray<ParameterSymbol>.Empty,
-                TypeSymbol.Void,
+                returnType,
                 body,
                 hostPackage,
                 invokeName: "InvokeAction");
@@ -7829,9 +7839,24 @@ internal sealed class ReflectionMetadataEmitter
 
             this.EmitGoAction(node);
 
-            var run = typeof(System.Threading.Tasks.Task).GetMethod(
-                nameof(System.Threading.Tasks.Task.Run),
-                new[] { typeof(Action) });
+            var closure = this.outer.goClosureInfos[node];
+            var isAsync = closure.InvokeMethod.Type?.ClrType != null
+                && typeof(System.Threading.Tasks.Task).IsAssignableFrom(closure.InvokeMethod.Type.ClrType);
+
+            MethodInfo run;
+            if (isAsync)
+            {
+                run = typeof(System.Threading.Tasks.Task).GetMethod(
+                    nameof(System.Threading.Tasks.Task.Run),
+                    new[] { typeof(Func<System.Threading.Tasks.Task>) });
+            }
+            else
+            {
+                run = typeof(System.Threading.Tasks.Task).GetMethod(
+                    nameof(System.Threading.Tasks.Task.Run),
+                    new[] { typeof(Action) });
+            }
+
             this.il.Call(this.outer.GetMethodEntityHandle(run));
 
             if (hasScope)
@@ -7884,11 +7909,25 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.Token(fieldHandle);
             }
 
-            var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(invokeHandle);
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(actionCtor));
+            var isAsync = closure.InvokeMethod.Type?.ClrType != null
+                && typeof(System.Threading.Tasks.Task).IsAssignableFrom(closure.InvokeMethod.Type.ClrType);
+
+            if (isAsync)
+            {
+                var funcTaskCtor = typeof(Func<System.Threading.Tasks.Task>).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(invokeHandle);
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(funcTaskCtor));
+            }
+            else
+            {
+                var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(IntPtr) });
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(invokeHandle);
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(actionCtor));
+            }
         }
 
         private void EmitScopeStatement(BoundScopeStatement node)
