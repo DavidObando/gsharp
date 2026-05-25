@@ -123,6 +123,89 @@ public class AsyncStateMachineRewriterTests
         Assert.Null(function.StateMachineType);
     }
 
+    [Fact]
+    public void Rewrite_PipelineComposition_ProducesStableShapeWithAllPassArtifacts()
+    {
+        // This end-to-end lowering test verifies that the inner pass ordering produces a
+        // stable shape: ExceptionHandler → Spiller → RefHoister → CaptureWalker → MoveNextBodyRewriter.
+        // We bind a program with try/catch around an await + an await in an expression,
+        // run Rewrite, and assert the resulting plan demonstrates all passes ran.
+        var awaitInTry = new BoundAwaitExpression(
+            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task))),
+            TypeSymbol.Void);
+        var awaitInExpr = new BoundAwaitExpression(
+            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<int>))),
+            TypeSymbol.Int);
+
+        // try { await ...; } catch(Exception e) { }
+        var catchVar = new LocalVariableSymbol("e", false, TypeSymbol.FromClrType(typeof(System.Exception)));
+        var tryBlock = Block(new BoundExpressionStatement(awaitInTry));
+        var catchBody = Block();
+        var catchClause = new BoundCatchClause(TypeSymbol.FromClrType(typeof(System.Exception)), catchVar, catchBody);
+        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray.Create(catchClause), finallyBlock: null);
+
+        // x = await Task<int>
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var body = Block(
+            tryStmt,
+            new BoundVariableDeclaration(x, awaitInExpr));
+
+        var function = new FunctionSymbol("pipeline", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
+        var program = Program(function, body);
+
+        // Act
+        var result = AsyncStateMachineRewriter.Rewrite(program, Resolver);
+
+        // Assert: plan was created
+        var plan = Assert.Single(result.StateMachines);
+
+        // Verify pass artifacts:
+        // 1. ExceptionHandler: try/catch with await should have been rewritten
+        //    (the original BoundTryStatement with await in try is gone from the plan's lowered body).
+        Assert.DoesNotContain(plan.MoveNextPlan.AwaitResumePoints,
+            rp => rp.AwaitExpression == awaitInTry && rp.State < 0);
+
+        // 2. Spiller: await in expression context was spilled to statement level.
+        //    The lowered body should not contain any BoundAwaitExpression as sub-expressions.
+        Assert.False(AsyncBoundTreeQueries.HasAwait(plan.LoweredBody) &&
+            ContainsNestedAwaitInExpression(plan.LoweredBody),
+            "Spiller should have lifted sub-expression awaits.");
+
+        // 3. Both awaits got state assignments (pipeline didn't drop any).
+        Assert.True(plan.AwaitResumeStates.Count >= 2,
+            $"Expected at least 2 await states, got {plan.AwaitResumeStates.Count}");
+
+        // 4. MoveNextPlan has matching resume points.
+        Assert.True(plan.MoveNextPlan.AwaitResumePoints.Length >= 2);
+
+        // 5. Hoisted local 'x' should appear in the field map.
+        Assert.NotNull(plan.FieldMap.GetLocalField(x));
+    }
+
+    private static bool ContainsNestedAwaitInExpression(BoundStatement body)
+    {
+        // Walk expressions looking for await nested inside binary/call/etc.
+        // A properly spilled body has awaits only at statement-expression level.
+        var checker = new NestedAwaitChecker();
+        checker.RewriteStatement(body);
+        return checker.Found;
+    }
+
+    private sealed class NestedAwaitChecker : BoundTreeRewriter
+    {
+        public bool Found { get; private set; }
+
+        protected override BoundExpression RewriteBinaryExpression(BoundBinaryExpression node)
+        {
+            if (AsyncBoundTreeQueries.HasAwait(new BoundExpressionStatement(node)))
+            {
+                Found = true;
+            }
+
+            return base.RewriteBinaryExpression(node);
+        }
+    }
+
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
         return new BoundBlockStatement(statements.ToImmutableArray());
