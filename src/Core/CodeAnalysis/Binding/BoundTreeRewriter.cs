@@ -61,6 +61,9 @@ public abstract class BoundTreeRewriter
                 return RewriteAwaitForRangeStatement((BoundAwaitForRangeStatement)node);
             case BoundNodeKind.YieldStatement:
                 return RewriteYieldStatement((BoundYieldStatement)node);
+            case BoundNodeKind.AwaitYieldPoint:
+            case BoundNodeKind.AwaitResumePoint:
+                return node;
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }

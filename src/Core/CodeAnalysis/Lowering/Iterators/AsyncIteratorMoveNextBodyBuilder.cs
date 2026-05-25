@@ -473,6 +473,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 stmts.Add(new BoundConditionalGotoStatement(resumeAfterLabel, isCompletedCall, jumpIfTrue: true));
 
                 // === Suspension path ===
+                // [AwaitYieldPoint] — hidden sequence point marker before state save.
+                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitYieldPoint, awaitState));
+
                 // this.<>1__state = awaitState;
                 stmts.Add(Stmt(ctx.WriteField(ctx.stateField, Literal(awaitState))));
 
@@ -489,6 +492,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 // resumeLabel:
                 stmts.Add(new BoundLabelStatement(resumeLabel));
+
+                // [AwaitResumePoint] — hidden sequence point marker after resume dispatch.
+                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitResumePoint, awaitState));
 
                 // awaiter = this.<>u__N;
                 BoundExpression reloadedAwaiter = ctx.ReadField(awaiterField);

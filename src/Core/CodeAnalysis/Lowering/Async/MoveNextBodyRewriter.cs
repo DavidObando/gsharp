@@ -523,6 +523,9 @@ public static class MoveNextBodyRewriter
                     resumePoint.ResumeAfterLabel, isCompletedCall, jumpIfTrue: true));
 
                 // === Suspension path ===
+                // [AwaitYieldPoint] — hidden sequence point marker before state save.
+                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitYieldPoint, resumePoint.State));
+
                 // this.<>1__state = K;
                 stmts.Add(Stmt(ctx.WriteField(ctx.plan.FieldMap.StateField, Literal(resumePoint.State))));
 
@@ -549,6 +552,9 @@ public static class MoveNextBodyRewriter
 
                 // stateK_resume:
                 stmts.Add(new BoundLabelStatement(resumePoint.ResumeLabel));
+
+                // [AwaitResumePoint] — hidden sequence point marker after resume dispatch.
+                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitResumePoint, resumePoint.State));
 
                 // awaiter = (TAwaiter)this.<>u__N;
                 BoundExpression reloadedAwaiter = ctx.ReadField(awaiterField);
