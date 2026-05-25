@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Lowering;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -4856,39 +4857,25 @@ public sealed class Binder
             return false;
         }
 
-        if (clr.FullName == "System.Threading.Tasks.Task")
+        // Use the general awaitable-shape resolver: any type with a conforming
+        // GetAwaiter()/IsCompleted/GetResult() triple is awaitable (C# spec §12.9.8).
+        var shape = AwaitableShape.Resolve(clr);
+        if (shape == null)
+        {
+            return false;
+        }
+
+        var resultClrType = shape.ResultType;
+        if (resultClrType == typeof(void))
         {
             element = TypeSymbol.Void;
-            return true;
         }
-
-        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        else
         {
-            var def = clr.GetGenericTypeDefinition();
-            if (def.FullName == "System.Threading.Tasks.Task`1")
-            {
-                element = TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
-                return true;
-            }
+            element = TypeSymbol.FromClrType(resultClrType);
         }
 
-        // Walk base chain (e.g. user-derived Task subclasses).
-        for (var t = clr.BaseType; t != null; t = t.BaseType)
-        {
-            if (t.FullName == "System.Threading.Tasks.Task")
-            {
-                element = TypeSymbol.Void;
-                return true;
-            }
-
-            if (t.IsGenericType && !t.IsGenericTypeDefinition && t.GetGenericTypeDefinition().FullName == "System.Threading.Tasks.Task`1")
-            {
-                element = TypeSymbol.FromClrType(t.GetGenericArguments()[0]);
-                return true;
-            }
-        }
-
-        return false;
+        return true;
     }
 
     private BoundExpression BindAwaitExpression(AwaitExpressionSyntax syntax)
