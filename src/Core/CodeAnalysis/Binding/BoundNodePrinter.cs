@@ -231,6 +231,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.ChannelCloseExpression:
                 WriteIntrinsicCall("close", ((BoundChannelCloseExpression)node).Channel, writer);
                 break;
+            case BoundNodeKind.AddressOfExpression:
+                WriteAddressOfExpression((BoundAddressOfExpression)node, writer);
+                break;
+            case BoundNodeKind.DereferenceExpression:
+                WriteDereferenceExpression((BoundDereferenceExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -1285,5 +1291,17 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteAddressOfExpression(BoundAddressOfExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.AmpersandToken);
+        node.Operand.WriteTo(writer);
+    }
+
+    private static void WriteDereferenceExpression(BoundDereferenceExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.StarToken);
+        node.Operand.WriteTo(writer);
     }
 }

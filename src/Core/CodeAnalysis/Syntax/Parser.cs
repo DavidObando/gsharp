@@ -1175,7 +1175,8 @@ public class Parser
             Current.Kind != SyntaxKind.OpenSquareBracketToken &&
             Current.Kind != SyntaxKind.OpenParenthesisToken &&
             Current.Kind != SyntaxKind.FuncKeyword &&
-            Current.Kind != SyntaxKind.MapKeyword)
+            Current.Kind != SyntaxKind.MapKeyword &&
+            Current.Kind != SyntaxKind.StarToken)
         {
             return null;
         }

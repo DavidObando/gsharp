@@ -403,6 +403,10 @@ public abstract class BoundTreeRewriter
                 return RewriteChannelReceiveExpression((BoundChannelReceiveExpression)node);
             case BoundNodeKind.ChannelCloseExpression:
                 return RewriteChannelCloseExpression((BoundChannelCloseExpression)node);
+            case BoundNodeKind.AddressOfExpression:
+                return RewriteAddressOfExpression((BoundAddressOfExpression)node);
+            case BoundNodeKind.DereferenceExpression:
+                return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -819,6 +823,38 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundChannelCloseExpression(channel);
+    }
+
+    /// <summary>
+    /// Rewrites an address-of expression.
+    /// </summary>
+    /// <param name="node">The address-of expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteAddressOfExpression(BoundAddressOfExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        if (operand == node.Operand)
+        {
+            return node;
+        }
+
+        return new BoundAddressOfExpression(operand);
+    }
+
+    /// <summary>
+    /// Rewrites a dereference expression.
+    /// </summary>
+    /// <param name="node">The dereference expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteDereferenceExpression(BoundDereferenceExpression node)
+    {
+        var operand = RewriteExpression(node.Operand);
+        if (operand == node.Operand)
+        {
+            return node;
+        }
+
+        return new BoundDereferenceExpression(operand);
     }
 
     /// <summary>
