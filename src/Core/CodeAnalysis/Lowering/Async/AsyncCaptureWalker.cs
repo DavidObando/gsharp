@@ -69,6 +69,14 @@ public static class AsyncCaptureWalker
                 continue;
             }
 
+            // Skip ref locals (ByRef-typed) — they cannot be hoisted into fields.
+            // The RefInitializationHoister eliminates them before this walker runs;
+            // this check is a safety net.
+            if (local.Type is ByRefTypeSymbol)
+            {
+                continue;
+            }
+
             orderedLocals.Add(local);
         }
 
