@@ -34,6 +34,14 @@ public static class GeneratedNames
     public const string ThisField = "<>4__this";
 
     /// <summary>
+    /// The shared prefix used by every spill-temp field (and the
+    /// corresponding spill-temp local that the spill spiller introduces).
+    /// Consumed by <see cref="AsyncCaptureWalker"/> to skip spill temps —
+    /// they are managed by the spiller, not the capture walker.
+    /// </summary>
+    public const string SpillTempPrefix = "<>7__wrap";
+
+    /// <summary>
     /// Returns the name of the hoisted field that mirrors a parameter of the
     /// original async method.
     /// </summary>
@@ -83,5 +91,5 @@ public static class GeneratedNames
     /// <param name="ordinal">A per-method monotonic ordinal.</param>
     /// <returns>The mangled spill-temp field name.</returns>
     public static string SpillTempField(int ordinal)
-        => "<>7__wrap" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        => SpillTempPrefix + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
