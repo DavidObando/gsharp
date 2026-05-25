@@ -462,12 +462,17 @@ public static class MoveNextBodyRewriter
                 // TAwaiter awaiter = <expr>.GetAwaiter();
                 var rewrittenOperand = RewriteExpression(awaitExpr.Expression);
                 BoundExpression getAwaiterReceiver;
-                if (awaiterClrType.IsValueType || (awaitExpr.Expression?.Type?.ClrType?.IsValueType ?? false))
+                var awaitableClrType = awaitExpr.Expression?.Type?.ClrType;
+                if (awaitableClrType != null && awaitableClrType.IsValueType)
                 {
-                    // Value-type awaitables need address for instance call.
-                    // But GetAwaiter is called on the awaitable, not the awaiter.
-                    // For value-type awaitables, we need a local to take address of.
-                    getAwaiterReceiver = rewrittenOperand;
+                    // Value-type awaitables require a managed pointer (byref) for the
+                    // instance GetAwaiter() call. Spill to a temp local and take address.
+                    var awaitableTypeSymbol = TypeSymbol.FromClrType(awaitableClrType);
+                    var tempLocal = new LocalVariableSymbol(
+                        "<>awaitable_" + resumePoint.State, isReadOnly: false, awaitableTypeSymbol);
+                    ctx.allLocals.Add(tempLocal);
+                    stmts.Add(new BoundVariableDeclaration(tempLocal, rewrittenOperand));
+                    getAwaiterReceiver = new BoundAddressOfExpression(new BoundVariableExpression(tempLocal));
                 }
                 else
                 {
