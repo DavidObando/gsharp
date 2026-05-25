@@ -161,6 +161,23 @@ public sealed class AsyncStateMachineFieldMap
         return new BoundFieldAssignmentExpression(receiver, StructType, field, value);
     }
 
+    /// <summary>
+    /// Attempts to find the hoisted field for a variable (local or parameter).
+    /// Returns <c>true</c> if the variable is hoisted.
+    /// </summary>
+    /// <param name="variable">The variable to look up.</param>
+    /// <param name="field">The hoisted field, if found.</param>
+    /// <returns><c>true</c> if the variable is hoisted; otherwise <c>false</c>.</returns>
+    public bool TryGetHoistedField(VariableSymbol variable, out FieldSymbol field)
+    {
+        if (variable is ParameterSymbol ps)
+        {
+            return parameterFields.TryGetValue(ps, out field);
+        }
+
+        return localFields.TryGetValue(variable, out field);
+    }
+
     private static FieldSymbol RequireField(System.Collections.Immutable.ImmutableArray<FieldSymbol> fields, int index, string expectedName)
     {
         if (index < 0 || index >= fields.Length)

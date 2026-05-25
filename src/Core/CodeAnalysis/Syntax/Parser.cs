@@ -2441,6 +2441,9 @@ public class Parser
             case SyntaxKind.FuncKeyword:
                 return ParseFunctionLiteralExpression();
 
+            case SyntaxKind.AsyncKeyword when Peek(1).Kind == SyntaxKind.FuncKeyword:
+                return ParseFunctionLiteralExpression();
+
             case SyntaxKind.SwitchKeyword:
                 return ParseSwitchExpression();
 
@@ -2452,14 +2455,20 @@ public class Parser
 
     private ExpressionSyntax ParseFunctionLiteralExpression()
     {
-        // Phase 4.7: function literal `func(p1 T1, p2 T2) R { body }`.
+        // Phase 4.7 + 5.1: function literal `[async] func(p1 T1, p2 T2) R { body }`.
+        SyntaxToken asyncModifier = null;
+        if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        {
+            asyncModifier = NextToken();
+        }
+
         var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         var returnType = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionLiteralExpressionSyntax(syntaxTree, funcKeyword, openParen, parameters, closeParen, returnType, body);
+        return new FunctionLiteralExpressionSyntax(syntaxTree, asyncModifier, funcKeyword, openParen, parameters, closeParen, returnType, body);
     }
 
     private ExpressionSyntax ParseSwitchExpression()

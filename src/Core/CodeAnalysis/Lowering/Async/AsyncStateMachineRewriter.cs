@@ -81,6 +81,52 @@ public static class AsyncStateMachineRewriter
         return new AsyncStateMachineRewriteResult(program, plans.ToImmutable());
     }
 
+    /// <summary>
+    /// Builds a state-machine plan for a single async lambda function.
+    /// Used by the emitter after closure synthesis has produced the final
+    /// lambda body.
+    /// </summary>
+    /// <param name="function">The lambda's function symbol (must have IsAsync == true).</param>
+    /// <param name="body">The lambda body (already closure-rewritten if captures exist).</param>
+    /// <param name="references">The compilation reference resolver.</param>
+    /// <param name="packageName">The host package name for ordinal allocation.</param>
+    /// <returns>A plan, or null if the builder could not be resolved.</returns>
+    public static AsyncStateMachinePlan RewriteSingle(
+        FunctionSymbol function,
+        BoundBlockStatement body,
+        ReferenceResolver references,
+        string packageName)
+    {
+        if (function == null || !function.IsAsync)
+        {
+            return null;
+        }
+
+        var ordinalsByScopeAndName = new Dictionary<string, int>();
+        var key = (packageName ?? string.Empty) + ":" + function.Name;
+        ordinalsByScopeAndName.TryGetValue(key, out var ordinal);
+        ordinalsByScopeAndName[key] = ordinal + 1;
+
+        var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(body);
+        var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
+        var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
+
+        var stateMachine = AsyncStateMachineTypeBuilder.Build(function, refHoisted, references, ordinal);
+        if (stateMachine == null)
+        {
+            function.StateMachineType = null;
+            return null;
+        }
+
+        var fieldMap = AsyncStateMachineFieldMap.Create(stateMachine, refHoisted);
+        var awaitStates = AwaitStateCollector.Allocate(refHoisted);
+        var kickoffPlan = KickoffBodyBuilder.Build(function, fieldMap);
+        var moveNextPlan = MoveNextBodyBuilder.Build(refHoisted, awaitStates);
+        function.StateMachineType = stateMachine;
+
+        return new AsyncStateMachinePlan(function, refHoisted, stateMachine, fieldMap, awaitStates, kickoffPlan, moveNextPlan);
+    }
+
     private static int AllocateTypeOrdinal(
         BoundProgram program,
         FunctionSymbol function,

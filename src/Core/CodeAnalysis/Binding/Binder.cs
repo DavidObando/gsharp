@@ -3764,7 +3764,7 @@ public sealed class Binder
 
     private BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax)
     {
-        // Phase 4.7: function literal `func(p1 T1, p2 T2) R { body }`.
+        // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
         // Bind parameters, push a new scope chained to the current scope so
         // outer locals are visible by lexical lookup (closure capture), bind
         // the body against a synthetic FunctionSymbol whose return type is
@@ -3793,11 +3793,21 @@ public sealed class Binder
 
         var returnType = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+
+        // For async lambdas, the observable return type (from the caller's
+        // perspective) is Task or Task<T>, matching top-level async functions.
+        var observableReturnType = returnType;
+        if (syntax.IsAsync)
+        {
+            observableReturnType = WrapAsTask(returnType);
+        }
+
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
         var synthetic = new FunctionSymbol(
             $"<lambda{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>",
             parameterSymbols.ToImmutable(),
             returnType);
+        synthetic.IsAsync = syntax.IsAsync;
 
         // Snapshot current binder state, then push a child scope and bind
         // the body as if we were inside this synthetic function.
@@ -6183,6 +6193,7 @@ public sealed class Binder
     {
         private readonly HashSet<VariableSymbol> parameters;
         private readonly HashSet<VariableSymbol> seen;
+        private readonly HashSet<VariableSymbol> declared;
         private readonly ImmutableArray<VariableSymbol>.Builder captured;
 
         public CapturedVariableCollector(
@@ -6192,13 +6203,20 @@ public sealed class Binder
         {
             this.parameters = parameters;
             this.seen = seen;
+            this.declared = new HashSet<VariableSymbol>();
             this.captured = captured;
+        }
+
+        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        {
+            this.declared.Add(node.Variable);
+            return base.RewriteVariableDeclaration(node);
         }
 
         protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
         {
             if (!this.parameters.Contains(node.Variable)
-                && !(node.Variable is GlobalVariableSymbol)
+                && !this.declared.Contains(node.Variable)
                 && this.seen.Add(node.Variable))
             {
                 this.captured.Add(node.Variable);

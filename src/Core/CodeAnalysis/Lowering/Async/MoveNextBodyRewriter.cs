@@ -358,6 +358,22 @@ public static class MoveNextBodyRewriter
                 return node;
             }
 
+            protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+            {
+                var rewrittenValue = RewriteExpression(node.Value);
+
+                // If the receiver is the hoisted `this` (instance method on a closure),
+                // we cannot represent a nested field store with the current node shape.
+                // For read-only capture access this path won't be hit; defer full
+                // write-through support for captured vars in async lambdas.
+                if (rewrittenValue != node.Value)
+                {
+                    return new BoundFieldAssignmentExpression(node.Receiver, node.StructType, node.Field, rewrittenValue);
+                }
+
+                return node;
+            }
+
             protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
             {
                 // The emitter stores the caught exception into a LOCAL slot via
@@ -603,6 +619,15 @@ public static class MoveNextBodyRewriter
                 field = null;
                 if (variable is ParameterSymbol param)
                 {
+                    // Check if this is the `this` parameter of an instance method.
+                    // The `this` reference is hoisted to the special ThisField.
+                    if (ctx.plan.FieldMap.ThisField != null &&
+                        ReferenceEquals(param, ctx.plan.KickoffMethod.ThisParameter))
+                    {
+                        field = ctx.plan.FieldMap.ThisField;
+                        return true;
+                    }
+
                     try
                     {
                         field = ctx.plan.FieldMap.GetParameterField(param);
