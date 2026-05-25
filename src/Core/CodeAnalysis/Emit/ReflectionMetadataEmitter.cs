@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -110,6 +111,10 @@ internal sealed class ReflectionMetadataEmitter
 
     // Maps async iterator SM class to the emit-time context needed by EmitAwaitOnCompletedCall.
     private readonly Dictionary<StructSymbol, AsyncIteratorEmitContext> asyncIteratorEmitContexts = new Dictionary<StructSymbol, AsyncIteratorEmitContext>();
+
+    // Tracks which closure class a capture-bearing async lambda's SM struct nests inside.
+    // SM structs NOT in this dictionary nest inside the per-package <Program> class.
+    private readonly Dictionary<StructSymbol, StructSymbol> asyncSmEnclosingClosures = new Dictionary<StructSymbol, StructSymbol>();
 
     private Type coreObjectType;
     private Type coreStringType;
@@ -270,27 +275,94 @@ internal sealed class ReflectionMetadataEmitter
             allAggregates = allAggregates.AddRange(asyncSmStructs);
         }
 
-        var classes = allAggregates.Where(s => s.IsClass).ToList();
-        var structs = allAggregates.Where(s => !s.IsClass).ToList();
+        // Separate state-machine types from non-SM types. SM types will be
+        // nested inside their declaring type (<Program> or closure class) per
+        // Roslyn convention. To satisfy ECMA-335 §II.22.32 (enclosing row <
+        // nested row), <Program> TypeDefs must precede SM TypeDefs.
+        var smClassSet = new HashSet<StructSymbol>(
+            this.iteratorStateMachineInfos.Keys.Concat(this.asyncIteratorInfos.Keys));
+        var smStructSet = new HashSet<StructSymbol>(asyncSmStructs);
+
+        var nonSmClasses = new List<StructSymbol>();
+        var smClasses = new List<StructSymbol>();
+        var nonSmStructs = new List<StructSymbol>();
+        var smStructsOrdered = new List<StructSymbol>();
+
+        foreach (var s in allAggregates)
+        {
+            if (s.IsClass)
+            {
+                if (smClassSet.Contains(s))
+                {
+                    smClasses.Add(s);
+                }
+                else
+                {
+                    nonSmClasses.Add(s);
+                }
+            }
+            else
+            {
+                if (smStructSet.Contains(s))
+                {
+                    smStructsOrdered.Add(s);
+                }
+                else
+                {
+                    nonSmStructs.Add(s);
+                }
+            }
+        }
+
         var interfaces = this.program.Interfaces;
 
-        // TypeDef row order: <Module>, interfaces (each owns abstract method
-        // rows), classes (each owns ctor rows + methods), structs (receiver
-        // methods only), <Program>s. Field-row planning is independent of
-        // methods so we walk allAggregates in their original order; the
-        // methodList re-planning is what requires interfaces before classes
-        // before structs (non-decreasing methodList rule per ECMA-335).
+        // Field-row planning: non-SM types first, then SM types. This ensures
+        // fieldList pointers are non-decreasing when <Program> (which owns no
+        // fields) sits between non-SM and SM TypeDefs.
+        //
+        //   TypeDef row order (new):
+        //     <Module>   fieldList=1     methodList=1
+        //     Interfaces ...
+        //     Non-SM classes ...
+        //     Non-SM structs ...
+        //     <Program>  fieldList=M+1   methodList=...
+        //     SM classes fieldList=M+1.. methodList=...
+        //     SM structs fieldList=...   methodList=...
+        //
+        // Where M = total non-SM fields. <Program> owns 0 fields so its
+        // fieldList equals the first SM type's fieldList.
         int nextFieldRow = 1;
         var structFirstFieldRow = new Dictionary<StructSymbol, int>();
-        foreach (var s in allAggregates)
+
+        // Walk non-SM types for field assignment.
+        foreach (var s in nonSmClasses)
         {
             structFirstFieldRow[s] = nextFieldRow;
             nextFieldRow += s.Fields.Length;
         }
 
-        int totalStructFields = nextFieldRow - 1;
-        var moduleFirstFieldRow = allAggregates.IsDefaultOrEmpty ? 1 : 1;
-        var programFirstFieldRow = totalStructFields + 1;
+        foreach (var s in nonSmStructs)
+        {
+            structFirstFieldRow[s] = nextFieldRow;
+            nextFieldRow += s.Fields.Length;
+        }
+
+        int programFirstFieldRow = nextFieldRow;
+
+        // SM types get field rows after <Program>'s fieldList pointer.
+        foreach (var s in smClasses)
+        {
+            structFirstFieldRow[s] = nextFieldRow;
+            nextFieldRow += s.Fields.Length;
+        }
+
+        foreach (var s in smStructsOrdered)
+        {
+            structFirstFieldRow[s] = nextFieldRow;
+            nextFieldRow += s.Fields.Length;
+        }
+
+        var moduleFirstFieldRow = 1;
 
         // Phase 3.B.4: plan method rows for interface abstract methods FIRST.
         // Interface TypeDefs sit between <Module> and the class TypeDefs in
@@ -307,16 +379,11 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        // Plan method rows for class ctors next. Each class always owns a
-        // parameterless default ctor (so `Foo{}` composite literal continues
-        // to work) and, when a primary constructor was declared, a second
-        // parameterized ctor immediately after it. Rows are non-decreasing
-        // per ECMA-335: class TypeDef.methodList points at the class's
-        // default ctor row, and the methods are emitted in this row order.
+        // Plan method rows for non-SM class ctors + instance methods.
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
         var aggregateMethodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-        foreach (var c in classes)
+        foreach (var c in nonSmClasses)
         {
             classCtorRows[c] = methodRow++;
             if (c.HasPrimaryConstructor)
@@ -335,17 +402,10 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
-        foreach (var s in structs)
+        foreach (var s in nonSmStructs)
         {
-            // Async state-machine structs own MoveNext + SetStateMachine methods.
-            if (asyncSmPlansByStruct.ContainsKey(s))
-            {
-                structFirstMethodRows[s] = methodRow;
-                methodRow += 2; // MoveNext, SetStateMachine
-                continue;
-            }
-
             if (s.Methods.IsDefaultOrEmpty && !s.IsInline)
             {
                 continue;
@@ -383,24 +443,14 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var i in interfaces)
         {
             this.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
-            foreach (var m in i.Methods)
-            {
-                this.EmitAbstractMethod(m);
-            }
         }
 
-        // 2b. Emit class TypeDefs (so methodLists stay non-decreasing), then
-        // struct TypeDefs. Class TypeDefs' methodList points at the class's
-        // preassigned ctor row; struct TypeDefs point at their first receiver
-        // method row when present, otherwise at the package method block.
-        foreach (var c in classes)
+        // 2b. Emit non-SM class TypeDefs (so methodLists stay non-decreasing),
+        // then non-SM struct TypeDefs. SM types are emitted AFTER <Program>.
+        foreach (var c in nonSmClasses)
         {
             this.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
-            // Phase 3.B.4: emit InterfaceImpl rows for each user-defined
-            // interface implemented by this class. The metadata API requires
-            // interfaces to be added in numerical order per class, which we
-            // get for free by walking structSym.Interfaces in source order.
             if (!c.Interfaces.IsDefaultOrEmpty)
             {
                 foreach (var iface in c.Interfaces)
@@ -411,32 +461,14 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
             }
-
-            if (this.iteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
-            {
-                this.AddIteratorInterfaceImplementations(c, iteratorInfo);
-            }
-
-            if (this.asyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
-            {
-                this.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
-            }
         }
 
-        foreach (var s in structs)
+        foreach (var s in nonSmStructs)
         {
             var methodListRow = structFirstMethodRows.TryGetValue(s, out var firstStructMethodRow)
                 ? firstStructMethodRow
                 : firstPackageCtorRow;
             this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
-
-            // Async state-machine structs implement IAsyncStateMachine.
-            if (asyncSmPlansByStruct.ContainsKey(s))
-            {
-                var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
-                var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
-                this.metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
-            }
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -509,10 +541,7 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        // Plan method rows AND remember each package's ctor row (the methodList
-        // pointer on its <Program> TypeDef). Pre-assign function handles so
-        // call sites can be encoded before bodies are written. Class default
-        // ctors already occupy rows 1..K, so package ctors start at K+1.
+        // Plan method rows for packages (per-package ctor + functions + entry).
         var packageCtorRows = new Dictionary<PackageSymbol, int>();
         var nextRow = firstPackageCtorRow;
         foreach (var pkg in packages)
@@ -529,15 +558,102 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Plan method rows for SM classes (after package methods).
+        int firstSmClassMethodRow = nextRow;
+        foreach (var c in smClasses)
+        {
+            classCtorRows[c] = nextRow++;
+            if (c.HasPrimaryConstructor)
+            {
+                classPrimaryCtorRows[c] = nextRow++;
+            }
+
+            if (!c.Methods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.Methods)
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                    aggregateMethodHandles[m] = handle;
+                    this.methodHandles[m] = handle;
+                }
+            }
+        }
+
+        // Plan method rows for SM structs (MoveNext + SetStateMachine each).
+        foreach (var s in smStructsOrdered)
+        {
+            structFirstMethodRows[s] = nextRow;
+            nextRow += 2; // MoveNext, SetStateMachine
+        }
+
         MethodDefinitionHandle entryHandle = default;
         if (this.program.EntryPoint is not null)
         {
             entryHandle = this.functionHandles[this.program.EntryPoint];
         }
 
-        // 4. Emit method definitions in row order. Class default ctors come
-        // first (rows 1..K), then per-package ctor + functions + entry point.
-        foreach (var c in classes)
+        // Pre-register SM class ctor handles so iterator kickoff bodies
+        // (emitted during B4) can reference them for newobj calls.
+        foreach (var c in smClasses)
+        {
+            this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
+        }
+
+        // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
+        // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
+        var programTypeDefHandles = new Dictionary<PackageSymbol, TypeDefinitionHandle>();
+        foreach (var pkg in packages)
+        {
+            var programHandle = this.metadata.AddTypeDefinition(
+                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
+                @namespace: this.metadata.GetOrAddString(pkg.Name),
+                name: this.metadata.GetOrAddString("<Program>"),
+                baseType: this.objectTypeRef,
+                fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
+                methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[pkg]));
+            programTypeDefHandles[pkg] = programHandle;
+        }
+
+        // SM class TypeDefs (sync iterators + async iterators).
+        foreach (var c in smClasses)
+        {
+            this.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+
+            if (this.iteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
+            {
+                this.AddIteratorInterfaceImplementations(c, iteratorInfo);
+            }
+
+            if (this.asyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
+            {
+                this.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
+            }
+        }
+
+        // SM struct TypeDefs (async method/lambda state machines).
+        foreach (var s in smStructsOrdered)
+        {
+            var smMethodListRow = structFirstMethodRows[s];
+            this.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
+
+            var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
+            var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
+            this.metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
+        }
+
+        // === PHASE B: Emit MethodDefs in row order ===
+        // B1. Interface abstract methods.
+        foreach (var i in interfaces)
+        {
+            foreach (var m in i.Methods)
+            {
+                this.EmitAbstractMethod(m);
+            }
+        }
+
+        // B2. Non-SM class ctors + instance methods.
+        foreach (var c in nonSmClasses)
         {
             var ctorHandle = this.EmitClassDefaultConstructor(c);
             this.classCtorHandles[c] = ctorHandle;
@@ -563,16 +679,9 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        foreach (var s in structs)
+        // 4b. Non-SM struct methods.
+        foreach (var s in nonSmStructs)
         {
-            // Async state-machine structs: emit MoveNext + SetStateMachine.
-            if (asyncSmPlansByStruct.TryGetValue(s, out var smPlan))
-            {
-                this.EmitStateMachineMoveNext(smPlan);
-                this.EmitStateMachineSetStateMachine(smPlan);
-                continue;
-            }
-
             if (s.IsInline)
             {
                 this.EmitInlineStructSynthesizedMembers(s);
@@ -602,9 +711,10 @@ internal sealed class ReflectionMetadataEmitter
         // to their definitions' rows.
         this.RegisterConstructedTypeAliases();
 
+        // B4. Per-package methods (ctor + user functions + entry).
         foreach (var pkg in packages)
         {
-            var pkgCtor = this.EmitDefaultConstructor();
+            this.EmitDefaultConstructor();
 
             foreach (var fn in functionsByPackage[pkg])
             {
@@ -621,16 +731,73 @@ internal sealed class ReflectionMetadataEmitter
                 var entryBody = this.program.Functions[this.program.EntryPoint];
                 this.EmitFunction(this.program.EntryPoint, entryBody, isEntryPoint: true);
             }
+        }
 
-            // 5. <Program> type definition for this package — namespace = package name.
-            this.metadata.AddTypeDefinition(
-                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
-                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
-                @namespace: this.metadata.GetOrAddString(pkg.Name),
-                name: this.metadata.GetOrAddString("<Program>"),
-                baseType: this.objectTypeRef,
-                fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
-                methodList: pkgCtor);
+        // B5. SM class method bodies (ctors + instance methods).
+        foreach (var c in smClasses)
+        {
+            var ctorHandle = this.EmitClassDefaultConstructor(c);
+            this.classCtorHandles[c] = ctorHandle;
+
+            if (c.HasPrimaryConstructor)
+            {
+                var primaryHandle = this.EmitClassPrimaryConstructor(c);
+                this.classPrimaryCtorHandles[c] = primaryHandle;
+            }
+
+            if (!c.Methods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.Methods)
+                {
+                    if (!this.program.Functions.TryGetValue(m, out var body))
+                    {
+                        body = this.lambdaBodies[m];
+                    }
+
+                    var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                    this.methodHandles[m] = emittedHandle;
+                }
+            }
+        }
+
+        // B6. SM struct method bodies (MoveNext + SetStateMachine).
+        foreach (var s in smStructsOrdered)
+        {
+            if (asyncSmPlansByStruct.TryGetValue(s, out var smPlan))
+            {
+                this.EmitStateMachineMoveNext(smPlan);
+                this.EmitStateMachineSetStateMachine(smPlan);
+            }
+        }
+
+        // NestedType entries. Each SM is nested inside its declaring type:
+        // capture-bearing async lambda SMs inside their closure class,
+        // all others inside the per-package <Program>.
+        var hostPkg = entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
+        var defaultProgramHandle = hostPkg != null && programTypeDefHandles.TryGetValue(hostPkg, out var h) ? h : default;
+
+        foreach (var c in smClasses)
+        {
+            var nestedHandle = this.structTypeDefs[c];
+            var smPkg = this.GetSmPackage(c, packages, entryPointPackage);
+            var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
+            this.metadata.AddNestedType(nestedHandle, enclosingHandle);
+        }
+
+        foreach (var s in smStructsOrdered)
+        {
+            var nestedHandle = this.structTypeDefs[s];
+            if (this.asyncSmEnclosingClosures.TryGetValue(s, out var closureSym)
+                && this.structTypeDefs.TryGetValue(closureSym, out var closureHandle))
+            {
+                this.metadata.AddNestedType(nestedHandle, closureHandle);
+            }
+            else
+            {
+                var smPkg = this.GetSmPackage(s, packages, entryPointPackage);
+                var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
+                this.metadata.AddNestedType(nestedHandle, enclosingHandle);
+            }
         }
 
         // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
@@ -823,6 +990,110 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EmitIsReadOnlyAttribute(handle2);
         }
+    }
+
+    /// <summary>
+    /// Emits a nested-private TypeDef for a state-machine type.  Same as
+    /// <see cref="EmitStructTypeDef"/> but uses <c>NestedPrivate</c> visibility
+    /// and an empty namespace (nested types have no namespace in metadata).
+    /// </summary>
+    private void EmitNestedStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
+    {
+        if (!structSym.TypeArguments.IsDefaultOrEmpty)
+        {
+            throw new System.NotSupportedException(
+                $"Internal error: a constructed StructSymbol ('{structSym.Name}') reached EmitNestedStructTypeDef.");
+        }
+
+        FieldDefinitionHandle firstField = default;
+        foreach (var field in structSym.Fields)
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
+            var attrs = MapFieldAccessibility(field.Accessibility);
+            if (field.IsReadOnly)
+            {
+                attrs |= FieldAttributes.InitOnly;
+            }
+
+            var handle = this.metadata.AddFieldDefinition(
+                attributes: attrs,
+                name: this.metadata.GetOrAddString(field.Name),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = handle;
+            }
+
+            this.structFieldDefs[field] = handle;
+        }
+
+        if (firstField.IsNil)
+        {
+            firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
+        }
+
+        TypeAttributes typeAttrs;
+        EntityHandle baseType;
+        if (structSym.IsClass)
+        {
+            var classAttrs = TypeAttributes.Class
+                | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
+                | TypeAttributes.BeforeFieldInit
+                | TypeAttributes.NestedPrivate;
+            if (!structSym.IsOpen)
+            {
+                classAttrs |= TypeAttributes.Sealed;
+            }
+
+            typeAttrs = classAttrs;
+            if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            {
+                baseType = baseHandle;
+            }
+            else
+            {
+                baseType = this.objectTypeRef;
+            }
+        }
+        else
+        {
+            typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
+                | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
+                | TypeAttributes.NestedPrivate;
+            baseType = this.valueTypeRef;
+        }
+
+        // Nested types have no namespace in ECMA-335 metadata.
+        var handle2 = this.metadata.AddTypeDefinition(
+            attributes: typeAttrs,
+            @namespace: default(StringHandle),
+            name: this.metadata.GetOrAddString(structSym.Name),
+            baseType: baseType,
+            fieldList: firstField,
+            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
+        this.structTypeDefs[structSym] = handle2;
+    }
+
+    /// <summary>
+    /// Resolves the package that a state-machine type's kickoff belongs to,
+    /// for determining which <c>&lt;Program&gt;</c> TypeDef it nests inside.
+    /// </summary>
+    private PackageSymbol GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol entryPointPackage)
+    {
+        // Try the SM's packageName to find the matching package.
+        if (smSym.PackageName != null)
+        {
+            foreach (var pkg in packages)
+            {
+                if (pkg.Name == smSym.PackageName)
+                {
+                    return pkg;
+                }
+            }
+        }
+
+        return entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
     }
 
     /// <summary>Emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on an inline struct TypeDef.</summary>
@@ -1029,6 +1300,16 @@ internal sealed class ReflectionMetadataEmitter
             Accessibility.Internal => TypeAttributes.NotPublic,
             Accessibility.Private => TypeAttributes.NotPublic,
             _ => TypeAttributes.Public,
+        };
+    }
+
+    private static TypeAttributes MapNestedTypeAccessibility(Accessibility accessibility)
+    {
+        return accessibility switch
+        {
+            Accessibility.Internal => TypeAttributes.NestedAssembly,
+            Accessibility.Private => TypeAttributes.NestedPrivate,
+            _ => TypeAttributes.NestedPublic,
         };
     }
 
@@ -3302,6 +3583,14 @@ internal sealed class ReflectionMetadataEmitter
             if (plan == null)
             {
                 continue;
+            }
+
+            // Record nesting: capture-bearing async lambda SMs nest inside
+            // their closure class (Subset A of the Roslyn nesting convention).
+            if (this.closureInfos.TryGetValue(literal, out var closureForNesting))
+            {
+                var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
+                this.asyncSmEnclosingClosures[smStruct] = closureForNesting.ClassSym;
             }
 
             plans.Add(plan);
