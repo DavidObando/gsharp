@@ -202,20 +202,16 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
-        var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
-        var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
-        var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program);
-
-        var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
-        if (asyncDiagnostics.Any())
+        var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
+        if (lowerDiagnostics.Any())
         {
-            return new EmitResult(success: false, asyncDiagnostics);
+            return new EmitResult(success: false, lowerDiagnostics);
         }
 
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
-            EmitAssembly(program, stream, References, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult, asyncIteratorRewriteResult: asyncIteratorRewriteResult);
+            EmitAssembly(program, stream, References, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult);
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -261,26 +257,22 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
-        var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, References ?? Symbols.ReferenceResolver.Default());
-        var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
-        var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program);
-
-        var asyncDiagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
-        if (asyncDiagnostics.Any())
+        var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
+        if (lowerDiagnostics.Any())
         {
-            return new EmitResult(success: false, asyncDiagnostics);
+            return new EmitResult(success: false, lowerDiagnostics);
         }
 
         try
         {
             if (peStream is not null)
             {
-                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult, asyncIteratorRewriteResult: asyncIteratorRewriteResult);
+                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult);
             }
 
             if (refStream is not null)
             {
-                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: asyncRewriteResult, iteratorRewriteResult: iteratorRewriteResult, asyncIteratorRewriteResult: asyncIteratorRewriteResult);
+                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult);
             }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
@@ -293,8 +285,61 @@ public class Compilation
         return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
     }
 
+    /// <summary>
+    /// The canonical async/iterator lowering pipeline. Runs all rewriter
+    /// passes in the correct order and gates unsupported constructs via
+    /// <see cref="Lowering.Async.AsyncEmitPrecheck"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Ordering: the rewriters run first because
+    /// <see cref="Lowering.Async.AsyncEmitPrecheck.Check"/> inspects
+    /// <see cref="FunctionSymbol.StateMachineType"/> which is populated by
+    /// <see cref="Lowering.Async.AsyncStateMachineRewriter.Rewrite"/>. The
+    /// precheck cannot move before the rewriters without losing the ability
+    /// to distinguish successfully-lowered async methods from those that
+    /// failed builder resolution.</para>
+    /// </remarks>
+    private static (LoweredProgram Lowered, ImmutableArray<Diagnostic> Diagnostics) LowerForEmit(
+        BoundProgram program, ReferenceResolver references)
+    {
+        // Run the rewriter passes.
+        var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, references);
+        var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
+        var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program);
+
+        // Gate: fail fast on unsupported async constructs after lowering.
+        // This runs after the rewriters because it inspects StateMachineType
+        // which is set during AsyncStateMachineRewriter.Rewrite.
+        var diagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
+
+        var lowered = new LoweredProgram(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+        return (lowered, diagnostics);
+    }
+
     private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null)
     {
         ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+    }
+
+    /// <summary>
+    /// Bundle holding the results of the lowering pipeline passes.
+    /// </summary>
+    private sealed class LoweredProgram
+    {
+        public LoweredProgram(
+            Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult,
+            IteratorRewriteResult iteratorRewriteResult,
+            AsyncIteratorRewriteResult asyncIteratorRewriteResult)
+        {
+            AsyncRewriteResult = asyncRewriteResult;
+            IteratorRewriteResult = iteratorRewriteResult;
+            AsyncIteratorRewriteResult = asyncIteratorRewriteResult;
+        }
+
+        public Lowering.Async.AsyncStateMachineRewriteResult AsyncRewriteResult { get; }
+
+        public IteratorRewriteResult IteratorRewriteResult { get; }
+
+        public AsyncIteratorRewriteResult AsyncIteratorRewriteResult { get; }
     }
 }
