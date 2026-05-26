@@ -25,6 +25,32 @@ Identifiers consisting of a surrogate pair (Unicode code points beyond U+FFFF) a
 
 Keywords are reserved and may not be used as identifiers. See `SyntaxFacts.GetKeywordKind` for the canonical list.
 
+## Predeclared types
+
+The following type names are predeclared in the universe scope and resolved by `Binder.LookupType`. They are not lexical keywords — they may appear anywhere a type identifier is permitted, but rebinding them is rejected by the binder.
+
+| Name       | CLR type            | Notes                                                              |
+| ---------- | ------------------- | ------------------------------------------------------------------ |
+| `bool`     | `System.Boolean`    | `true` / `false` literals.                                         |
+| `sbyte`    | `System.SByte`      | 8-bit signed integer.                                              |
+| `byte`     | `System.Byte`       | 8-bit unsigned integer.                                            |
+| `short`    | `System.Int16`      | 16-bit signed integer.                                             |
+| `ushort`   | `System.UInt16`     | 16-bit unsigned integer.                                           |
+| `int`      | `System.Int32`      | Default integer literal type.                                      |
+| `uint`     | `System.UInt32`     | Reached via the `U` literal suffix.                                |
+| `long`     | `System.Int64`      | Reached via the `L` literal suffix.                                |
+| `ulong`    | `System.UInt64`     | Reached via the `UL` / `LU` literal suffix.                        |
+| `nint`     | `System.IntPtr`     | Native-sized signed integer.                                       |
+| `nuint`    | `System.UIntPtr`    | Native-sized unsigned integer.                                     |
+| `float32`  | `System.Single`     | 32-bit binary floating point. `F` literal suffix.                  |
+| `float64`  | `System.Double`     | 64-bit binary floating point. Default float literal type. `D` literal suffix. |
+| `decimal`  | `System.Decimal`    | 128-bit base-10 floating point. `M` literal suffix.                |
+| `char`     | `System.Char`       | 16-bit Unicode code unit. Written with single quotes — `'a'`, `'\n'`, `'\u00e9'`. See ADR-0046. |
+| `string`   | `System.String`     | UTF-16 immutable string.                                           |
+| `object`   | `System.Object`     | Universal upper bound — every type implicitly widens to `object`. See ADR-0045. |
+
+See ADR-0044 (numeric primitive coverage), ADR-0045 (`object` as universal upper bound), and ADR-0046 (`char` literal grammar) for design rationale.
+
 ## Numeric literals
 
 GSharp supports the following integer literal forms:
@@ -37,7 +63,34 @@ GSharp supports the following integer literal forms:
 | Binary  | `0b` / `0B` | `0`, `1`        | `0b1010_1010` |
 
 * Underscores (`_`) may appear between digits and immediately after a base prefix for readability (`0x_FF` is valid). A trailing underscore (`1_`) or an underscore as the only digit after a prefix (`0x_`) is rejected.
-* GSharp does **not** support Go's leading-zero octal form (e.g., `0755`); the explicit `0o755` is required. This keeps the grammar unambiguous for future floating-point literal work.
+* GSharp does **not** support Go's leading-zero octal form (e.g., `0755`); the explicit `0o755` is required. This keeps the grammar unambiguous for floating-point literals.
+
+### Floating-point literals
+
+A decimal literal containing a `.` fractional part and/or a `e` / `E` exponent is a floating-point literal. The leading integer part is optional (`.5` is valid); the trailing fractional part is optional after a `.` (`5.` is valid). Underscores are permitted between digits in the integer, fractional, and exponent parts, but not adjacent to the `.` or to the sign of the exponent. Examples: `3.14`, `.5`, `5.`, `1e10`, `1.5E-3`, `1_000.000_1`.
+
+The default type of an unsuffixed floating-point literal is `float64`.
+
+### Numeric literal suffixes
+
+A case-insensitive type-pin suffix may follow the digit body. The suffix is consumed by the lexer and the literal's static type is the corresponding predeclared type.
+
+| Suffix     | Type      | Legal on |
+| ---------- | --------- | -------- |
+| `L` / `l`  | `long`    | integer bodies (decimal, hex, octal, binary) |
+| `U` / `u`  | `uint`    | integer bodies |
+| `UL` / `LU` (any casing) | `ulong` | integer bodies |
+| `F` / `f`  | `float32` | decimal integer or floating-point bodies |
+| `D` / `d`  | `float64` | decimal integer or floating-point bodies |
+| `M` / `m`  | `decimal` | decimal integer or floating-point bodies |
+
+`F`, `D`, and `M` are **not** legal on hex/octal/binary integer bodies because `F` and `D` are themselves hex digits — `0xFFf` is the hex number ending in three `F` digits, not a float-suffixed value.
+
+A decimal literal with no suffix and no fractional/exponent part has type `int`; if its value exceeds `Int32.MaxValue` the binder reports a diagnostic, so an explicit `L` suffix is required to write a 64-bit literal.
+
+## Character literals
+
+A character literal is a single Unicode code unit enclosed in single quotes (`'`). The contents are processed exactly like an interpreted string of length one — escape sequences (`\\`, `\'`, `\"`, `\0`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\xHH`, `\uHHHH`, `\UHHHHHHHH`) are recognized. A character literal has type `char`. See ADR-0046 for the full grammar and rationale.
 
 ## String literals
 
@@ -59,3 +112,6 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 * `docs/coverage-matrix.md` — language-construct coverage matrix.
 * `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering.
 * `docs/adr/0012-raw-string-delimiter.md` — rationale for backtick raw strings.
+* `docs/adr/0044-numeric-primitive-coverage.md` — primitive-type lattice and numeric suffix grammar.
+* `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.
+* `docs/adr/0046-char-literal-grammar.md` — `char` literals and escape grammar.
