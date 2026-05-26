@@ -657,6 +657,12 @@ public sealed class Binder
             }
         }
 
+        // Phase 4 of #141 / ADR-0047 §5: detect the `@Attribute` declaration
+        // sugar marker before resolving the base clause so we can tolerate
+        // an explicit `: System.Attribute` (redundant restatement) and reject
+        // any conflicting explicit base.
+        var hasAttributeSugar = HasAttributeSugarMarker(syntax.Annotations);
+
         // Phase 3.B.3 sub-step 3 + 3.B.4: resolve the optional `: X, Y, Z` clause.
         // Each identifier is either the (single) base class or an interface
         // implemented by this class. A base class, if present, must be the
@@ -683,6 +689,16 @@ public sealed class Binder
                 {
                     var token = allBaseTokens[i];
                     var baseName = token.Text;
+
+                    // Phase 4 of #141: tolerate an explicit `: Attribute` on an
+                    // @Attribute-marked class (redundant restatement). The
+                    // System.Attribute base is supplied by the emitter.
+                    if (hasAttributeSugar && i == 0
+                        && (baseName == "Attribute" || baseName == "System.Attribute"))
+                    {
+                        continue;
+                    }
+
                     if (!scope.TryLookupTypeAlias(baseName, out var resolved))
                     {
                         Diagnostics.ReportUnableToFindType(token.Location, baseName);
@@ -700,6 +716,14 @@ public sealed class Binder
                         if (i != 0)
                         {
                             Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                            continue;
+                        }
+
+                        if (hasAttributeSugar)
+                        {
+                            // Phase 4 of #141 / ADR-0047 §5: @Attribute sugar
+                            // forces System.Attribute as the base; conflict.
+                            Diagnostics.ReportAttributeClassExplicitBase(token.Location, baseName);
                             continue;
                         }
 
@@ -741,6 +765,13 @@ public sealed class Binder
             AttributeTargetKind.Type,
             TypeDeclarationAllowedTargets,
             syntax.IsClass ? "a class declaration" : "a struct declaration"));
+
+        if (hasAttributeSugar && syntax.IsClass)
+        {
+            // Phase 4 of #141 / ADR-0047 §5: tag the class so the emitter
+            // overrides its CLR base type to System.Attribute.
+            structSymbol.SetIsAttributeClass();
+        }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
@@ -6517,6 +6548,64 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// Phase 4 of #141 / ADR-0047 §5: returns true if any annotation in the
+    /// list is the bare <c>@Attribute</c> sugar marker (single-segment name
+    /// <c>Attribute</c>, no use-site target qualifier).
+    /// </summary>
+    /// <param name="annotations">Annotations from the declaration's syntax node.</param>
+    /// <returns>True if the marker is present.</returns>
+    private static bool HasAttributeSugarMarker(ImmutableArray<AnnotationSyntax> annotations)
+    {
+        if (annotations.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var annotation in annotations)
+        {
+            // ADR-0047 §5: the sugar marker is exactly `@Attribute` (no
+            // use-site target qualifier; no arguments; single-segment name).
+            if (annotation.Target != null)
+            {
+                continue;
+            }
+
+            if (annotation.NameSegments.Length != 1)
+            {
+                continue;
+            }
+
+            if (annotation.NameSegments[0].Text == "Attribute")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Phase 4 of #141 / ADR-0047 §5: returns true if <paramref name="annotation"/>
+    /// is the bare <c>@Attribute</c> sugar marker.
+    /// </summary>
+    /// <param name="annotation">The annotation node to test.</param>
+    /// <returns>True for the marker.</returns>
+    private static bool IsAttributeSugarMarker(AnnotationSyntax annotation)
+    {
+        if (annotation == null || annotation.Target != null)
+        {
+            return false;
+        }
+
+        if (annotation.NameSegments.Length != 1)
+        {
+            return false;
+        }
+
+        return annotation.NameSegments[0].Text == "Attribute";
+    }
+
+    /// <summary>
     /// Resolves a list of <see cref="AnnotationSyntax"/> nodes against the
     /// declaring scope and returns the bound attribute list per ADR-0047.
     /// </summary>
@@ -6539,6 +6628,15 @@ public sealed class Binder
         var builder = ImmutableArray.CreateBuilder<BoundAttribute>(annotations.Length);
         foreach (var annotation in annotations)
         {
+            // Phase 4 of #141 / ADR-0047 §5: the `@Attribute` marker on a
+            // class declaration is sugar — it does NOT participate in the
+            // emitted CustomAttribute table. The struct binder consumes it
+            // separately via HasAttributeSugarMarker.
+            if (defaultTarget == AttributeTargetKind.Type && IsAttributeSugarMarker(annotation))
+            {
+                continue;
+            }
+
             var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription);
             if (bound != null)
             {

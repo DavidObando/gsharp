@@ -201,6 +201,16 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the original generic definition when this is a constructed instance; otherwise <c>this</c>.</summary>
     public StructSymbol Definition { get; private set; }
 
+    /// <summary>
+    /// Gets a value indicating whether this class is sugar-marked as a
+    /// <see cref="System.Attribute"/>-derived type via the
+    /// <c>@Attribute</c> declaration sugar from ADR-0047 §5. When true, the
+    /// emitter overrides the CLR base type from <c>System.Object</c> to
+    /// <see cref="System.Attribute"/> and chains the class's constructors
+    /// to <c>System.Attribute..ctor()</c>.
+    /// </summary>
+    public bool IsAttributeClass { get; private set; }
+
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
     /// <param name="interfaces">The interfaces this class implements directly.</param>
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
@@ -232,6 +242,17 @@ public sealed class StructSymbol : TypeSymbol
     public void SetTypeParameters(ImmutableArray<TypeParameterSymbol> typeParameters)
     {
         TypeParameters = typeParameters;
+    }
+
+    /// <summary>
+    /// Marks this class as an <c>@Attribute</c>-sugar attribute type per
+    /// ADR-0047 §5. Intended to be called once by the binder after
+    /// <see cref="Symbol.SetAttributes"/> when the bound annotation list
+    /// contains the <c>@Attribute</c> marker.
+    /// </summary>
+    public void SetIsAttributeClass()
+    {
+        IsAttributeClass = true;
     }
 
     /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>

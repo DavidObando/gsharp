@@ -135,6 +135,68 @@ type Point struct {
         Assert.Equal(2, helper.Attributes.Length);
     }
 
+    [Fact]
+    public void AttributeSugar_Marks_Class_As_AttributeClass_And_Does_Not_Emit_Marker_Attribute()
+    {
+        var source = """
+            package P
+            import System
+
+            @Attribute
+            type Trace class {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        var trace = globalScope.Structs.Single(s => s.Name == "Trace");
+
+        Assert.True(trace.IsAttributeClass);
+
+        // The @Attribute marker is sugar — it must NOT appear in Symbol.Attributes
+        // (since System.Attribute is not itself an applicable attribute).
+        Assert.Empty(trace.Attributes);
+        Assert.Empty(GetBinderDiagnostics(globalScope));
+    }
+
+    [Fact]
+    public void AttributeSugar_Tolerates_Explicit_System_Attribute_Base()
+    {
+        var source = """
+            package P
+            import System
+
+            @Attribute
+            type Trace class : Attribute {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        var trace = globalScope.Structs.Single(s => s.Name == "Trace");
+
+        Assert.True(trace.IsAttributeClass);
+        Assert.Empty(GetBinderDiagnostics(globalScope));
+    }
+
+    [Fact]
+    public void AttributeSugar_Reports_Conflict_With_Other_Explicit_Base()
+    {
+        var source = """
+            package P
+            import System
+
+            open type Other class {
+            }
+
+            @Attribute
+            type Trace class : Other {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0203");
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

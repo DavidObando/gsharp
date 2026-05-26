@@ -1217,6 +1217,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0202", "Attribute arguments must be compile-time constants (primitive, string, typeof, enum, or 1-D array thereof).");
     }
 
+    /// <summary>
+    /// Reports a class declaration tagged with the <c>@Attribute</c>
+    /// declaration sugar (ADR-0047 §5) that already declares an explicit
+    /// base class other than <c>System.Attribute</c>. The implicit
+    /// <c>System.Attribute</c> base imposed by the sugar conflicts with
+    /// the user-supplied base.
+    /// </summary>
+    /// <param name="location">The location of the offending base-class identifier.</param>
+    /// <param name="baseName">The user-supplied base-class name.</param>
+    public void ReportAttributeClassExplicitBase(TextLocation location, string baseName)
+    {
+        Report(location, "GS0203", $"Class is tagged @Attribute and cannot also declare an explicit base class '{baseName}'. The @Attribute sugar implies ': System.Attribute'.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
