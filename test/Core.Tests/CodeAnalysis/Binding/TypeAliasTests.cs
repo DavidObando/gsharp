@@ -52,6 +52,56 @@ public class TypeAliasTests
             d => d.Message.Contains("already declared", System.StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData("byte")]
+    [InlineData("sbyte")]
+    [InlineData("short")]
+    [InlineData("ushort")]
+    [InlineData("uint")]
+    [InlineData("long")]
+    [InlineData("ulong")]
+    [InlineData("nint")]
+    [InlineData("nuint")]
+    [InlineData("float32")]
+    [InlineData("float64")]
+    [InlineData("decimal")]
+    [InlineData("char")]
+    [InlineData("object")]
+    public void TypeAlias_Cannot_Shadow_New_Primitives(string primitiveName)
+    {
+        // ADR-0044 / ADR-0045: each primitive added in issue #142 must be
+        // rejected as a redeclaration target, matching the existing
+        // bool/int/string behaviour.
+        var diagnostics = Bind($"type {primitiveName} = string\n");
+        Assert.Contains(
+            diagnostics,
+            d => d.Message.Contains("already declared", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("byte")]
+    [InlineData("sbyte")]
+    [InlineData("short")]
+    [InlineData("ushort")]
+    [InlineData("uint")]
+    [InlineData("long")]
+    [InlineData("ulong")]
+    [InlineData("nint")]
+    [InlineData("nuint")]
+    [InlineData("float32")]
+    [InlineData("float64")]
+    [InlineData("decimal")]
+    [InlineData("char")]
+    [InlineData("object")]
+    public void TypeClause_Resolves_New_Primitive_As_Alias_Target(string primitiveName)
+    {
+        // The new keywords must be reachable from any type-clause position.
+        // A type alias to one of them is the smallest exercise that does not
+        // depend on the Phase 3 conversion table.
+        var diagnostics = Bind($"type X = {primitiveName}\n");
+        Assert.Empty(diagnostics);
+    }
+
     [Fact]
     public void TypeAlias_Duplicate_Reports_Error()
     {
