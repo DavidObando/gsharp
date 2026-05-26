@@ -1025,13 +1025,13 @@ public sealed class Evaluator
         switch (u.Op.Kind)
         {
             case BoundUnaryOperatorKind.Identity:
-                return (int)operand;
+                return operand;
             case BoundUnaryOperatorKind.Negation:
-                return -(int)operand;
+                return Negate(operand);
             case BoundUnaryOperatorKind.LogicalNegation:
                 return !(bool)operand;
             case BoundUnaryOperatorKind.OnesComplement:
-                return ~(int)operand;
+                return OnesComplement(operand);
             case BoundUnaryOperatorKind.NullAssertion:
                 if (operand == null)
                 {
@@ -1045,6 +1045,34 @@ public sealed class Evaluator
                 throw new EvaluatorException($"Unexpected unary operator {u.Op}", u);
         }
     }
+
+    private static object Negate(object v) => v switch
+    {
+        int i => -i,
+        long l => -l,
+        sbyte sb => (sbyte)-sb,
+        short sh => (short)-sh,
+        nint ni => -ni,
+        float f => -f,
+        double d => -d,
+        decimal dec => -dec,
+        _ => throw new InvalidOperationException($"Unsupported negation operand type {v?.GetType()}"),
+    };
+
+    private static object OnesComplement(object v) => v switch
+    {
+        int i => ~i,
+        long l => ~l,
+        sbyte sb => (sbyte)~sb,
+        byte b => (byte)~b,
+        short sh => (short)~sh,
+        ushort us => (ushort)~us,
+        uint ui => ~ui,
+        ulong ul => ~ul,
+        nint ni => ~ni,
+        nuint nu => ~nu,
+        _ => throw new InvalidOperationException($"Unsupported ~ operand type {v?.GetType()}"),
+    };
 
     private object EvaluateBinaryExpression(BoundBinaryExpression b)
     {
@@ -1061,79 +1089,294 @@ public sealed class Evaluator
 
         switch (b.Op.Kind)
         {
-            case BoundBinaryOperatorKind.Product:
-                return (int)left * (int)right;
-            case BoundBinaryOperatorKind.Quotient:
-                return (int)left / (int)right;
-            case BoundBinaryOperatorKind.Remainder:
-                return (int)left % (int)right;
-            case BoundBinaryOperatorKind.ShiftLeft:
-                return (int)left << (int)right;
-            case BoundBinaryOperatorKind.ShiftRight:
-                return (int)left >> (int)right;
-            case BoundBinaryOperatorKind.BitwiseAnd:
-                if (b.Type == TypeSymbol.Int)
-                {
-                    return (int)left & (int)right;
-                }
-                else
-                {
-                    return (bool)left & (bool)right;
-                }
-
-            case BoundBinaryOperatorKind.BitClear:
-                return (int)left & (~(int)right);
-            case BoundBinaryOperatorKind.Sum:
-                if (b.Type == TypeSymbol.Int)
-                {
-                    return (int)left + (int)right;
-                }
-                else
-                {
-                    return (string)left + (string)right;
-                }
-
-            case BoundBinaryOperatorKind.Difference:
-                return (int)left - (int)right;
-            case BoundBinaryOperatorKind.BitwiseOr:
-                if (b.Type == TypeSymbol.Int)
-                {
-                    return (int)left | (int)right;
-                }
-                else
-                {
-                    return (bool)left | (bool)right;
-                }
-
-            case BoundBinaryOperatorKind.BitwiseXor:
-                if (b.Type == TypeSymbol.Int)
-                {
-                    return (int)left ^ (int)right;
-                }
-                else
-                {
-                    return (bool)left ^ (bool)right;
-                }
-
             case BoundBinaryOperatorKind.Equals:
                 return Equals(left, right);
             case BoundBinaryOperatorKind.NotEquals:
                 return !Equals(left, right);
-            case BoundBinaryOperatorKind.Less:
-                return (int)left < (int)right;
-            case BoundBinaryOperatorKind.LessOrEquals:
-                return (int)left <= (int)right;
-            case BoundBinaryOperatorKind.Greater:
-                return (int)left > (int)right;
-            case BoundBinaryOperatorKind.GreaterOrEquals:
-                return (int)left >= (int)right;
             case BoundBinaryOperatorKind.LogicalAnd:
                 return (bool)left && (bool)right;
             case BoundBinaryOperatorKind.LogicalOr:
                 return (bool)left || (bool)right;
+        }
+
+        // String concat / bool short-circuiting flow through the existing
+        // typed paths; everything else routes through the primitive-aware
+        // helpers below so each numeric type uses its own arithmetic.
+        if (b.Op.Kind == BoundBinaryOperatorKind.Sum && b.Type == TypeSymbol.String)
+        {
+            return (string)left + (string)right;
+        }
+
+        if (left is bool lb && right is bool rb)
+        {
+            return b.Op.Kind switch
+            {
+                BoundBinaryOperatorKind.BitwiseAnd => lb & rb,
+                BoundBinaryOperatorKind.BitwiseOr => lb | rb,
+                BoundBinaryOperatorKind.BitwiseXor => lb ^ rb,
+                _ => throw new EvaluatorException($"Unexpected binary operator {b.Op}", b),
+            };
+        }
+
+        return EvaluateNumericBinary(b, left, right);
+    }
+
+    private static object EvaluateNumericBinary(BoundBinaryExpression b, object left, object right)
+    {
+        var resultType = b.Type;
+        switch (b.Op.Kind)
+        {
+            case BoundBinaryOperatorKind.Sum:
+                return NarrowToResultType(NumericAdd(left, right), resultType);
+            case BoundBinaryOperatorKind.Difference:
+                return NarrowToResultType(NumericSub(left, right), resultType);
+            case BoundBinaryOperatorKind.Product:
+                return NarrowToResultType(NumericMul(left, right), resultType);
+            case BoundBinaryOperatorKind.Quotient:
+                return NarrowToResultType(NumericDiv(left, right), resultType);
+            case BoundBinaryOperatorKind.Remainder:
+                return NarrowToResultType(NumericMod(left, right), resultType);
+            case BoundBinaryOperatorKind.BitwiseAnd:
+                return NarrowToResultType(NumericAnd(left, right), resultType);
+            case BoundBinaryOperatorKind.BitwiseOr:
+                return NarrowToResultType(NumericOr(left, right), resultType);
+            case BoundBinaryOperatorKind.BitwiseXor:
+                return NarrowToResultType(NumericXor(left, right), resultType);
+            case BoundBinaryOperatorKind.BitClear:
+                return NarrowToResultType(NumericAnd(left, OnesComplement(right)), resultType);
+            case BoundBinaryOperatorKind.ShiftLeft:
+                return NarrowToResultType(NumericShl(left, (int)right), resultType);
+            case BoundBinaryOperatorKind.ShiftRight:
+                return NarrowToResultType(NumericShr(left, (int)right), resultType);
+            case BoundBinaryOperatorKind.Less:
+                return NumericCompare(left, right) < 0;
+            case BoundBinaryOperatorKind.LessOrEquals:
+                return NumericCompare(left, right) <= 0;
+            case BoundBinaryOperatorKind.Greater:
+                return NumericCompare(left, right) > 0;
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                return NumericCompare(left, right) >= 0;
             default:
                 throw new EvaluatorException($"Unexpected binary operator {b.Op}", b);
         }
+    }
+
+    private static object NumericAdd(object l, object r) => l switch
+    {
+        int li when r is int ri => li + ri,
+        long li when r is long ri => li + ri,
+        uint li when r is uint ri => li + ri,
+        ulong li when r is ulong ri => li + ri,
+        sbyte li when r is sbyte ri => li + ri,
+        byte li when r is byte ri => li + ri,
+        short li when r is short ri => li + ri,
+        ushort li when r is ushort ri => li + ri,
+        nint li when r is nint ri => li + ri,
+        nuint li when r is nuint ri => li + ri,
+        float li when r is float ri => li + ri,
+        double li when r is double ri => li + ri,
+        decimal li when r is decimal ri => li + ri,
+        char li when r is char ri => li + ri,
+        _ => throw new InvalidOperationException($"Unsupported + on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericSub(object l, object r) => l switch
+    {
+        int li when r is int ri => li - ri,
+        long li when r is long ri => li - ri,
+        uint li when r is uint ri => li - ri,
+        ulong li when r is ulong ri => li - ri,
+        sbyte li when r is sbyte ri => li - ri,
+        byte li when r is byte ri => li - ri,
+        short li when r is short ri => li - ri,
+        ushort li when r is ushort ri => li - ri,
+        nint li when r is nint ri => li - ri,
+        nuint li when r is nuint ri => li - ri,
+        float li when r is float ri => li - ri,
+        double li when r is double ri => li - ri,
+        decimal li when r is decimal ri => li - ri,
+        _ => throw new InvalidOperationException($"Unsupported - on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericMul(object l, object r) => l switch
+    {
+        int li when r is int ri => li * ri,
+        long li when r is long ri => li * ri,
+        uint li when r is uint ri => li * ri,
+        ulong li when r is ulong ri => li * ri,
+        sbyte li when r is sbyte ri => li * ri,
+        byte li when r is byte ri => li * ri,
+        short li when r is short ri => li * ri,
+        ushort li when r is ushort ri => li * ri,
+        nint li when r is nint ri => li * ri,
+        nuint li when r is nuint ri => li * ri,
+        float li when r is float ri => li * ri,
+        double li when r is double ri => li * ri,
+        decimal li when r is decimal ri => li * ri,
+        _ => throw new InvalidOperationException($"Unsupported * on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericDiv(object l, object r) => l switch
+    {
+        int li when r is int ri => li / ri,
+        long li when r is long ri => li / ri,
+        uint li when r is uint ri => li / ri,
+        ulong li when r is ulong ri => li / ri,
+        sbyte li when r is sbyte ri => li / ri,
+        byte li when r is byte ri => li / ri,
+        short li when r is short ri => li / ri,
+        ushort li when r is ushort ri => li / ri,
+        nint li when r is nint ri => li / ri,
+        nuint li when r is nuint ri => li / ri,
+        float li when r is float ri => li / ri,
+        double li when r is double ri => li / ri,
+        decimal li when r is decimal ri => li / ri,
+        _ => throw new InvalidOperationException($"Unsupported / on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericMod(object l, object r) => l switch
+    {
+        int li when r is int ri => li % ri,
+        long li when r is long ri => li % ri,
+        uint li when r is uint ri => li % ri,
+        ulong li when r is ulong ri => li % ri,
+        sbyte li when r is sbyte ri => li % ri,
+        byte li when r is byte ri => li % ri,
+        short li when r is short ri => li % ri,
+        ushort li when r is ushort ri => li % ri,
+        nint li when r is nint ri => li % ri,
+        nuint li when r is nuint ri => li % ri,
+        float li when r is float ri => li % ri,
+        double li when r is double ri => li % ri,
+        decimal li when r is decimal ri => li % ri,
+        _ => throw new InvalidOperationException($"Unsupported % on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericAnd(object l, object r) => l switch
+    {
+        int li when r is int ri => li & ri,
+        long li when r is long ri => li & ri,
+        uint li when r is uint ri => li & ri,
+        ulong li when r is ulong ri => li & ri,
+        sbyte li when r is sbyte ri => li & ri,
+        byte li when r is byte ri => li & ri,
+        short li when r is short ri => li & ri,
+        ushort li when r is ushort ri => li & ri,
+        nint li when r is nint ri => li & ri,
+        nuint li when r is nuint ri => li & ri,
+        _ => throw new InvalidOperationException($"Unsupported & on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericOr(object l, object r) => l switch
+    {
+        int li when r is int ri => li | ri,
+        long li when r is long ri => li | ri,
+        uint li when r is uint ri => li | ri,
+        ulong li when r is ulong ri => li | ri,
+        sbyte li when r is sbyte ri => li | ri,
+        byte li when r is byte ri => li | ri,
+        short li when r is short ri => li | ri,
+        ushort li when r is ushort ri => li | ri,
+        nint li when r is nint ri => li | ri,
+        nuint li when r is nuint ri => li | ri,
+        _ => throw new InvalidOperationException($"Unsupported | on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericXor(object l, object r) => l switch
+    {
+        int li when r is int ri => li ^ ri,
+        long li when r is long ri => li ^ ri,
+        uint li when r is uint ri => li ^ ri,
+        ulong li when r is ulong ri => li ^ ri,
+        sbyte li when r is sbyte ri => li ^ ri,
+        byte li when r is byte ri => li ^ ri,
+        short li when r is short ri => li ^ ri,
+        ushort li when r is ushort ri => li ^ ri,
+        nint li when r is nint ri => li ^ ri,
+        nuint li when r is nuint ri => li ^ ri,
+        _ => throw new InvalidOperationException($"Unsupported ^ on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NumericShl(object l, int r) => l switch
+    {
+        int li => li << r,
+        long li => li << r,
+        uint li => li << r,
+        ulong li => li << r,
+        sbyte li => li << r,
+        byte li => li << r,
+        short li => li << r,
+        ushort li => li << r,
+        nint li => li << r,
+        nuint li => li << r,
+        _ => throw new InvalidOperationException($"Unsupported << on {l?.GetType()}"),
+    };
+
+    private static object NumericShr(object l, int r) => l switch
+    {
+        int li => li >> r,
+        long li => li >> r,
+        uint li => li >> r,
+        ulong li => li >> r,
+        sbyte li => li >> r,
+        byte li => li >> r,
+        short li => li >> r,
+        ushort li => li >> r,
+        nint li => li >> r,
+        nuint li => li >> r,
+        _ => throw new InvalidOperationException($"Unsupported >> on {l?.GetType()}"),
+    };
+
+    private static int NumericCompare(object l, object r) => l switch
+    {
+        int li when r is int ri => li.CompareTo(ri),
+        long li when r is long ri => li.CompareTo(ri),
+        uint li when r is uint ri => li.CompareTo(ri),
+        ulong li when r is ulong ri => li.CompareTo(ri),
+        sbyte li when r is sbyte ri => li.CompareTo(ri),
+        byte li when r is byte ri => li.CompareTo(ri),
+        short li when r is short ri => li.CompareTo(ri),
+        ushort li when r is ushort ri => li.CompareTo(ri),
+        nint li when r is nint ri => li.CompareTo(ri),
+        nuint li when r is nuint ri => li.CompareTo(ri),
+        float li when r is float ri => li.CompareTo(ri),
+        double li when r is double ri => li.CompareTo(ri),
+        decimal li when r is decimal ri => li.CompareTo(ri),
+        char li when r is char ri => li.CompareTo(ri),
+        _ => throw new InvalidOperationException($"Unsupported comparison on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    private static object NarrowToResultType(object value, TypeSymbol resultType)
+    {
+        // C# arithmetic on sub-int types promotes to int. To preserve the
+        // operator's declared result type (e.g. byte + byte → byte) we
+        // narrow back here. Other widths already match their CLR type.
+        if (resultType == TypeSymbol.SByte)
+        {
+            return unchecked((sbyte)Convert.ToInt32(value));
+        }
+
+        if (resultType == TypeSymbol.Byte)
+        {
+            return unchecked((byte)Convert.ToInt32(value));
+        }
+
+        if (resultType == TypeSymbol.Short)
+        {
+            return unchecked((short)Convert.ToInt32(value));
+        }
+
+        if (resultType == TypeSymbol.UShort)
+        {
+            return unchecked((ushort)Convert.ToInt32(value));
+        }
+
+        if (resultType == TypeSymbol.Char)
+        {
+            return unchecked((char)Convert.ToInt32(value));
+        }
+
+        return value;
     }
 
     private object EvaluateCallExpression(BoundCallExpression node)
@@ -1820,10 +2063,6 @@ public sealed class Evaluator
         {
             return Convert.ToBoolean(value, System.Globalization.CultureInfo.InvariantCulture);
         }
-        else if (node.Type == TypeSymbol.Int)
-        {
-            return Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
-        }
         else if (node.Type == TypeSymbol.String)
         {
             return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
@@ -1834,19 +2073,122 @@ public sealed class Evaluator
             // representation is identical to the underlying type.
             return value;
         }
-        else if (node.Type is InterfaceSymbol
+        else if (node.Type == TypeSymbol.Object
+            || node.Type is InterfaceSymbol
             || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass))
         {
-            // Reference upcast (class → implemented interface, or derived
-            // class → base class). The interpreter stores instances as
-            // boxed objects of the concrete class, so the upcast is a no-op
-            // at runtime — only the bind-time static type changes.
+            // Reference upcast (class → implemented interface, derived class
+            // → base class, or any → object). The interpreter stores
+            // instances as boxed objects, so the upcast is a no-op at
+            // runtime — only the bind-time static type changes.
             return value;
+        }
+        else if (node.Type?.ClrType != null && IsSupportedNumericClrType(node.Type.ClrType))
+        {
+            // ADR-0044: numeric conversions across the primitive lattice.
+            // Cast unchecked to match the IL `conv.*` opcodes' truncation
+            // semantics (Convert.ChangeType throws on overflow instead).
+            return UncheckedNumericConvert(value, node.Type.ClrType);
         }
         else
         {
             throw new EvaluatorException($"Unexpected type {node.Type}", node);
         }
+    }
+
+    private static bool IsSupportedNumericClrType(Type t)
+    {
+        return t == typeof(sbyte) || t == typeof(byte)
+            || t == typeof(short) || t == typeof(ushort)
+            || t == typeof(int) || t == typeof(uint)
+            || t == typeof(long) || t == typeof(ulong)
+            || t == typeof(nint) || t == typeof(nuint)
+            || t == typeof(float) || t == typeof(double)
+            || t == typeof(decimal) || t == typeof(char);
+    }
+
+    private static object UncheckedNumericConvert(object value, Type to)
+    {
+        // Mirror IL `conv.*` truncation: e.g. (int)9999999999L == 1410065407.
+        // Convert.ChangeType is checked and throws OverflowException instead.
+        if (value is decimal dv)
+        {
+            // decimal → primitive is checked at the BCL level even for
+            // unchecked casts; route through (long) first when applicable.
+            if (to == typeof(float))
+            {
+                return (float)dv;
+            }
+
+            if (to == typeof(double))
+            {
+                return (double)dv;
+            }
+
+            return UncheckedNumericConvert((long)dv, to);
+        }
+
+        if (to == typeof(decimal))
+        {
+            return Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        // For everything else, go through long / double, then unchecked cast.
+        if (value is float fv)
+        {
+            return UncheckedNumericConvert((double)fv, to);
+        }
+
+        if (value is double dbv)
+        {
+            if (to == typeof(float))
+            {
+                return (float)dbv;
+            }
+
+            if (to == typeof(double))
+            {
+                return dbv;
+            }
+
+            return UncheckedNumericConvert((long)dbv, to);
+        }
+
+        // All integral / char sources fit into a long for round-tripping.
+        long asLong = value switch
+        {
+            sbyte x => x,
+            byte x => x,
+            short x => x,
+            ushort x => x,
+            int x => x,
+            uint x => x,
+            long x => x,
+            ulong x => unchecked((long)x),
+            nint x => x,
+            nuint x => unchecked((long)(ulong)x),
+            char x => x,
+            bool x => x ? 1 : 0,
+            _ => Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        return to switch
+        {
+            Type t when t == typeof(sbyte) => unchecked((sbyte)asLong),
+            Type t when t == typeof(byte) => unchecked((byte)asLong),
+            Type t when t == typeof(short) => unchecked((short)asLong),
+            Type t when t == typeof(ushort) => unchecked((ushort)asLong),
+            Type t when t == typeof(int) => unchecked((int)asLong),
+            Type t when t == typeof(uint) => unchecked((uint)asLong),
+            Type t when t == typeof(long) => asLong,
+            Type t when t == typeof(ulong) => unchecked((ulong)asLong),
+            Type t when t == typeof(nint) => (nint)asLong,
+            Type t when t == typeof(nuint) => unchecked((nuint)(ulong)asLong),
+            Type t when t == typeof(float) => (float)asLong,
+            Type t when t == typeof(double) => (double)asLong,
+            Type t when t == typeof(char) => unchecked((char)asLong),
+            _ => Convert.ChangeType(value, to, System.Globalization.CultureInfo.InvariantCulture),
+        };
     }
 
     private object EvaluateImportedCallExpression(BoundImportedCallExpression node)
