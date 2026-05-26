@@ -162,13 +162,11 @@ public static class SpillSequenceSpiller
                 return false;
             }
 
-            // If the return expression is already a direct await, no spilling needed.
-            if (ret.Expression is BoundAwaitExpression)
-            {
-                builder.Add(ret);
-                return false;
-            }
-
+            // Always spill: even a direct `return await X` must be lifted into
+            // `var __tmp = await X; return __tmp` so MoveNextBodyRewriter can
+            // recognize the await as a top-level variable-declaration shape.
+            // Leaving a BoundAwaitExpression as the direct return expression
+            // would leak an un-rewritten await to the emitter (issue #132).
             var spilled = SpillExpression(ret.Expression);
             FlushSideEffects(spilled, builder);
             builder.Add(new BoundReturnStatement(spilled.Value));
