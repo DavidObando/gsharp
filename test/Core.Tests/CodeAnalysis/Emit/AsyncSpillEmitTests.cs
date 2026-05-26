@@ -123,6 +123,49 @@ Console.WriteLine(t.Result)
         Assert.Contains("42", output);
     }
 
+    [Fact]
+    public void Return_Direct_Await_FromResult_Returns_Value()
+    {
+        // Regression for issue #132: `return await X` used to leak an
+        // un-rewritten BoundAwaitExpression to the emitter.
+        const string Source = @"package ReturnAwaitTest
+import System
+import System.Threading.Tasks
+
+async func getVal() int {
+    return await Task.FromResult(42)
+}
+
+var t = getVal()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        var output = CompileAndRun(Source, "ReturnAwaitTest");
+        Assert.Contains("42", output);
+    }
+
+    [Fact]
+    public void Return_Direct_Await_TaskDelay_RealSuspension_Returns_Value()
+    {
+        // Regression for issue #132: verify the real-suspension path through
+        // `return await` works, not just the fast (FromResult) path.
+        const string Source = @"package ReturnAwaitDelayTest
+import System
+import System.Threading.Tasks
+
+async func getVal() int {
+    await Task.Delay(1)
+    return await Task.FromResult(42)
+}
+
+var t = getVal()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        var output = CompileAndRun(Source, "ReturnAwaitDelayTest");
+        Assert.Contains("42", output);
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();
