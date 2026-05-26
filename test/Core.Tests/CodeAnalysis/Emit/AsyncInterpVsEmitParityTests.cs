@@ -237,7 +237,7 @@ Console.WriteLine(t.Result)
         AssertParity(Source, Expected, nameof(Parity_AsyncAccumulator_MultipleAwaits));
     }
 
-    [Fact(Skip = "Interpreter does not support yield — iterator execution is emit-only")]
+    [Fact]
     public void Parity_SyncIterator_Sequence()
     {
         const string Source = @"package ParitySyncIter
@@ -258,7 +258,7 @@ for x in nums() {
         AssertParity(Source, Expected, nameof(Parity_SyncIterator_Sequence));
     }
 
-    [Fact(Skip = "Interpreter does not support yield — async iterator execution is emit-only")]
+    [Fact(Skip = "Emitter does not yet support `await for` (IAsyncEnumerable consumer side). Interpreter side is covered by AsyncIterator_InterpOnly_ProducesValues.")]
     public void Parity_AsyncIterator_YieldWithAwait()
     {
         const string Source = @"package ParityAsyncIter
@@ -280,6 +280,35 @@ await for x in gen() {
 ";
         const string Expected = "10\n20\n30\n";
         AssertParity(Source, Expected, nameof(Parity_AsyncIterator_YieldWithAwait));
+    }
+
+    [Fact]
+    public void AsyncIterator_InterpOnly_ProducesValues()
+    {
+        // Interpreter-side coverage for #138: yield + await inside an async
+        // iterator function (`IAsyncEnumerable[int]`). The matching parity
+        // test is skipped because the emitter does not yet implement the
+        // `await for` consumer side; this test exercises the interpreter
+        // alone so the producer side does not regress.
+        const string Source = @"package AsyncIterInterp
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+func gen() IAsyncEnumerable[int] {
+    yield 10
+    await Task.Delay(1)
+    yield 20
+    await Task.Delay(1)
+    yield 30
+}
+
+await for x in gen() {
+    Console.WriteLine(x)
+}
+";
+        const string Expected = "10\n20\n30\n";
+        Assert.Equal(Expected, RunInterpreter(Source));
     }
 
     [Fact]

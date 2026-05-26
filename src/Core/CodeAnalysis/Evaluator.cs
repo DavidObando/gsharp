@@ -25,6 +25,8 @@ public sealed class Evaluator
     private readonly Stack<Dictionary<VariableSymbol, object>> locals = new Stack<Dictionary<VariableSymbol, object>>();
     private readonly object goLock = new object();
     private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
+    private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
+    private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new Dictionary<Symbols.FunctionSymbol, bool>();
     private Random random;
 
     private object lastValue;
@@ -131,6 +133,10 @@ public sealed class Evaluator
                     break;
                 case BoundNodeKind.AwaitForRangeStatement:
                     EvaluateAwaitForRangeStatement((BoundAwaitForRangeStatement)s);
+                    index++;
+                    break;
+                case BoundNodeKind.YieldStatement:
+                    EvaluateYieldStatement((BoundYieldStatement)s);
                     index++;
                     break;
                 default:
@@ -1149,6 +1155,14 @@ public sealed class Evaluator
             this.locals.Push(locals);
 
             var statement = program.Functions[node.Function];
+
+            if (IsIteratorFunction(node.Function, statement))
+            {
+                var iteratorResult = EvaluateIteratorFunction(node.Function, statement);
+                this.locals.Pop();
+                return iteratorResult;
+            }
+
             var result = EvaluateStatement(statement);
 
             this.locals.Pop();
@@ -1160,6 +1174,92 @@ public sealed class Evaluator
 
             return result;
         }
+    }
+
+    private bool IsIteratorFunction(Symbols.FunctionSymbol function, BoundBlockStatement body)
+    {
+        if (iteratorFunctionCache.TryGetValue(function, out var cached))
+        {
+            return cached;
+        }
+
+        var walker = new YieldFinder();
+        walker.RewriteStatement(body);
+        cached = walker.Found;
+        iteratorFunctionCache[function] = cached;
+        return cached;
+    }
+
+    private object EvaluateIteratorFunction(Symbols.FunctionSymbol function, BoundBlockStatement body)
+    {
+        // ADR-0040: iterator functions (sync `sequence[T]` / `IEnumerable[T]` and
+        // async `IAsyncEnumerable[T]`) are realized eagerly under the interpreter.
+        // We push a yield sink, run the body to completion synchronously (with
+        // `await` modeled by `GetAwaiter().GetResult()` per the existing
+        // single-threaded interp model), then wrap the collected items in a
+        // typed list or an IAsyncEnumerable adapter for `await for` consumers.
+        var elementType = GetIteratorElementClrType(function.Type);
+        var listType = typeof(List<>).MakeGenericType(elementType);
+        var list = (System.Collections.IList)Activator.CreateInstance(listType);
+
+        iteratorSinks.Push(list);
+        try
+        {
+            EvaluateStatement(body);
+        }
+        finally
+        {
+            iteratorSinks.Pop();
+        }
+
+        if (IsAsyncEnumerableReturn(function.Type))
+        {
+            var wrapperType = typeof(InterpAsyncEnumerableBuffer<>).MakeGenericType(elementType);
+            return Activator.CreateInstance(wrapperType, list);
+        }
+
+        return list;
+    }
+
+    private void EvaluateYieldStatement(BoundYieldStatement node)
+    {
+        if (iteratorSinks.Count == 0)
+        {
+            throw new EvaluatorException("'yield' encountered outside of an iterator function.", node);
+        }
+
+        var value = EvaluateExpression(node.Expression);
+        iteratorSinks.Peek().Add(value);
+        lastValue = value;
+    }
+
+    private static Type GetIteratorElementClrType(TypeSymbol type)
+    {
+        if (type is Symbols.SequenceTypeSymbol seq)
+        {
+            return seq.ElementType.ClrType ?? typeof(object);
+        }
+
+        var clr = type?.ClrType;
+        if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            return clr.GetGenericArguments()[0];
+        }
+
+        return typeof(object);
+    }
+
+    private static bool IsAsyncEnumerableReturn(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var fullName = clr.GetGenericTypeDefinition().FullName;
+        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
+            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
     private static object WrapAsyncResult(TypeSymbol declaredReturn, object value)
@@ -1858,6 +1958,49 @@ public sealed class Evaluator
         {
             var locals = this.locals.Peek();
             locals[variable] = value;
+        }
+    }
+
+    private sealed class YieldFinder : Binding.BoundTreeRewriter
+    {
+        public bool Found { get; private set; }
+
+        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        {
+            Found = true;
+            return node;
+        }
+    }
+
+    private sealed class InterpAsyncEnumerableBuffer<T> :
+        System.Collections.Generic.IAsyncEnumerable<T>,
+        System.Collections.Generic.IAsyncEnumerator<T>
+    {
+        private readonly System.Collections.Generic.IList<T> items;
+        private int index = -1;
+
+        public InterpAsyncEnumerableBuffer(System.Collections.Generic.IList<T> items)
+        {
+            this.items = items;
+        }
+
+        public T Current => items[index];
+
+        public System.Collections.Generic.IAsyncEnumerator<T> GetAsyncEnumerator(
+            System.Threading.CancellationToken cancellationToken = default)
+        {
+            return new InterpAsyncEnumerableBuffer<T>(items);
+        }
+
+        public System.Threading.Tasks.ValueTask<bool> MoveNextAsync()
+        {
+            index++;
+            return new System.Threading.Tasks.ValueTask<bool>(index < items.Count);
+        }
+
+        public System.Threading.Tasks.ValueTask DisposeAsync()
+        {
+            return default;
         }
     }
 
