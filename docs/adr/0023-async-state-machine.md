@@ -119,7 +119,7 @@ Filed issues tracking incomplete edges of the async/iterator surface:
 Smaller deferrals carried in commit messages:
 
 - `[EnumeratorCancellation]` parameter forwarding (§10 advanced).
-- `asyncSequence[T]` alias for `IAsyncEnumerable[T]` (future ADR).
+- `asyncSequence[T]` alias for `IAsyncEnumerable[T]` — addressed by ADR-0041 (proposes context-sensitive `sequence[T]` instead of a new keyword).
 - Iterator `try`/`finally` support (`Dispose()` resuming into finally blocks).
 - Extension-method `GetAwaiter()` resolution.
 - `AsyncMethodBuilderInfo` for `ValueTask`/`ValueTask<T>` return types.
