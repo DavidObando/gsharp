@@ -2720,6 +2720,70 @@ public sealed class Binder
         return new BoundMakeChannelExpression(chan, capacity);
     }
 
+    private BoundExpression BindTypeOfExpression(TypeOfExpressionSyntax syntax)
+    {
+        // Issue #143: `typeof(T)` returns System.Type for the referenced type.
+        var typeSymbol = BindTypeClause(syntax.TypeClause);
+        if (typeSymbol == null || typeSymbol == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression();
+        }
+
+        var systemType = ImportedTypeSymbol.Get(typeof(Type));
+        return new BoundTypeOfExpression(typeSymbol, systemType);
+    }
+
+    private BoundExpression BindNameOfExpression(NameOfExpressionSyntax syntax)
+    {
+        // Issue #143: `nameof(expr)` is folded to a compile-time string of
+        // the unqualified short name. The argument must be a name reference
+        // (identifier, member access, or type). `nameof(this)` / `nameof(it)`
+        // are rejected to match C# semantics.
+        if (TryExtractNameOfName(syntax.Argument, out var name))
+        {
+            return new BoundLiteralExpression(name);
+        }
+
+        Diagnostics.ReportNameOfRequiresNameReference(syntax.Argument.Location);
+        return new BoundErrorExpression();
+    }
+
+    private static bool TryExtractNameOfName(ExpressionSyntax argument, out string name)
+    {
+        switch (argument)
+        {
+            case NameExpressionSyntax n:
+                {
+                    var ident = n.IdentifierToken.Text;
+                    if (string.IsNullOrEmpty(ident) || ident == "this" || ident == "it")
+                    {
+                        name = null;
+                        return false;
+                    }
+
+                    name = ident;
+                    return true;
+                }
+
+            case AccessorExpressionSyntax acc when !acc.IsNullConditional:
+                return TryExtractNameOfName(acc.RightPart, out name);
+
+            case CallExpressionSyntax call when call.TypeArgumentList != null && call.Arguments.Count == 0:
+                // Generic name like `List[int]` parsed as an empty-arg generic
+                // call site is treated as a type reference whose short name is
+                // the identifier (matches C# `nameof(List<int>)` -> "List").
+                name = call.Identifier.Text;
+                return !string.IsNullOrEmpty(name);
+
+            case ParenthesizedExpressionSyntax p:
+                return TryExtractNameOfName(p.Expression, out name);
+
+            default:
+                name = null;
+                return false;
+        }
+    }
+
     private BoundStatement BindSelectStatement(SelectStatementSyntax syntax)
     {
         // Phase 5.6 / ADR-0022: select statement orchestrating channel ops.
@@ -3488,6 +3552,10 @@ public sealed class Binder
                 return BindSwitchExpression((SwitchExpressionSyntax)syntax);
             case SyntaxKind.MakeChannelExpression:
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
+            case SyntaxKind.TypeOfExpression:
+                return BindTypeOfExpression((TypeOfExpressionSyntax)syntax);
+            case SyntaxKind.NameOfExpression:
+                return BindNameOfExpression((NameOfExpressionSyntax)syntax);
             case SyntaxKind.FieldAssignmentExpression:
                 return BindFieldAssignmentExpression((FieldAssignmentExpressionSyntax)syntax);
             case SyntaxKind.EventSubscriptionExpression:

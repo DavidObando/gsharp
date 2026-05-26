@@ -473,6 +473,7 @@ public sealed class Evaluator
                 BoundNodeKind.IndexExpression => EvaluateIndexExpression((BoundIndexExpression)node),
                 BoundNodeKind.IndexAssignmentExpression => EvaluateIndexAssignmentExpression((BoundIndexAssignmentExpression)node),
                 BoundNodeKind.LenExpression => EvaluateLenExpression((BoundLenExpression)node),
+                BoundNodeKind.TypeOfExpression => EvaluateTypeOfExpression((BoundTypeOfExpression)node),
                 BoundNodeKind.CapExpression => EvaluateCapExpression((BoundCapExpression)node),
                 BoundNodeKind.AppendExpression => EvaluateAppendExpression((BoundAppendExpression)node),
                 BoundNodeKind.StructLiteralExpression => EvaluateStructLiteralExpression((BoundStructLiteralExpression)node),
@@ -632,6 +633,20 @@ public sealed class Evaluator
             System.Collections.IDictionary d => d.Count,
             _ => throw new EvaluatorException($"len: unsupported operand of CLR type '{v?.GetType()}'.", node),
         };
+    }
+
+    private static object EvaluateTypeOfExpression(BoundTypeOfExpression node)
+    {
+        // Issue #143: nullable value types resolve to `System.Nullable<T>`;
+        // nullable reference types and every other shape resolve to the
+        // operand's ClrType directly.
+        if (node.OperandType is NullableTypeSymbol nullable
+            && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr)
+        {
+            return typeof(System.Nullable<>).MakeGenericType(valueClr);
+        }
+
+        return node.OperandType.ClrType ?? typeof(object);
     }
 
     private object EvaluateCapExpression(BoundCapExpression node)

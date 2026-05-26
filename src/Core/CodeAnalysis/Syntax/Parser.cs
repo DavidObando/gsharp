@@ -2709,6 +2709,20 @@ public class Parser
             // Phase 5.4 / ADR-0022: contextual `make(chan T)` / `make(chan T, capacity)`.
             current = ParseMakeChannelExpression();
         }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "typeof"
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // Issue #143: contextual `typeof(T)` — argument is a type clause.
+            current = ParseTypeOfExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "nameof"
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // Issue #143: contextual `nameof(expr)` — argument is a name reference.
+            current = ParseNameOfExpression();
+        }
         else if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             current = ParseCallExpression();
@@ -2938,6 +2952,29 @@ public class Parser
 
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new MakeChannelExpressionSyntax(syntaxTree, makeIdentifier, openParen, channelType, comma, capacity, closeParen);
+    }
+
+    private ExpressionSyntax ParseTypeOfExpression()
+    {
+        // Issue #143: `typeof(T)` — the argument is a type clause, not an expression.
+        var typeOfIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var typeClause = ParseTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new TypeOfExpressionSyntax(syntaxTree, typeOfIdentifier, openParen, typeClause, closeParen);
+    }
+
+    private ExpressionSyntax ParseNameOfExpression()
+    {
+        // Issue #143: `nameof(expr)` — the argument is a name reference. We
+        // parse it as a general expression; the binder validates that it
+        // reduces to a name (identifier / member access / generic name) and
+        // emits a diagnostic otherwise.
+        var nameOfIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var argument = ParseExpression();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new NameOfExpressionSyntax(syntaxTree, nameOfIdentifier, openParen, argument, closeParen);
     }
 
     // Phase 4.9: Kotlin-style trailing-lambda call syntax. When a call's

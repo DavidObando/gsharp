@@ -80,6 +80,9 @@ public enum BoundNodeKind
     DefaultExpression,
     ClrStaticCallExpression,
 
+    // Issue #143: typeof operator
+    TypeOfExpression,
+
     // Patterns
     ConstantPattern,
     DiscardPattern,

@@ -112,6 +112,7 @@ MinusMinusToken
 MinusToken
 MultiAssignmentStatement
 NameExpression
+NameOfExpression
 NamedArgumentExpression
 NamedDeconstructionField
 NamedDeconstructionStatement
@@ -183,6 +184,7 @@ TypeAliasDeclaration
 TypeArgumentList
 TypeClause
 TypeKeyword
+TypeOfExpression
 TypeParameter
 TypeParameterList
 TypePattern
@@ -269,6 +271,7 @@ ThrowStatement
 TryStatement
 TupleElementAccessExpression
 TupleLiteralExpression
+TypeOfExpression
 TypePattern
 UnaryExpression
 UserInstanceCallExpression

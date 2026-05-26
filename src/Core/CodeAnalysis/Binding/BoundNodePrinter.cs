@@ -154,6 +154,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.LenExpression:
                 WriteIntrinsicCall("len", ((BoundLenExpression)node).Operand, writer);
                 break;
+            case BoundNodeKind.TypeOfExpression:
+                WriteTypeOfExpression((BoundTypeOfExpression)node, writer);
+                break;
             case BoundNodeKind.CapExpression:
                 WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
                 break;
@@ -973,6 +976,14 @@ public static class BoundNodePrinter
         writer.WriteIdentifier(name);
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         operand.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteTypeOfExpression(BoundTypeOfExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("typeof");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        writer.WriteIdentifier(node.OperandType.Name);
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 
