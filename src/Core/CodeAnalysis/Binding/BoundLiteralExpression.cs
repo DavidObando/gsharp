@@ -50,19 +50,27 @@ public sealed class BoundLiteralExpression : BoundExpression
             return TypeSymbol.Null;
         }
 
-        if (value is bool)
+        // ADR-0044: lexer-produced literal tokens carry their typed CLR value.
+        // BoundLiteralExpression reads that CLR type back as the static
+        // GSharp type so e.g. `1L` binds as `long` and `1.5` as `float64`.
+        switch (value)
         {
-            return TypeSymbol.Bool;
-        }
-
-        if (value is int)
-        {
-            return TypeSymbol.Int;
-        }
-
-        if (value is string)
-        {
-            return TypeSymbol.String;
+            case bool _: return TypeSymbol.Bool;
+            case sbyte _: return TypeSymbol.SByte;
+            case byte _: return TypeSymbol.Byte;
+            case short _: return TypeSymbol.Short;
+            case ushort _: return TypeSymbol.UShort;
+            case int _: return TypeSymbol.Int;
+            case uint _: return TypeSymbol.UInt;
+            case long _: return TypeSymbol.Long;
+            case ulong _: return TypeSymbol.ULong;
+            case nint _: return TypeSymbol.NInt;
+            case nuint _: return TypeSymbol.NUInt;
+            case float _: return TypeSymbol.Float32;
+            case double _: return TypeSymbol.Float64;
+            case decimal _: return TypeSymbol.Decimal;
+            case char _: return TypeSymbol.Char;
+            case string _: return TypeSymbol.String;
         }
 
         throw new Exception($"Unexpected literal '{value}' of type {value.GetType()}");
