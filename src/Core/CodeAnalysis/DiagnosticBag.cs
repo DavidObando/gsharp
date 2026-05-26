@@ -1084,6 +1084,58 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0190", "The argument to 'nameof' must be a name reference: an identifier, member access, or type.");
     }
 
+    /// <summary>
+    /// Reports a character literal that is missing a closing quote or
+    /// whose body crosses a line terminator (ADR-0046).
+    /// </summary>
+    /// <param name="location">The literal's location.</param>
+    public void ReportUnterminatedCharLiteral(TextLocation location)
+    {
+        Report(location, "GS0191", "Unterminated character literal.");
+    }
+
+    /// <summary>
+    /// Reports an empty character literal <c>''</c> (ADR-0046).
+    /// </summary>
+    /// <param name="location">The literal's location.</param>
+    public void ReportEmptyCharLiteral(TextLocation location)
+    {
+        Report(location, "GS0192", "Empty character literal; a character literal must contain exactly one code unit or escape.");
+    }
+
+    /// <summary>
+    /// Reports a character literal containing more than one code unit
+    /// (e.g. <c>'ab'</c>) per ADR-0046.
+    /// </summary>
+    /// <param name="location">The literal's location.</param>
+    public void ReportMultiCharCharLiteral(TextLocation location)
+    {
+        Report(location, "GS0193", "Character literal contains more than one code unit; use a string literal instead.");
+    }
+
+    /// <summary>
+    /// Reports an unknown escape sequence inside a character literal
+    /// (ADR-0046).
+    /// </summary>
+    /// <param name="location">The literal's location.</param>
+    /// <param name="escapeChar">The unrecognised escape character.</param>
+    public void ReportInvalidCharEscape(TextLocation location, char escapeChar)
+    {
+        Report(location, "GS0194", $"Unrecognised escape sequence '\\{escapeChar}' in character literal.");
+    }
+
+    /// <summary>
+    /// Reports a malformed Unicode escape (<c>\\u</c>, <c>\\U</c>, or
+    /// <c>\\x</c>) inside a character literal: too few hex digits, or in
+    /// the case of <c>\\U</c>, a value outside the basic multilingual
+    /// plane (ADR-0046).
+    /// </summary>
+    /// <param name="location">The literal's location.</param>
+    public void ReportInvalidUnicodeEscape(TextLocation location)
+    {
+        Report(location, "GS0195", "Malformed Unicode escape in character literal.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

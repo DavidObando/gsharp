@@ -197,6 +197,13 @@ public sealed class Lexer
                     kind = SyntaxKind.EllipsisToken;
                     position += 3;
                 }
+                else if (IsDecimalDigit(Peek(1)))
+                {
+                    // ADR-0044 leading-dot float literal (`.5`). ReadNumber
+                    // detects the leading dot via `Current == '.'` and parses
+                    // the digit body as the fractional part.
+                    ReadNumber();
+                }
                 else
                 {
                     kind = SyntaxKind.DotToken;
@@ -377,6 +384,9 @@ public sealed class Lexer
                 break;
             case '`':
                 ReadRawString();
+                break;
+            case '\'':
+                ReadCharLiteral();
                 break;
             case '0':
             case '1':
@@ -701,33 +711,233 @@ public sealed class Lexer
         kind = SyntaxKind.WhitespaceToken;
     }
 
+    private void ReadCharLiteral()
+    {
+        // ADR-0046 single-quote character literal. Exactly one Unicode code
+        // unit (or one escape sequence) between the delimiters; line
+        // terminators inside the literal are diagnostics; unknown escapes
+        // are diagnostics.
+        var literalStart = position;
+        position++; // consume opening '
+
+        char produced = '\0';
+        bool sawChar = false;
+        bool errored = false;
+
+        if (Current == '\0' || Current == '\r' || Current == '\n')
+        {
+            var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart));
+            Diagnostics.ReportUnterminatedCharLiteral(loc);
+            value = '\0';
+            kind = SyntaxKind.CharacterToken;
+            return;
+        }
+
+        if (Current == '\'')
+        {
+            // Empty literal: ''.
+            position++;
+            var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart));
+            Diagnostics.ReportEmptyCharLiteral(loc);
+            value = '\0';
+            kind = SyntaxKind.CharacterToken;
+            return;
+        }
+
+        if (Current == '\\')
+        {
+            // Escape sequence.
+            position++; // consume '\'
+            switch (Current)
+            {
+                case '\'': produced = '\''; position++; break;
+                case '"': produced = '"'; position++; break;
+                case '\\': produced = '\\'; position++; break;
+                case '0': produced = '\0'; position++; break;
+                case 'a': produced = '\a'; position++; break;
+                case 'b': produced = '\b'; position++; break;
+                case 'f': produced = '\f'; position++; break;
+                case 'n': produced = '\n'; position++; break;
+                case 'r': produced = '\r'; position++; break;
+                case 't': produced = '\t'; position++; break;
+                case 'v': produced = '\v'; position++; break;
+                case 'x':
+                    position++;
+                    produced = ReadHexEscape(literalStart, minDigits: 1, maxDigits: 4, ref errored);
+                    break;
+                case 'u':
+                    position++;
+                    produced = ReadHexEscape(literalStart, minDigits: 4, maxDigits: 4, ref errored);
+                    break;
+                case 'U':
+                    position++;
+                    produced = ReadLongUnicodeEscape(literalStart, ref errored);
+                    break;
+                default:
+                    {
+                        var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart + 1));
+                        Diagnostics.ReportInvalidCharEscape(loc, Current);
+                        produced = Current;
+                        if (Current != '\0' && Current != '\r' && Current != '\n' && Current != '\'')
+                        {
+                            position++;
+                        }
+
+                        errored = true;
+                        break;
+                    }
+            }
+
+            sawChar = true;
+        }
+        else
+        {
+            produced = Current;
+            position++;
+            sawChar = true;
+        }
+
+        // After the body, require the closing quote and exactly one character.
+        if (Current == '\'')
+        {
+            position++;
+        }
+        else
+        {
+            // Multi-codepoint literal (e.g. 'ab') or missing closing quote.
+            // Consume up to the matching quote / line terminator so the parser
+            // recovers cleanly.
+            var bodyStart = position;
+            while (Current != '\'' && Current != '\0' && Current != '\r' && Current != '\n')
+            {
+                position++;
+            }
+
+            var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart));
+            if (Current == '\'')
+            {
+                if (!errored)
+                {
+                    Diagnostics.ReportMultiCharCharLiteral(loc);
+                }
+
+                position++;
+            }
+            else
+            {
+                Diagnostics.ReportUnterminatedCharLiteral(loc);
+            }
+
+            _ = bodyStart;
+        }
+
+        _ = sawChar;
+        kind = SyntaxKind.CharacterToken;
+        value = produced;
+    }
+
+    private char ReadHexEscape(int literalStart, int minDigits, int maxDigits, ref bool errored)
+    {
+        var digitsStart = position;
+        var consumed = 0;
+        int accumulator = 0;
+        while (consumed < maxDigits && IsHexDigit(Current))
+        {
+            accumulator = (accumulator << 4) | HexValue(Current);
+            position++;
+            consumed++;
+        }
+
+        if (consumed < minDigits)
+        {
+            var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart));
+            Diagnostics.ReportInvalidUnicodeEscape(loc);
+            errored = true;
+        }
+
+        _ = digitsStart;
+        return (char)accumulator;
+    }
+
+    private char ReadLongUnicodeEscape(int literalStart, ref bool errored)
+    {
+        // \U requires exactly 8 hex digits. Values > 0xFFFF cannot fit in a
+        // single UTF-16 code unit and so cannot be represented in a `char`
+        // literal (per ADR-0046).
+        var consumed = 0;
+        long accumulator = 0;
+        while (consumed < 8 && IsHexDigit(Current))
+        {
+            accumulator = (accumulator << 4) | (long)HexValue(Current);
+            position++;
+            consumed++;
+        }
+
+        if (consumed < 8 || accumulator > 0xFFFF)
+        {
+            var loc = new TextLocation(this.text, new TextSpan(literalStart, position - literalStart));
+            Diagnostics.ReportInvalidUnicodeEscape(loc);
+            errored = true;
+        }
+
+        return (char)(accumulator & 0xFFFF);
+    }
+
+    private static bool IsHexDigit(char c)
+        => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    private static int HexValue(char c)
+    {
+        if (c >= '0' && c <= '9')
+        {
+            return c - '0';
+        }
+
+        if (c >= 'a' && c <= 'f')
+        {
+            return c - 'a' + 10;
+        }
+
+        return c - 'A' + 10;
+    }
+
     private void ReadNumber()
     {
         // Recognized forms (Go-inspired, with C#-style _ separators):
-        //   decimal   42, 1_000_000
-        //   hex       0x1F, 0X_FF, 0xDEAD_BEEF
-        //   octal     0o17, 0O_77  (Go also allows leading-zero octal; we require the prefix
-        //                            to avoid ambiguity with future float literals.)
-        //   binary    0b1010, 0B_1010_1010
+        //   decimal int  42, 1_000_000
+        //   hex          0x1F, 0X_FF, 0xDEAD_BEEF
+        //   octal        0o17, 0O_77  (Go also allows leading-zero octal; we
+        //                              require the prefix to keep the grammar
+        //                              unambiguous next to float literals.)
+        //   binary       0b1010, 0B_1010_1010
+        //   float        1.5, 1.5e-3, 1e10, .5 (the leading-dot form is
+        //                routed in by the '.' dispatcher; see Lex())
+        // Optional trailing type-pin suffix (ADR-0044, case-insensitive):
+        //   L / l       long
+        //   U / u       uint           (UL/LU/Ul/lU/etc.  -> ulong)
+        //   F / f       float32        (decimal-radix or float body only)
+        //   D / d       float64        (decimal-radix or float body only)
+        //   M / m       decimal        (decimal-radix or float body only)
         // A trailing underscore, a leading underscore in the digit body, or a
         // prefix with no digits is rejected as an invalid number.
         var numberStart = position;
         var radix = 10;
         var digitsStart = position;
+        var startedWithDot = Current == '.';
 
-        if (Current == '0' && (Lookahead == 'x' || Lookahead == 'X'))
+        if (!startedWithDot && Current == '0' && (Lookahead == 'x' || Lookahead == 'X'))
         {
             radix = 16;
             position += 2;
             digitsStart = position;
         }
-        else if (Current == '0' && (Lookahead == 'o' || Lookahead == 'O'))
+        else if (!startedWithDot && Current == '0' && (Lookahead == 'o' || Lookahead == 'O'))
         {
             radix = 8;
             position += 2;
             digitsStart = position;
         }
-        else if (Current == '0' && (Lookahead == 'b' || Lookahead == 'B'))
+        else if (!startedWithDot && Current == '0' && (Lookahead == 'b' || Lookahead == 'B'))
         {
             radix = 2;
             position += 2;
@@ -738,59 +948,331 @@ public sealed class Lexer
         // here because the dispatcher only routes digits → ReadNumber, but kept
         // explicit for clarity). Underscore IS allowed immediately after a
         // base prefix per Go's spec (e.g., `0x_FF`).
-        bool sawDigit = false;
+        bool sawIntDigit = false;
         char last = '\0';
-        while (true)
+        if (startedWithDot)
         {
-            var c = Current;
-            if (c == '_')
+            // Consume the leading '.' and parse the fractional digit body.
+            // We deliberately leave digitsStart at numberStart so the dot
+            // is included in the substring passed to ParseFloatLiteral.
+            last = Current;
+            position++;
+            while (true)
             {
+                var c = Current;
+                if (c == '_')
+                {
+                    last = c;
+                    position++;
+                    continue;
+                }
+
+                if (!IsDecimalDigit(c))
+                {
+                    break;
+                }
+
+                sawIntDigit = true;
                 last = c;
                 position++;
-                continue;
             }
-
-            if (!IsDigitForRadix(c, radix))
+        }
+        else
+        {
+            while (true)
             {
-                break;
-            }
+                var c = Current;
+                if (c == '_')
+                {
+                    last = c;
+                    position++;
+                    continue;
+                }
 
-            sawDigit = true;
-            last = c;
-            position++;
+                if (!IsDigitForRadix(c, radix))
+                {
+                    break;
+                }
+
+                sawIntDigit = true;
+                last = c;
+                position++;
+            }
         }
 
+        // After the integer body, decide whether this is a float. Only base-10
+        // literals can become floats.
+        bool isFloat = startedWithDot;
+        if (radix == 10)
+        {
+            // Fractional part: a '.' followed by at least one digit. A bare
+            // trailing dot (`1.`) is intentionally not consumed here so that
+            // member access like `(1).ToString()` stays unambiguous — float
+            // literals must have a digit on at least one side of the dot.
+            if (!startedWithDot && Current == '.' && IsDecimalDigit(Lookahead))
+            {
+                isFloat = true;
+                last = Current;
+                position++; // consume '.'
+                while (true)
+                {
+                    var c = Current;
+                    if (c == '_')
+                    {
+                        last = c;
+                        position++;
+                        continue;
+                    }
+
+                    if (!IsDecimalDigit(c))
+                    {
+                        break;
+                    }
+
+                    last = c;
+                    position++;
+                }
+            }
+
+            // Exponent: e/E [+/-] digits
+            if ((Current == 'e' || Current == 'E')
+                && (IsDecimalDigit(Lookahead)
+                    || ((Lookahead == '+' || Lookahead == '-') && IsDecimalDigit(Peek(2)))))
+            {
+                isFloat = true;
+                last = Current;
+                position++; // consume 'e'
+                if (Current == '+' || Current == '-')
+                {
+                    last = Current;
+                    position++;
+                }
+
+                while (true)
+                {
+                    var c = Current;
+                    if (c == '_')
+                    {
+                        last = c;
+                        position++;
+                        continue;
+                    }
+
+                    if (!IsDecimalDigit(c))
+                    {
+                        break;
+                    }
+
+                    last = c;
+                    position++;
+                }
+            }
+        }
+
+        // Optional type-pin suffix. In hex/oct/bin mode `F` and `D` are
+        // valid hex digits, so only L / U / UL combinations are accepted
+        // after non-decimal-radix integer bodies. In decimal-radix or
+        // float bodies, every ADR-0044 suffix is accepted.
+        SyntaxKind suffixKind;
+        var (suffixType, suffixLen) = TryReadNumericSuffix(radix == 10 || isFloat, isFloat);
+        position += suffixLen;
+        suffixKind = SyntaxKind.NumberToken;
+
+        var bodyEnd = position - suffixLen;
         var length = position - numberStart;
         var fullText = this.text.ToString(numberStart, length);
 
-        if (!sawDigit || last == '_')
+        var sawAnyDigit = sawIntDigit || isFloat;
+        if (!sawAnyDigit || last == '_')
         {
             var loc = new TextLocation(this.text, new TextSpan(numberStart, length));
-            Diagnostics.ReportInvalidNumber(loc, fullText, TypeSymbol.Int);
+            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int);
             this.value = 0;
-            kind = SyntaxKind.NumberToken;
+            kind = suffixKind;
             return;
         }
 
-        var digitText = this.text.ToString(digitsStart, position - digitsStart).Replace("_", string.Empty);
+        var digitBody = this.text.ToString(digitsStart, bodyEnd - digitsStart).Replace("_", string.Empty);
 
-        int parsed;
+        if (isFloat || (suffixType != null && IsFloatLikeType(suffixType)))
+        {
+            this.value = ParseFloatLiteral(digitBody, suffixType, fullText, numberStart, length);
+        }
+        else
+        {
+            this.value = ParseIntegerLiteral(digitBody, radix, suffixType, fullText, numberStart, length);
+        }
+
+        kind = suffixKind;
+    }
+
+    private (TypeSymbol Type, int Length) TryReadNumericSuffix(bool allowFloatSuffixes, bool isFloatBody)
+    {
+        // ADR-0044 numeric suffix grammar. Case-insensitive. UL and LU
+        // combinations both denote ulong. F/D/M are not legal on hex,
+        // octal, or binary integer bodies because F is a hex digit.
+        var c0 = Current;
+        var c1 = Lookahead;
+
+        if (c0 == 'L' || c0 == 'l')
+        {
+            if (c1 == 'U' || c1 == 'u')
+            {
+                return (TypeSymbol.ULong, 2);
+            }
+
+            return (TypeSymbol.Long, 1);
+        }
+
+        if (c0 == 'U' || c0 == 'u')
+        {
+            if (c1 == 'L' || c1 == 'l')
+            {
+                return (TypeSymbol.ULong, 2);
+            }
+
+            return (TypeSymbol.UInt, 1);
+        }
+
+        if (allowFloatSuffixes)
+        {
+            if (c0 == 'F' || c0 == 'f')
+            {
+                return (TypeSymbol.Float32, 1);
+            }
+
+            if (c0 == 'D' || c0 == 'd')
+            {
+                return (TypeSymbol.Float64, 1);
+            }
+
+            if (c0 == 'M' || c0 == 'm')
+            {
+                return (TypeSymbol.Decimal, 1);
+            }
+        }
+
+        _ = isFloatBody;
+        return (null, 0);
+    }
+
+    private static bool IsFloatLikeType(TypeSymbol type)
+    {
+        return type == TypeSymbol.Float32
+            || type == TypeSymbol.Float64
+            || type == TypeSymbol.Decimal;
+    }
+
+    private object ParseIntegerLiteral(string digitBody, int radix, TypeSymbol suffixType, string fullText, int spanStart, int spanLength)
+    {
+        // Big enough to hold any 64-bit literal; we narrow into a smaller
+        // CLR type based on the suffix or default to int when none is given.
+        ulong parsed;
         try
         {
             parsed = radix == 10
-                ? int.Parse(digitText, System.Globalization.CultureInfo.InvariantCulture)
-                : System.Convert.ToInt32(digitText, radix);
+                ? ulong.Parse(digitBody, System.Globalization.CultureInfo.InvariantCulture)
+                : System.Convert.ToUInt64(digitBody, radix);
         }
         catch (System.Exception)
         {
-            var loc = new TextLocation(this.text, new TextSpan(numberStart, length));
-            Diagnostics.ReportInvalidNumber(loc, fullText, TypeSymbol.Int);
-            parsed = 0;
+            var loc = new TextLocation(this.text, new TextSpan(spanStart, spanLength));
+            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int);
+            return suffixType == TypeSymbol.Long ? (object)0L
+                : suffixType == TypeSymbol.ULong ? (object)0UL
+                : suffixType == TypeSymbol.UInt ? (object)0U
+                : (object)0;
         }
 
-        this.value = parsed;
-        kind = SyntaxKind.NumberToken;
+        if (suffixType == TypeSymbol.Long)
+        {
+            if (parsed > long.MaxValue)
+            {
+                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Long);
+                return 0L;
+            }
+
+            return (long)parsed;
+        }
+
+        if (suffixType == TypeSymbol.ULong)
+        {
+            return parsed;
+        }
+
+        if (suffixType == TypeSymbol.UInt)
+        {
+            if (parsed > uint.MaxValue)
+            {
+                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.UInt);
+                return 0U;
+            }
+
+            return (uint)parsed;
+        }
+
+        // No suffix → default to int per ADR-0044. Narrow when it fits.
+        if (parsed <= int.MaxValue)
+        {
+            return (int)parsed;
+        }
+
+        // Backwards compatibility: hex/octal/binary literals whose bit
+        // pattern fits in 32 bits are bit-cast to int (so `0xDEAD_BEEF`
+        // yields -559038737 rather than overflowing). Decimal literals
+        // still overflow per the obvious arithmetic reading.
+        if (radix != 10 && parsed <= uint.MaxValue)
+        {
+            return (int)(uint)parsed;
+        }
+
+        ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int);
+        return 0;
     }
+
+    private object ParseFloatLiteral(string digitBody, TypeSymbol suffixType, string fullText, int spanStart, int spanLength)
+    {
+        var targetType = suffixType ?? TypeSymbol.Float64;
+
+        try
+        {
+            if (targetType == TypeSymbol.Float32)
+            {
+                return float.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (targetType == TypeSymbol.Decimal)
+            {
+                return decimal.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            // Float64 default.
+            return double.Parse(digitBody, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (System.Exception)
+        {
+            ReportOverflow(fullText, spanStart, spanLength, targetType);
+            if (targetType == TypeSymbol.Float32)
+            {
+                return 0f;
+            }
+
+            if (targetType == TypeSymbol.Decimal)
+            {
+                return 0m;
+            }
+
+            return 0d;
+        }
+    }
+
+    private void ReportOverflow(string fullText, int spanStart, int spanLength, TypeSymbol type)
+    {
+        var loc = new TextLocation(this.text, new TextSpan(spanStart, spanLength));
+        Diagnostics.ReportInvalidNumber(loc, fullText, type);
+    }
+
+    private static bool IsDecimalDigit(char c) => c >= '0' && c <= '9';
 
     private static bool IsDigitForRadix(char c, int radix)
     {

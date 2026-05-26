@@ -77,6 +77,7 @@ public enum SyntaxKind
     StringToken,
     InterpolatedStringToken,
     NumberToken,
+    CharacterToken,
 
     // Identifier tokens
     IdentifierToken,
