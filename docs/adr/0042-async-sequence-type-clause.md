@@ -67,7 +67,7 @@ All three produce identical IL and identical symbols. The implicit swap remains 
 
 ### Restriction: `async` is only valid before `sequence` in type-clause position
 
-`async` as a type-clause prefix is reserved for the iterator alias. `async map[K]V`, `async chan T`, `async []T`, `async *T`, etc. are explicitly rejected with a diagnostic. Generalizing the modifier to function-type clauses (`async func(P) R` ≡ `func(P) Task[R]`) is the subject of issue #150 and a future ADR; this ADR leaves the door open without committing.
+`async` as a type-clause prefix is reserved for the iterator alias. `async map[K]V`, `async chan T`, `async []T`, `async *T`, etc. are explicitly rejected with a diagnostic. Generalizing the modifier to function-type clauses (`async func(P) R` ≡ `func(P) Task[R]`) is the subject of ADR-0043; this ADR leaves the door open without committing.
 
 ## Consequences
 
@@ -76,7 +76,7 @@ Positive:
 - Closes the asymmetry between sync and async iterator type-clause spellings everywhere a type may appear.
 - Single grammar rule, single binder branch, zero downstream changes — all consumer sites (`await for`, iterator rewriter, async-iterator rewriter, emit) already key off the CLR type produced by `AsyncSequenceTypeSymbol` (shipped with ADR-0041).
 - Reuses the existing `async` keyword; no new reserved word; reads consistently with `async func` declarations and lambdas.
-- Future-proofs the modifier for issue #150 (`async func(P) R`) without committing to it now.
+- Future-proofs the modifier for ADR-0043 (`async func(P) R`).
 
 Negative:
 
@@ -104,7 +104,7 @@ The status quo after ADR-0041. Rejected: the parameter/local/field asymmetry is 
 
 ### D. Generalize `async` to all type-clause prefixes in this ADR (`async map[K]V`, `async chan T`, etc.)
 
-Rejected as overreach. None of the other forms have an existing BCL counterpart, and conflating the modifier across unrelated shapes would erode its meaning. Function-type clauses (`async func(P) R`) are tracked separately in issue #150.
+Rejected as overreach. None of the other forms have an existing BCL counterpart, and conflating the modifier across unrelated shapes would erode its meaning. Function-type clauses (`async func(P) R`) are tracked separately in ADR-0043.
 
 ## Implementation summary
 

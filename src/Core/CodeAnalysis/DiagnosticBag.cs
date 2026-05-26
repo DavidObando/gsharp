@@ -463,13 +463,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
     /// <summary>
     /// Reports that the <c>async</c> modifier was used in a type-clause position
-    /// without being followed by <c>sequence</c> (ADR-0042).
+    /// without being followed by <c>sequence</c> or <c>func</c> (ADR-0042 / ADR-0043).
     /// </summary>
     /// <param name="location">The text location of the <c>async</c> modifier.</param>
     /// <param name="actualKind">The kind of the token actually following <c>async</c>.</param>
-    public void ReportAsyncModifierInTypeClauseRequiresSequence(TextLocation location, SyntaxKind actualKind)
+    public void ReportAsyncModifierInTypeClauseRequiresSequenceOrFunc(TextLocation location, SyntaxKind actualKind)
     {
-        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]'; found '<{actualKind}>'.";
+        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]' or 'func(...)'; found '<{actualKind}>'.";
         Report(location, "GS0135", message);
     }
 
@@ -1058,6 +1058,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportPointerTypeCannotBeFieldType(TextLocation location, string typeName)
     {
         Report(location, "GS9006", $"Pointer type '{typeName}' cannot be used as a field type.");
+    }
+
+    /// <summary>
+    /// Reports that an <c>async func(...)</c> type clause has an explicit
+    /// <c>Task[…]</c> (or other Task-shaped) return type. The <c>async</c>
+    /// modifier already implies a Task wrap, so the explicit wrap is
+    /// disallowed (ADR-0043).
+    /// </summary>
+    /// <param name="location">The text location of the offending return-type clause.</param>
+    /// <param name="returnTypeName">The name of the explicit return type.</param>
+    public void ReportAsyncFunctionTypeClauseHasExplicitTaskReturn(TextLocation location, string returnTypeName)
+    {
+        var message = $"The return type of an 'async func(...)' type clause is implicitly wrapped in 'Task'; do not write '{returnTypeName}' explicitly.";
+        Report(location, "GS0189", message);
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

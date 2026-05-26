@@ -1021,10 +1021,13 @@ public class Parser
             return ParseSequenceTypeClause();
         }
 
-        // ADR-0042: `async sequence[T]` — alias for IAsyncEnumerable[T] in any type-clause position.
+        // ADR-0042 / ADR-0043: `async` as a type-clause prefix is reserved for
+        // `async sequence[T]` (alias for IAsyncEnumerable[T]) and
+        // `async func(P) R` (alias for func(P) Task[R]). All other forms are
+        // rejected with a diagnostic.
         if (Current.Kind == SyntaxKind.AsyncKeyword)
         {
-            return ParseAsyncSequenceTypeClause();
+            return ParseAsyncPrefixedTypeClause();
         }
 
         // ADR-0039: pointer type `*T` in type-annotation position.
@@ -1157,15 +1160,21 @@ public class Parser
         return TypeClauseSyntax.CreateSequence(syntaxTree, sequenceKeyword, openBracket, elementType, closeBracket, question);
     }
 
-    private TypeClauseSyntax ParseAsyncSequenceTypeClause()
+    private TypeClauseSyntax ParseAsyncPrefixedTypeClause()
     {
-        // ADR-0042: `async sequence[T]` — the `async` modifier in a type clause
-        // is only valid before `sequence[T]` today (other modifier forms such as
-        // `async func(P) R` are tracked separately, see issue #150).
+        // ADR-0042: `async sequence[T]` — alias for IAsyncEnumerable[T].
+        // ADR-0043: `async func(P) R` — alias for func(P) Task[R].
+        // No other form is legal as an `async`-prefixed type clause.
         var asyncModifier = MatchToken(SyntaxKind.AsyncKeyword);
+
+        if (Current.Kind == SyntaxKind.FuncKeyword)
+        {
+            return ParseAsyncFunctionTypeClause(asyncModifier);
+        }
+
         if (Current.Kind != SyntaxKind.SequenceKeyword)
         {
-            Diagnostics.ReportAsyncModifierInTypeClauseRequiresSequence(asyncModifier.Location, Current.Kind);
+            Diagnostics.ReportAsyncModifierInTypeClauseRequiresSequenceOrFunc(asyncModifier.Location, Current.Kind);
         }
 
         var sequenceKeyword = MatchToken(SyntaxKind.SequenceKeyword);
@@ -1174,6 +1183,42 @@ public class Parser
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
         return TypeClauseSyntax.CreateAsyncSequence(syntaxTree, asyncModifier, sequenceKeyword, openBracket, elementType, closeBracket, question);
+    }
+
+    private TypeClauseSyntax ParseAsyncFunctionTypeClause(SyntaxToken asyncModifier)
+    {
+        // ADR-0043: `async func(P) R` is a synonym for `func(P) Task[R]`
+        // (with carve-outs for void → Task and IAsyncEnumerable[T] → unchanged).
+        var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseTypeClause());
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var returnTypeClause = ParseOptionalTypeClause();
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return TypeClauseSyntax.CreateAsyncFunction(
+            syntaxTree,
+            asyncModifier,
+            funcKeyword,
+            openParen,
+            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen,
+            returnTypeClause,
+            question);
     }
 
     private TypeClauseSyntax ParseFunctionTypeClause()
