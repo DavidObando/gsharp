@@ -152,7 +152,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0105", message);
     }
 
-    /// <summary>Reports that inline and data modifiers were combined.</summary>
+    /// <summary>Reports that the <c>inline</c> modifier was combined with <c>data</c> or <c>record</c>.</summary>
     /// <param name="location">The text location of the conflicting modifier.</param>
     public void ReportInlineCannotBeCombinedWithData(TextLocation location)
     {

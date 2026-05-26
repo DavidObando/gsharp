@@ -55,10 +55,10 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
 | GS0104 | Error | `data struct` requires at least one field. | `data struct Foo {}` — use `struct` instead. |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
-| GS0106 | Error | Parameter name collision with a parameter already declared. | Duplicate name inside the same parameter list. |
-| GS0107 | Error | `inline` cannot be combined with `open` on the same struct. | `open inline struct Foo { … }` is not legal. |
+| GS0106 | Error | `inline` cannot be combined with `data` or `record`. | `inline data struct Foo { … }` is not legal. |
+| GS0107 | Error | `inline struct` cannot be combined with `open`. | `open inline struct Foo { … }` is not legal. |
 | GS0108 | Error | Inline struct synthesised member conflicts with an explicit declaration. | An `inline struct` auto-generates certain member names that cannot be re-declared. |
-| GS0109 | Error | Inline struct synthesised member conflict (variant form). | Similar to GS0108, triggered on a different synthesised member. |
+| GS0109 | Error | `record` is an alias for `data struct` and cannot be combined with `data`. | `data record Foo { … }` — use either `data struct` or `record`. |
 | GS0110 | Error | Empty enum declaration. | `type Color enum {}` — an enum must have at least one member. |
 | GS0111 | Error | Duplicate enum member. | Two members in the same `enum` share a name. |
 | GS0112 | Error | Undefined enum member. | `Color.Purple` where `Purple` is not a declared member of `Color`. |
@@ -67,8 +67,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0115 | Error | Array literal length mismatch. | `[3]int{1, 2}` — literal has 2 elements but length is 3. |
 | GS0116 | Error | Type is not indexable. | `x[0]` where `x` is `bool` or another non-array/slice type. |
 | GS0117 | Error | Invalid argument type for a built-in function. | `len(42)` — `len` cannot be applied to an `int`. |
-| GS0118 | Error | Empty enum declaration (variant). | Raised for a different empty-enum path than GS0110. |
-| GS0119 | Error | Type is not disposable. | `defer x.Close()` where the type has no `Close` method. |
+| GS0118 | Error | A `try` statement requires at least one `catch` or `finally` clause. | `try { f() }` with no `catch` or `finally`. |
+| GS0119 | Error | Type is not disposable. | `using x = Foo()` where `Foo` provides no public `Dispose()` method. |
 | GS0120 | Error | Invalid `break` or `continue`. | `break` used outside of a loop. |
 | GS0121 | Error | Invalid `return`. | `return` used outside of a function. |
 | GS0122 | Error | Void function cannot return an expression. | `return 42` inside a function declared without a return type. |
@@ -97,7 +97,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0145 | Error | Variadic parameter is not the last parameter. | `func f(a ...int, b string)`. |
 | GS0146 | Error | Variadic parameter only allowed on top-level function declarations. | Variadic parameter on a closure or method. |
 | GS0147 | Error | Too few arguments for variadic function. | Calling a variadic function with fewer than the minimum required arguments. |
-| GS0148 | Error | Wrong argument count (variant). | Similar to GS0144, raised for a different overload-resolution path. |
+| GS0148 | Error | Generic function has wrong number of type arguments. | `f[int, string]()` when `f` takes only one type parameter. |
 | GS0149 | Error | Type is not generic. | `int[string]` — `int` accepts no type arguments. |
 | GS0150 | Error | Type-parameter variance position violation. | A covariant type parameter used in a contravariant position. |
 | GS0151 | Error | Type argument inference failed. | The compiler could not infer a type argument from the call arguments. |
@@ -121,7 +121,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
 | GS0170 | Error | Switch case value is not a constant expression. | `case x:` where `x` is a mutable variable. |
 | GS0171 | Error | Switch case type is incompatible with the switch expression. | `switch (s) { case 42: }` where `s` is `string`. |
-| GS0172 | Error | Switch case type mismatch (variant). | Similar to GS0171, raised for a different path. |
+| GS0172 | Error | Property pattern requires a struct or class value. | A property pattern `{ Field: value }` applied to a non-struct/class type. |
 | GS0173 | Error | Undefined field on type. | Accessing a struct field that was never declared. |
 | GS0174 | Error | Relational pattern operator not defined for type. | `case > 5:` where the switched type doesn't support `>`. |
 | GS0175 | Error | List pattern requires an array or slice. | List pattern `[a, b]` applied to a non-array/slice value. |
