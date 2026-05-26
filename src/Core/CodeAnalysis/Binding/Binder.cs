@@ -24,6 +24,32 @@ public sealed class Binder
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
 
+    /// <summary>
+    /// Targets permitted on a function declaration (member or free):
+    /// <c>method</c> by default; <c>return</c> via use-site qualifier.
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> FunctionDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Method, AttributeTargetKind.Return);
+
+    /// <summary>
+    /// Targets permitted on a parameter: only <c>param</c>.
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> ParameterAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Param);
+
+    /// <summary>
+    /// Targets permitted on a type-shaped declaration
+    /// (<c>struct</c> / <c>interface</c> / <c>enum</c> / type alias).
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> TypeDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Type);
+
+    /// <summary>
+    /// Targets permitted on a field declaration: only <c>field</c>.
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> FieldDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Field);
+
     private FunctionSymbol function;
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
@@ -453,6 +479,16 @@ public sealed class Binder
             return;
         }
 
+        // Issue #141 / ADR-0047: type aliases accept annotations syntactically;
+        // since the alias has no dedicated symbol of its own, the resolved
+        // attribute list is reported for diagnostics and otherwise dropped
+        // until v2 introduces a richer alias-symbol shape.
+        BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Type,
+            TypeDeclarationAllowedTargets,
+            "a type alias declaration");
+
         if (!scope.TryDeclareTypeAlias(name, aliasedType))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
@@ -471,6 +507,11 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var enumSymbol = new EnumSymbol(name, accessibility, package.Name, syntax);
+        enumSymbol.SetAttributes(BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Type,
+            TypeDeclarationAllowedTargets,
+            "an enum declaration"));
 
         var seenMemberNames = new HashSet<string>();
         var members = ImmutableArray.CreateBuilder<EnumMemberSymbol>();
@@ -695,6 +736,12 @@ public sealed class Binder
             structSymbol.SetTypeParameters(typeParameters);
         }
 
+        structSymbol.SetAttributes(BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Type,
+            TypeDeclarationAllowedTargets,
+            syntax.IsClass ? "a class declaration" : "a struct declaration"));
+
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
@@ -849,6 +896,11 @@ public sealed class Binder
         var name = syntax.Identifier.Text;
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
+        interfaceSymbol.SetAttributes(BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Type,
+            TypeDeclarationAllowedTargets,
+            "an interface declaration"));
 
         // Phase 4.3c / ADR-0020: bind type parameters at declaration time so
         // method-signature binding (which happens later) can resolve them.
@@ -1091,6 +1143,28 @@ public sealed class Binder
             var type = BindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
 
             var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+
+            // Issue #141 / ADR-0047: resolve annotation lead-ins for this
+            // declaration. We do this once per function regardless of whether
+            // it is an extension, a method, or a free function — diagnostics
+            // and the resulting bound-attribute list are identical.
+            var functionAttributes = BindAttributes(
+                syntax.Annotations,
+                AttributeTargetKind.Method,
+                FunctionDeclarationAllowedTargets,
+                "a function declaration");
+
+            // Per-parameter annotations: each ParameterSyntax owns its own
+            // annotation list; the default target is `param`.
+            foreach (var parameterSyntax in syntax.Parameters)
+            {
+                BindAttributes(
+                    parameterSyntax.Annotations,
+                    AttributeTargetKind.Param,
+                    ParameterAllowedTargets,
+                    "a parameter declaration");
+            }
+
             FunctionSymbol function;
             if (methodReceiverStruct != null)
             {
@@ -1118,6 +1192,7 @@ public sealed class Binder
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
                 function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+                function.SetAttributes(functionAttributes);
                 methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
                 return;
             }
@@ -1125,6 +1200,7 @@ public sealed class Binder
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+            function.SetAttributes(functionAttributes);
 
             if (syntax.IsExtension)
             {
@@ -6438,6 +6514,232 @@ public sealed class Binder
         return packagesInOrder.Count > 0
             ? packagesInOrder[0]
             : new PackageSymbol("Default", declaration: null);
+    }
+
+    /// <summary>
+    /// Resolves a list of <see cref="AnnotationSyntax"/> nodes against the
+    /// declaring scope and returns the bound attribute list per ADR-0047.
+    /// </summary>
+    /// <param name="annotations">Annotations from the declaration's syntax node.</param>
+    /// <param name="defaultTarget">Default target inferred from the declaration position.</param>
+    /// <param name="allowedTargets">Target kinds permitted at this declaration position.</param>
+    /// <param name="positionDescription">Human-readable position for diagnostics.</param>
+    /// <returns>The resolved attribute list (skipping unresolved entries).</returns>
+    private ImmutableArray<BoundAttribute> BindAttributes(
+        ImmutableArray<AnnotationSyntax> annotations,
+        AttributeTargetKind defaultTarget,
+        ImmutableHashSet<AttributeTargetKind> allowedTargets,
+        string positionDescription)
+    {
+        if (annotations.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<BoundAttribute>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundAttribute>(annotations.Length);
+        foreach (var annotation in annotations)
+        {
+            var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription);
+            if (bound != null)
+            {
+                builder.Add(bound);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private BoundAttribute BindAttribute(
+        AnnotationSyntax annotation,
+        AttributeTargetKind defaultTarget,
+        ImmutableHashSet<AttributeTargetKind> allowedTargets,
+        string positionDescription)
+    {
+        // 1) Resolve target — parser already filtered to canonical kinds; if
+        // the user wrote an unrecognised one a GS0197 was already reported,
+        // but we still need to map a parsed-but-unknown string back to a
+        // sentinel. The closed set keys off ADR-0047 §2.
+        var targetKind = defaultTarget;
+        if (annotation.Target != null)
+        {
+            if (TryParseTargetKind(annotation.Target.KindIdentifier.Text, out var parsedTarget))
+            {
+                targetKind = parsedTarget;
+            }
+            else
+            {
+                // Already reported by the parser; treat as default and continue.
+            }
+
+            if (!allowedTargets.Contains(targetKind))
+            {
+                Diagnostics.ReportAttributeTargetInvalidForPosition(
+                    annotation.Target.KindIdentifier.Location,
+                    annotation.Target.KindIdentifier.Text,
+                    positionDescription);
+            }
+        }
+
+        // 2) Resolve attribute type (C#-style: `Foo` then `FooAttribute`).
+        var nameText = annotation.GetNameText();
+        var attrType = ResolveAttributeType(nameText, annotation, out var nameIsExact);
+        if (attrType == null)
+        {
+            return null;
+        }
+
+        // 3) Validate it derives from System.Attribute.
+        if (!IsAttributeType(attrType))
+        {
+            var displayName = nameIsExact ? nameText : (nameText + "Attribute");
+            Diagnostics.ReportNotAnAttributeType(GetAnnotationNameLocation(annotation), displayName);
+            return null;
+        }
+
+        // 4) Bind arguments — positional + named — restricted to compile-time
+        // constants. Named arguments come back from ParseArguments as
+        // NamedArgumentExpressionSyntax wrappers.
+        var positional = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
+        var named = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
+        if (annotation.Arguments != null)
+        {
+            foreach (var argSyntax in annotation.Arguments)
+            {
+                if (argSyntax is NamedArgumentExpressionSyntax namedArg)
+                {
+                    var bound = TryBindAttributeConstant(namedArg.Expression);
+                    if (bound == null)
+                    {
+                        Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location);
+                        continue;
+                    }
+
+                    named.Add(new BoundAttributeArgument(namedArg.NameToken.Text, bound.Value, bound.Type));
+                }
+                else
+                {
+                    var bound = TryBindAttributeConstant(argSyntax);
+                    if (bound == null)
+                    {
+                        Diagnostics.ReportAttributeArgumentNotConstant(argSyntax.Location);
+                        continue;
+                    }
+
+                    positional.Add(new BoundAttributeArgument(name: null, bound.Value, bound.Type));
+                }
+            }
+        }
+
+        return new BoundAttribute(annotation, attrType, targetKind, positional.ToImmutable(), named.ToImmutable());
+    }
+
+    private TypeSymbol ResolveAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
+    {
+        var nameLocation = GetAnnotationNameLocation(annotation);
+        nameIsExact = true;
+
+        // The dotted form (e.g. `System.Obsolete`) is not yet routed through
+        // LookupType — fall back to a CLR walk by full name. v1 keeps
+        // resolution focused on the single-identifier form; dotted names
+        // remain a follow-up.
+        var direct = LookupType(name);
+        TypeSymbol suffixed = null;
+        if (!string.IsNullOrEmpty(name) && !name.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            suffixed = LookupType(name + "Attribute");
+        }
+
+        if (direct != null && IsAttributeType(direct) && suffixed != null && IsAttributeType(suffixed))
+        {
+            Diagnostics.ReportAmbiguousAttributeName(nameLocation, name);
+            return direct;
+        }
+
+        if (direct != null)
+        {
+            nameIsExact = true;
+            return direct;
+        }
+
+        if (suffixed != null)
+        {
+            nameIsExact = false;
+            return suffixed;
+        }
+
+        Diagnostics.ReportAttributeTypeNotFound(nameLocation, name);
+        return null;
+    }
+
+    private static bool IsAttributeType(TypeSymbol typeSymbol)
+    {
+        var clr = typeSymbol?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        var attributeFullName = typeof(System.Attribute).FullName;
+        for (var t = clr; t != null; t = t.BaseType)
+        {
+            if (t.FullName == attributeFullName)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static TextLocation GetAnnotationNameLocation(AnnotationSyntax annotation)
+    {
+        if (!annotation.NameSegments.IsDefaultOrEmpty)
+        {
+            var first = annotation.NameSegments[0];
+            var last = annotation.NameSegments[annotation.NameSegments.Length - 1];
+            var span = TextSpan.FromBounds(first.Span.Start, last.Span.End);
+            return new TextLocation(annotation.SyntaxTree.Text, span);
+        }
+
+        return annotation.Location;
+    }
+
+    private static bool TryParseTargetKind(string text, out AttributeTargetKind kind)
+    {
+        switch (text)
+        {
+            case "field": kind = AttributeTargetKind.Field; return true;
+            case "param": kind = AttributeTargetKind.Param; return true;
+            case "return": kind = AttributeTargetKind.Return; return true;
+            case "type": kind = AttributeTargetKind.Type; return true;
+            case "method": kind = AttributeTargetKind.Method; return true;
+            case "property": kind = AttributeTargetKind.Property; return true;
+            case "event": kind = AttributeTargetKind.Event; return true;
+            case "module": kind = AttributeTargetKind.Module; return true;
+            case "assembly": kind = AttributeTargetKind.Assembly; return true;
+            case "genericparam": kind = AttributeTargetKind.GenericParam; return true;
+            default: kind = AttributeTargetKind.Method; return false;
+        }
+    }
+
+    /// <summary>
+    /// Tries to bind an attribute argument expression as a compile-time
+    /// constant. v1 accepts only direct literal-shaped expressions
+    /// (numbers, strings, chars, bool, nil); broader constant folding —
+    /// <c>typeof(T)</c>, enum member access, array literals, signed
+    /// numeric literals — is a follow-up once the corresponding binder
+    /// paths land in Phase 3 / Phase 5.
+    /// </summary>
+    /// <param name="syntax">The argument expression.</param>
+    /// <returns>The bound literal, or <c>null</c> if not a recognised constant.</returns>
+    private BoundLiteralExpression TryBindAttributeConstant(ExpressionSyntax syntax)
+    {
+        if (syntax is LiteralExpressionSyntax literal)
+        {
+            return BindExpression(literal) as BoundLiteralExpression;
+        }
+
+        return null;
     }
 
     private sealed class CapturedVariableCollector : BoundTreeRewriter

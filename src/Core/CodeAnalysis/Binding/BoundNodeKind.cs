@@ -102,6 +102,9 @@ public enum BoundNodeKind
     YieldStatement,
     AwaitYieldPoint,
     AwaitResumePoint,
+
+    // Issue #141 / ADR-0047: attribute application (annotation in source).
+    Attribute,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

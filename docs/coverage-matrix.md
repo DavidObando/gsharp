@@ -206,6 +206,7 @@ AddressOfExpression
 AppendExpression
 ArrayCreationExpression
 AssignmentExpression
+Attribute
 AwaitExpression
 AwaitForRangeStatement
 BinaryExpression
