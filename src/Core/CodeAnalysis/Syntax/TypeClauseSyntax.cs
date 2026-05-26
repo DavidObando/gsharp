@@ -193,10 +193,11 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 #pragma warning restore SA1642
 
-    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a sequence type (ADR-0040).</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a sequence type (ADR-0040) — optionally prefixed by the <c>async</c> modifier per ADR-0042.</summary>
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
         SyntaxToken sequenceKeyword,
         SyntaxToken openBracketToken,
         TypeClauseSyntax elementType,
@@ -205,6 +206,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         bool isSequence)
         : base(syntaxTree)
     {
+        AsyncModifier = asyncModifier;
         SequenceKeyword = sequenceKeyword;
         SequenceOpenBracketToken = openBracketToken;
         SequenceElementType = elementType;
@@ -327,6 +329,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes a sequence type <c>sequence[T]</c> (ADR-0040).</summary>
     public bool IsSequence => SequenceKeyword != null;
 
+    /// <summary>Gets the optional <c>async</c> modifier preceding a sequence type clause (ADR-0042), or <c>null</c>.</summary>
+    public SyntaxToken AsyncModifier { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes an async sequence type <c>async sequence[T]</c> (ADR-0042).</summary>
+    public bool IsAsyncSequence => SequenceKeyword != null && AsyncModifier != null;
+
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="starToken">The <c>*</c> prefix token.</param>
@@ -358,6 +366,27 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken closeBracketToken,
         SyntaxToken questionToken)
     {
-        return new TypeClauseSyntax(syntaxTree, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
+        return new TypeClauseSyntax(syntaxTree, asyncModifier: null, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
+    }
+
+    /// <summary>Creates an async sequence type clause <c>async sequence[T]</c> (ADR-0042).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">The <c>async</c> modifier token.</param>
+    /// <param name="sequenceKeyword">The <c>sequence</c> keyword.</param>
+    /// <param name="openBracketToken">The <c>[</c> token.</param>
+    /// <param name="elementType">The element type clause.</param>
+    /// <param name="closeBracketToken">The <c>]</c> token.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An async sequence type clause.</returns>
+    public static TypeClauseSyntax CreateAsyncSequence(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken sequenceKeyword,
+        SyntaxToken openBracketToken,
+        TypeClauseSyntax elementType,
+        SyntaxToken closeBracketToken,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
     }
 }
