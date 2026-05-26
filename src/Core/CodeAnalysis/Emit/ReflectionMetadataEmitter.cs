@@ -6115,6 +6115,13 @@ internal sealed class ReflectionMetadataEmitter
                 return true;
             }
 
+            // ADR-0045: any reference type widens to `object` at the IL
+            // level as a no-op; the slot already holds the reference.
+            if (b?.ClrType == typeof(object) && a?.ClrType != null && !a.ClrType.IsValueType)
+            {
+                return true;
+            }
+
             if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
             {
                 for (var c = aClass; c != null; c = c.BaseClass)
@@ -6174,7 +6181,16 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundUnaryOperatorKind.Identity:
                     break;
                 case BoundUnaryOperatorKind.Negation:
-                    this.il.OpCode(ILOpCode.Neg);
+                    if (u.Op.OperandType == TypeSymbol.Decimal)
+                    {
+                        var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
+                        this.il.Call(this.outer.GetMethodEntityHandle(neg));
+                    }
+                    else
+                    {
+                        this.il.OpCode(ILOpCode.Neg);
+                    }
+
                     break;
                 case BoundUnaryOperatorKind.LogicalNegation:
                     this.il.LoadConstantI4(0);
@@ -6186,6 +6202,28 @@ internal sealed class ReflectionMetadataEmitter
                 default:
                     throw new NotSupportedException(
                         $"Unary operator '{u.Op.Kind}' is not yet supported by the emitter.");
+            }
+
+            if (u.Op.Kind == BoundUnaryOperatorKind.OnesComplement
+                || u.Op.Kind == BoundUnaryOperatorKind.Negation)
+            {
+                var t = u.Op.Type;
+                if (t == TypeSymbol.SByte)
+                {
+                    this.il.OpCode(ILOpCode.Conv_i1);
+                }
+                else if (t == TypeSymbol.Byte)
+                {
+                    this.il.OpCode(ILOpCode.Conv_u1);
+                }
+                else if (t == TypeSymbol.Short)
+                {
+                    this.il.OpCode(ILOpCode.Conv_i2);
+                }
+                else if (t == TypeSymbol.UShort || t == TypeSymbol.Char)
+                {
+                    this.il.OpCode(ILOpCode.Conv_u2);
+                }
             }
         }
 
@@ -6289,6 +6327,18 @@ internal sealed class ReflectionMetadataEmitter
 
             this.EmitExpression(b.Left);
             this.EmitExpression(b.Right);
+
+            // ADR-0044: decimal arithmetic and comparison route through
+            // System.Decimal's operator methods.
+            if (b.Left.Type == TypeSymbol.Decimal && b.Right.Type == TypeSymbol.Decimal)
+            {
+                if (this.TryEmitDecimalBinary(b.Op.Kind))
+                {
+                    return;
+                }
+            }
+
+            bool isUnsigned = IsUnsignedOrChar(b.Left.Type);
             switch (b.Op.Kind)
             {
                 case BoundBinaryOperatorKind.Sum:
@@ -6301,16 +6351,16 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.OpCode(ILOpCode.Mul);
                     break;
                 case BoundBinaryOperatorKind.Quotient:
-                    this.il.OpCode(ILOpCode.Div);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Div_un : ILOpCode.Div);
                     break;
                 case BoundBinaryOperatorKind.Remainder:
-                    this.il.OpCode(ILOpCode.Rem);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Rem_un : ILOpCode.Rem);
                     break;
                 case BoundBinaryOperatorKind.ShiftLeft:
                     this.il.OpCode(ILOpCode.Shl);
                     break;
                 case BoundBinaryOperatorKind.ShiftRight:
-                    this.il.OpCode(ILOpCode.Shr);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr);
                     break;
                 case BoundBinaryOperatorKind.BitwiseAnd:
                 case BoundBinaryOperatorKind.LogicalAnd:
@@ -6337,18 +6387,18 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
                 case BoundBinaryOperatorKind.Less:
-                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
                     break;
                 case BoundBinaryOperatorKind.LessOrEquals:
-                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                     this.il.LoadConstantI4(0);
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
                 case BoundBinaryOperatorKind.Greater:
-                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                     break;
                 case BoundBinaryOperatorKind.GreaterOrEquals:
-                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
                     this.il.LoadConstantI4(0);
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
@@ -6356,6 +6406,90 @@ internal sealed class ReflectionMetadataEmitter
                     throw new NotSupportedException(
                         $"Binary operator '{b.Op.Kind}' is not yet supported by the emitter.");
             }
+
+            EmitNarrowingTruncationIfNeeded(b.Op.Kind, b.Type);
+        }
+
+        private void EmitNarrowingTruncationIfNeeded(BoundBinaryOperatorKind kind, TypeSymbol resultType)
+        {
+            // IL evaluation-stack quirk: arithmetic, bitwise, and shift
+            // opcodes on sub-i4 operands produce an i4 result that is not
+            // truncated to the operand's natural width. For correctness of
+            // sbyte/byte/short/ushort/char result types, narrow back.
+            switch (kind)
+            {
+                case BoundBinaryOperatorKind.Sum:
+                case BoundBinaryOperatorKind.Difference:
+                case BoundBinaryOperatorKind.Product:
+                case BoundBinaryOperatorKind.Quotient:
+                case BoundBinaryOperatorKind.Remainder:
+                case BoundBinaryOperatorKind.ShiftLeft:
+                case BoundBinaryOperatorKind.ShiftRight:
+                case BoundBinaryOperatorKind.BitwiseAnd:
+                case BoundBinaryOperatorKind.BitwiseOr:
+                case BoundBinaryOperatorKind.BitwiseXor:
+                case BoundBinaryOperatorKind.BitClear:
+                    if (resultType == TypeSymbol.SByte)
+                    {
+                        this.il.OpCode(ILOpCode.Conv_i1);
+                    }
+                    else if (resultType == TypeSymbol.Byte)
+                    {
+                        this.il.OpCode(ILOpCode.Conv_u1);
+                    }
+                    else if (resultType == TypeSymbol.Short)
+                    {
+                        this.il.OpCode(ILOpCode.Conv_i2);
+                    }
+                    else if (resultType == TypeSymbol.UShort || resultType == TypeSymbol.Char)
+                    {
+                        this.il.OpCode(ILOpCode.Conv_u2);
+                    }
+
+                    break;
+            }
+        }
+
+        private static bool IsUnsignedOrChar(TypeSymbol t)
+        {
+            return t == TypeSymbol.Byte
+                || t == TypeSymbol.UShort
+                || t == TypeSymbol.UInt
+                || t == TypeSymbol.ULong
+                || t == TypeSymbol.NUInt
+                || t == TypeSymbol.Char;
+        }
+
+        private bool TryEmitDecimalBinary(BoundBinaryOperatorKind kind)
+        {
+            string opName = kind switch
+            {
+                BoundBinaryOperatorKind.Sum => "op_Addition",
+                BoundBinaryOperatorKind.Difference => "op_Subtraction",
+                BoundBinaryOperatorKind.Product => "op_Multiply",
+                BoundBinaryOperatorKind.Quotient => "op_Division",
+                BoundBinaryOperatorKind.Remainder => "op_Modulus",
+                BoundBinaryOperatorKind.Equals => "op_Equality",
+                BoundBinaryOperatorKind.NotEquals => "op_Inequality",
+                BoundBinaryOperatorKind.Less => "op_LessThan",
+                BoundBinaryOperatorKind.LessOrEquals => "op_LessThanOrEqual",
+                BoundBinaryOperatorKind.Greater => "op_GreaterThan",
+                BoundBinaryOperatorKind.GreaterOrEquals => "op_GreaterThanOrEqual",
+                _ => null,
+            };
+            if (opName == null)
+            {
+                return false;
+            }
+
+            var op = typeof(decimal).GetMethod(opName, new[] { typeof(decimal), typeof(decimal) });
+            if (op == null)
+            {
+                return false;
+            }
+
+            this.il.Call(this.outer.GetMethodEntityHandle(op));
+            return true;
         }
 
         private void EmitLoadVariable(VariableSymbol variable)

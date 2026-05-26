@@ -12,18 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundUnaryOperator
 {
-    private static BoundUnaryOperator[] supportedOperators =
-    {
-        new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, TypeSymbol.Int),
-        new BoundUnaryOperator(SyntaxKind.MinusToken, BoundUnaryOperatorKind.Negation, TypeSymbol.Int),
-        new BoundUnaryOperator(SyntaxKind.BangToken, BoundUnaryOperatorKind.LogicalNegation, TypeSymbol.Bool),
-        new BoundUnaryOperator(SyntaxKind.HatToken, BoundUnaryOperatorKind.OnesComplement, TypeSymbol.Int),
-
-        // Unsupported as of this point:
-        //   - SyntaxKind.StarToken
-        //   - SyntaxKind.AmpersandToken
-        //   - SyntaxKind.LeftArrowToken
-    };
+    private static BoundUnaryOperator[] supportedOperators = BuildSupportedOperators();
 
     private BoundUnaryOperator(SyntaxKind syntaxKind, BoundUnaryOperatorKind kind, TypeSymbol operandType)
         : this(syntaxKind, kind, operandType, operandType)
@@ -85,5 +74,44 @@ public sealed class BoundUnaryOperator
         }
 
         return null;
+    }
+
+    private static BoundUnaryOperator[] BuildSupportedOperators()
+    {
+        var list = new System.Collections.Generic.List<BoundUnaryOperator>
+        {
+            new BoundUnaryOperator(SyntaxKind.BangToken, BoundUnaryOperatorKind.LogicalNegation, TypeSymbol.Bool),
+        };
+
+        // ADR-0044: unary +, -, ~ on every signed integral primitive.
+        TypeSymbol[] signed = { TypeSymbol.SByte, TypeSymbol.Short, TypeSymbol.Int, TypeSymbol.Long, TypeSymbol.NInt };
+        foreach (var t in signed)
+        {
+            list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.MinusToken, BoundUnaryOperatorKind.Negation, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.HatToken, BoundUnaryOperatorKind.OnesComplement, t));
+        }
+
+        // Unsigned integrals: unary + and ~ only (C# does not define unary
+        // minus on unsigned types directly; users can cast first).
+        TypeSymbol[] unsigned = { TypeSymbol.Byte, TypeSymbol.UShort, TypeSymbol.UInt, TypeSymbol.ULong, TypeSymbol.NUInt };
+        foreach (var t in unsigned)
+        {
+            list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.HatToken, BoundUnaryOperatorKind.OnesComplement, t));
+        }
+
+        // char: unary + only (treat as identity); ~ and - require explicit promotion.
+        list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, TypeSymbol.Char));
+
+        // Floating-point + decimal: unary + and -.
+        TypeSymbol[] floats = { TypeSymbol.Float32, TypeSymbol.Float64, TypeSymbol.Decimal };
+        foreach (var t in floats)
+        {
+            list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.MinusToken, BoundUnaryOperatorKind.Negation, t));
+        }
+
+        return list.ToArray();
     }
 }
