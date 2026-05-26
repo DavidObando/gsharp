@@ -367,6 +367,8 @@ public static class SyntaxFacts
                 return ">>";
             case SyntaxKind.ShiftRightEqualsToken:
                 return ">>=";
+            case SyntaxKind.AtToken:
+                return "@";
 
             // keywords
             case SyntaxKind.AsyncKeyword:

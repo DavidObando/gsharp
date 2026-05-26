@@ -388,6 +388,10 @@ public sealed class Lexer
             case '\'':
                 ReadCharLiteral();
                 break;
+            case '@':
+                kind = SyntaxKind.AtToken;
+                position++;
+                break;
             case '0':
             case '1':
             case '2':

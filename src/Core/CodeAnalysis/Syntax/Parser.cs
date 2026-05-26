@@ -150,6 +150,11 @@ public class Parser
 
     private MemberSyntax ParseMember()
     {
+        // ADR-0047 / issue #141: Kotlin-style annotation lead-ins precede any
+        // other modifier on a declaration. We collect them once and then
+        // attach the list to whichever member node ParseMember produces.
+        var annotations = ParseAnnotations();
+
         SyntaxToken accessibilityModifier = null;
         if (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
@@ -166,37 +171,164 @@ public class Parser
             asyncModifier = NextToken();
         }
 
+        MemberSyntax member;
         if (Current.Kind == SyntaxKind.FuncKeyword)
         {
-            return ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
+            member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
         }
-
-        if (Current.Kind == SyntaxKind.TypeKeyword)
+        else if (Current.Kind == SyntaxKind.TypeKeyword)
         {
-            return ParseTypeAliasDeclaration(accessibilityModifier);
+            member = ParseTypeAliasDeclaration(accessibilityModifier);
         }
-
-        if (accessibilityModifier != null &&
+        else if (accessibilityModifier != null &&
             (Current.Kind == SyntaxKind.VarKeyword ||
              Current.Kind == SyntaxKind.LetKeyword ||
              Current.Kind == SyntaxKind.ConstKeyword))
         {
             var declaration = ParseVariableDeclaration(accessibilityModifier);
-            return new GlobalStatementSyntax(syntaxTree, declaration);
+            member = new GlobalStatementSyntax(syntaxTree, declaration);
         }
-
-        if (accessibilityModifier != null)
+        else
         {
-            Diagnostics.ReportAccessibilityModifierNotAllowedHere(accessibilityModifier.Location, accessibilityModifier.Text);
+            if (accessibilityModifier != null)
+            {
+                Diagnostics.ReportAccessibilityModifierNotAllowedHere(accessibilityModifier.Location, accessibilityModifier.Text);
+            }
+
+            if (asyncModifier != null)
+            {
+                // `async` not followed by `func` — surface as an unexpected token.
+                Diagnostics.ReportUnexpectedToken(asyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+            }
+
+            member = ParseGlobalStatement();
         }
 
-        if (asyncModifier != null)
+        return member.WithAnnotations(annotations);
+    }
+
+    /// <summary>
+    /// Parses zero or more Kotlin-style annotations (ADR-0047) at the current
+    /// position. Stops at the first token that is not <c>@</c>. The returned
+    /// list is empty when no annotation lead-in is present.
+    /// </summary>
+    private ImmutableArray<AnnotationSyntax> ParseAnnotations()
+    {
+        if (Current.Kind != SyntaxKind.AtToken)
         {
-            // `async` not followed by `func` — surface as an unexpected token.
-            Diagnostics.ReportUnexpectedToken(asyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+            return ImmutableArray<AnnotationSyntax>.Empty;
         }
 
-        return ParseGlobalStatement();
+        var builder = ImmutableArray.CreateBuilder<AnnotationSyntax>();
+        while (Current.Kind == SyntaxKind.AtToken)
+        {
+            builder.Add(ParseAnnotation());
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Parses a single annotation: <c>@</c> [target-kind <c>:</c>] dotted-name
+    /// [<c>(</c> arguments <c>)</c>]. Pre: <c>Current.Kind == AtToken</c>.
+    /// </summary>
+    private AnnotationSyntax ParseAnnotation()
+    {
+        var atToken = MatchToken(SyntaxKind.AtToken);
+
+        // Optional use-site target: `kind:` where kind is one of the canonical
+        // contextual identifiers in ADR-0047 §2. The colon is what makes the
+        // token mean "target" — without the colon the token is the first
+        // segment of the annotation name. We accept any token kind whose text
+        // matches a canonical kind, so reserved keywords like `type` and
+        // `return` work even though the lexer never demotes them to
+        // identifiers — they are contextual only here.
+        AnnotationTargetSyntax target = null;
+        if (Peek(1).Kind == SyntaxKind.ColonToken &&
+            (Current.Kind == SyntaxKind.IdentifierToken ||
+             IsValidAnnotationTargetKind(Current.Text)))
+        {
+            var kindToken = NextToken();
+            var colonToken = NextToken();
+
+            // Normalize the kind to an IdentifierToken so downstream consumers
+            // can rely on a uniform shape regardless of whether the source
+            // spelled `type:` (keyword) or `field:` (plain identifier).
+            var kindIdentifier = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, kindToken.Position, kindToken.Text, null);
+            target = new AnnotationTargetSyntax(syntaxTree, kindIdentifier, colonToken);
+
+            if (!IsValidAnnotationTargetKind(kindToken.Text))
+            {
+                Diagnostics.ReportAnnotationTargetInvalid(kindToken.Location, kindToken.Text);
+            }
+        }
+
+        // Dotted attribute name. At least one segment must be present.
+        var nameSegments = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var dotTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+
+        if (Current.Kind != SyntaxKind.IdentifierToken)
+        {
+            Diagnostics.ReportAnnotationExpected(atToken.Location);
+
+            // Synthesize a single bad identifier so downstream consumers
+            // still see a structurally valid annotation node.
+            var bad = MatchToken(SyntaxKind.IdentifierToken);
+            nameSegments.Add(bad);
+        }
+        else
+        {
+            nameSegments.Add(NextToken());
+            while (Current.Kind == SyntaxKind.DotToken && Peek(1).Kind == SyntaxKind.IdentifierToken)
+            {
+                dotTokens.Add(NextToken());
+                nameSegments.Add(NextToken());
+            }
+        }
+
+        // Optional argument list. The opening `(` must appear with no
+        // intervening tokens (we use it to disambiguate "annotation with no
+        // args" from "annotation followed by something that opens a `(`").
+        SyntaxToken openParen = null;
+        SeparatedSyntaxList<ExpressionSyntax> arguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SyntaxToken closeParen = null;
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            arguments = ParseArguments();
+            closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
+        return new AnnotationSyntax(
+            syntaxTree,
+            atToken,
+            target,
+            nameSegments.ToImmutable(),
+            dotTokens.ToImmutable(),
+            openParen,
+            arguments,
+            closeParen);
+    }
+
+    private static bool IsValidAnnotationTargetKind(string text)
+    {
+        // The closed kind set from ADR-0047 §2.
+        switch (text)
+        {
+            case "field":
+            case "param":
+            case "return":
+            case "type":
+            case "method":
+            case "property":
+            case "event":
+            case "module":
+            case "assembly":
+            case "genericparam":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)
@@ -982,6 +1114,9 @@ public class Parser
 
     private ParameterSyntax ParseParameter()
     {
+        // ADR-0047: parameter-level annotations precede the identifier.
+        var annotations = ParseAnnotations();
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
@@ -990,7 +1125,7 @@ public class Parser
         }
 
         var type = ParseTypeClause();
-        return new ParameterSyntax(syntaxTree, identifier, ellipsis, type);
+        return new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
     }
 
     private TypeClauseSyntax ParseTypeClause()

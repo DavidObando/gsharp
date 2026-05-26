@@ -73,6 +73,9 @@ public enum SyntaxKind
     ShiftRightToken,
     ShiftRightEqualsToken,
 
+    // ADR-0047: annotation lead-in token
+    AtToken,
+
     // Built-in type tokens
     StringToken,
     InterpolatedStringToken,
@@ -222,6 +225,10 @@ public enum SyntaxKind
     // Issue #143: typeof / nameof contextual operators
     TypeOfExpression,
     NameOfExpression,
+
+    // Issue #141 / ADR-0047: attribute (annotation) syntax
+    Annotation,
+    AnnotationTarget,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
