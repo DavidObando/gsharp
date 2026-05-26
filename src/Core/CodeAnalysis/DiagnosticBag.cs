@@ -462,6 +462,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that the <c>async</c> modifier was used in a type-clause position
+    /// without being followed by <c>sequence</c> (ADR-0042).
+    /// </summary>
+    /// <param name="location">The text location of the <c>async</c> modifier.</param>
+    /// <param name="actualKind">The kind of the token actually following <c>async</c>.</param>
+    public void ReportAsyncModifierInTypeClauseRequiresSequence(TextLocation location, SyntaxKind actualKind)
+    {
+        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]'; found '<{actualKind}>'.";
+        Report(location, message);
+    }
+
+    /// <summary>
     /// Reports that a <c>yield</c> statement was used outside an iterator function (ADR-0040).
     /// </summary>
     /// <param name="location">The text location of the yield keyword.</param>

@@ -1021,6 +1021,12 @@ public class Parser
             return ParseSequenceTypeClause();
         }
 
+        // ADR-0042: `async sequence[T]` — alias for IAsyncEnumerable[T] in any type-clause position.
+        if (Current.Kind == SyntaxKind.AsyncKeyword)
+        {
+            return ParseAsyncSequenceTypeClause();
+        }
+
         // ADR-0039: pointer type `*T` in type-annotation position.
         if (Current.Kind == SyntaxKind.StarToken)
         {
@@ -1151,6 +1157,25 @@ public class Parser
         return TypeClauseSyntax.CreateSequence(syntaxTree, sequenceKeyword, openBracket, elementType, closeBracket, question);
     }
 
+    private TypeClauseSyntax ParseAsyncSequenceTypeClause()
+    {
+        // ADR-0042: `async sequence[T]` — the `async` modifier in a type clause
+        // is only valid before `sequence[T]` today (other modifier forms such as
+        // `async func(P) R` are tracked separately, see issue #150).
+        var asyncModifier = MatchToken(SyntaxKind.AsyncKeyword);
+        if (Current.Kind != SyntaxKind.SequenceKeyword)
+        {
+            Diagnostics.ReportAsyncModifierInTypeClauseRequiresSequence(asyncModifier.Location, Current.Kind);
+        }
+
+        var sequenceKeyword = MatchToken(SyntaxKind.SequenceKeyword);
+        var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+        var elementType = ParseTypeClause();
+        var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        return TypeClauseSyntax.CreateAsyncSequence(syntaxTree, asyncModifier, sequenceKeyword, openBracket, elementType, closeBracket, question);
+    }
+
     private TypeClauseSyntax ParseFunctionTypeClause()
     {
         // Phase 4.7: function type clause `func(T1, T2, ...) R?`. The return
@@ -1195,6 +1220,7 @@ public class Parser
             Current.Kind != SyntaxKind.MapKeyword &&
             Current.Kind != SyntaxKind.ChanKeyword &&
             Current.Kind != SyntaxKind.SequenceKeyword &&
+            Current.Kind != SyntaxKind.AsyncKeyword &&
             Current.Kind != SyntaxKind.StarToken)
         {
             return null;

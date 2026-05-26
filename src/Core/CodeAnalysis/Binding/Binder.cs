@@ -1710,12 +1710,21 @@ public sealed class Binder
         }
 
         // ADR-0040: sequence type clause `sequence[T]`.
+        // ADR-0042: `async sequence[T]` resolves to IAsyncEnumerable[T] in any
+        // type-clause position; the unmodified `sequence[T]` stays IEnumerable[T]
+        // (with the ADR-0041 implicit swap applied separately at function
+        // return-type binding sites).
         if (syntax.IsSequence)
         {
             var elementType = BindTypeClause(syntax.SequenceElementType);
             if (elementType == null)
             {
                 return null;
+            }
+
+            if (syntax.IsAsyncSequence)
+            {
+                return AsyncSequenceTypeSymbol.Get(elementType);
             }
 
             return SequenceTypeSymbol.Get(elementType);
