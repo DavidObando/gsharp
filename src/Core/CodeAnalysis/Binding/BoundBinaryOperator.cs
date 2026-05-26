@@ -12,41 +12,22 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundBinaryOperator
 {
-    private static BoundBinaryOperator[] supportedOperators =
+    private static readonly TypeSymbol[] SignedIntegralTypes =
     {
-        // Supported operators for int operands:
-        new BoundBinaryOperator(SyntaxKind.StarToken, BoundBinaryOperatorKind.Product, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.SlashToken, BoundBinaryOperatorKind.Quotient, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.PercentToken, BoundBinaryOperatorKind.Remainder, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.MinusToken, BoundBinaryOperatorKind.Difference, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, TypeSymbol.Int),
-        new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Int, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Int, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.LessToken, BoundBinaryOperatorKind.Less, TypeSymbol.Int, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.LessOrEqualsToken, BoundBinaryOperatorKind.LessOrEquals, TypeSymbol.Int, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.GreaterToken, BoundBinaryOperatorKind.Greater, TypeSymbol.Int, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.GreaterOrEqualsToken, BoundBinaryOperatorKind.GreaterOrEquals, TypeSymbol.Int, TypeSymbol.Bool),
-
-        // Supported operators for bool operands:
-        new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.AmpersandAmpersandToken, BoundBinaryOperatorKind.LogicalAnd, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.PipePipeToken, BoundBinaryOperatorKind.LogicalOr, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Bool),
-
-        // Supported operators for string operands:
-        new BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, TypeSymbol.String),
-        new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.String, TypeSymbol.Bool),
-        new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.String, TypeSymbol.Bool),
+        TypeSymbol.SByte, TypeSymbol.Short, TypeSymbol.Int, TypeSymbol.Long, TypeSymbol.NInt,
     };
+
+    private static readonly TypeSymbol[] UnsignedIntegralTypes =
+    {
+        TypeSymbol.Byte, TypeSymbol.UShort, TypeSymbol.UInt, TypeSymbol.ULong, TypeSymbol.NUInt,
+    };
+
+    private static readonly TypeSymbol[] FloatingPointTypes =
+    {
+        TypeSymbol.Float32, TypeSymbol.Float64,
+    };
+
+    private static BoundBinaryOperator[] supportedOperators = BuildSupportedOperators();
 
     private BoundBinaryOperator(SyntaxKind syntaxKind, BoundBinaryOperatorKind kind, TypeSymbol type)
         : this(syntaxKind, kind, type, type, type)
@@ -181,5 +162,91 @@ public sealed class BoundBinaryOperator
     private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)
     {
         return nullCandidate == TypeSymbol.Null && (nullableOrUnderlying is NullableTypeSymbol || nullableOrUnderlying == TypeSymbol.Null);
+    }
+
+    private static BoundBinaryOperator[] BuildSupportedOperators()
+    {
+        var list = new System.Collections.Generic.List<BoundBinaryOperator>();
+
+        // ADR-0044: every integral primitive supports the full arithmetic,
+        // comparison, bitwise, and shift operator set, closed under its own
+        // type (sbyte + sbyte → sbyte, long + long → long, …). Cross-type
+        // promotion happens through explicit casts.
+        foreach (var t in SignedIntegralTypes)
+        {
+            AddIntegralOperators(list, t);
+        }
+
+        foreach (var t in UnsignedIntegralTypes)
+        {
+            AddIntegralOperators(list, t);
+        }
+
+        // Floating-point primitives support arithmetic + comparison, but
+        // not bitwise or shifts.
+        foreach (var t in FloatingPointTypes)
+        {
+            AddArithmeticAndComparisonOperators(list, t);
+        }
+
+        // Decimal mirrors the floating-point shape but is emitted through
+        // System.Decimal's operator methods (handled by the emitter).
+        AddArithmeticAndComparisonOperators(list, TypeSymbol.Decimal);
+
+        // char is comparison-only at its own type: char + char would have to
+        // widen to int in C#'s rules, and the binder does not yet promote
+        // across types here. Users can write `int(c1) + int(c2)` explicitly.
+        AddComparisonOperators(list, TypeSymbol.Char);
+
+        // Bool operators (unchanged behaviour, kept here for one source of truth).
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandAmpersandToken, BoundBinaryOperatorKind.LogicalAnd, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.PipePipeToken, BoundBinaryOperatorKind.LogicalOr, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Bool));
+
+        // String operators (concatenation + equality through BCL helpers).
+        list.Add(new BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, TypeSymbol.String));
+        list.Add(new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.String, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.String, TypeSymbol.Bool));
+
+        // ADR-0045: `object` reference equality.
+        list.Add(new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Object, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Object, TypeSymbol.Bool));
+
+        return list.ToArray();
+    }
+
+    private static void AddArithmeticAndComparisonOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)
+    {
+        list.Add(new BoundBinaryOperator(SyntaxKind.PlusToken, BoundBinaryOperatorKind.Sum, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.MinusToken, BoundBinaryOperatorKind.Difference, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.StarToken, BoundBinaryOperatorKind.Product, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.SlashToken, BoundBinaryOperatorKind.Quotient, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.PercentToken, BoundBinaryOperatorKind.Remainder, t));
+        AddComparisonOperators(list, t);
+    }
+
+    private static void AddIntegralOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)
+    {
+        AddArithmeticAndComparisonOperators(list, t);
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, t, TypeSymbol.Int, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, t, TypeSymbol.Int, t));
+    }
+
+    private static void AddComparisonOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)
+    {
+        list.Add(new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, t, t, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, t, t, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.LessToken, BoundBinaryOperatorKind.Less, t, t, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.LessOrEqualsToken, BoundBinaryOperatorKind.LessOrEquals, t, t, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.GreaterToken, BoundBinaryOperatorKind.Greater, t, t, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(SyntaxKind.GreaterOrEqualsToken, BoundBinaryOperatorKind.GreaterOrEquals, t, t, TypeSymbol.Bool));
     }
 }
