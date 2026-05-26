@@ -133,6 +133,8 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle objectInstanceToStringRef;
     private MemberReferenceHandle objectInstanceGetHashCodeRef;
     private MemberReferenceHandle nullRefExceptionCtorRef;
+    private EntityHandle? systemAttributeTypeRef;
+    private MemberReferenceHandle? systemAttributeCtorRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -965,7 +967,13 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             typeAttrs = classAttrs;
-            if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            if (structSym.IsAttributeClass)
+            {
+                // Phase 4 of #141 / ADR-0047 §5: @Attribute sugar — base is
+                // System.Attribute, regardless of any other resolution.
+                baseType = this.GetSystemAttributeTypeRef();
+            }
+            else if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
                 baseType = baseHandle;
             }
@@ -1617,7 +1625,45 @@ internal sealed class ReflectionMetadataEmitter
             return baseCtor;
         }
 
+        if (classSym.IsAttributeClass)
+        {
+            // Phase 4 of #141 / ADR-0047 §5: chain to System.Attribute..ctor()
+            // since the base type was overridden away from System.Object.
+            return this.GetSystemAttributeCtorRef();
+        }
+
         return this.objectCtorRef;
+    }
+
+    private EntityHandle GetSystemAttributeTypeRef()
+    {
+        if (!this.systemAttributeTypeRef.HasValue)
+        {
+            var t = this.references.TryResolveType("System.Attribute", out var resolved)
+                ? resolved
+                : typeof(System.Attribute);
+            this.systemAttributeTypeRef = this.GetTypeReference(t);
+        }
+
+        return this.systemAttributeTypeRef.Value;
+    }
+
+    private MemberReferenceHandle GetSystemAttributeCtorRef()
+    {
+        if (!this.systemAttributeCtorRef.HasValue)
+        {
+            var attrTypeRef = this.GetSystemAttributeTypeRef();
+            var ctorSig = new BlobBuilder();
+            new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+                .Parameters(0, r => r.Void(), _ => { });
+
+            this.systemAttributeCtorRef = this.metadata.AddMemberReference(
+                attrTypeRef,
+                this.metadata.GetOrAddString(".ctor"),
+                this.metadata.GetOrAddBlob(ctorSig));
+        }
+
+        return this.systemAttributeCtorRef.Value;
     }
 
     /// <summary>

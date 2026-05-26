@@ -81,6 +81,25 @@ public class AttributeEmitTests
         Assert.Equal("legacy", arg.Value);
     }
 
+    [Fact]
+    public void AttributeSugar_Emits_Class_With_SystemAttribute_Base()
+    {
+        var source = """
+            package P
+            import System
+
+            @Attribute
+            type Trace class {
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var trace = assembly.GetTypes().Single(t => t.Name == "Trace");
+
+        Assert.Equal("System.Attribute", trace.BaseType?.FullName);
+        Assert.True(typeof(System.Attribute).IsAssignableFrom(trace));
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;
