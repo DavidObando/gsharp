@@ -422,6 +422,8 @@ public abstract class BoundTreeRewriter
                 return RewriteSpillSequenceExpression((BoundSpillSequenceExpression)node);
             case BoundNodeKind.DefaultExpression:
                 return RewriteDefaultExpression((BoundDefaultExpression)node);
+            case BoundNodeKind.TypeOfExpression:
+                return node;
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }

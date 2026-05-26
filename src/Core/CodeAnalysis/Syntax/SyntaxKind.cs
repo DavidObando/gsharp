@@ -217,6 +217,10 @@ public enum SyntaxKind
     AwaitForRangeStatement,
     EventSubscriptionExpression,
     YieldStatement,
+
+    // Issue #143: typeof / nameof contextual operators
+    TypeOfExpression,
+    NameOfExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

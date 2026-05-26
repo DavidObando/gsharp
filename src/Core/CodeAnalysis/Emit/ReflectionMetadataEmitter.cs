@@ -122,6 +122,8 @@ internal sealed class ReflectionMetadataEmitter
     private Type coreBooleanType;
     private Type coreArrayType;
     private Type coreValueType;
+    private Type coreSystemType;
+    private Type coreRuntimeTypeHandleType;
     private TypeReferenceHandle objectTypeRef;
     private TypeReferenceHandle valueTypeRef;
     private MemberReferenceHandle objectCtorRef;
@@ -216,6 +218,8 @@ internal sealed class ReflectionMetadataEmitter
         this.coreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
         this.coreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
         this.coreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
+        this.coreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
+        this.coreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.valueTypeRef = this.GetTypeReference(this.coreValueType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
@@ -3975,6 +3979,8 @@ internal sealed class ReflectionMetadataEmitter
             case BoundLenExpression len:
                 WalkForAppends(len.Operand, sink);
                 break;
+            case BoundTypeOfExpression:
+                break;
             case BoundCapExpression cap:
                 WalkForAppends(cap.Operand, sink);
                 break;
@@ -4291,6 +4297,32 @@ internal sealed class ReflectionMetadataEmitter
         var method = this.coreStringType.GetMethod("get_Length", Type.EmptyTypes)
             ?? throw new InvalidOperationException("String.get_Length is not resolvable from the supplied references.");
         return this.GetMethodReference(method);
+    }
+
+    private MemberReferenceHandle GetTypeFromHandleReference()
+    {
+        // System.Type::GetTypeFromHandle(RuntimeTypeHandle) — backs `typeof(T)`.
+        var method = this.coreSystemType.GetMethod(
+            "GetTypeFromHandle",
+            new[] { this.coreRuntimeTypeHandleType })
+            ?? throw new InvalidOperationException("Type.GetTypeFromHandle(RuntimeTypeHandle) is not resolvable from the supplied references.");
+        return this.GetMethodReference(method);
+    }
+
+    private EntityHandle GetTypeOfToken(TypeSymbol type)
+    {
+        // Issue #143: `typeof(T)` token resolution. `NullableTypeSymbol` over a
+        // value type must surface as `System.Nullable<T>` to match C# semantics
+        // (binder/evaluator collapse the wrapper to its underlying type for
+        // every other purpose — ADR-0001).
+        if (type is NullableTypeSymbol nullable
+            && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr)
+        {
+            var nullableType = typeof(System.Nullable<>).MakeGenericType(valueClr);
+            return this.GetTypeHandleForMember(nullableType);
+        }
+
+        return this.GetElementTypeToken(type);
     }
 
     private MemberReferenceHandle GetArrayCopyReference()
@@ -5732,6 +5764,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundLenExpression len:
                     this.EmitLen(len);
                     break;
+                case BoundTypeOfExpression typeOf:
+                    this.EmitTypeOf(typeOf);
+                    break;
                 case BoundCapExpression cap:
                     this.EmitExpression(cap.Operand);
                     this.il.OpCode(ILOpCode.Ldlen);
@@ -6491,6 +6526,14 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Ldlen);
                 this.il.OpCode(ILOpCode.Conv_i4);
             }
+        }
+
+        private void EmitTypeOf(BoundTypeOfExpression typeOf)
+        {
+            // Issue #143: `typeof(T)` -> ldtoken <T> ; call Type::GetTypeFromHandle.
+            this.il.OpCode(ILOpCode.Ldtoken);
+            this.il.Token(this.outer.GetTypeOfToken(typeOf.OperandType));
+            this.il.Call(this.outer.GetTypeFromHandleReference());
         }
 
         private void EmitAppend(BoundAppendExpression app)

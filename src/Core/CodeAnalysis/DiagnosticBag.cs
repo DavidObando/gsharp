@@ -1074,6 +1074,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0189", message);
     }
 
+    /// <summary>
+    /// Reports that a <c>nameof(...)</c> argument is not a valid name
+    /// reference (it must denote an identifier, member access, or type).
+    /// </summary>
+    /// <param name="location">The text location of the argument.</param>
+    public void ReportNameOfRequiresNameReference(TextLocation location)
+    {
+        Report(location, "GS0190", "The argument to 'nameof' must be a name reference: an identifier, member access, or type.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
