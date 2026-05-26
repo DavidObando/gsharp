@@ -994,6 +994,9 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EmitIsReadOnlyAttribute(handle2);
         }
+
+        // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
+        this.EmitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
     }
 
     /// <summary>
@@ -1129,6 +1132,391 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Phase 3 of #141 / ADR-0047 §3: emits a <c>CustomAttribute</c> row for
+    /// every bound user annotation on <paramref name="symbol"/> whose target
+    /// matches <paramref name="filter"/>. Resolves the attribute type to a
+    /// CLR <see cref="Type"/>, picks a constructor matching the supplied
+    /// positional argument arity / element types, writes the ECMA-335 II.23.3
+    /// value blob (prolog <c>0x0001</c>, fixed args, named-arg count, named
+    /// args), and attaches it to <paramref name="parent"/>.
+    /// Attributes whose CLR type can't be resolved or whose ctor cannot be
+    /// matched are silently skipped — the binder owns user-facing diagnostics.
+    /// </summary>
+    /// <param name="parent">The metadata entity (TypeDef / MethodDef / ...) to attach the attribute to.</param>
+    /// <param name="symbol">The symbol carrying the bound annotation list.</param>
+    /// <param name="filter">Only attributes whose <see cref="BoundAttribute.Target"/> equals this kind are emitted.</param>
+    private void EmitUserAttributes(EntityHandle parent, Symbol symbol, AttributeTargetKind filter)
+    {
+        if (symbol?.Attributes.IsDefaultOrEmpty != false)
+        {
+            return;
+        }
+
+        foreach (var attr in symbol.Attributes)
+        {
+            if (attr.Target != filter)
+            {
+                continue;
+            }
+
+            this.EmitBoundAttribute(parent, attr);
+        }
+    }
+
+    private void EmitBoundAttribute(EntityHandle parent, BoundAttribute attr)
+    {
+        var clrType = attr.AttributeType.ClrType;
+        if (clrType == null)
+        {
+            return;
+        }
+
+        if (!this.references.TryResolveType(clrType.FullName, out var resolved))
+        {
+            resolved = clrType;
+        }
+
+        var positional = attr.PositionalArguments;
+        var ctor = ResolveAttributeConstructor(resolved, positional);
+        if (ctor == null)
+        {
+            return;
+        }
+
+        var ctorParams = ctor.GetParameters();
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                ctorParams.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in ctorParams)
+                    {
+                        EncodeClrTypeForCtorSig(ps.AddParameter().Type(), p.ParameterType);
+                    }
+                });
+
+        var attrTypeRef = this.GetTypeReference(resolved);
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        for (int i = 0; i < ctorParams.Length; i++)
+        {
+            WriteCustomAttributeFixedArg(valueBlob, ctorParams[i].ParameterType, positional[i].Value);
+        }
+
+        var named = attr.NamedArguments;
+        valueBlob.WriteUInt16((ushort)named.Length);
+        foreach (var arg in named)
+        {
+            WriteCustomAttributeNamedArg(valueBlob, resolved, arg);
+        }
+
+        this.metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
+    {
+        var ctors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        foreach (var ctor in ctors)
+        {
+            var pars = ctor.GetParameters();
+            if (pars.Length != positional.Length)
+            {
+                continue;
+            }
+
+            bool match = true;
+            for (int i = 0; i < pars.Length; i++)
+            {
+                var supplied = positional[i].Value;
+                var paramType = pars[i].ParameterType;
+                if (supplied == null)
+                {
+                    if (paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == null)
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                else if (!paramType.IsInstanceOfType(supplied))
+                {
+                    // Allow numeric widening (int → long, etc.) and char → int.
+                    if (!IsTriviallyConvertible(supplied.GetType(), paramType))
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+            }
+
+            if (match)
+            {
+                return ctor;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsTriviallyConvertible(Type from, Type to)
+    {
+        if (from == to)
+        {
+            return true;
+        }
+
+        if (to.IsEnum)
+        {
+            return from == Enum.GetUnderlyingType(to);
+        }
+
+        return false;
+    }
+
+    private static void EncodeClrTypeForCtorSig(SignatureTypeEncoder enc, Type t)
+    {
+        if (t == typeof(bool))
+        {
+            enc.Boolean();
+        }
+        else if (t == typeof(char))
+        {
+            enc.Char();
+        }
+        else if (t == typeof(sbyte))
+        {
+            enc.SByte();
+        }
+        else if (t == typeof(byte))
+        {
+            enc.Byte();
+        }
+        else if (t == typeof(short))
+        {
+            enc.Int16();
+        }
+        else if (t == typeof(ushort))
+        {
+            enc.UInt16();
+        }
+        else if (t == typeof(int))
+        {
+            enc.Int32();
+        }
+        else if (t == typeof(uint))
+        {
+            enc.UInt32();
+        }
+        else if (t == typeof(long))
+        {
+            enc.Int64();
+        }
+        else if (t == typeof(ulong))
+        {
+            enc.UInt64();
+        }
+        else if (t == typeof(float))
+        {
+            enc.Single();
+        }
+        else if (t == typeof(double))
+        {
+            enc.Double();
+        }
+        else if (t == typeof(string))
+        {
+            enc.String();
+        }
+        else if (t == typeof(object))
+        {
+            enc.Object();
+        }
+        else if (t.IsEnum)
+        {
+            EncodeClrTypeForCtorSig(enc, Enum.GetUnderlyingType(t));
+        }
+        else
+        {
+            // Fallback: encode as object so the signature is still well-formed.
+            enc.Object();
+        }
+    }
+
+    private static void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object value)
+    {
+        if (paramType.IsEnum)
+        {
+            WriteCustomAttributeFixedArg(bb, Enum.GetUnderlyingType(paramType), value);
+            return;
+        }
+
+        if (paramType == typeof(bool))
+        {
+            bb.WriteBoolean((bool)value);
+        }
+        else if (paramType == typeof(char))
+        {
+            bb.WriteUInt16((char)value);
+        }
+        else if (paramType == typeof(sbyte))
+        {
+            bb.WriteSByte(Convert.ToSByte(value));
+        }
+        else if (paramType == typeof(byte))
+        {
+            bb.WriteByte(Convert.ToByte(value));
+        }
+        else if (paramType == typeof(short))
+        {
+            bb.WriteInt16(Convert.ToInt16(value));
+        }
+        else if (paramType == typeof(ushort))
+        {
+            bb.WriteUInt16(Convert.ToUInt16(value));
+        }
+        else if (paramType == typeof(int))
+        {
+            bb.WriteInt32(Convert.ToInt32(value));
+        }
+        else if (paramType == typeof(uint))
+        {
+            bb.WriteUInt32(Convert.ToUInt32(value));
+        }
+        else if (paramType == typeof(long))
+        {
+            bb.WriteInt64(Convert.ToInt64(value));
+        }
+        else if (paramType == typeof(ulong))
+        {
+            bb.WriteUInt64(Convert.ToUInt64(value));
+        }
+        else if (paramType == typeof(float))
+        {
+            bb.WriteSingle(Convert.ToSingle(value));
+        }
+        else if (paramType == typeof(double))
+        {
+            bb.WriteDouble(Convert.ToDouble(value));
+        }
+        else if (paramType == typeof(string))
+        {
+            bb.WriteSerializedString((string)value);
+        }
+        else
+        {
+            // Fallback: serialise as string round-trip (best-effort).
+            bb.WriteSerializedString(value?.ToString());
+        }
+    }
+
+    private static void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
+    {
+        var prop = attributeType.GetProperty(arg.Name, BindingFlags.Public | BindingFlags.Instance);
+        var field = prop == null
+            ? attributeType.GetField(arg.Name, BindingFlags.Public | BindingFlags.Instance)
+            : null;
+        Type memberType;
+        byte kindTag;
+        if (prop != null)
+        {
+            kindTag = 0x54;
+            memberType = prop.PropertyType;
+        }
+        else if (field != null)
+        {
+            kindTag = 0x53;
+            memberType = field.FieldType;
+        }
+        else
+        {
+            // Unknown member — skip silently; binder owns user diagnostics.
+            return;
+        }
+
+        bb.WriteByte(kindTag);
+        WriteCustomAttributeFieldOrPropertyType(bb, memberType);
+        bb.WriteSerializedString(arg.Name);
+        WriteCustomAttributeFixedArg(bb, memberType, arg.Value);
+    }
+
+    private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)
+    {
+        // ECMA-335 II.23.3 — element-type byte for a FIELD/PROPERTY tag.
+        if (t == typeof(bool))
+        {
+            bb.WriteByte(0x02);
+        }
+        else if (t == typeof(char))
+        {
+            bb.WriteByte(0x03);
+        }
+        else if (t == typeof(sbyte))
+        {
+            bb.WriteByte(0x04);
+        }
+        else if (t == typeof(byte))
+        {
+            bb.WriteByte(0x05);
+        }
+        else if (t == typeof(short))
+        {
+            bb.WriteByte(0x06);
+        }
+        else if (t == typeof(ushort))
+        {
+            bb.WriteByte(0x07);
+        }
+        else if (t == typeof(int))
+        {
+            bb.WriteByte(0x08);
+        }
+        else if (t == typeof(uint))
+        {
+            bb.WriteByte(0x09);
+        }
+        else if (t == typeof(long))
+        {
+            bb.WriteByte(0x0A);
+        }
+        else if (t == typeof(ulong))
+        {
+            bb.WriteByte(0x0B);
+        }
+        else if (t == typeof(float))
+        {
+            bb.WriteByte(0x0C);
+        }
+        else if (t == typeof(double))
+        {
+            bb.WriteByte(0x0D);
+        }
+        else if (t == typeof(string))
+        {
+            bb.WriteByte(0x0E);
+        }
+        else if (t.IsEnum)
+        {
+            // 0x55 then serialised type name (assembly-qualified).
+            bb.WriteByte(0x55);
+            bb.WriteSerializedString(t.AssemblyQualifiedName);
+        }
+        else
+        {
+            // Fallback to STRING.
+            bb.WriteByte(0x0E);
+        }
+    }
+
+    /// <summary>
     /// Phase 3.B.4: emits a TypeDef row for a user-defined interface. Carries
     /// <c>TypeAttributes.Interface | Abstract | Public</c>, no fields, and a
     /// methodList pointing at its preassigned first abstract-method row.
@@ -1149,6 +1537,9 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
         this.interfaceTypeDefs[ifaceSym] = handle;
+
+        // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
+        this.EmitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
     }
 
     /// <summary>
@@ -2196,6 +2587,11 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: MetadataTokens.ParameterHandle(1));
+
+        // Phase 3 of #141: attach user annotations (method target) to the
+        // MethodDef. Return / param targets are wired alongside their
+        // respective handles in a follow-up.
+        this.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
 
         return handle;
     }
