@@ -258,7 +258,7 @@ for x in nums() {
         AssertParity(Source, Expected, nameof(Parity_SyncIterator_Sequence));
     }
 
-    [Fact(Skip = "Emitter does not yet support `await for` (IAsyncEnumerable consumer side). Interpreter side is covered by AsyncIterator_InterpOnly_ProducesValues.")]
+    [Fact]
     public void Parity_AsyncIterator_YieldWithAwait()
     {
         const string Source = @"package ParityAsyncIter
@@ -274,9 +274,13 @@ func gen() IAsyncEnumerable[int] {
     yield 30
 }
 
-await for x in gen() {
-    Console.WriteLine(x)
+async func consume() {
+    await for x in gen() {
+        Console.WriteLine(x)
+    }
 }
+
+consume().Wait()
 ";
         const string Expected = "10\n20\n30\n";
         AssertParity(Source, Expected, nameof(Parity_AsyncIterator_YieldWithAwait));

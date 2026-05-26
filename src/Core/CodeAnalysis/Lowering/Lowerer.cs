@@ -243,6 +243,144 @@ public sealed class Lowerer : BoundTreeRewriter
         return RewriteStatement(lowered);
     }
 
+    /// <inheritdoc/>
+    protected override BoundStatement RewriteAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+    {
+        // Phase 5.8 / ADR-0023 — issue #148: desugar
+        //   await for v in stream { <body> }
+        // into the equivalent try/finally with an awaiting MoveNextAsync
+        // loop and an awaiting DisposeAsync. After the rewrite, the
+        // AsyncStateMachineRewriter pipeline (AsyncExceptionHandlerRewriter
+        // + SpillSequenceSpiller + MoveNextBodyRewriter) handles the
+        // resulting awaits — including the await inside the finally
+        // (Pattern B in AsyncExceptionHandlerRewriter).
+        //
+        // {
+        //   var __enum = stream.GetAsyncEnumerator(default(CancellationToken))
+        //   try {
+        //     start:
+        //     var __more = await __enum.MoveNextAsync()
+        //     gotoFalse __more, end
+        //     v = __enum.Current
+        //     <body>
+        //     goto start
+        //     end:
+        //   } finally {
+        //     await __enum.DisposeAsync()
+        //   }
+        // }
+        var stream = RewriteExpression(node.Stream);
+        var body = RewriteStatement(node.Body);
+
+        var lowered = LowerAwaitForRange(node.ValueVariable, stream, body);
+        return RewriteStatement(lowered);
+    }
+
+    private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body)
+    {
+        var streamClr = stream.Type?.ClrType;
+        if (streamClr == null)
+        {
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        System.Type asyncEnumerableInterface = null;
+        if (streamClr.IsGenericType &&
+            !streamClr.IsGenericTypeDefinition &&
+            streamClr.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+        {
+            asyncEnumerableInterface = streamClr;
+        }
+        else
+        {
+            foreach (var iface in streamClr.GetInterfaces())
+            {
+                if (iface.IsGenericType &&
+                    !iface.IsGenericTypeDefinition &&
+                    iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
+                {
+                    asyncEnumerableInterface = iface;
+                    break;
+                }
+            }
+        }
+
+        if (asyncEnumerableInterface == null)
+        {
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var elementClr = asyncEnumerableInterface.GetGenericArguments()[0];
+        var enumeratorClr = typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr);
+        var valueTaskBoolClr = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(typeof(bool));
+
+        var getAsyncEnumerator = asyncEnumerableInterface.GetMethod(
+            "GetAsyncEnumerator",
+            new[] { typeof(System.Threading.CancellationToken) });
+        var moveNextAsync = enumeratorClr.GetMethod("MoveNextAsync", System.Type.EmptyTypes);
+        var currentProperty = enumeratorClr.GetProperty("Current");
+        var disposeAsync = typeof(System.IAsyncDisposable).GetMethod("DisposeAsync", System.Type.EmptyTypes);
+
+        if (getAsyncEnumerator == null || moveNextAsync == null || currentProperty == null || disposeAsync == null)
+        {
+            return new BoundExpressionStatement(new BoundErrorExpression());
+        }
+
+        var cancellationTokenType = TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken));
+        var enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
+        var valueTaskBoolType = TypeSymbol.FromClrType(valueTaskBoolClr);
+        var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+        var currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
+
+        var enumeratorSymbol = new LocalVariableSymbol("$awaitEnum", isReadOnly: true, type: enumeratorType);
+        var enumeratorExpr = new BoundVariableExpression(enumeratorSymbol);
+        var getEnumCall = new BoundImportedInstanceCallExpression(
+            stream,
+            getAsyncEnumerator,
+            enumeratorType,
+            ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(cancellationTokenType)));
+        var enumeratorDecl = new BoundVariableDeclaration(enumeratorSymbol, getEnumCall);
+
+        var startLabel = GenerateLabel();
+        var endLabel = GenerateLabel();
+        var moreSymbol = new LocalVariableSymbol("$more", isReadOnly: false, type: TypeSymbol.Bool);
+
+        var moveNextCall = new BoundImportedInstanceCallExpression(
+            enumeratorExpr,
+            moveNextAsync,
+            valueTaskBoolType,
+            ImmutableArray<BoundExpression>.Empty);
+        var moveNextAwait = new BoundAwaitExpression(moveNextCall, TypeSymbol.Bool);
+        var moreDecl = new BoundVariableDeclaration(moreSymbol, moveNextAwait);
+
+        var currentAccess = new BoundClrPropertyAccessExpression(enumeratorExpr, currentProperty, currentType);
+        var assignValue = new BoundExpressionStatement(
+            new BoundAssignmentExpression(valueVariable, currentAccess));
+
+        var tryStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        tryStatements.Add(new BoundLabelStatement(startLabel));
+        tryStatements.Add(moreDecl);
+        tryStatements.Add(new BoundConditionalGotoStatement(endLabel, new BoundVariableExpression(moreSymbol), jumpIfTrue: false));
+        tryStatements.Add(assignValue);
+        tryStatements.Add(body);
+        tryStatements.Add(new BoundGotoStatement(startLabel));
+        tryStatements.Add(new BoundLabelStatement(endLabel));
+        var tryBlock = new BoundBlockStatement(tryStatements.ToImmutable());
+
+        var disposeCall = new BoundImportedInstanceCallExpression(
+            enumeratorExpr,
+            disposeAsync,
+            valueTaskType,
+            ImmutableArray<BoundExpression>.Empty);
+        var disposeAwait = new BoundAwaitExpression(disposeCall, TypeSymbol.Void);
+        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(disposeAwait)));
+
+        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+
+        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(enumeratorDecl, tryStmt));
+    }
+
     private BoundStatement LowerIndexedRange(BoundForRangeStatement node)
     {
         // {
@@ -574,12 +712,6 @@ public sealed class Lowerer : BoundTreeRewriter
                 }
 
                 builder.Add(new BoundSelectStatement(flatCases.ToImmutable()));
-            }
-            else if (current is BoundAwaitForRangeStatement af)
-            {
-                // Phase 5.8: flatten the await-for body so nested if/for/etc. work.
-                var flatAfBody = Flatten(af.Body);
-                builder.Add(new BoundAwaitForRangeStatement(af.ValueVariable, af.Stream, flatAfBody));
             }
             else
             {
