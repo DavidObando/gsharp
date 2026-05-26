@@ -69,7 +69,99 @@ run().Wait()
         AssertParity(Source, Expected, nameof(Parity_RealSuspension_TaskDelay));
     }
 
-    [Fact(Skip = "Emitter produces InvalidProgramException for async state machine with try/catch — tracked as follow-up")]
+    [Fact]
+    public void Parity_AsyncWithMultipleAwaitsInTry()
+    {
+        const string Source = @"package ParityMultiAwaitTry
+import System
+import System.Threading.Tasks
+
+async func run() int {
+    var s = 0
+    try {
+        await Task.Delay(1)
+        s = s + 1
+        await Task.Delay(1)
+        s = s + 2
+        await Task.Delay(1)
+        s = s + 4
+    } catch(ex) {
+        s = -1
+    }
+    return s
+}
+
+var t = run()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        const string Expected = "7\n";
+        AssertParity(Source, Expected, nameof(Parity_AsyncWithMultipleAwaitsInTry));
+    }
+
+    [Fact]
+    public void Parity_AsyncWithNestedTryAroundAwait()
+    {
+        const string Source = @"package ParityNestedTry
+import System
+import System.Threading.Tasks
+
+async func run() int {
+    var s = 0
+    try {
+        await Task.Delay(1)
+        try {
+            await Task.Delay(1)
+            s = s + 10
+        } catch(inner) {
+            s = -2
+        }
+        s = s + 1
+    } catch(ex) {
+        s = -1
+    }
+    return s
+}
+
+var t = run()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        const string Expected = "11\n";
+        AssertParity(Source, Expected, nameof(Parity_AsyncWithNestedTryAroundAwait));
+    }
+
+    [Fact]
+    public void Parity_AsyncTryFinally_RunsOnceOnNormalCompletion()
+    {
+        // Regression for #137: with the IL `leave` fix, the finally must run
+        // exactly once (after the try body completes), not on every async
+        // suspension.
+        const string Source = @"package ParityFinallyOnce
+import System
+import System.Threading.Tasks
+
+async func run() int {
+    var count = 0
+    try {
+        await Task.Delay(1)
+        await Task.Delay(1)
+        await Task.Delay(1)
+    } finally {
+        count = count + 1
+    }
+    return count
+}
+
+var t = run()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        const string Expected = "1\n";
+        AssertParity(Source, Expected, nameof(Parity_AsyncTryFinally_RunsOnceOnNormalCompletion));
+    }
+
+    [Fact]
     public void Parity_AsyncWithTryCatch_AroundAwait()
     {
         const string Source = @"package ParityTryCatch
@@ -95,7 +187,7 @@ Console.WriteLine(t.Result)
         AssertParity(Source, Expected, nameof(Parity_AsyncWithTryCatch_AroundAwait));
     }
 
-    [Fact(Skip = "Emitter produces InvalidProgramException for async state machine with try/finally — tracked as follow-up")]
+    [Fact]
     public void Parity_AsyncWithTryFinally_AroundAwait()
     {
         const string Source = @"package ParityTryFinally

@@ -126,14 +126,22 @@ public static class MoveNextBodyRewriter
                 statements.Add(new BoundVariableDeclaration(retValLocal, defaultVal));
             }
 
+            // Pre-pass: locate each await within the user's try-statement nesting
+            // so we can route the resume dispatch around protected regions.
+            // `br` and `brtrue`/`brfalse` cannot enter a CLR protected region;
+            // instead we route entry to a label placed immediately before the
+            // outermost user try, then have each user-try's internal dispatch
+            // route further (to either a resume label or a nested entry label).
+            var tryDispatch = TryDispatchPlanner.Plan(plan.LoweredBody, awaitResumeMap);
+
             // Build the try-body: state dispatch + user body + SetResult path.
             // Everything that targets exprReturnLabel must be INSIDE the try
             // because br cannot leave a protected region.
             var tryBodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-            EmitStateDispatch(tryBodyStatements);
+            EmitStateDispatch(tryBodyStatements, tryDispatch);
 
             // Rewritten user body.
-            var rewriter = new InnerRewriter(this);
+            var rewriter = new InnerRewriter(this, tryDispatch);
             var rewrittenBody = rewriter.RewriteStatement(plan.LoweredBody);
             if (rewrittenBody is BoundBlockStatement block)
             {
@@ -175,7 +183,9 @@ public static class MoveNextBodyRewriter
                 thisParameter);
         }
 
-        private void EmitStateDispatch(ImmutableArray<BoundStatement>.Builder statements)
+        private void EmitStateDispatch(
+            ImmutableArray<BoundStatement>.Builder statements,
+            TryDispatchPlan tryDispatch)
         {
             statements.Add(new BoundLabelStatement(plan.MoveNextPlan.DispatchLabel));
 
@@ -186,11 +196,15 @@ public static class MoveNextBodyRewriter
 
             foreach (var rp in plan.MoveNextPlan.AwaitResumePoints)
             {
+                // If this await is inside a user try, route to the outermost
+                // containing try's entry label (placed just before that try);
+                // otherwise jump directly to the resume label.
+                var target = tryDispatch.GetOuterDispatchTarget(rp.State) ?? rp.ResumeLabel;
                 var condition = new BoundBinaryExpression(
                     new BoundVariableExpression(cachedStateLocal),
                     BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
                     Literal(rp.State));
-                statements.Add(new BoundConditionalGotoStatement(rp.ResumeLabel, condition, jumpIfTrue: true));
+                statements.Add(new BoundConditionalGotoStatement(target, condition, jumpIfTrue: true));
             }
         }
 
@@ -267,10 +281,12 @@ public static class MoveNextBodyRewriter
         private sealed class InnerRewriter : BoundTreeRewriter
         {
             private readonly RewriteContext ctx;
+            private readonly TryDispatchPlan tryDispatch;
 
-            public InnerRewriter(RewriteContext ctx)
+            public InnerRewriter(RewriteContext ctx, TryDispatchPlan tryDispatch)
             {
                 this.ctx = ctx;
+                this.tryDispatch = tryDispatch;
             }
 
             protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
@@ -385,56 +401,105 @@ public static class MoveNextBodyRewriter
                 // catch variables.
                 var result = (BoundTryStatement)base.RewriteTryStatement(node);
 
-                var needsPatch = false;
+                // Patch hoisted catch variables.
+                var needsCatchPatch = false;
                 foreach (var clause in result.CatchClauses)
                 {
                     if (TryGetHoistedField(clause.Variable, out _))
                     {
-                        needsPatch = true;
+                        needsCatchPatch = true;
                         break;
                     }
                 }
 
-                if (!needsPatch)
+                if (needsCatchPatch)
+                {
+                    var patchedClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
+                    foreach (var clause in result.CatchClauses)
+                    {
+                        if (TryGetHoistedField(clause.Variable, out var field))
+                        {
+                            var copyToField = Stmt(ctx.WriteField(
+                                field,
+                                new BoundVariableExpression(clause.Variable)));
+                            var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+                            stmts.Add(copyToField);
+                            if (clause.Body is BoundBlockStatement block)
+                            {
+                                stmts.AddRange(block.Statements);
+                            }
+                            else
+                            {
+                                stmts.Add(clause.Body);
+                            }
+
+                            patchedClauses.Add(new BoundCatchClause(
+                                clause.ExceptionType,
+                                clause.Variable,
+                                new BoundBlockStatement(stmts.ToImmutable())));
+                        }
+                        else
+                        {
+                            patchedClauses.Add(clause);
+                        }
+                    }
+
+                    result = new BoundTryStatement(
+                        result.TryBlock,
+                        patchedClauses.ToImmutable(),
+                        result.FinallyBlock);
+                }
+
+                // If this user try contains awaits in its body, prepend a
+                // state-dispatch at the top of the try body (legal because
+                // dispatch and resume labels are both inside the same
+                // protected region) and mark the position immediately before
+                // the try with the synthesized entry label that the outer
+                // dispatch (or an enclosing try's dispatch) routes to.
+                var dispatchEntries = tryDispatch.GetInternalDispatchEntries(node);
+                var entryLabel = tryDispatch.GetEntryLabel(node);
+
+                if (dispatchEntries.IsDefaultOrEmpty && entryLabel == null)
                 {
                     return result;
                 }
 
-                var newClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
-                foreach (var clause in result.CatchClauses)
+                var newTryBodyStmts = ImmutableArray.CreateBuilder<BoundStatement>();
+                if (!dispatchEntries.IsDefaultOrEmpty)
                 {
-                    if (TryGetHoistedField(clause.Variable, out var field))
+                    foreach (var entry in dispatchEntries)
                     {
-                        // Prepend: this.<field> = clause.Variable (load from local slot)
-                        var copyToField = Stmt(ctx.WriteField(
-                            field,
-                            new BoundVariableExpression(clause.Variable)));
-                        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
-                        stmts.Add(copyToField);
-                        if (clause.Body is BoundBlockStatement block)
-                        {
-                            stmts.AddRange(block.Statements);
-                        }
-                        else
-                        {
-                            stmts.Add(clause.Body);
-                        }
-
-                        newClauses.Add(new BoundCatchClause(
-                            clause.ExceptionType,
-                            clause.Variable,
-                            new BoundBlockStatement(stmts.ToImmutable())));
-                    }
-                    else
-                    {
-                        newClauses.Add(clause);
+                        var cond = new BoundBinaryExpression(
+                            new BoundVariableExpression(ctx.cachedStateLocal),
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                            Literal(entry.State));
+                        newTryBodyStmts.Add(new BoundConditionalGotoStatement(entry.Target, cond, jumpIfTrue: true));
                     }
                 }
 
-                return new BoundTryStatement(
-                    result.TryBlock,
-                    newClauses.ToImmutable(),
+                if (result.TryBlock is BoundBlockStatement existingBlock)
+                {
+                    newTryBodyStmts.AddRange(existingBlock.Statements);
+                }
+                else
+                {
+                    newTryBodyStmts.Add(result.TryBlock);
+                }
+
+                var rebuiltTry = new BoundTryStatement(
+                    new BoundBlockStatement(newTryBodyStmts.ToImmutable()),
+                    result.CatchClauses,
                     result.FinallyBlock);
+
+                if (entryLabel == null)
+                {
+                    return rebuiltTry;
+                }
+
+                // Place the entry label immediately before the try (outside it).
+                return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+                    new BoundLabelStatement(entryLabel),
+                    rebuiltTry));
             }
 
             protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
