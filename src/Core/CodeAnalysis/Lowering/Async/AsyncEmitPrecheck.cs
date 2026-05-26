@@ -62,7 +62,7 @@ public static class AsyncEmitPrecheck
             if (function.StateMachineType == null)
             {
                 var location = LocateAsyncFunction(function);
-                builder.Add(new Diagnostic(location, AsyncStateMachineUnavailableMessage));
+                builder.Add(new Diagnostic(location, "GS0190", DiagnosticSeverity.Error, AsyncStateMachineUnavailableMessage));
                 continue;
             }
         }
@@ -71,7 +71,7 @@ public static class AsyncEmitPrecheck
         {
             if (!IsAsyncIterator(entry) && entry.StateMachineType == null)
             {
-                builder.Add(new Diagnostic(LocateAsyncFunction(entry), AsyncStateMachineUnavailableMessage));
+                builder.Add(new Diagnostic(LocateAsyncFunction(entry), "GS0190", DiagnosticSeverity.Error, AsyncStateMachineUnavailableMessage));
             }
         }
 

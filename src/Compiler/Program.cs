@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -81,20 +82,24 @@ public class Program
         if (parsed.OutputPath is null)
         {
             // Legacy / no-output mode: interpret the program (back-compat).
-            return Interpret(compilation);
+            return Interpret(compilation, parsed);
         }
 
         return Emit(compilation, parsed);
     }
 
-    private static int Interpret(Compilation compilation)
+    private static int Interpret(Compilation compilation, CommandLineArgs args)
     {
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
         if (result.Diagnostics.Any())
         {
-            Console.Out.WriteDiagnostics(result.Diagnostics);
-            Console.Error.WriteLine("Failed.");
-            return Error;
+            var effective = ApplySuppressPromote(result.Diagnostics, args);
+            Console.Out.WriteDiagnostics(effective);
+            if (effective.Any(d => d.IsError))
+            {
+                Console.Error.WriteLine("Failed.");
+                return Error;
+            }
         }
 
         Console.WriteLine("Success.");
@@ -127,7 +132,18 @@ public class Program
             result = compilation.Emit(peStream, refStream, args.AssemblyName);
         }
 
-        if (!result.Success)
+        // Apply /nowarn, /warnaserror filtering.
+        var effectiveDiagnostics = ApplySuppressPromote(result.Diagnostics, args);
+
+        // Always print diagnostics (errors and warnings).
+        if (effectiveDiagnostics.Any())
+        {
+            Console.Out.WriteDiagnostics(effectiveDiagnostics);
+        }
+
+        bool hasErrors = !result.Success || effectiveDiagnostics.Any(d => d.IsError);
+
+        if (hasErrors)
         {
             TryDelete(outputPath);
             if (!string.IsNullOrEmpty(refOutputPath))
@@ -135,7 +151,6 @@ public class Program
                 TryDelete(refOutputPath);
             }
 
-            Console.Out.WriteDiagnostics(result.Diagnostics);
             Console.Error.WriteLine("Failed.");
             return Error;
         }
@@ -152,6 +167,52 @@ public class Program
         }
 
         return Success;
+    }
+
+    /// <summary>
+    /// Applies /nowarn, /warnaserror, /warnaserror+:, /warnaserror-: filtering to a diagnostic list.
+    /// Returns the filtered/promoted set.
+    /// </summary>
+    private static IReadOnlyList<Diagnostic> ApplySuppressPromote(
+        IEnumerable<Diagnostic> diagnostics,
+        CommandLineArgs args)
+    {
+        var result = new List<Diagnostic>();
+        foreach (var d in diagnostics)
+        {
+            var id = d.Id;
+            var severity = d.Severity;
+
+            // /nowarn suppresses warning-level diagnostics with the specified ID.
+            if (severity == DiagnosticSeverity.Warning && args.NoWarnIds.Contains(id))
+            {
+                continue;
+            }
+
+            // /warnaserror+:<id> promotes specific warnings to errors.
+            if (severity == DiagnosticSeverity.Warning && args.WarnAsErrorIds.Contains(id))
+            {
+                severity = DiagnosticSeverity.Error;
+            }
+
+            // /warnaserror (global) promotes all warnings to errors, unless /warnaserror-:<id> opts out.
+            if (severity == DiagnosticSeverity.Warning && args.TreatAllWarningsAsErrors && !args.WarnNotAsErrorIds.Contains(id))
+            {
+                severity = DiagnosticSeverity.Error;
+            }
+
+            // If the severity changed, wrap in a new Diagnostic preserving everything else.
+            if (severity != d.Severity)
+            {
+                result.Add(new Diagnostic(d.Location, d.Id, severity, d.Message));
+            }
+            else
+            {
+                result.Add(d);
+            }
+        }
+
+        return result;
     }
 
     private static void TryDelete(string path)
@@ -264,6 +325,48 @@ public class Program
                         result.ImplicitSystemImport = false;
                         break;
 
+                    case "nowarn":
+                        // /nowarn:GS0001,GS0002 or /nowarn:0001,0002
+                        foreach (var id in ParseIdList(value))
+                        {
+                            result.NoWarnIds.Add(id);
+                        }
+
+                        break;
+
+                    case "warnaserror":
+                        // /warnaserror  → global; /warnaserror+:<ids> → promote specific ids
+                        // /warnaserror-:<ids> → demote specific ids (keep as warnings even with /warnaserror)
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            result.TreatAllWarningsAsErrors = true;
+                        }
+                        else
+                        {
+                            foreach (var id in ParseIdList(value))
+                            {
+                                result.WarnAsErrorIds.Add(id);
+                            }
+                        }
+
+                        break;
+
+                    case "warnaserror+":
+                        foreach (var id in ParseIdList(value))
+                        {
+                            result.WarnAsErrorIds.Add(id);
+                        }
+
+                        break;
+
+                    case "warnaserror-":
+                        foreach (var id in ParseIdList(value))
+                        {
+                            result.WarnNotAsErrorIds.Add(id);
+                        }
+
+                        break;
+
                     case "debug":
                     case "pdb":
                         // Accepted for SDK compatibility; debug info emit is Phase 2.
@@ -286,6 +389,36 @@ public class Program
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Parses a comma-separated list of diagnostic IDs. Accepts both canonical
+    /// form (<c>GS0001</c>) and bare numeric form (<c>0001</c> or <c>1</c>).
+    /// </summary>
+    private static IEnumerable<string> ParseIdList(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            yield break;
+        }
+
+        foreach (var raw in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (raw.StartsWith("GS", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return raw.ToUpperInvariant();
+            }
+            else if (int.TryParse(raw, out var num))
+            {
+                // Bare number: normalise to GS#### form.
+                yield return $"GS{num:D4}";
+            }
+            else
+            {
+                // Unrecognised format — pass through as-is.
+                yield return raw;
+            }
+        }
     }
 
     private static List<string> ExpandResponseFiles(string[] args)
@@ -362,10 +495,14 @@ public class Program
         // On Unix `/` is also the path separator. We treat `/foo:value` as a
         // switch only if the substring before the first colon contains no other
         // path separator (e.g. `/out:bar.dll` is a switch but `/tmp/x.gs` is not).
+        // For `/foo` (no colon) we treat it as a switch only when the name after
+        // the leading `/` contains no path separators (e.g. `/warnaserror` is a
+        // switch but `/tmp/x.gs` is a file path).
         var colon = arg.IndexOf(':');
         if (colon < 0)
         {
-            return false;
+            var nameOnly = arg.AsSpan(1);
+            return nameOnly.IndexOfAny('/', '\\') < 0;
         }
 
         var head = arg.AsSpan(1, colon - 1);
@@ -391,6 +528,18 @@ public class Program
         public bool ShowHelp { get; set; }
 
         public bool ImplicitSystemImport { get; set; } = true;
+
+        /// <summary>Gets the set of diagnostic IDs to suppress (from /nowarn).</summary>
+        public HashSet<string> NoWarnIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets or sets a value indicating whether all warnings should be treated as errors (from /warnaserror without IDs).</summary>
+        public bool TreatAllWarningsAsErrors { get; set; }
+
+        /// <summary>Gets the set of diagnostic IDs that should be promoted to errors (from /warnaserror+:&lt;ids&gt;).</summary>
+        public HashSet<string> WarnAsErrorIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets the set of diagnostic IDs that should remain as warnings (from /warnaserror-:&lt;ids&gt;), overriding /warnaserror.</summary>
+        public HashSet<string> WarnNotAsErrorIds { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed class CommandLineException : Exception

@@ -37,6 +37,9 @@
         Version="$(Version)"
         OutputType="$(OutputType)"
         RefAssembly="$(_GsharpRefAssemblyPath)"
+        NoWarn="$(NoWarn)"
+        TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+        WarningsAsErrors="$(WarningsAsErrors)"
         Compile="@(Compile)"
         References="@(ReferencePath)"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />

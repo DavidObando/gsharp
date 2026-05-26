@@ -41,7 +41,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportBadCharacter(TextLocation location, char character)
     {
         var message = $"Bad character input: '{character}'.";
-        Report(location, message);
+        Report(location, "GS0001", message);
     }
 
     /// <summary>
@@ -51,7 +51,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnterminatedComment(TextLocation location)
     {
         var message = "Unterminated comment.";
-        Report(location, message);
+        Report(location, "GS0002", message);
     }
 
     /// <summary>
@@ -61,7 +61,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnterminatedString(TextLocation location)
     {
         var message = "Unterminated string literal.";
-        Report(location, message);
+        Report(location, "GS0003", message);
     }
 
     /// <summary>
@@ -73,7 +73,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInvalidNumber(TextLocation location, string text, TypeSymbol type)
     {
         var message = $"The number {text} isn't valid {type}.";
-        Report(location, message);
+        Report(location, "GS0004", message);
     }
 
     /// <summary>
@@ -85,7 +85,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnexpectedToken(TextLocation location, SyntaxKind actualKind, SyntaxKind expectedKind)
     {
         var message = $"Unexpected token <{actualKind}>, expected <{expectedKind}>.";
-        Report(location, message);
+        Report(location, "GS0005", message);
     }
 
     /// <summary>
@@ -95,7 +95,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportAllPathsMustReturn(TextLocation location)
     {
         var message = "Not all code paths return a value.";
-        Report(location, message);
+        Report(location, "GS0100", message);
     }
 
     /// <summary>
@@ -106,7 +106,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportParameterAlreadyDeclared(TextLocation location, string parameterName)
     {
         var message = $"A parameter with the name '{parameterName}' already exists.";
-        Report(location, message);
+        Report(location, "GS0101", message);
     }
 
     /// <summary>
@@ -117,7 +117,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSymbolAlreadyDeclared(TextLocation location, string name)
     {
         var message = $"'{name}' is already declared.";
-        Report(location, message);
+        Report(location, "GS0102", message);
     }
 
     /// <summary>
@@ -128,7 +128,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportMethodReceiverMustBeStructOrClass(TextLocation location, string receiverTypeName)
     {
         var message = $"Method receiver type '{receiverTypeName}' must be a struct or class declared in the same package.";
-        Report(location, message);
+        Report(location, "GS0103", message);
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportEmptyDataStruct(TextLocation location, string name)
     {
         var message = $"'data struct {name}' requires at least one field; use 'struct' instead.";
-        Report(location, message);
+        Report(location, "GS0104", message);
     }
 
     /// <summary>Reports that an inline struct does not declare exactly one field.</summary>
@@ -149,21 +149,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInlineStructRequiresExactlyOneField(TextLocation location, string name, int actualCount)
     {
         var message = $"'inline struct {name}' requires exactly one field, but has {actualCount}.";
-        Report(location, message);
+        Report(location, "GS0105", message);
     }
 
-    /// <summary>Reports that inline and data modifiers were combined.</summary>
+    /// <summary>Reports that the <c>inline</c> modifier was combined with <c>data</c> or <c>record</c>.</summary>
     /// <param name="location">The text location of the conflicting modifier.</param>
     public void ReportInlineCannotBeCombinedWithData(TextLocation location)
     {
-        Report(location, "'inline' cannot be combined with 'data' or 'record'.");
+        Report(location, "GS0106", "'inline' cannot be combined with 'data' or 'record'.");
     }
 
     /// <summary>Reports that inline and open modifiers were combined.</summary>
     /// <param name="location">The text location of the conflicting modifier.</param>
     public void ReportInlineCannotBeCombinedWithOpen(TextLocation location)
     {
-        Report(location, "'inline struct' cannot be combined with 'open'.");
+        Report(location, "GS0107", "'inline struct' cannot be combined with 'open'.");
     }
 
     /// <summary>Reports that a synthesized inline-struct member was hand-written.</summary>
@@ -173,7 +173,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInlineStructSynthesizedMemberConflict(TextLocation location, string typeName, string memberName)
     {
         var message = $"Inline struct '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
-        Report(location, message);
+        Report(location, "GS0108", message);
     }
 
     /// <summary>
@@ -182,7 +182,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the <c>data</c> keyword.</param>
     public void ReportRecordCannotBeCombinedWithDataKeyword(TextLocation location)
     {
-        Report(location, "'record' is an alias for 'data struct' and cannot be combined with 'data'.");
+        Report(location, "GS0109", "'record' is an alias for 'data struct' and cannot be combined with 'data'.");
     }
 
     /// <summary>
@@ -193,7 +193,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportEmptyEnumDeclaration(TextLocation location, string enumName)
     {
         var message = $"Enum '{enumName}' must declare at least one member.";
-        Report(location, message);
+        Report(location, "GS0110", message);
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDuplicateEnumMember(TextLocation location, string memberName, string enumName)
     {
         var message = $"Enum '{enumName}' already declares a member named '{memberName}'.";
-        Report(location, message);
+        Report(location, "GS0111", message);
     }
 
     /// <summary>
@@ -217,7 +217,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedEnumMember(TextLocation location, string memberName, string enumName)
     {
         var message = $"Enum '{enumName}' does not define a member named '{memberName}'.";
-        Report(location, message);
+        Report(location, "GS0112", message);
     }
 
     /// <summary>
@@ -228,7 +228,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedType(TextLocation location, string name)
     {
         var message = $"Type '{name}' doesn't exist.";
-        Report(location, message);
+        Report(location, "GS0113", message);
     }
 
     /// <summary>
@@ -239,7 +239,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInvalidArrayLength(TextLocation location, string text)
     {
         var message = $"Array length '{text}' must be a non-negative integer literal.";
-        Report(location, message);
+        Report(location, "GS0114", message);
     }
 
     /// <summary>
@@ -251,7 +251,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportArrayLiteralLengthMismatch(TextLocation location, int expected, int actual)
     {
         var message = $"Array literal expects {expected} initialisers but got {actual}.";
-        Report(location, message);
+        Report(location, "GS0115", message);
     }
 
     /// <summary>
@@ -262,7 +262,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
     {
         var message = $"Type '{type.Name}' is not indexable.";
-        Report(location, message);
+        Report(location, "GS0116", message);
     }
 
     /// <summary>
@@ -274,7 +274,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportIntrinsicArgumentType(TextLocation location, string name, TypeSymbol type)
     {
         var message = $"Built-in '{name}' cannot be applied to a value of type '{type.Name}'.";
-        Report(location, message);
+        Report(location, "GS0117", message);
     }
 
     /// <summary>
@@ -283,7 +283,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the 'try' keyword.</param>
     public void ReportTryWithoutCatchOrFinally(TextLocation location)
     {
-        Report(location, "A 'try' statement requires at least one catch or finally clause.");
+        Report(location, "GS0118", "A 'try' statement requires at least one catch or finally clause.");
     }
 
     /// <summary>
@@ -293,7 +293,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The non-disposable type.</param>
     public void ReportTypeNotDisposable(TextLocation location, TypeSymbol type)
     {
-        Report(location, $"Type '{type.Name}' cannot be used in a 'using' statement because it does not provide a public Dispose() method.");
+        Report(location, "GS0119", $"Type '{type.Name}' cannot be used in a 'using' statement because it does not provide a public Dispose() method.");
     }
 
     /// <summary>
@@ -304,7 +304,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInvalidBreakOrContinue(TextLocation location, string text)
     {
         var message = $"The keyword '{text}' can only be used inside of loops.";
-        Report(location, message);
+        Report(location, "GS0120", message);
     }
 
     /// <summary>
@@ -314,7 +314,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInvalidReturn(TextLocation location)
     {
         var message = "The 'return' keyword can only be used inside of functions.";
-        Report(location, message);
+        Report(location, "GS0121", message);
     }
 
     /// <summary>
@@ -325,7 +325,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInvalidReturnExpression(TextLocation location, string functionName)
     {
         var message = $"Since the function '{functionName}' does not return a value the 'return' keyword cannot be followed by an expression.";
-        Report(location, message);
+        Report(location, "GS0122", message);
     }
 
     /// <summary>
@@ -336,7 +336,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportMissingReturnExpression(TextLocation location, TypeSymbol returnType)
     {
         var message = $"An expression of type '{returnType}' is expected.";
-        Report(location, message);
+        Report(location, "GS0123", message);
     }
 
     /// <summary>
@@ -346,7 +346,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportExpressionMustHaveValue(TextLocation location)
     {
         var message = "Expression must have a value.";
-        Report(location, message);
+        Report(location, "GS0124", message);
     }
 
     /// <summary>
@@ -357,7 +357,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedVariable(TextLocation location, string name)
     {
         var message = $"Variable '{name}' doesn't exist.";
-        Report(location, message);
+        Report(location, "GS0125", message);
     }
 
     /// <summary>
@@ -368,7 +368,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportNotAVariable(TextLocation location, string name)
     {
         var message = $"'{name}' is not a variable.";
-        Report(location, message);
+        Report(location, "GS0126", message);
     }
 
     /// <summary>
@@ -379,7 +379,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportCannotAssign(TextLocation location, string name)
     {
         var message = $"Variable '{name}' is read-only and cannot be assigned to.";
-        Report(location, message);
+        Report(location, "GS0127", message);
     }
 
     /// <summary>
@@ -391,7 +391,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedUnaryOperator(TextLocation location, string operatorText, TypeSymbol operandType)
     {
         var message = $"Unary operator '{operatorText}' is not defined for type '{operandType}'.";
-        Report(location, message);
+        Report(location, "GS0128", message);
     }
 
     /// <summary>
@@ -404,7 +404,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedBinaryOperator(TextLocation location, string operatorText, TypeSymbol leftType, TypeSymbol rightType)
     {
         var message = $"Binary operator '{operatorText}' is not defined for types '{leftType}' and '{rightType}'.";
-        Report(location, message);
+        Report(location, "GS0129", message);
     }
 
     /// <summary>
@@ -415,7 +415,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUndefinedFunction(TextLocation location, string name)
     {
         var message = $"Function '{name}' doesn't exist.";
-        Report(location, message);
+        Report(location, "GS0130", message);
     }
 
     /// <summary>
@@ -426,7 +426,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportNotAFunction(TextLocation location, string name)
     {
         var message = $"'{name}' is not a function.";
-        Report(location, message);
+        Report(location, "GS0131", message);
     }
 
     /// <summary>
@@ -436,7 +436,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportAwaitOutsideAsyncFunction(TextLocation location)
     {
         var message = "'await' can only be used inside an 'async func'.";
-        Report(location, message);
+        Report(location, "GS0132", message);
     }
 
     /// <summary>
@@ -447,7 +447,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTypeIsNotAwaitable(TextLocation location, TypeSymbol actualType)
     {
         var message = $"Expression of type '{actualType}' cannot be awaited; expected a 'Task' or 'Task[T]'.";
-        Report(location, message);
+        Report(location, "GS0133", message);
     }
 
     /// <summary>
@@ -458,7 +458,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTypeIsNotAsyncEnumerable(TextLocation location, TypeSymbol actualType)
     {
         var message = $"Expression of type '{actualType}' cannot be iterated with 'await for'; expected an 'IAsyncEnumerable[T]'.";
-        Report(location, message);
+        Report(location, "GS0134", message);
     }
 
     /// <summary>
@@ -470,7 +470,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportAsyncModifierInTypeClauseRequiresSequence(TextLocation location, SyntaxKind actualKind)
     {
         var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]'; found '<{actualKind}>'.";
-        Report(location, message);
+        Report(location, "GS0135", message);
     }
 
     /// <summary>
@@ -480,7 +480,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportYieldOutsideIteratorFunction(TextLocation location)
     {
         var message = "'yield' statement is not allowed outside an iterator function (a function returning IEnumerable[T] or sequence[T]).";
-        Report(location, message);
+        Report(location, "GS0136", message);
     }
 
     /// <summary>
@@ -490,7 +490,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportGoOperandIsNotACall(TextLocation location)
     {
         var message = "'go' must be followed by a function or method call.";
-        Report(location, message);
+        Report(location, "GS0137", message);
     }
 
     /// <summary>
@@ -500,7 +500,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDeferOperandIsNotACall(TextLocation location)
     {
         var message = "'defer' must be followed by a function or method call.";
-        Report(location, message);
+        Report(location, "GS0138", message);
     }
 
     /// <summary>
@@ -511,7 +511,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportReceiveOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
     {
         var message = $"The receive operator '<-' requires a channel operand; got '{actualType}'.";
-        Report(location, message);
+        Report(location, "GS0139", message);
     }
 
     /// <summary>
@@ -522,7 +522,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSendTargetIsNotChannel(TextLocation location, TypeSymbol actualType)
     {
         var message = $"The send operator '<-' requires a channel on the left; got '{actualType}'.";
-        Report(location, message);
+        Report(location, "GS0140", message);
     }
 
     /// <summary>
@@ -533,7 +533,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportCloseOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
     {
         var message = $"'close' requires a channel operand; got '{actualType}'.";
-        Report(location, message);
+        Report(location, "GS0141", message);
     }
 
     /// <summary>
@@ -543,7 +543,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSelectWithNoCases(TextLocation location)
     {
         var message = "'select' with no cases is unreachable.";
-        Report(location, message);
+        Report(location, "GS0142", message);
     }
 
     /// <summary>
@@ -553,7 +553,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSelectDuplicateDefault(TextLocation location)
     {
         var message = "'select' may have at most one 'default' arm.";
-        Report(location, message);
+        Report(location, "GS0143", message);
     }
 
     /// <summary>
@@ -566,7 +566,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportWrongArgumentCount(TextLocation location, string name, int expectedCount, int actualCount)
     {
         var message = $"Function '{name}' requires {expectedCount} arguments but was given {actualCount}.";
-        Report(location, message);
+        Report(location, "GS0144", message);
     }
 
     /// <summary>Reports a variadic parameter (<c>...T</c>) that is not the last parameter (Phase 4.8).</summary>
@@ -575,7 +575,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportVariadicParameterMustBeLast(TextLocation location, string name)
     {
         var message = $"Variadic parameter '{name}' must be the last parameter.";
-        Report(location, message);
+        Report(location, "GS0145", message);
     }
 
     /// <summary>Reports a variadic parameter used in a context that does not yet support it (Phase 4.8 — MVP: top-level functions only).</summary>
@@ -584,7 +584,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportVariadicParameterNotSupportedHere(TextLocation location, string name)
     {
         var message = $"Variadic parameter '{name}' is only supported on top-level function declarations.";
-        Report(location, message);
+        Report(location, "GS0146", message);
     }
 
     /// <summary>Reports a call to a variadic function with too few fixed arguments (Phase 4.8).</summary>
@@ -595,7 +595,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTooFewArgumentsForVariadic(TextLocation location, string name, int minimumCount, int actualCount)
     {
         var message = $"Function '{name}' requires at least {minimumCount} arguments but was given {actualCount}.";
-        Report(location, message);
+        Report(location, "GS0147", message);
     }
 
     /// <summary>Reports a generic call whose explicit type-argument list has the wrong arity (Phase 4.1 / ADR-0020).</summary>
@@ -605,7 +605,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="actualCount">The actual number of type arguments.</param>
     public void ReportWrongTypeArgumentCount(TextLocation location, string name, int expectedCount, int actualCount)
     {
-        Report(location, $"Generic function '{name}' requires {expectedCount} type arguments but was given {actualCount}.");
+        Report(location, "GS0148", $"Generic function '{name}' requires {expectedCount} type arguments but was given {actualCount}.");
     }
 
     /// <summary>Reports a type-clause type-argument list applied to a non-generic type (Phase 4.3c / ADR-0020).</summary>
@@ -613,7 +613,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="name">The type name.</param>
     public void ReportTypeNotGeneric(TextLocation location, string name)
     {
-        Report(location, $"Type '{name}' is not generic.");
+        Report(location, "GS0149", $"Type '{name}' is not generic.");
     }
 
     /// <summary>Reports an interface type-parameter used in a position incompatible with its declared variance (Phase 4.3c / ADR-0021).</summary>
@@ -623,7 +623,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="usedPosition">The position the type-parameter was used in (input/output).</param>
     public void ReportTypeParameterVariancePositionViolation(TextLocation location, string typeParameterName, string declaredVariance, string usedPosition)
     {
-        Report(location, $"Type parameter '{typeParameterName}' declared '{declaredVariance}' cannot appear in {usedPosition} position.");
+        Report(location, "GS0150", $"Type parameter '{typeParameterName}' declared '{declaredVariance}' cannot appear in {usedPosition} position.");
     }
 
     /// <summary>Reports a generic call whose type arguments could not be inferred from the value arguments (Phase 4.1 / ADR-0020).</summary>
@@ -632,7 +632,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="typeParameterName">The unresolved type-parameter name.</param>
     public void ReportTypeArgumentInferenceFailed(TextLocation location, string name, string typeParameterName)
     {
-        Report(location, $"Cannot infer type argument '{typeParameterName}' for generic function '{name}'; supply it explicitly via '[{typeParameterName}]'.");
+        Report(location, "GS0151", $"Cannot infer type argument '{typeParameterName}' for generic function '{name}'; supply it explicitly via '[{typeParameterName}]'.");
     }
 
     /// <summary>Reports a generic call whose type argument does not satisfy the declared constraint (Phase 4.2 / ADR-0020).</summary>
@@ -642,7 +642,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="constraintDescription">A human-readable description of the constraint (e.g. <c>comparable</c>).</param>
     public void ReportTypeArgumentDoesNotSatisfyConstraint(TextLocation location, string typeParameterName, TypeSymbol typeArgument, string constraintDescription)
     {
-        Report(location, $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
+        Report(location, "GS0152", $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
     }
 
     /// <summary>Reports an interface used as a type-parameter constraint that is not <c>sealed</c> (Phase 4.2b / ADR-0020).</summary>
@@ -650,7 +650,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="interfaceName">The interface name.</param>
     public void ReportInterfaceConstraintNotSealed(TextLocation location, string interfaceName)
     {
-        Report(location, $"Interface '{interfaceName}' cannot be used as a type-parameter constraint because it is not declared 'sealed'.");
+        Report(location, "GS0153", $"Interface '{interfaceName}' cannot be used as a type-parameter constraint because it is not declared 'sealed'.");
     }
 
     /// <summary>
@@ -663,7 +663,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportWrongArgumentType(TextLocation location, string name, TypeSymbol expectedType, TypeSymbol actualType)
     {
         var message = $"Parameter '{name}' requires a value of type '{expectedType}' but was given a value of type '{actualType}'.";
-        Report(location, message);
+        Report(location, "GS0154", message);
     }
 
     /// <summary>
@@ -675,7 +675,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportCannotConvert(TextLocation location, TypeSymbol fromType, TypeSymbol toType)
     {
         var message = $"Cannot convert type '{fromType}' to '{toType}'.";
-        Report(location, message);
+        Report(location, "GS0155", message);
     }
 
     /// <summary>
@@ -687,7 +687,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportCannotConvertImplicitly(TextLocation location, TypeSymbol fromType, TypeSymbol toType)
     {
         var message = $"Cannot convert type '{fromType}' to '{toType}'. An explicit conversion exists (are you missing a cast?)";
-        Report(location, message);
+        Report(location, "GS0156", message);
     }
 
     /// <summary>
@@ -698,7 +698,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnableToFindType(TextLocation location, string text)
     {
         var message = $"Cannot find type {text}. Are you missing an import?";
-        Report(location, message);
+        Report(location, "GS0157", message);
     }
 
     /// <summary>
@@ -709,7 +709,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnableToFindMember(TextLocation location, string text)
     {
         var message = $"Cannot find member {text}.";
-        Report(location, message);
+        Report(location, "GS0158", message);
     }
 
     /// <summary>
@@ -720,7 +720,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportUnableToFindFunction(TextLocation location, string text)
     {
         var message = $"Cannot find function {text}.";
-        Report(location, message);
+        Report(location, "GS0159", message);
     }
 
     /// <summary>
@@ -734,7 +734,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount)
     {
         var message = $"Call to '{name}' is ambiguous between {candidateCount} applicable overloads.";
-        Report(location, message);
+        Report(location, "GS0160", message);
     }
 
     /// <summary>Reports that copy/with syntax was applied to a non-data-struct value.</summary>
@@ -743,7 +743,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportCopyOrWithNotDataStruct(TextLocation location, TypeSymbol type)
     {
         var message = $"copy/with requires a data struct receiver, but got '{type}'.";
-        Report(location, message);
+        Report(location, "GS0161", message);
     }
 
     /// <summary>Reports that named arguments were used outside the scoped data-struct copy syntax.</summary>
@@ -751,7 +751,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportNamedArgumentOnlyValidForCopy(TextLocation location)
     {
         var message = "Named arguments are only supported for data-struct .copy(...).";
-        Report(location, message);
+        Report(location, "GS0162", message);
     }
 
     /// <summary>Reports that a deconstruction target has the wrong number of elements.</summary>
@@ -761,7 +761,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDeconstructionFieldCountMismatch(TextLocation location, int expected, int actual)
     {
         var message = $"Deconstruction requires {expected} fields but was given {actual}.";
-        Report(location, message);
+        Report(location, "GS0163", message);
     }
 
     /// <summary>Reports that positional deconstruction needs a tuple or data struct.</summary>
@@ -770,7 +770,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDeconstructionRequiresTupleOrDataStruct(TextLocation location, TypeSymbol type)
     {
         var message = $"Deconstruction requires a tuple or data struct initializer, but got '{type}'.";
-        Report(location, message);
+        Report(location, "GS0164", message);
     }
 
     /// <summary>
@@ -781,7 +781,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportMultipleTopLevelFiles(TextLocation location)
     {
         var message = "Only one source file in a compilation may contain top-level statements.";
-        Report(location, message);
+        Report(location, "GS0165", message);
     }
 
     /// <summary>
@@ -792,7 +792,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTopLevelStatementsConflictWithMain(TextLocation location)
     {
         var message = "Top-level statements cannot be used together with an explicit Main function.";
-        Report(location, message);
+        Report(location, "GS0166", message);
     }
 
     /// <summary>
@@ -805,7 +805,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportMultiAssignmentMismatch(TextLocation location, int targetCount, int valueCount)
     {
         var message = $"Multi-assignment has {targetCount} target(s) but {valueCount} value(s).";
-        Report(location, message);
+        Report(location, "GS0167", message);
     }
 
     /// <summary>
@@ -816,7 +816,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportFallthroughNotSupported(TextLocation location)
     {
         var message = "'fallthrough' is not supported (ADR-0013). GSharp 'switch' cases do not fall through.";
-        Report(location, message);
+        Report(location, "GS0168", message);
     }
 
     /// <summary>
@@ -826,7 +826,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportDuplicateSwitchDefault(TextLocation location)
     {
         var message = "A 'switch' statement can only have one 'default' arm.";
-        Report(location, message);
+        Report(location, "GS0169", message);
     }
 
     /// <summary>
@@ -836,7 +836,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchCaseValueNotConstant(TextLocation location)
     {
         var message = "Switch case value must be a constant expression.";
-        Report(location, message);
+        Report(location, "GS0170", message);
     }
 
     /// <summary>
@@ -848,7 +848,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchCaseTypeMismatch(TextLocation location, TypeSymbol caseType, TypeSymbol switchType)
     {
         var message = $"Switch case value of type '{caseType}' is incompatible with switch expression of type '{switchType}'.";
-        Report(location, message);
+        Report(location, "GS0171", message);
     }
 
     /// <summary>Reports that a property pattern was used on a non-aggregate type.</summary>
@@ -856,7 +856,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The discriminant type.</param>
     public void ReportPropertyPatternRequiresStructOrClass(TextLocation location, TypeSymbol type)
     {
-        Report(location, $"Property pattern requires a struct or class value, not '{type}'.");
+        Report(location, "GS0172", $"Property pattern requires a struct or class value, not '{type}'.");
     }
 
     /// <summary>Reports that a property pattern references an unknown field.</summary>
@@ -865,7 +865,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The containing type.</param>
     public void ReportUndefinedFieldOnType(TextLocation location, string fieldName, TypeSymbol type)
     {
-        Report(location, $"Type '{type}' does not define a field named '{fieldName}'.");
+        Report(location, "GS0173", $"Type '{type}' does not define a field named '{fieldName}'.");
     }
 
     /// <summary>Reports that a relational pattern operator is not defined for a type.</summary>
@@ -874,7 +874,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The operand type.</param>
     public void ReportRelationalPatternOperatorUndefined(TextLocation location, SyntaxKind op, TypeSymbol type)
     {
-        Report(location, $"Relational pattern operator '{SyntaxFacts.GetText(op)}' is not defined for type '{type}'.");
+        Report(location, "GS0174", $"Relational pattern operator '{SyntaxFacts.GetText(op)}' is not defined for type '{type}'.");
     }
 
     /// <summary>Reports that a list pattern was used on a non-array/slice type.</summary>
@@ -882,7 +882,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The discriminant type.</param>
     public void ReportListPatternRequiresArrayOrSlice(TextLocation location, TypeSymbol type)
     {
-        Report(location, $"List pattern requires an array or slice value, not '{type}'.");
+        Report(location, "GS0175", $"List pattern requires an array or slice value, not '{type}'.");
     }
 
     /// <summary>
@@ -892,7 +892,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchExpressionMissingDefault(TextLocation location)
     {
         var message = "Switch expression must have a 'default' arm.";
-        Report(location, message);
+        Report(location, "GS0176", message);
     }
 
     /// <summary>
@@ -904,7 +904,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchExpressionNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
     {
         var message = $"Switch expression on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
-        Report(location, message);
+        Report(location, "GS0177", message);
     }
 
     /// <summary>
@@ -916,7 +916,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchStatementNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
     {
         var message = $"Switch statement on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
-        Report(location, message);
+        Report(location, "GS0178", message);
     }
 
     /// <summary>
@@ -928,7 +928,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportSwitchExpressionArmTypeMismatch(TextLocation location, TypeSymbol armType, TypeSymbol expectedType)
     {
         var message = $"All switch-expression arms must produce the same type; expected '{expectedType}' but arm produces '{armType}'.";
-        Report(location, message);
+        Report(location, "GS0179", message);
     }
 
     /// <summary>
@@ -939,7 +939,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportAccessibilityModifierNotAllowedHere(TextLocation location, string modifier)
     {
         var message = $"Accessibility modifier '{modifier}' is not allowed here. It is only valid on top-level 'func', 'type', 'var', 'let' and 'const' declarations.";
-        Report(location, message);
+        Report(location, "GS0180", message);
     }
 
     /// <summary>Reports an attempt to subclass a sealed (non-<c>open</c>) class. Phase 3.B.3 sub-step 3 / ADR-0017.</summary>
@@ -947,7 +947,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="baseTypeName">The base type name.</param>
     public void ReportBaseClassNotOpen(TextLocation location, string baseTypeName)
     {
-        Report(location, $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
+        Report(location, "GS0181", $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
     }
 
     /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
@@ -956,7 +956,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The method name.</param>
     public void ReportMissingOverride(TextLocation location, string baseTypeName, string methodName)
     {
-        Report(location, $"Method '{baseTypeName}.{methodName}' is overridable; add 'override' to redefine it.");
+        Report(location, "GS0182", $"Method '{baseTypeName}.{methodName}' is overridable; add 'override' to redefine it.");
     }
 
     /// <summary>Reports an <c>override</c> method that does not match any open base method. ADR-0017.</summary>
@@ -964,7 +964,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The method name.</param>
     public void ReportNoBaseMethodToOverride(TextLocation location, string methodName)
     {
-        Report(location, $"Method '{methodName}' is marked 'override' but no matching open base method was found.");
+        Report(location, "GS0183", $"Method '{methodName}' is marked 'override' but no matching open base method was found.");
     }
 
     /// <summary>Reports an <c>override</c> targeting a method that is not <c>open</c> (sealed override). ADR-0017.</summary>
@@ -972,7 +972,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The method name.</param>
     public void ReportOverrideOfSealedMethod(TextLocation location, string methodName)
     {
-        Report(location, $"Method '{methodName}' cannot override the base method because the base method is not open.");
+        Report(location, "GS0184", $"Method '{methodName}' cannot override the base method because the base method is not open.");
     }
 
     /// <summary>Reports a signature mismatch between an <c>override</c> method and its base method.</summary>
@@ -980,7 +980,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The method name.</param>
     public void ReportOverrideSignatureMismatch(TextLocation location, string methodName)
     {
-        Report(location, $"Override of method '{methodName}' must match the base method's parameter types and return type.");
+        Report(location, "GS0185", $"Override of method '{methodName}' must match the base method's parameter types and return type.");
     }
 
     /// <summary>Reports an interface method declared with a body (ADR-0018: Phase 3 interfaces are signature-only).</summary>
@@ -988,7 +988,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The method name.</param>
     public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
     {
-        Report(location, $"Interface method '{methodName}' may not have a body in this version of GSharp; see ADR-0018.");
+        Report(location, "GS0186", $"Interface method '{methodName}' may not have a body in this version of GSharp; see ADR-0018.");
     }
 
     /// <summary>Reports a class that fails to implement an interface method.</summary>
@@ -998,7 +998,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The missing method.</param>
     public void ReportInterfaceMethodNotImplemented(TextLocation location, string className, string interfaceName, string methodName)
     {
-        Report(location, $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
+        Report(location, "GS0187", $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
     }
 
     /// <summary>Phase 3.B.5: reports a class that implements a sealed interface declared in a different package.</summary>
@@ -1008,7 +1008,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="interfacePackage">The package owning the sealed interface.</param>
     public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
     {
-        Report(location, $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
+        Report(location, "GS0188", $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
     }
 
     /// <summary>GS9001: Cannot take address of a non-lvalue expression.</summary>
@@ -1016,7 +1016,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="expressionText">A textual representation of the offending expression.</param>
     public void ReportCannotTakeAddressOfNonLvalue(TextLocation location, string expressionText)
     {
-        Report(location, $"GS9001: Cannot take address of '{expressionText}': expression is not an lvalue.");
+        Report(location, "GS9001", $"Cannot take address of '{expressionText}': expression is not an lvalue.");
     }
 
     /// <summary>GS9002: Argument must be passed by reference.</summary>
@@ -1025,7 +1025,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="methodName">The target method name.</param>
     public void ReportArgumentMustBePassedByRef(TextLocation location, int argumentIndex, string methodName)
     {
-        Report(location, $"GS9002: Argument {argumentIndex} to '{methodName}' must be passed by reference (`&`).");
+        Report(location, "GS9002", $"Argument {argumentIndex} to '{methodName}' must be passed by reference (`&`).");
     }
 
     /// <summary>GS9003: Variable must be definitely assigned before being passed by ref.</summary>
@@ -1033,7 +1033,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="variableName">The variable name.</param>
     public void ReportVariableNotDefinitelyAssignedForRef(TextLocation location, string variableName)
     {
-        Report(location, $"GS9003: Variable '{variableName}' must be definitely assigned before being passed by `ref`.");
+        Report(location, "GS9003", $"Variable '{variableName}' must be definitely assigned before being passed by `ref`.");
     }
 
     /// <summary>GS9004: By-ref value cannot escape its declaring scope.</summary>
@@ -1041,7 +1041,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="reason">Description of the escape (capture in lambda, return, store in field).</param>
     public void ReportByRefCannotEscape(TextLocation location, string reason)
     {
-        Report(location, $"GS9004: By-ref value cannot escape: {reason}.");
+        Report(location, "GS9004", $"By-ref value cannot escape: {reason}.");
     }
 
     /// <summary>GS9005: Cannot take address of a constant.</summary>
@@ -1049,7 +1049,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="constantName">The constant name.</param>
     public void ReportCannotTakeAddressOfConstant(TextLocation location, string constantName)
     {
-        Report(location, $"GS9005: Cannot take address of constant '{constantName}'.");
+        Report(location, "GS9005", $"Cannot take address of constant '{constantName}'.");
     }
 
     /// <summary>GS9006: Pointer type cannot be used as a field type.</summary>
@@ -1057,7 +1057,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="typeName">The pointer type name.</param>
     public void ReportPointerTypeCannotBeFieldType(TextLocation location, string typeName)
     {
-        Report(location, $"GS9006: Pointer type '{typeName}' cannot be used as a field type.");
+        Report(location, "GS9006", $"Pointer type '{typeName}' cannot be used as a field type.");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)
@@ -1082,9 +1082,9 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         return string.Join(", ", displayed);
     }
 
-    private void Report(TextLocation location, string message)
+    private void Report(TextLocation location, string id, string message, DiagnosticSeverity severity = DiagnosticSeverity.Error)
     {
-        var diagnostic = new Diagnostic(location, message);
+        var diagnostic = new Diagnostic(location, id, severity, message);
         diagnostics.Add(diagnostic);
     }
 }

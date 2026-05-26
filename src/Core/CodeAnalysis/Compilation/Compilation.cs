@@ -149,7 +149,7 @@ public class Compilation
             var sourceText = SourceText.From(textWriter.ToString());
             var location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
             var message = ex.Message;
-            var diagnostic = new Diagnostic(location, message);
+            var diagnostic = new Diagnostic(location, "GS9999", DiagnosticSeverity.Error, message);
             return new EvaluationResult(ImmutableArray.Create(diagnostic), null);
         }
     }
@@ -191,22 +191,28 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (syntaxDiagnostics.Any())
+        if (syntaxDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, syntaxDiagnostics);
         }
 
         var program = Binder.BindProgram(GlobalScope);
-        if (program.Diagnostics.Any())
+        if (program.Diagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
-        if (lowerDiagnostics.Any())
+        if (lowerDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, lowerDiagnostics);
         }
+
+        var allWarnings = syntaxDiagnostics
+            .Concat(program.Diagnostics)
+            .Concat(lowerDiagnostics)
+            .Where(d => !d.IsError)
+            .ToImmutableArray();
 
         try
         {
@@ -216,11 +222,11 @@ public class Compilation
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
             var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
-            var diagnostic = new Diagnostic(location, ex.Message);
+            var diagnostic = new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
             return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
         }
 
-        return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
+        return new EmitResult(success: true, diagnostics: allWarnings);
     }
 
     /// <summary>
@@ -246,22 +252,28 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (syntaxDiagnostics.Any())
+        if (syntaxDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, syntaxDiagnostics);
         }
 
         var program = Binder.BindProgram(GlobalScope);
-        if (program.Diagnostics.Any())
+        if (program.Diagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
-        if (lowerDiagnostics.Any())
+        if (lowerDiagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, lowerDiagnostics);
         }
+
+        var allWarnings = syntaxDiagnostics
+            .Concat(program.Diagnostics)
+            .Concat(lowerDiagnostics)
+            .Where(d => !d.IsError)
+            .ToImmutableArray();
 
         try
         {
@@ -278,11 +290,11 @@ public class Compilation
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
             var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
-            var diagnostic = new Diagnostic(location, ex.Message);
+            var diagnostic = new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
             return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
         }
 
-        return new EmitResult(success: true, diagnostics: ImmutableArray<Diagnostic>.Empty);
+        return new EmitResult(success: true, diagnostics: allWarnings);
     }
 
     /// <summary>
