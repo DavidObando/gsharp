@@ -1160,6 +1160,63 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0197", $"Annotation target '{kind}' is not a recognized use-site kind. Expected one of: field, param, return, type, method, property, event, module, assembly, genericparam.");
     }
 
+    /// <summary>
+    /// Reports an annotation whose name cannot be resolved to any type
+    /// reachable from the declaring scope (ADR-0047 §3).
+    /// </summary>
+    /// <param name="location">The source location of the offending annotation name.</param>
+    /// <param name="name">The unresolved annotation name as written in source.</param>
+    public void ReportAttributeTypeNotFound(TextLocation location, string name)
+    {
+        Report(location, "GS0198", $"Attribute type '{name}' could not be found. Looked up both '{name}' and '{name}Attribute'.");
+    }
+
+    /// <summary>
+    /// Reports an annotation whose name resolves to both <c>Foo</c> and
+    /// <c>FooAttribute</c> in the declaring scope (ADR-0047 §3). The user
+    /// must qualify the name to disambiguate.
+    /// </summary>
+    /// <param name="location">The source location of the offending annotation name.</param>
+    /// <param name="name">The ambiguous annotation name as written in source.</param>
+    public void ReportAmbiguousAttributeName(TextLocation location, string name)
+    {
+        Report(location, "GS0199", $"Attribute name '{name}' is ambiguous between '{name}' and '{name}Attribute'. Qualify the name to disambiguate.");
+    }
+
+    /// <summary>
+    /// Reports an annotation whose resolved type does not derive from
+    /// <c>System.Attribute</c> (ADR-0047 §3).
+    /// </summary>
+    /// <param name="location">The source location of the offending annotation.</param>
+    /// <param name="typeName">The type name that fails the attribute check.</param>
+    public void ReportNotAnAttributeType(TextLocation location, string typeName)
+    {
+        Report(location, "GS0200", $"Type '{typeName}' is not an attribute class (it does not derive from System.Attribute).");
+    }
+
+    /// <summary>
+    /// Reports a use-site target qualifier that is valid in isolation but
+    /// not permitted at the current declaration position (ADR-0047 §4).
+    /// </summary>
+    /// <param name="location">The source location of the offending target.</param>
+    /// <param name="kind">The disallowed target kind text.</param>
+    /// <param name="position">A human-readable description of the declaration position.</param>
+    public void ReportAttributeTargetInvalidForPosition(TextLocation location, string kind, string position)
+    {
+        Report(location, "GS0201", $"Attribute target '{kind}' is not valid on {position}.");
+    }
+
+    /// <summary>
+    /// Reports an attribute argument whose value cannot be reduced to a
+    /// compile-time constant of the recognised attribute-argument value
+    /// space (ADR-0047 §3 / ECMA-335 II.23.3).
+    /// </summary>
+    /// <param name="location">The source location of the offending argument.</param>
+    public void ReportAttributeArgumentNotConstant(TextLocation location)
+    {
+        Report(location, "GS0202", "Attribute arguments must be compile-time constants (primitive, string, typeof, enum, or 1-D array thereof).");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
