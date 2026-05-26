@@ -45,7 +45,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0004 | Error | Invalid number literal. | `9999999999999999999` is out of range for `int`. |
 | GS0005 | Error | Unexpected token. | Parser expected one token kind but found another (e.g. missing `)` or `;`). |
 
-### Binder / semantic diagnostics (GS0100–GS0188)
+### Binder / semantic diagnostics (GS0100–GS0189)
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
@@ -84,7 +84,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0132 | Error | `await` outside an `async func`. | `await someTask` in a regular (non-async) function. |
 | GS0133 | Error | Expression is not awaitable. | `await 42` — `int` is not a `Task` or `Task[T]`. |
 | GS0134 | Error | Expression is not async-enumerable. | `await for x in 42` — `int` does not implement `IAsyncEnumerable[T]`. |
-| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]`. | `async int` in a type position. |
+| GS0135 | Error | `async` modifier in a type clause is only valid before `sequence[T]` or `func(...)`. | `async int` in a type position. |
 | GS0136 | Error | `yield` outside an iterator function. | `yield return 1` in a function that returns `int`, not `sequence[int]`. |
 | GS0137 | Error | `go` operand is not a call expression. | `go x + 1` — only function calls may follow `go`. |
 | GS0138 | Error | `defer` operand is not a call expression. | `defer x + 1`. |
@@ -138,6 +138,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0186 | Error | Interface method may not have a body. | A method declared inside an `interface` has an implementation block. |
 | GS0187 | Error | Class does not implement interface method. | A class claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class cannot implement a sealed interface from a different package. | Implementing a `sealed interface` defined outside the current package. |
+| GS0189 | Error | The return type of an `async func(...)` type clause is implicitly wrapped in `Task`; do not write `Task[…]` explicitly. | `async func(int) Task[int]` in a type position (ADR-0043). |
 
 ### Async state-machine diagnostics (GS0190)
 

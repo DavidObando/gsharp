@@ -1644,6 +1644,8 @@ public sealed class Binder
         if (syntax.IsFunction)
         {
             // Phase 4.7: function-type clause `func(T1, T2, ...) R?`.
+            // ADR-0043: `async func(P) R` aliases to `func(P) Task[R]` (with
+            // carve-outs for void → Task and IAsyncEnumerable[T] → unchanged).
             var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
             for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
             {
@@ -1657,6 +1659,37 @@ public sealed class Binder
             }
 
             var ret = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+            if (ret == null)
+            {
+                return null;
+            }
+
+            if (syntax.IsAsyncFunction)
+            {
+                if (IsTaskShapedReturn(ret))
+                {
+                    Diagnostics.ReportAsyncFunctionTypeClauseHasExplicitTaskReturn(
+                        syntax.ReturnTypeClause.Location,
+                        ret.Name);
+                    return null;
+                }
+
+                // ADR-0041 iterator carve-out — same logic as
+                // BindReturnTypeClause(isAsync=true) at function declarations.
+                if (ret is SequenceTypeSymbol seq)
+                {
+                    ret = AsyncSequenceTypeSymbol.Get(seq.ElementType);
+                }
+                else if (ret is NullableTypeSymbol nt && nt.UnderlyingType is SequenceTypeSymbol innerSeq)
+                {
+                    ret = NullableTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(innerSeq.ElementType));
+                }
+                else if (!IsAsyncIteratorReturnType(ret))
+                {
+                    ret = WrapAsTask(ret);
+                }
+            }
+
             return FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), ret ?? TypeSymbol.Void);
         }
 
@@ -2896,6 +2929,36 @@ public sealed class Binder
             || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="type"/> already denotes a
+    /// Task-shaped awaitable (Task, Task[T], ValueTask, or ValueTask[T]).
+    /// Used by the <c>async func(...)</c> type-clause binder (ADR-0043) to
+    /// reject explicit Task wrapping where the modifier already implies it.
+    /// </summary>
+    private static bool IsTaskShapedReturn(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        string fullName;
+        if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            fullName = clr.GetGenericTypeDefinition()?.FullName;
+        }
+        else
+        {
+            fullName = clr.FullName;
+        }
+
+        return fullName == "System.Threading.Tasks.Task"
+            || fullName == "System.Threading.Tasks.Task`1"
+            || fullName == "System.Threading.Tasks.ValueTask"
+            || fullName == "System.Threading.Tasks.ValueTask`1";
+    }
+
     private static TypeSymbol GetIteratorElementType(TypeSymbol type)
     {
         if (type is SequenceTypeSymbol seq)
@@ -3870,9 +3933,11 @@ public sealed class Binder
         returnType ??= TypeSymbol.Void;
 
         // For async lambdas, the observable return type (from the caller's
-        // perspective) is Task or Task<T>, matching top-level async functions.
+        // perspective) is Task or Task<T>, matching top-level async functions —
+        // with the iterator carve-out (ADR-0041): an async iterator lambda
+        // returning IAsyncEnumerable[T] does not get a Task wrap.
         var observableReturnType = returnType;
-        if (syntax.IsAsync)
+        if (syntax.IsAsync && !IsAsyncIteratorReturnType(returnType))
         {
             observableReturnType = WrapAsTask(returnType);
         }

@@ -134,7 +134,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         QuestionToken = questionToken;
     }
 
-    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a function type <c>func(T1, T2, ...) R?</c> (Phase 4.7).</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a function type <c>func(T1, T2, ...) R?</c> (Phase 4.7), optionally prefixed by the <c>async</c> modifier per ADR-0043.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="funcKeyword">The <c>func</c> keyword.</param>
     /// <param name="openParenToken">The opening <c>(</c> token.</param>
@@ -150,14 +150,8 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken closeParenToken,
         TypeClauseSyntax returnTypeClause,
         SyntaxToken questionToken)
-        : base(syntaxTree)
+        : this(syntaxTree, asyncModifier: null, funcKeyword, openParenToken, functionParameterTypes, closeParenToken, returnTypeClause, questionToken, isFunction: true)
     {
-        FuncKeyword = funcKeyword;
-        OpenParenToken = openParenToken;
-        FunctionParameterTypes = functionParameterTypes;
-        CloseParenToken = closeParenToken;
-        ReturnTypeClause = returnTypeClause;
-        QuestionToken = questionToken;
     }
 
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a channel type <c>chan T?</c> (Phase 5.4 / ADR-0022).</summary>
@@ -211,6 +205,30 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SequenceOpenBracketToken = openBracketToken;
         SequenceElementType = elementType;
         SequenceCloseBracketToken = closeBracketToken;
+        QuestionToken = questionToken;
+    }
+#pragma warning restore SA1642
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for an (optionally <c>async</c>-modified) function type clause (ADR-0043).</summary>
+#pragma warning disable SA1642
+    private TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken,
+        bool isFunction)
+        : base(syntaxTree)
+    {
+        AsyncModifier = asyncModifier;
+        FuncKeyword = funcKeyword;
+        OpenParenToken = openParenToken;
+        FunctionParameterTypes = functionParameterTypes;
+        CloseParenToken = closeParenToken;
+        ReturnTypeClause = returnTypeClause;
         QuestionToken = questionToken;
     }
 #pragma warning restore SA1642
@@ -335,6 +353,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes an async sequence type <c>async sequence[T]</c> (ADR-0042).</summary>
     public bool IsAsyncSequence => SequenceKeyword != null && AsyncModifier != null;
 
+    /// <summary>Gets a value indicating whether this clause denotes an async function type <c>async func(...) R?</c> (ADR-0043).</summary>
+    public bool IsAsyncFunction => FuncKeyword != null && AsyncModifier != null;
+
     /// <summary>Creates a pointer type clause <c>*T</c> (ADR-0039).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="starToken">The <c>*</c> prefix token.</param>
@@ -388,5 +409,28 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
+    }
+
+    /// <summary>Creates an async function type clause <c>async func(P) R?</c> (ADR-0043).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="asyncModifier">The leading <c>async</c> modifier token.</param>
+    /// <param name="funcKeyword">The <c>func</c> keyword.</param>
+    /// <param name="openParenToken">The opening <c>(</c> token.</param>
+    /// <param name="functionParameterTypes">The comma-separated parameter-type clauses.</param>
+    /// <param name="closeParenToken">The closing <c>)</c> token.</param>
+    /// <param name="returnTypeClause">The optional return-type clause; <c>null</c> for void.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <returns>An async function type clause.</returns>
+    public static TypeClauseSyntax CreateAsyncFunction(
+        SyntaxTree syntaxTree,
+        SyntaxToken asyncModifier,
+        SyntaxToken funcKeyword,
+        SyntaxToken openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
+        SyntaxToken closeParenToken,
+        TypeClauseSyntax returnTypeClause,
+        SyntaxToken questionToken)
+    {
+        return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, closeParenToken, returnTypeClause, questionToken, isFunction: true);
     }
 }
