@@ -107,7 +107,7 @@ This reuses architectural patterns from the async state-machine pipeline (`Synth
 
 ## Open questions
 
-1. **Async iterator alias**: `IAsyncEnumerable[T]` support shipped in #128 but no `asyncSequence[T]` alias exists yet. Future ADR will decide the ergonomic spelling.
+1. **Async iterator alias**: `IAsyncEnumerable[T]` support shipped in #128 but no `asyncSequence[T]` alias exists yet. ADR-0041 proposes overloading `sequence[T]` in `async` return-type position to mean `IAsyncEnumerable[T]`, in lieu of a separate keyword.
 2. **Try/finally in iterators**: this slice does not support `try`/`finally` within iterator bodies (would require `Dispose()` to resume into finally blocks). A diagnostic is emitted if detected.
 3. **Interpreter parity**: the interpreter (`Evaluator.cs`) does not gain `yield` support in this slice. Iterator functions are emit-only. This is a known gap tracked as #138 — the interpreter is authoritative per `docs/emit-pipeline.md` but iterator state machines are inherently an emit concern.
 

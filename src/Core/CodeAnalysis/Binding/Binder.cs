@@ -753,7 +753,7 @@ public sealed class Binder
                     }
                 }
 
-                var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+                var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
                 var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
                 var methodParameters = parameters.ToImmutable();
 
@@ -943,7 +943,7 @@ public sealed class Binder
                 }
             }
 
-            var returnType = BindTypeClause(methodSyntax.Type) ?? TypeSymbol.Void;
+            var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
             var methodSymbol = new FunctionSymbol(
                 methodName,
                 parameters.ToImmutable(),
@@ -1096,7 +1096,8 @@ public sealed class Binder
                 }
             }
 
-            var type = BindTypeClause(syntax.Type) ?? TypeSymbol.Void;
+            // ADR-0041: bind the return type with async-aware alias resolution.
+            var type = BindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
 
             var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
             FunctionSymbol function;
@@ -1846,6 +1847,38 @@ public sealed class Binder
         }
 
         return NullableTypeSymbol.Get(bound);
+    }
+
+    /// <summary>
+    /// ADR-0041: binds the return-type clause of a function (declaration,
+    /// method, extension, or lambda). When <paramref name="isAsync"/> is
+    /// <c>true</c> and the clause is the top-level <c>sequence[T]</c> alias
+    /// (optionally nullable), the alias resolves to
+    /// <see cref="AsyncSequenceTypeSymbol"/> (i.e. <c>IAsyncEnumerable[T]</c>)
+    /// rather than the synchronous <see cref="SequenceTypeSymbol"/>.
+    /// In every other position — parameter types, locals, generic arguments,
+    /// nested type clauses — <c>sequence[T]</c> continues to mean
+    /// <c>IEnumerable[T]</c> (ADR-0040).
+    /// </summary>
+    private TypeSymbol BindReturnTypeClause(TypeClauseSyntax syntax, bool isAsync)
+    {
+        var bound = BindTypeClause(syntax);
+        if (!isAsync || bound == null)
+        {
+            return bound;
+        }
+
+        if (bound is SequenceTypeSymbol seq)
+        {
+            return AsyncSequenceTypeSymbol.Get(seq.ElementType);
+        }
+
+        if (bound is NullableTypeSymbol nt && nt.UnderlyingType is SequenceTypeSymbol innerSeq)
+        {
+            return NullableTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(innerSeq.ElementType));
+        }
+
+        return bound;
     }
 
     private BoundStatement BindIfStatement(IfStatementSyntax syntax)
@@ -3824,7 +3857,7 @@ public sealed class Binder
             parameterTypes.Add(ptype);
         }
 
-        var returnType = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+        var returnType = syntax.ReturnTypeClause != null ? BindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
 
         // For async lambdas, the observable return type (from the caller's
