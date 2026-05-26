@@ -441,13 +441,10 @@ public sealed class Binder
         var name = syntax.Identifier.Text;
 
         // Reject shadowing of primitive type names.
-        switch (name)
+        if (IsPrimitiveTypeName(name))
         {
-            case "bool":
-            case "int":
-            case "string":
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-                return;
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return;
         }
 
         var aliasedType = BindTypeClause(syntax.AliasedType);
@@ -466,13 +463,10 @@ public sealed class Binder
     {
         var name = syntax.Identifier.Text;
 
-        switch (name)
+        if (IsPrimitiveTypeName(name))
         {
-            case "bool":
-            case "int":
-            case "string":
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-                return;
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return;
         }
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
@@ -509,13 +503,10 @@ public sealed class Binder
     {
         var name = syntax.Identifier.Text;
 
-        switch (name)
+        if (IsPrimitiveTypeName(name))
         {
-            case "bool":
-            case "int":
-            case "string":
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-                return;
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return;
         }
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
@@ -1189,7 +1180,31 @@ public sealed class Binder
     }
 
     private static bool IsPrimitiveTypeName(string name)
-        => name == "bool" || name == "int" || name == "string" || name == "float64";
+    {
+        switch (name)
+        {
+            case "bool":
+            case "byte":
+            case "sbyte":
+            case "short":
+            case "ushort":
+            case "int":
+            case "uint":
+            case "long":
+            case "ulong":
+            case "nint":
+            case "nuint":
+            case "float32":
+            case "float64":
+            case "decimal":
+            case "char":
+            case "string":
+            case "object":
+                return true;
+            default:
+                return false;
+        }
+    }
 
     private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
     {
@@ -6291,10 +6306,38 @@ public sealed class Binder
         {
             case "bool":
                 return TypeSymbol.Bool;
+            case "byte":
+                return TypeSymbol.Byte;
+            case "sbyte":
+                return TypeSymbol.SByte;
+            case "short":
+                return TypeSymbol.Short;
+            case "ushort":
+                return TypeSymbol.UShort;
             case "int":
                 return TypeSymbol.Int;
+            case "uint":
+                return TypeSymbol.UInt;
+            case "long":
+                return TypeSymbol.Long;
+            case "ulong":
+                return TypeSymbol.ULong;
+            case "nint":
+                return TypeSymbol.NInt;
+            case "nuint":
+                return TypeSymbol.NUInt;
+            case "float32":
+                return TypeSymbol.Float32;
+            case "float64":
+                return TypeSymbol.Float64;
+            case "decimal":
+                return TypeSymbol.Decimal;
+            case "char":
+                return TypeSymbol.Char;
             case "string":
                 return TypeSymbol.String;
+            case "object":
+                return TypeSymbol.Object;
         }
 
         if (scope.TryLookupTypeAlias(name, out var aliased))
