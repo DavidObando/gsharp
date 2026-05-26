@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -30,6 +32,50 @@ public sealed class Conversion
     /// States that there's an explicit conversion between the given types.
     /// </summary>
     public static readonly Conversion Explicit = new Conversion(exists: true, isIdentity: false, isImplicit: false);
+
+    // ADR-0044 implicit numeric widening lattice, keyed by source CLR full
+    // name → set of target CLR full names. Mirrors C# §6.1.2 plus the
+    // ADR-0044 inclusion of `decimal` as a widening target for every
+    // integral source. Native-width integers (nint/nuint) follow C#'s
+    // rules: nint widens to int64/single/double/decimal; nuint widens to
+    // uint64/single/double/decimal.
+    private static readonly Dictionary<string, HashSet<string>> NumericWideningTargets = new(StringComparer.Ordinal)
+    {
+        ["System.SByte"] = new(StringComparer.Ordinal) { "System.Int16", "System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Byte"] = new(StringComparer.Ordinal) { "System.Int16", "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Int16"] = new(StringComparer.Ordinal) { "System.Int32", "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.UInt16"] = new(StringComparer.Ordinal) { "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Int32"] = new(StringComparer.Ordinal) { "System.Int64", "System.IntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.UInt32"] = new(StringComparer.Ordinal) { "System.Int64", "System.UInt64", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Int64"] = new(StringComparer.Ordinal) { "System.Single", "System.Double", "System.Decimal" },
+        ["System.UInt64"] = new(StringComparer.Ordinal) { "System.Single", "System.Double", "System.Decimal" },
+        ["System.IntPtr"] = new(StringComparer.Ordinal) { "System.Int64", "System.Single", "System.Double", "System.Decimal" },
+        ["System.UIntPtr"] = new(StringComparer.Ordinal) { "System.UInt64", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Char"] = new(StringComparer.Ordinal) { "System.UInt16", "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.IntPtr", "System.UIntPtr", "System.Single", "System.Double", "System.Decimal" },
+        ["System.Single"] = new(StringComparer.Ordinal) { "System.Double" },
+    };
+
+    // All numeric primitive CLR full-name set — every pair (source != target)
+    // that isn't an implicit widening is permitted as an explicit narrowing
+    // (per ADR-0044). `char` is included so `(char)<int>` and `(int)<char>`
+    // both work the same way as in C#.
+    private static readonly HashSet<string> NumericClrFullNames = new(StringComparer.Ordinal)
+    {
+        "System.SByte",
+        "System.Byte",
+        "System.Int16",
+        "System.UInt16",
+        "System.Int32",
+        "System.UInt32",
+        "System.Int64",
+        "System.UInt64",
+        "System.IntPtr",
+        "System.UIntPtr",
+        "System.Single",
+        "System.Double",
+        "System.Decimal",
+        "System.Char",
+    };
 
     private Conversion(bool exists, bool isIdentity, bool isImplicit)
     {
@@ -98,6 +144,24 @@ public sealed class Conversion
             return Conversion.None;
         }
 
+        // ADR-0044 numeric lattice. Both operands must be CLR primitives in
+        // the numeric set; the widening map decides implicit vs. explicit.
+        // Decimal narrowings (decimal → int etc.) and signed/unsigned
+        // mismatches at the same width (int ↔ uint) are explicit per C#.
+        var fromClr = from?.ClrType?.FullName;
+        var toClr = to?.ClrType?.FullName;
+        if (fromClr != null && toClr != null
+            && NumericClrFullNames.Contains(fromClr)
+            && NumericClrFullNames.Contains(toClr))
+        {
+            if (NumericWideningTargets.TryGetValue(fromClr, out var targets) && targets.Contains(toClr))
+            {
+                return Conversion.Implicit;
+            }
+
+            return Conversion.Explicit;
+        }
+
         if (from == TypeSymbol.Bool || from == TypeSymbol.Int)
         {
             if (to == TypeSymbol.String)
@@ -120,10 +184,24 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
+        // ADR-0045: every value-type primitive (and every user struct)
+        // boxes implicitly to `object`. Reference types convert to
+        // `object` as a plain reference widening.
+        if (to?.ClrType == typeof(object) && from?.ClrType != null)
+        {
+            return Conversion.Implicit;
+        }
+
         // Boxing conversion for user value types to System.Object.
         if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType == typeof(object))
         {
             return Conversion.Implicit;
+        }
+
+        // ADR-0045 explicit unbox: `(T)objectValue` for any value-type T.
+        if (from?.ClrType == typeof(object) && to?.ClrType != null && to.ClrType.IsValueType)
+        {
+            return Conversion.Explicit;
         }
 
         // Reference upcast: a class implicitly converts to any interface in
