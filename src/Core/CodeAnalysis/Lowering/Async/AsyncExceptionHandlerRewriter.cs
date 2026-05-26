@@ -108,9 +108,22 @@ public static class AsyncExceptionHandlerRewriter
 
             bool finallyHasAwait = rewrittenFinally != null && AsyncBoundTreeQueries.HasAwait(rewrittenFinally);
 
-            if (!anyCatchHasAwait && !finallyHasAwait)
+            // The finally must be lifted out of the protected region in either
+            // of two cases:
+            //   1) The finally itself contains an await (the CLR forbids await
+            //      inside a finally handler).
+            //   2) The try body contains an await. Without lifting, the IL
+            //      `leave` emitted for async suspension would execute the
+            //      finally on every yield, which is semantically wrong (the
+            //      finally should run only when the try completes normally,
+            //      exceptionally, or via early exit — not on async suspension).
+            bool tryBodyHasAwait = AsyncBoundTreeQueries.HasAwait(rewrittenTry);
+            bool needsFinallyLift = rewrittenFinally != null && (finallyHasAwait || tryBodyHasAwait);
+
+            if (!anyCatchHasAwait && !needsFinallyLift)
             {
-                // No await in any handler — pass through (possibly with rewritten children).
+                // No handler-await and no need to lift the finally — pass
+                // through (possibly with rewritten children).
                 if (rewrittenTry == node.TryBlock && !CatchesChanged(node.CatchClauses, rewrittenClauses) && rewrittenFinally == node.FinallyBlock)
                 {
                     return node;
@@ -130,7 +143,7 @@ public static class AsyncExceptionHandlerRewriter
                 pendingExLocal, new BoundLiteralExpression(null, nullableExceptionType));
             statements.Add(pendingExNullInit);
 
-            if (finallyHasAwait)
+            if (needsFinallyLift)
             {
                 // Pattern B: try/finally with await in finally
                 // Also handles try/catch/finally where finally has await:

@@ -5462,6 +5462,12 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
         private readonly AsyncIteratorEmitContext asyncIteratorEmitCtx;
 
+        // Stack of currently-active protected regions; each entry holds the set of
+        // bound labels defined lexically within that region (including nested
+        // protected sub-regions). Used to translate goto/conditional-goto whose
+        // target lies outside the innermost region into the CLR-required `leave`.
+        private readonly Stack<HashSet<BoundLabel>> protectedRegionStack = new Stack<HashSet<BoundLabel>>();
+
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
             InstructionEncoder il,
@@ -5555,11 +5561,10 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.MarkLabel(this.labels[lbl.Label]);
                     break;
                 case BoundGotoStatement g:
-                    this.il.Branch(ILOpCode.Br, this.labels[g.Label]);
+                    this.EmitBranch(g.Label, conditional: null, jumpIfTrue: false);
                     break;
                 case BoundConditionalGotoStatement cg:
-                    this.EmitExpression(cg.Condition);
-                    this.il.Branch(cg.JumpIfTrue ? ILOpCode.Brtrue : ILOpCode.Brfalse, this.labels[cg.Label]);
+                    this.EmitBranch(cg.Label, conditional: cg.Condition, jumpIfTrue: cg.JumpIfTrue);
                     break;
                 case BoundTryStatement tryStmt:
                     this.EmitTryStatement(tryStmt);
@@ -6305,7 +6310,7 @@ internal sealed class ReflectionMetadataEmitter
 
                 this.il.MarkLabel(outerTryStart);
                 this.il.MarkLabel(innerTryStart);
-                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                this.EmitProtectedRegion((BoundBlockStatement)node.TryBlock);
                 var innerTryEnd = this.il.DefineLabel();
                 this.il.Branch(ILOpCode.Leave, endLabel);
                 this.il.MarkLabel(innerTryEnd);
@@ -6313,7 +6318,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitCatchClauses(node.CatchClauses, innerTryStart, innerTryEnd, leaveTarget: endLabel);
 
                 this.il.MarkLabel(finallyStart);
-                this.EmitBlock((BoundBlockStatement)node.FinallyBlock);
+                this.EmitProtectedRegion((BoundBlockStatement)node.FinallyBlock);
                 this.il.OpCode(ILOpCode.Endfinally);
                 this.il.MarkLabel(finallyEnd);
 
@@ -6323,7 +6328,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var tryStart = this.il.DefineLabel();
                 this.il.MarkLabel(tryStart);
-                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                this.EmitProtectedRegion((BoundBlockStatement)node.TryBlock);
                 var tryEnd = this.il.DefineLabel();
                 this.il.Branch(ILOpCode.Leave, endLabel);
                 this.il.MarkLabel(tryEnd);
@@ -6338,11 +6343,11 @@ internal sealed class ReflectionMetadataEmitter
                 var finallyEnd = this.il.DefineLabel();
 
                 this.il.MarkLabel(tryStart);
-                this.EmitBlock((BoundBlockStatement)node.TryBlock);
+                this.EmitProtectedRegion((BoundBlockStatement)node.TryBlock);
                 this.il.Branch(ILOpCode.Leave, finallyEnd);
 
                 this.il.MarkLabel(finallyStart);
-                this.EmitBlock((BoundBlockStatement)node.FinallyBlock);
+                this.EmitProtectedRegion((BoundBlockStatement)node.FinallyBlock);
                 this.il.OpCode(ILOpCode.Endfinally);
                 this.il.MarkLabel(finallyEnd);
 
@@ -6368,13 +6373,100 @@ internal sealed class ReflectionMetadataEmitter
                 // Stack contains the caught exception; store into the catch variable.
                 this.EmitStoreVariable(clause.Variable);
 
-                this.EmitBlock((BoundBlockStatement)clause.Body);
+                this.EmitProtectedRegion((BoundBlockStatement)clause.Body);
                 this.il.Branch(ILOpCode.Leave, leaveTarget);
                 this.il.MarkLabel(handlerEnd);
 
                 var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(clause.ExceptionType.ClrType);
                 this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
             }
+        }
+
+        // Emits a block as a protected region: pushes the lexical label set so
+        // gotos targeting labels outside the region are translated to `leave`.
+        private void EmitProtectedRegion(BoundBlockStatement block)
+        {
+            var labelSet = new HashSet<BoundLabel>();
+            CollectLabels(block, labelSet);
+            this.protectedRegionStack.Push(labelSet);
+            try
+            {
+                this.EmitBlock(block);
+            }
+            finally
+            {
+                this.protectedRegionStack.Pop();
+            }
+        }
+
+        private static void CollectLabels(BoundStatement statement, HashSet<BoundLabel> sink)
+        {
+            switch (statement)
+            {
+                case null:
+                    return;
+                case BoundLabelStatement lbl:
+                    sink.Add(lbl.Label);
+                    return;
+                case BoundBlockStatement block:
+                    foreach (var s in block.Statements)
+                    {
+                        CollectLabels(s, sink);
+                    }
+
+                    return;
+                case BoundTryStatement t:
+                    CollectLabels(t.TryBlock, sink);
+                    foreach (var c in t.CatchClauses)
+                    {
+                        CollectLabels(c.Body, sink);
+                    }
+
+                    if (t.FinallyBlock != null)
+                    {
+                        CollectLabels(t.FinallyBlock, sink);
+                    }
+
+                    return;
+                case BoundScopeStatement sc:
+                    CollectLabels(sc.Body, sink);
+                    return;
+                default:
+                    // All other structured statements (if/for/while/...) are
+                    // flattened to BoundGotoStatement/BoundConditionalGotoStatement
+                    // by Lowerer before reaching the emitter, so there are no
+                    // hidden BoundLabelStatements to discover.
+                    return;
+            }
+        }
+
+        private void EmitBranch(BoundLabel target, BoundExpression conditional, bool jumpIfTrue)
+        {
+            var targetHandle = this.labels[target];
+            var crossesRegion = this.protectedRegionStack.Count > 0
+                && !this.protectedRegionStack.Peek().Contains(target);
+
+            if (conditional == null)
+            {
+                this.il.Branch(crossesRegion ? ILOpCode.Leave : ILOpCode.Br, targetHandle);
+                return;
+            }
+
+            if (!crossesRegion)
+            {
+                this.EmitExpression(conditional);
+                this.il.Branch(jumpIfTrue ? ILOpCode.Brtrue : ILOpCode.Brfalse, targetHandle);
+                return;
+            }
+
+            // Conditional goto that crosses a protected region boundary:
+            // `leave` is not conditional, so emit the inverse branch over a
+            // `leave` to the target.
+            var skipLabel = this.il.DefineLabel();
+            this.EmitExpression(conditional);
+            this.il.Branch(jumpIfTrue ? ILOpCode.Brfalse : ILOpCode.Brtrue, skipLabel);
+            this.il.Branch(ILOpCode.Leave, targetHandle);
+            this.il.MarkLabel(skipLabel);
         }
 
         private void EmitLen(BoundLenExpression len)
