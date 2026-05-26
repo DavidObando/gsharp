@@ -2497,6 +2497,9 @@ public class Parser
             case SyntaxKind.NumberToken:
                 return ParseNumberLiteral();
 
+            case SyntaxKind.CharacterToken:
+                return ParseCharacterLiteral();
+
             case SyntaxKind.StringToken:
                 return ParseStringLiteral();
 
@@ -3190,6 +3193,12 @@ public class Parser
     {
         var numberToken = MatchToken(SyntaxKind.NumberToken);
         return new LiteralExpressionSyntax(syntaxTree, numberToken);
+    }
+
+    private ExpressionSyntax ParseCharacterLiteral()
+    {
+        var charToken = MatchToken(SyntaxKind.CharacterToken);
+        return new LiteralExpressionSyntax(syntaxTree, charToken);
     }
 
     private ExpressionSyntax ParseStringLiteral()
