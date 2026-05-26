@@ -5908,10 +5908,26 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // ADR-0044 numeric conversion lattice. Any pair of numeric CLR
+            // primitives (sbyte/byte/short/ushort/int/uint/long/ulong/nint/
+            // nuint/float/double/decimal/char) gets a typed IL conversion.
+            if (TryEmitNumericConversion(from, to))
+            {
+                return;
+            }
+
             if (to?.ClrType == typeof(object) && IsValueTypeSymbol(from))
             {
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(this.outer.GetElementTypeToken(from));
+                return;
+            }
+
+            // ADR-0045 explicit unbox: `(T)objectValue` for a value type T.
+            if (from?.ClrType == typeof(object) && to?.ClrType != null && to.ClrType.IsValueType)
+            {
+                this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.GetElementTypeToken(to));
                 return;
             }
 
@@ -5926,6 +5942,171 @@ internal sealed class ReflectionMetadataEmitter
             throw new NotSupportedException(
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
         }
+
+        // ADR-0044 numeric conversions. Maps the from/to CLR pair to the
+        // appropriate `conv.*` opcode or, for `decimal`, to the matching
+        // implicit/explicit operator method. Returns true when an emission
+        // was made.
+        private bool TryEmitNumericConversion(TypeSymbol fromSym, TypeSymbol toSym)
+        {
+            var from = fromSym?.ClrType;
+            var to = toSym?.ClrType;
+            if (from is null || to is null)
+            {
+                return false;
+            }
+
+            if (!IsNumericClrType(from) || !IsNumericClrType(to))
+            {
+                return false;
+            }
+
+            // decimal is a value type with no `conv.*` opcode; route through
+            // the BCL's operator methods. `op_Implicit` for widening sources
+            // (every integral type → decimal) and `op_Explicit` otherwise.
+            if (to == typeof(decimal) || from == typeof(decimal))
+            {
+                return TryEmitDecimalConversion(from, to);
+            }
+
+            // Stack-type bookkeeping: anything narrower than i4 is widened to
+            // i4 on the evaluation stack, so the source's stack shape is
+            // determined by `from`'s size only when it's i8, native int, r4,
+            // or r8. We pick the conv opcode that matches the *target*
+            // representation.
+            ILOpCode? op = null;
+            if (to == typeof(sbyte))
+            {
+                op = ILOpCode.Conv_i1;
+            }
+            else if (to == typeof(byte))
+            {
+                op = ILOpCode.Conv_u1;
+            }
+            else if (to == typeof(short))
+            {
+                op = ILOpCode.Conv_i2;
+            }
+            else if (to == typeof(ushort) || to == typeof(char))
+            {
+                op = ILOpCode.Conv_u2;
+            }
+            else if (to == typeof(int))
+            {
+                // From an i4-sized source the value is already i4. From i8,
+                // r4, r8, nint, nuint we must narrow to i4.
+                if (Is32BitOrSmaller(from))
+                {
+                    return true;
+                }
+
+                op = ILOpCode.Conv_i4;
+            }
+            else if (to == typeof(uint))
+            {
+                if (Is32BitOrSmaller(from))
+                {
+                    return true;
+                }
+
+                op = ILOpCode.Conv_u4;
+            }
+            else if (to == typeof(long))
+            {
+                op = ILOpCode.Conv_i8;
+            }
+            else if (to == typeof(ulong))
+            {
+                op = ILOpCode.Conv_u8;
+            }
+            else if (to == typeof(nint))
+            {
+                op = ILOpCode.Conv_i;
+            }
+            else if (to == typeof(nuint))
+            {
+                op = ILOpCode.Conv_u;
+            }
+            else if (to == typeof(float))
+            {
+                op = ILOpCode.Conv_r4;
+            }
+            else if (to == typeof(double))
+            {
+                op = ILOpCode.Conv_r8;
+            }
+
+            if (op == null)
+            {
+                return false;
+            }
+
+            this.il.OpCode(op.Value);
+            return true;
+        }
+
+        private bool TryEmitDecimalConversion(Type from, Type to)
+        {
+            // To decimal: every numeric source has either an `op_Implicit`
+            // (integrals, char) or an `op_Explicit` (float, double).
+            if (to == typeof(decimal))
+            {
+                var op = typeof(decimal).GetMethod("op_Implicit", new[] { from })
+                    ?? typeof(decimal).GetMethod("op_Explicit", new[] { from });
+                if (op == null)
+                {
+                    return false;
+                }
+
+                this.il.Call(this.outer.GetMethodEntityHandle(op));
+                return true;
+            }
+
+            // From decimal: every numeric target has an `op_Explicit`.
+            if (from == typeof(decimal))
+            {
+                var op = typeof(decimal).GetMethod("op_Explicit", new[] { typeof(decimal) });
+                // GetMethod by name+params resolves the conversion that
+                // returns the requested type when overloads disambiguate by
+                // return type; iterate to find the right one.
+                foreach (var m in typeof(decimal).GetMethods())
+                {
+                    if (m.Name == "op_Explicit"
+                        && m.ReturnType == to
+                        && m.GetParameters().Length == 1
+                        && m.GetParameters()[0].ParameterType == typeof(decimal))
+                    {
+                        op = m;
+                        break;
+                    }
+                }
+
+                if (op == null || op.ReturnType != to)
+                {
+                    return false;
+                }
+
+                this.il.Call(this.outer.GetMethodEntityHandle(op));
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsNumericClrType(Type t)
+            => t == typeof(sbyte) || t == typeof(byte)
+                || t == typeof(short) || t == typeof(ushort)
+                || t == typeof(int) || t == typeof(uint)
+                || t == typeof(long) || t == typeof(ulong)
+                || t == typeof(nint) || t == typeof(nuint)
+                || t == typeof(float) || t == typeof(double)
+                || t == typeof(decimal) || t == typeof(char);
+
+        private static bool Is32BitOrSmaller(Type t)
+            => t == typeof(sbyte) || t == typeof(byte)
+                || t == typeof(short) || t == typeof(ushort)
+                || t == typeof(int) || t == typeof(uint)
+                || t == typeof(char) || t == typeof(bool);
 
         private static bool IsReferenceCompatible(TypeSymbol a, TypeSymbol b)
         {
@@ -6229,16 +6410,134 @@ internal sealed class ReflectionMetadataEmitter
                 case string s:
                     this.il.LoadString(this.outer.metadata.GetOrAddUserString(s));
                     break;
+                case bool b:
+                    this.il.LoadConstantI4(b ? 1 : 0);
+                    break;
+                case sbyte sb:
+                    this.il.LoadConstantI4(sb);
+                    break;
+                case byte by:
+                    this.il.LoadConstantI4(by);
+                    break;
+                case short sh:
+                    this.il.LoadConstantI4(sh);
+                    break;
+                case ushort us:
+                    this.il.LoadConstantI4(us);
+                    break;
+                case char ch:
+                    this.il.LoadConstantI4(ch);
+                    break;
                 case int i:
                     this.il.LoadConstantI4(i);
                     break;
-                case bool b:
-                    this.il.LoadConstantI4(b ? 1 : 0);
+                case uint ui:
+                    this.il.LoadConstantI4(unchecked((int)ui));
+                    break;
+                case long lng:
+                    this.il.LoadConstantI8(lng);
+                    break;
+                case ulong ul:
+                    this.il.LoadConstantI8(unchecked((long)ul));
+                    break;
+                case nint ni:
+                    this.il.LoadConstantI8(ni);
+                    this.il.OpCode(ILOpCode.Conv_i);
+                    break;
+                case nuint nu:
+                    this.il.LoadConstantI8(unchecked((long)(ulong)nu));
+                    this.il.OpCode(ILOpCode.Conv_u);
+                    break;
+                case float f:
+                    this.il.LoadConstantR4(f);
+                    break;
+                case double d:
+                    this.il.LoadConstantR8(d);
+                    break;
+                case decimal m:
+                    this.EmitDecimalLiteral(m);
                     break;
                 default:
                     throw new NotSupportedException(
                         $"Literal of CLR type '{literal.Value?.GetType()}' is not yet supported.");
             }
+        }
+
+        // ADR-0044 decimal literal lowering. IL has no `ldc.decimal`, so each
+        // literal is materialised by calling the
+        // `Decimal(int, int, int, bool, byte)` ctor with the bit pattern
+        // returned by `decimal.GetBits`. Common small values (0, 1, -1) and
+        // any value that fits in `int` use the cheaper one-int ctors.
+        private void EmitDecimalLiteral(decimal value)
+        {
+            if (value == decimal.Zero)
+            {
+                this.EmitDecimalStaticField(nameof(decimal.Zero));
+                return;
+            }
+
+            if (value == decimal.One)
+            {
+                this.EmitDecimalStaticField(nameof(decimal.One));
+                return;
+            }
+
+            if (value == decimal.MinusOne)
+            {
+                this.EmitDecimalStaticField(nameof(decimal.MinusOne));
+                return;
+            }
+
+            // Try int ctor for small whole values.
+            if (decimal.Truncate(value) == value && value >= int.MinValue && value <= int.MaxValue)
+            {
+                var asInt = (int)value;
+                this.il.LoadConstantI4(asInt);
+                var ctor = typeof(decimal).GetConstructor(new[] { typeof(int) });
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(ctor));
+                return;
+            }
+
+            // Try long ctor.
+            if (decimal.Truncate(value) == value && value >= long.MinValue && value <= long.MaxValue)
+            {
+                var asLong = (long)value;
+                this.il.LoadConstantI8(asLong);
+                var ctor = typeof(decimal).GetConstructor(new[] { typeof(long) });
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(ctor));
+                return;
+            }
+
+            // General case: Decimal(int lo, int mid, int hi, bool isNegative, byte scale).
+            var bits = decimal.GetBits(value);
+            var lo = bits[0];
+            var mid = bits[1];
+            var hi = bits[2];
+            var flags = bits[3];
+            var isNegative = (flags & unchecked((int)0x80000000)) != 0;
+            var scale = (byte)((flags >> 16) & 0x7F);
+
+            this.il.LoadConstantI4(lo);
+            this.il.LoadConstantI4(mid);
+            this.il.LoadConstantI4(hi);
+            this.il.LoadConstantI4(isNegative ? 1 : 0);
+            this.il.LoadConstantI4(scale);
+
+            var bigCtor = typeof(decimal).GetConstructor(new[]
+            {
+                typeof(int), typeof(int), typeof(int), typeof(bool), typeof(byte),
+            });
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(bigCtor));
+        }
+
+        private void EmitDecimalStaticField(string name)
+        {
+            var field = typeof(decimal).GetField(name);
+            this.il.OpCode(ILOpCode.Ldsfld);
+            this.il.Token(this.outer.GetFieldReference(field));
         }
 
         private void EmitDefault(BoundDefaultExpression node)
