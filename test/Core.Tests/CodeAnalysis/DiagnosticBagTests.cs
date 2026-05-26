@@ -50,6 +50,36 @@ public class DiagnosticBagTests
         Assert.Equal(location, d.Location);
     }
 
+    [Fact]
+    public void Diagnostic_WithIdAndSeverity_ExposesProperties()
+    {
+        var location = MakeLocation("x");
+        var d = new Diagnostic(location, "GS0042", DiagnosticSeverity.Warning, "test warning");
+        Assert.Equal("GS0042", d.Id);
+        Assert.Equal(DiagnosticSeverity.Warning, d.Severity);
+        Assert.False(d.IsError);
+        Assert.Equal("test warning", d.Message);
+        Assert.Equal("test warning", d.ToString());
+    }
+
+    [Fact]
+    public void DiagnosticBag_ReportMethods_AssignStableIds()
+    {
+        var location = MakeLocation("bad char");
+        var bag = new DiagnosticBag();
+        bag.ReportBadCharacter(location, '`');
+        bag.ReportUnterminatedString(location);
+        bag.ReportUnexpectedToken(location, SyntaxKind.PlusToken, SyntaxKind.NumberToken);
+        bag.ReportUndefinedVariable(location, "x");
+
+        var diagnostics = bag.ToArray();
+        Assert.Contains(diagnostics, d => d.Id == "GS0001");
+        Assert.Contains(diagnostics, d => d.Id == "GS0003");
+        Assert.Contains(diagnostics, d => d.Id == "GS0005");
+        Assert.Contains(diagnostics, d => d.Id == "GS0125");
+        Assert.All(diagnostics, d => Assert.Equal(DiagnosticSeverity.Error, d.Severity));
+    }
+
     private static TextLocation MakeLocation(string text)
     {
         var source = SourceText.From(text);

@@ -118,9 +118,23 @@ public static class TextWriterExtensions
         {
             writer.WriteLine();
 
-            writer.SetForeground(ConsoleColor.DarkRed);
+            var severityColor = diagnostic.Severity switch
+            {
+                DiagnosticSeverity.Error => ConsoleColor.DarkRed,
+                DiagnosticSeverity.Warning => ConsoleColor.DarkYellow,
+                _ => ConsoleColor.DarkCyan,
+            };
+            var severityLabel = diagnostic.Severity switch
+            {
+                DiagnosticSeverity.Error => "error",
+                DiagnosticSeverity.Warning => "warning",
+                _ => "info",
+            };
+
+            writer.SetForeground(severityColor);
             writer.Write($"{diagnostic.Location.FileName}({diagnostic.Location.StartLine + 1},{diagnostic.Location.StartCharacter + 1},{diagnostic.Location.EndLine + 1},{diagnostic.Location.EndCharacter + 1}): ");
-            writer.WriteLine(diagnostic);
+            writer.Write($"{severityLabel} {diagnostic.Id}: ");
+            writer.WriteLine(diagnostic.Message);
             writer.ResetColor();
 
             var lineStart = diagnostic.Location.Text.Lines[diagnostic.Location.StartLine];
@@ -135,7 +149,7 @@ public static class TextWriterExtensions
             writer.Write("    ");
             writer.Write(prefix);
 
-            writer.SetForeground(ConsoleColor.DarkRed);
+            writer.SetForeground(severityColor);
             writer.Write(error);
             writer.ResetColor();
 

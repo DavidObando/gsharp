@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -146,6 +147,170 @@ public class ProgramTests
         finally
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_WithSyntaxError_ReturnsErrorExitCode()
+    {
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        // Missing closing brace — GS0005 unexpected token
+        File.WriteAllText(sample, "package P\nfunc Broken(\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_err_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", sample });
+            Assert.NotEqual(0, exit);
+            Assert.False(File.Exists(outPath), "output assembly should not exist on error");
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_NowarnFlag_Accepted()
+    {
+        // /nowarn with an unknown ID should not crash gsc.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_nowarn_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/nowarn:GS0001,GS0002", sample });
+            Assert.Equal(0, exit);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_WarnAsErrorFlag_Accepted()
+    {
+        // /warnaserror without IDs should be accepted without crashing.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_wae_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/warnaserror", sample });
+            Assert.Equal(0, exit);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_WarnAsErrorPlusFlag_Accepted()
+    {
+        // /warnaserror+:<ids> should be accepted without crashing.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_waep_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/warnaserror+:GS0001", sample });
+            Assert.Equal(0, exit);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_WarnAsErrorMinusFlag_Accepted()
+    {
+        // /warnaserror-:<ids> should be accepted without crashing.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_waem_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/warnaserror-:GS0001", sample });
+            Assert.Equal(0, exit);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Diagnostic_HasStableId_AndSeverity()
+    {
+        // Verify that a compile error produces a diagnostic with a stable GS#### ID and Error severity.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        // Unterminated string: should produce GS0003
+        File.WriteAllText(sample, "package P\nvar x = \"unterminated\n");
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Load(sample);
+        try
+        {
+            Assert.True(tree.Diagnostics.Any(), "expected parse diagnostics");
+            var d = tree.Diagnostics.First();
+            Assert.NotNull(d.Id);
+            Assert.StartsWith("GS", d.Id);
+            Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, d.Severity);
+            Assert.True(d.IsError);
+        }
+        finally
+        {
             try { File.Delete(sample); } catch { }
         }
     }

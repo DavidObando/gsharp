@@ -38,7 +38,7 @@ let x = 42
 var p = &x
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("GS9005"));
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9005");
     }
 
     [Fact]
@@ -48,7 +48,7 @@ var p = &x
 var p = &42
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("GS9001"));
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9001");
     }
 
     [Fact]
@@ -60,7 +60,7 @@ var y = 2
 var p = &(x + y)
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("GS9001"));
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9001");
     }
 
     [Fact]
@@ -107,7 +107,7 @@ var result = 0
 var ok = Int32.TryParse(""42"", result)
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("GS9002"));
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9002");
     }
 
     [Fact]

@@ -66,6 +66,15 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the path of the metadata-only reference assembly to write (refint).</summary>
     public string RefAssembly { get; set; }
 
+    /// <summary>Gets or sets the comma-separated list of diagnostic IDs to suppress (NoWarn MSBuild property).</summary>
+    public string NoWarn { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether all warnings should be treated as errors (TreatWarningsAsErrors MSBuild property).</summary>
+    public string TreatWarningsAsErrors { get; set; }
+
+    /// <summary>Gets or sets the comma-separated list of diagnostic IDs to promote to errors (WarningsAsErrors MSBuild property).</summary>
+    public string WarningsAsErrors { get; set; }
+
     /// <summary>Gets or sets the Compile item group (the .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
 
@@ -117,6 +126,21 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (!string.IsNullOrEmpty(this.RefAssembly))
         {
             args.Add($"/refout:{this.RefAssembly}");
+        }
+
+        if (!string.IsNullOrEmpty(this.NoWarn))
+        {
+            args.Add($"/nowarn:{this.NoWarn}");
+        }
+
+        if (!string.IsNullOrEmpty(this.WarningsAsErrors))
+        {
+            args.Add($"/warnaserror+:{this.WarningsAsErrors}");
+        }
+
+        if (string.Equals(this.TreatWarningsAsErrors, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("/warnaserror");
         }
 
         foreach (var r in this.References)
