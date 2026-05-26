@@ -9,9 +9,12 @@ AmpersandEqualsToken
 AmpersandHatEqualsToken
 AmpersandHatToken
 AmpersandToken
+Annotation
+AnnotationTarget
 ArrayCreationExpression
 AssignmentExpression
 AsyncKeyword
+AtToken
 AwaitExpression
 AwaitForRangeStatement
 AwaitKeyword

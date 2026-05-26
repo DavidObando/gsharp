@@ -1136,6 +1136,30 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0195", "Malformed Unicode escape in character literal.");
     }
 
+    /// <summary>
+    /// Reports an annotation lead-in (<c>@</c>) that is not followed by an
+    /// identifier or a use-site target qualifier (ADR-0047 §1).
+    /// </summary>
+    /// <param name="location">The source location of the offending token.</param>
+    public void ReportAnnotationExpected(TextLocation location)
+    {
+        Report(location, "GS0196", "Annotation name expected after '@'.");
+    }
+
+    /// <summary>
+    /// Reports an annotation use-site target qualifier whose kind is not one
+    /// of the canonical kinds defined in ADR-0047 §2 (<c>field</c>,
+    /// <c>param</c>, <c>return</c>, <c>type</c>, <c>method</c>,
+    /// <c>property</c>, <c>event</c>, <c>module</c>, <c>assembly</c>,
+    /// <c>genericparam</c>).
+    /// </summary>
+    /// <param name="location">The source location of the offending kind identifier.</param>
+    /// <param name="kind">The unrecognized kind text.</param>
+    public void ReportAnnotationTargetInvalid(TextLocation location, string kind)
+    {
+        Report(location, "GS0197", $"Annotation target '{kind}' is not a recognized use-site kind. Expected one of: field, param, return, type, method, property, event, module, assembly, genericparam.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
