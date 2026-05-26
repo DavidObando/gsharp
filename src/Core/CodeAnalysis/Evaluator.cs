@@ -502,6 +502,7 @@ public sealed class Evaluator
                 BoundNodeKind.ChannelCloseExpression => EvaluateChannelCloseExpression((BoundChannelCloseExpression)node),
                 BoundNodeKind.AddressOfExpression => EvaluateAddressOfExpression((BoundAddressOfExpression)node),
                 BoundNodeKind.DereferenceExpression => EvaluateDereferenceExpression((BoundDereferenceExpression)node),
+                BoundNodeKind.DefaultExpression => EvaluateDefaultExpression((BoundDefaultExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -1456,24 +1457,54 @@ public sealed class Evaluator
     private object EvaluateAwaitExpression(BoundAwaitExpression node)
     {
         var operand = EvaluateExpression(node.Expression);
-        if (operand is not Task task)
+        if (operand is Task task)
         {
-            throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
-        }
+            task.GetAwaiter().GetResult();
 
-        task.GetAwaiter().GetResult();
-
-        var taskType = task.GetType();
-        if (taskType.IsGenericType)
-        {
-            var resultProperty = taskType.GetProperty("Result");
-            if (resultProperty != null)
+            var taskType = task.GetType();
+            if (taskType.IsGenericType)
             {
-                return resultProperty.GetValue(task);
+                var resultProperty = taskType.GetProperty("Result");
+                if (resultProperty != null)
+                {
+                    return resultProperty.GetValue(task);
+                }
             }
+
+            return null;
         }
 
-        return null;
+        // Issue #148: `await for` desugaring produces `await __enum.MoveNextAsync()`
+        // and `await __enum.DisposeAsync()`, which return `ValueTask<bool>` /
+        // `ValueTask`. Use the same synchronous-await pragma the await-for
+        // path uses for the underlying enumerator calls.
+        if (operand == null)
+        {
+            throw new EvaluatorException("'await' operand did not evaluate to an awaitable.", node);
+        }
+
+        var operandType = operand.GetType();
+        if (operandType.FullName == "System.Threading.Tasks.ValueTask" ||
+            (operandType.IsGenericType && operandType.GetGenericTypeDefinition().FullName == "System.Threading.Tasks.ValueTask`1"))
+        {
+            return BlockOnValueTask(operand);
+        }
+
+        throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
+    }
+
+    private static object EvaluateDefaultExpression(BoundDefaultExpression node)
+    {
+        // Issue #148: the `await for` lowering uses `default(CancellationToken)`
+        // for the `GetAsyncEnumerator` token; more generally, BoundDefaultExpression
+        // should produce the type's default value when interpreted.
+        var clr = node.Type?.ClrType;
+        if (clr == null || !clr.IsValueType)
+        {
+            return null;
+        }
+
+        return System.Activator.CreateInstance(clr);
     }
 
     private object EvaluateMakeChannelExpression(BoundMakeChannelExpression node)
