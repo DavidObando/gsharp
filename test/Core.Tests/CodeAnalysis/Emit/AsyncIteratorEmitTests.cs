@@ -77,23 +77,25 @@ func empty() IAsyncEnumerable[int] {
         Assert.Empty(items);
     }
 
-    [Fact(Skip = "Pre-existing parser bug: null TypeClauseSyntax.Identifier when params + generic return type are combined — file a separate issue")]
+    [Fact]
     public void AsyncIterator_WithParameters_CapturesArguments()
     {
+        // Note: `range` is a reserved keyword (used in `for x := range expr`), so the
+        // function is named `myRange` here. See issue #147.
         const string Source = @"package AsyncIterParams
 import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func range(start int, count int) IAsyncEnumerable[int] {
+func myRange(start int, count int) IAsyncEnumerable[int] {
     var i = 0
-    while i < count {
+    for i < count {
         yield start + i
         i = i + 1
     }
 }
 ";
-        var items = CompileAndEnumerateWithArgs<int>(Source, "range", new object[] { 5, 3 }, nameof(AsyncIterator_WithParameters_CapturesArguments));
+        var items = CompileAndEnumerateWithArgs<int>(Source, "myRange", new object[] { 5, 3 }, nameof(AsyncIterator_WithParameters_CapturesArguments));
         Assert.Equal(new[] { 5, 6, 7 }, items);
     }
 
