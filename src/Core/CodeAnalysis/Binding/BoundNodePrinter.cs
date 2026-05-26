@@ -531,16 +531,16 @@ public static class BoundNodePrinter
         {
             writer.WriteKeyword((bool)node.Value ? SyntaxKind.TrueKeyword : SyntaxKind.FalseKeyword);
         }
-        else if (node.Type == TypeSymbol.Int)
-        {
-            writer.WriteNumber(value);
-        }
         else if (node.Type == TypeSymbol.String)
         {
             value = "\"" + value.Replace("\"", "\\\"") + "\"";
             writer.WriteString(value);
         }
-        else if (node.Value is int)
+        else if (node.Type == TypeSymbol.Char)
+        {
+            writer.WriteString("'" + value.Replace("'", "\\'") + "'");
+        }
+        else if (IsRecognizedNumericLiteralType(node.Type) || node.Value is int)
         {
             writer.WriteNumber(value);
         }
@@ -548,6 +548,17 @@ public static class BoundNodePrinter
         {
             throw new Exception($"Unexpected type {node.Type}");
         }
+    }
+
+    private static bool IsRecognizedNumericLiteralType(TypeSymbol t)
+    {
+        return t == TypeSymbol.SByte || t == TypeSymbol.Byte
+            || t == TypeSymbol.Short || t == TypeSymbol.UShort
+            || t == TypeSymbol.Int || t == TypeSymbol.UInt
+            || t == TypeSymbol.Long || t == TypeSymbol.ULong
+            || t == TypeSymbol.NInt || t == TypeSymbol.NUInt
+            || t == TypeSymbol.Float32 || t == TypeSymbol.Float64
+            || t == TypeSymbol.Decimal;
     }
 
     private static void WriteVariableExpression(BoundVariableExpression node, IndentedTextWriter writer)
