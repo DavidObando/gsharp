@@ -30,6 +30,7 @@ CatchKeyword
 ChanKeyword
 ChannelReceiveExpression
 ChannelSendStatement
+CharacterToken
 ClassKeyword
 CloseBraceToken
 CloseParenthesisToken

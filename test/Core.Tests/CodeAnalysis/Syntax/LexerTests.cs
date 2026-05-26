@@ -179,6 +179,112 @@ public class LexerTests
         Assert.Equal(expectedValue, token.Value);
     }
 
+    [Theory]
+    [InlineData("1L", typeof(long), 1L)]
+    [InlineData("1l", typeof(long), 1L)]
+    [InlineData("1U", typeof(uint), 1U)]
+    [InlineData("1u", typeof(uint), 1U)]
+    [InlineData("1UL", typeof(ulong), 1UL)]
+    [InlineData("1ul", typeof(ulong), 1UL)]
+    [InlineData("1LU", typeof(ulong), 1UL)]
+    [InlineData("1lu", typeof(ulong), 1UL)]
+    [InlineData("0xFFL", typeof(long), 0xFFL)]
+    [InlineData("0xFFU", typeof(uint), 0xFFU)]
+    [InlineData("0xFFUL", typeof(ulong), 0xFFUL)]
+    public void Lexes_IntegerLiteral_WithSuffix(string text, System.Type expectedType, object expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(expectedType, token.Value.GetType());
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    [Theory]
+    [InlineData("1.5", typeof(double), 1.5)]
+    [InlineData("1.5e2", typeof(double), 150.0)]
+    [InlineData("1.5e-1", typeof(double), 0.15)]
+    [InlineData("1e10", typeof(double), 1e10)]
+    [InlineData(".5", typeof(double), 0.5)]
+    [InlineData(".25e1", typeof(double), 2.5)]
+    [InlineData("1.5F", typeof(float), 1.5f)]
+    [InlineData("1.5f", typeof(float), 1.5f)]
+    [InlineData("1.5D", typeof(double), 1.5)]
+    [InlineData("1.5d", typeof(double), 1.5)]
+    [InlineData("2F", typeof(float), 2f)]
+    [InlineData("3D", typeof(double), 3.0)]
+    public void Lexes_FloatLiteral(string text, System.Type expectedType, object expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(expectedType, token.Value.GetType());
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    [Theory]
+    [InlineData("1.5M")]
+    [InlineData("1.5m")]
+    [InlineData("100M")]
+    public void Lexes_DecimalLiteral(string text)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.NumberToken, token.Kind);
+        Assert.Equal(typeof(decimal), token.Value.GetType());
+    }
+
+    [Fact]
+    public void Lexes_TrailingDot_KeepsIntAndDot()
+    {
+        // ADR-0044: bare trailing dot (`1.`) is NOT a float — int + '.' for
+        // member access disambiguation.
+        var tokens = SyntaxTree.ParseTokens("1.foo");
+        Assert.Equal(3, tokens.Length); // 1, ., foo
+        Assert.Equal(SyntaxKind.NumberToken, tokens[0].Kind);
+        Assert.Equal(1, tokens[0].Value);
+        Assert.Equal(SyntaxKind.DotToken, tokens[1].Kind);
+        Assert.Equal(SyntaxKind.IdentifierToken, tokens[2].Kind);
+    }
+
+    [Theory]
+    [InlineData("'a'", 'a')]
+    [InlineData("'Z'", 'Z')]
+    [InlineData("'\\n'", '\n')]
+    [InlineData("'\\t'", '\t')]
+    [InlineData("'\\\\'", '\\')]
+    [InlineData("'\\''", '\'')]
+    [InlineData("'\\\"'", '"')]
+    [InlineData("'\\0'", '\0')]
+    [InlineData("'\\u0041'", 'A')]
+    [InlineData("'\\x41'", 'A')]
+    [InlineData("'\\x4'", '\x4')]
+    [InlineData("'\\U00000041'", 'A')]
+    public void Lexes_CharacterLiteral(string text, char expected)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.CharacterToken, token.Kind);
+        Assert.Equal(expected, token.Value);
+    }
+
+    [Theory]
+    [InlineData("''", "Empty character literal")]
+    [InlineData("'ab'", "more than one code unit")]
+    [InlineData("'a", "Unterminated character literal")]
+    [InlineData("'\\q'", "Unrecognised escape")]
+    [InlineData("'\\u41'", "Malformed Unicode escape")]
+    [InlineData("'\\U00110000'", "Malformed Unicode escape")]
+    public void Invalid_CharacterLiteral_ReportsDiagnostic(string text, string expectedFragment)
+    {
+        SyntaxTree.ParseTokens(text, out var diagnostics);
+        Assert.Contains(diagnostics, d => d.Message.Contains(expectedFragment, System.StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void Lexes_RawString_NormalizesCRLF_To_LF()
     {
