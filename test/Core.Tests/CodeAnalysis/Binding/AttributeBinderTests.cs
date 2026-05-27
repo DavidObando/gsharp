@@ -732,6 +732,90 @@ type Point struct {
         Assert.Contains(program.Diagnostics, d => d.Id == "GS0204" && d.Message.Contains("Box.Value"));
     }
 
+    [Fact]
+    public void EnumeratorCancellation_On_CancellationToken_In_AsyncSequence_Is_Accepted()
+    {
+        // ADR-0040 / issue #180: a CancellationToken parameter on a function
+        // returning IAsyncEnumerable[T] is the only valid place for the
+        // attribute. No diagnostics should be reported.
+        var source = """
+            import System.Collections.Generic
+            import System.Runtime.CompilerServices
+            import System.Threading
+
+            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int] {
+                yield 1
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0207");
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0208");
+
+        var numbers = globalScope.Functions.Single(f => f.Name == "numbers");
+        var ct = numbers.Parameters.Single();
+        var attr = Assert.Single(ct.Attributes);
+        Assert.Equal(
+            "System.Runtime.CompilerServices.EnumeratorCancellationAttribute",
+            attr.AttributeType.Name);
+    }
+
+    [Fact]
+    public void EnumeratorCancellation_On_NonToken_Parameter_Reports_GS0207()
+    {
+        // ADR-0040: ERR_EnumeratorCancellationWrongType — the attribute is
+        // valid only on a CancellationToken parameter.
+        var source = """
+            import System.Collections.Generic
+            import System.Runtime.CompilerServices
+
+            func numbers(@EnumeratorCancellation n int) IAsyncEnumerable[int] {
+                yield n
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0207");
+    }
+
+    [Fact]
+    public void EnumeratorCancellation_On_NonAsyncSequence_Reports_GS0208()
+    {
+        // ADR-0040: the runtime threads the per-enumerator token only through
+        // IAsyncEnumerable.GetAsyncEnumerator, so applying the attribute on a
+        // plain function (or an iterator/enumerator return) is an error.
+        var source = """
+            import System.Threading
+            import System.Runtime.CompilerServices
+
+            func noop(@EnumeratorCancellation ct CancellationToken) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0208");
+    }
+
+    [Fact]
+    public void EnumeratorCancellation_On_AsyncEnumerator_Return_Reports_GS0208()
+    {
+        // IAsyncEnumerator[T] is *not* an `async sequence` — it has no
+        // GetAsyncEnumerator(CancellationToken) overload to thread the token
+        // through, so the attribute is rejected.
+        var source = """
+            import System.Collections.Generic
+            import System.Runtime.CompilerServices
+            import System.Threading
+
+            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerator[int] {
+                yield 1
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0208");
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
