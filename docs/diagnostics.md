@@ -146,6 +146,33 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 |----|----------|-------------|-----------------|
 | GS0190 | Error | Async state machine unavailable for this function. | An `async func` uses a language feature that the GSharp async emitter does not yet support (e.g. `await` inside a nested `try` block). |
 
+### Character literal diagnostics (GS0191–GS0195)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0191 | Error | Unterminated character literal. | A `'` that has no closing `'` before end-of-line. |
+| GS0192 | Error | Empty character literal; a character literal must contain exactly one code unit or escape. | `''` with nothing inside. |
+| GS0193 | Error | Character literal contains more than one code unit; use a string literal instead. | `'ab'`. |
+| GS0194 | Error | Unrecognised escape sequence in character literal. | `'\q'`. |
+| GS0195 | Error | Malformed Unicode escape in character literal. | `'\u00G0'`. |
+
+### Attribute / annotation diagnostics (GS0196–GS0205)
+
+ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attribute` declaration sugar. The following diagnostics cover parsing, resolution, use-site validation, and the compiler-recognised attribute set.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0196 | Error | Annotation name expected after `@`. | `@ func Foo() {}` — bare `@` with no identifier. |
+| GS0197 | Error | Annotation target is not a recognized use-site kind. | `@bogus:Foo func Bar() {}` — must be one of `field`, `param`, `return`, `type`, `method`, `property`, `event`, `module`, `assembly`, `genericparam`. |
+| GS0198 | Error | Attribute type could not be found. | `@DoesNotExist func Foo() {}` — neither `DoesNotExist` nor `DoesNotExistAttribute` resolves to a type. |
+| GS0199 | Error | Attribute name is ambiguous between `Foo` and `FooAttribute`. | Both types are in scope; qualify to disambiguate. |
+| GS0200 | Error | Type is not an attribute class (it does not derive from `System.Attribute`). | `@int func Foo() {}`. |
+| GS0201 | Error | Attribute target is not valid at this position. | `@field:Obsolete func Foo() {}` — `field` is not allowed on a function. |
+| GS0202 | Error | Attribute arguments must be compile-time constants. | `@Trace(myVar)` — argument is not a primitive, string, `typeof`, enum, or 1-D array thereof. |
+| GS0203 | Error | Class tagged `@Attribute` cannot also declare an explicit base class. | `@Attribute type Trace class : Other {}` — the `@Attribute` sugar implies `: System.Attribute`. |
+| GS0204 | **Warning** (Error if `IsError=true`) | Reference to a symbol marked `[Obsolete]`. | Calling a function declared with `@Obsolete("use Bar")`. Severity is promoted to error when the attribute's second argument is `true`. |
+| GS0205 | Error | Attribute is reserved for compiler synthesis. | `@CompilerGenerated`, `@Extension`, `@AsyncStateMachine`, `@Nullable`, or `@NullableContext` written in user source. |
+
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 
 | ID | Severity | Description | Example trigger |

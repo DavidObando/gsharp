@@ -103,6 +103,10 @@ GSharp has two string forms:
 
 Single-line comments start with `//` and run to the end of the line. (Block-comment syntax is not yet implemented; see the execution plan.)
 
+## Annotation lead-ins
+
+A leading `@` (the `AtToken`) introduces a Kotlin-style annotation per ADR-0047: `@Foo`, `@Foo("msg")`, `@Foo("msg", true)`, or `@target:Foo`. The `@` is a punctuation token used only by the annotation parser; it has no other syntactic role in expressions. The annotation list itself is part of the declaration grammar — see `docs/adr/0047-attribute-syntax-and-declaration.md`.
+
 ## Whitespace and line terminators
 
 Spaces, tabs, and line terminators are insignificant outside of string literals.
@@ -115,3 +119,4 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 * `docs/adr/0044-numeric-primitive-coverage.md` — primitive-type lattice and numeric suffix grammar.
 * `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.
 * `docs/adr/0046-char-literal-grammar.md` — `char` literals and escape grammar.
+* `docs/adr/0047-attribute-syntax-and-declaration.md` — Kotlin-style attribute syntax (`@Foo(...)`) and `@Attribute` declaration sugar.
