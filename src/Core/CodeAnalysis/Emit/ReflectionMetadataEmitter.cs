@@ -66,6 +66,13 @@ internal sealed class ReflectionMetadataEmitter
     // Phase 3.B.4: user-defined interface TypeDefs.
     private readonly Dictionary<InterfaceSymbol, TypeDefinitionHandle> interfaceTypeDefs = new Dictionary<InterfaceSymbol, TypeDefinitionHandle>();
 
+    // Issue #193: user-defined enum TypeDefs and the per-member literal field rows.
+    // EnumSymbol is emitted as a sealed value type deriving from System.Enum with
+    // a public instance field 'value__' of int32 plus one public static literal
+    // field per EnumMemberSymbol carrying its integer constant.
+    private readonly Dictionary<EnumSymbol, TypeDefinitionHandle> enumTypeDefs = new Dictionary<EnumSymbol, TypeDefinitionHandle>();
+    private readonly Dictionary<EnumMemberSymbol, FieldDefinitionHandle> enumMemberFieldDefs = new Dictionary<EnumMemberSymbol, FieldDefinitionHandle>();
+
     // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
@@ -124,6 +131,7 @@ internal sealed class ReflectionMetadataEmitter
     private Type coreValueType;
     private Type coreSystemType;
     private Type coreRuntimeTypeHandleType;
+    private Type coreEnumType;
     private TypeReferenceHandle objectTypeRef;
     private TypeReferenceHandle valueTypeRef;
     private MemberReferenceHandle objectCtorRef;
@@ -222,6 +230,7 @@ internal sealed class ReflectionMetadataEmitter
         this.coreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
         this.coreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
         this.coreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
+        this.coreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.valueTypeRef = this.GetTypeReference(this.coreValueType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
@@ -353,6 +362,19 @@ internal sealed class ReflectionMetadataEmitter
             nextFieldRow += s.Fields.Length;
         }
 
+        // Issue #193: each user-defined enum contributes 1 instance field
+        // (value__) plus one literal field per member. Enum field rows are
+        // planned right after non-SM struct fields so the enum TypeDef can
+        // be emitted between non-SM struct TypeDefs and <Program> without
+        // violating the monotone fieldList constraint.
+        var enums = this.program.Enums;
+        var enumFirstFieldRow = new Dictionary<EnumSymbol, int>();
+        foreach (var e in enums)
+        {
+            enumFirstFieldRow[e] = nextFieldRow;
+            nextFieldRow += 1 + e.Members.Length;
+        }
+
         int programFirstFieldRow = nextFieldRow;
 
         // SM types get field rows after <Program>'s fieldList pointer.
@@ -475,6 +497,14 @@ internal sealed class ReflectionMetadataEmitter
                 ? firstStructMethodRow
                 : firstPackageCtorRow;
             this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
+        }
+
+        // Issue #193: emit enum TypeDefs between non-SM structs and <Program>.
+        // Each enum has no methods, so its methodList points at the same row
+        // <Program>'s package ctor will live (firstPackageCtorRow).
+        foreach (var e in enums)
+        {
+            this.EmitEnumTypeDef(e, enumFirstFieldRow[e], firstPackageCtorRow);
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -1088,6 +1118,86 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.structTypeDefs[structSym] = handle2;
+    }
+
+    /// <summary>
+    /// Issue #193: emits a CLR <c>enum</c> TypeDef for a user-defined GSharp
+    /// <c>type Name enum { ... }</c>. The TypeDef is a sealed value type
+    /// deriving from <c>System.Enum</c> with:
+    ///   * an instance field <c>value__</c> of <c>int32</c> (the underlying
+    ///     type per ADR-0047 §3; widen later if we add explicit underlying
+    ///     -type syntax),
+    ///   * one <c>public static literal</c> field per <see cref="EnumMemberSymbol"/>
+    ///     carrying its integer constant via a <c>HasDefault</c> / Constant row.
+    /// Custom attributes bound onto <c>EnumSymbol.Attributes</c> route
+    /// to the type-def row; per-member attributes route to each literal field.
+    /// </summary>
+    private void EmitEnumTypeDef(EnumSymbol enumSym, int firstFieldRow, int methodListRow)
+    {
+        var enumTypeRef = this.GetTypeReference(this.coreEnumType);
+
+        // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
+        var valueFieldSigBlob = new BlobBuilder();
+        new BlobEncoder(valueFieldSigBlob).FieldSignature().Int32();
+        var valueFieldHandle = this.metadata.AddFieldDefinition(
+            attributes: FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName,
+            name: this.metadata.GetOrAddString("value__"),
+            signature: this.metadata.GetOrAddBlob(valueFieldSigBlob));
+
+        // Fields 2..N: one public static literal field per member, signature
+        // is the enum's own typedef (the standard CLR convention for enum
+        // literals). The Constant row is added below after all field rows
+        // have been emitted so they remain in increasing parent-token order.
+        var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
+        TypeDefinitionHandle enumTypeDef = default;
+
+        // The literal-field signature references the enum's own TypeDef; we
+        // need to reserve the TypeDef handle first so the FieldSig encoder
+        // can refer to it. AddTypeDefinition is monotone, so the next-row
+        // handle gives us the soon-to-be-emitted handle.
+        var pendingTypeDef = MetadataTokens.TypeDefinitionHandle(this.metadata.GetRowCount(TableIndex.TypeDef) + 1);
+
+        foreach (var member in enumSym.Members)
+        {
+            var memberSigBlob = new BlobBuilder();
+            new BlobEncoder(memberSigBlob).FieldSignature().Type(pendingTypeDef, isValueType: true);
+            var memberFieldHandle = this.metadata.AddFieldDefinition(
+                attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
+                name: this.metadata.GetOrAddString(member.Name),
+                signature: this.metadata.GetOrAddBlob(memberSigBlob));
+            memberFieldHandles.Add(memberFieldHandle);
+            this.enumMemberFieldDefs[member] = memberFieldHandle;
+        }
+
+        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
+            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
+            | MapTypeAccessibility(enumSym.Accessibility);
+
+        enumTypeDef = this.metadata.AddTypeDefinition(
+            attributes: typeAttrs,
+            @namespace: this.metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
+            name: this.metadata.GetOrAddString(enumSym.Name),
+            baseType: enumTypeRef,
+            fieldList: valueFieldHandle,
+            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
+        this.enumTypeDefs[enumSym] = enumTypeDef;
+
+        // Constant rows must be added in increasing parent FieldDefinition
+        // order; iterating the literal fields in declaration order naturally
+        // satisfies this since AddFieldDefinition is monotone.
+        for (int i = 0; i < enumSym.Members.Length; i++)
+        {
+            this.metadata.AddConstant(parent: memberFieldHandles[i], value: enumSym.Members[i].Value);
+        }
+
+        // Issue #188 (step 3): route any user annotations attached to the
+        // enum type onto the TypeDef row, and per-member annotations onto
+        // each literal-field row.
+        this.EmitUserAttributes(enumTypeDef, enumSym, AttributeTargetKind.Type);
+        for (int i = 0; i < enumSym.Members.Length; i++)
+        {
+            this.EmitUserAttributes(memberFieldHandles[i], enumSym.Members[i], AttributeTargetKind.Field);
+        }
     }
 
     /// <summary>
@@ -4846,6 +4956,11 @@ internal sealed class ReflectionMetadataEmitter
             return td;
         }
 
+        if (element is EnumSymbol enumSym && this.enumTypeDefs.TryGetValue(enumSym, out var etd))
+        {
+            return etd;
+        }
+
         throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
     }
 
@@ -5408,6 +5523,17 @@ internal sealed class ReflectionMetadataEmitter
 
             encoder.Type(typeDef, isValueType: !structSym.IsClass);
         }
+        else if (type is EnumSymbol enumSym)
+        {
+            // Issue #193: a user-defined enum's signature surface is its
+            // own TypeDef (a sealed value type derived from System.Enum).
+            if (!this.enumTypeDefs.TryGetValue(enumSym, out var enumTypeDef))
+            {
+                throw new InvalidOperationException($"Enum '{enumSym.Name}' has no emitted TypeDef.");
+            }
+
+            encoder.Type(enumTypeDef, isValueType: true);
+        }
         else if (type is InterfaceSymbol ifaceSym)
         {
             // Phase D: user-defined interface as a signature type. The
@@ -5463,6 +5589,15 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         if (type is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        // Issue #193: a user-defined enum is a CLR value type (sealed,
+        // derives from System.Enum). Boundary boxing logic (e.g. generic
+        // argument passing) must treat it as such even though it has no
+        // ClrType on the symbol.
+        if (type is EnumSymbol)
         {
             return true;
         }
