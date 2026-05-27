@@ -1637,7 +1637,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private void BindBlockStatements(ImmutableArray<StatementSyntax> statementSyntaxes, int startIndex, ImmutableArray<BoundStatement>.Builder statements)
@@ -1794,7 +1794,7 @@ public sealed class Binder
             variable.SetAttributes(boundAttrs);
         }
 
-        return new BoundVariableDeclaration(null, variable, convertedInitializer);
+        return new BoundVariableDeclaration(syntax, variable, convertedInitializer);
     }
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
@@ -1804,7 +1804,7 @@ public sealed class Binder
         var initializer = BindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
-            return new BoundExpressionStatement(null, initializer);
+            return new BoundExpressionStatement(syntax, initializer);
         }
 
         if (initializer.Type is TupleTypeSymbol tupleType)
@@ -1812,7 +1812,7 @@ public sealed class Binder
             if (syntax.Identifiers.Count != tupleType.Arity)
             {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, tupleType.Arity, syntax.Identifiers.Count);
-                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
             var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1820,7 +1820,7 @@ public sealed class Binder
             scope.TryDeclareVariable(tempVar);
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
+            statements.Add(new BoundVariableDeclaration(syntax, tempVar, initializer));
 
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
@@ -1828,10 +1828,10 @@ public sealed class Binder
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, elemType);
                 var access = new BoundTupleElementAccessExpression(null, new BoundVariableExpression(null, tempVar), tupleType, i);
-                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+                statements.Add(new BoundVariableDeclaration(syntax, elemVar, access));
             }
 
-            return new BoundBlockStatement(null, statements.ToImmutable());
+            return new BoundBlockStatement(syntax, statements.ToImmutable());
         }
 
         if (initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline))
@@ -1840,7 +1840,7 @@ public sealed class Binder
             if (syntax.Identifiers.Count != fields.Length)
             {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, fields.Length, syntax.Identifiers.Count);
-                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
             var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1848,21 +1848,21 @@ public sealed class Binder
             scope.TryDeclareVariable(tempVar);
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
+            statements.Add(new BoundVariableDeclaration(syntax, tempVar, initializer));
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
                 var idTok = syntax.Identifiers[i];
                 var field = fields[i];
                 var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, field.Type);
                 var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
-                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+                statements.Add(new BoundVariableDeclaration(syntax, elemVar, access));
             }
 
-            return new BoundBlockStatement(null, statements.ToImmutable());
+            return new BoundBlockStatement(syntax, statements.ToImmutable());
         }
 
         Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type);
-        return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+        return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
     }
 
     private BoundStatement BindNamedDeconstructionStatement(NamedDeconstructionStatementSyntax syntax)
@@ -1870,13 +1870,13 @@ public sealed class Binder
         var initializer = BindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
-            return new BoundExpressionStatement(null, initializer);
+            return new BoundExpressionStatement(syntax, initializer);
         }
 
         if (!(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline))
         {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1885,7 +1885,7 @@ public sealed class Binder
 
         var seen = new HashSet<string>();
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
+        statements.Add(new BoundVariableDeclaration(syntax, tempVar, initializer));
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.FieldIdentifier.Text;
@@ -1903,10 +1903,10 @@ public sealed class Binder
 
             var variable = BindVariableDeclaration(fieldSyntax.LocalIdentifier, isReadOnly: true, field.Type);
             var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), declaringType, field);
-            statements.Add(new BoundVariableDeclaration(null, variable, access));
+            statements.Add(new BoundVariableDeclaration(syntax, variable, access));
         }
 
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)
@@ -2221,7 +2221,7 @@ public sealed class Binder
 
             var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
             var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
-            return new BoundIfStatement(null, condition, thenStatement, elseStatement);
+            return new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
         }
 
         // `if init; cond { then } else { else }` lowers to a block that
@@ -2239,8 +2239,8 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        var inner = new BoundIfStatement(null, initCondition, initThen, initElse);
-        return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(initStatement, inner));
+        var inner = new BoundIfStatement(syntax, initCondition, initThen, initElse);
+        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(initStatement, inner));
     }
 
     private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
@@ -2478,7 +2478,7 @@ public sealed class Binder
         if (targets.Length != values.Length)
         {
             Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -2491,10 +2491,10 @@ public sealed class Binder
                 var nameExpr = (NameExpressionSyntax)targets[i];
                 var initializer = BindExpression(values[i]);
                 var variable = BindVariableDeclaration(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
-                statements.Add(new BoundVariableDeclaration(null, variable, initializer));
+                statements.Add(new BoundVariableDeclaration(syntax, variable, initializer));
             }
 
-            return new BoundBlockStatement(null, statements.ToImmutable());
+            return new BoundBlockStatement(syntax, statements.ToImmutable());
         }
 
         // Plain assignment: evaluate every RHS into a fresh temp, then assign each temp to its target.
@@ -2510,7 +2510,7 @@ public sealed class Binder
                 : new LocalVariableSymbol(tempName, isReadOnly: true, initializer.Type);
             scope.TryDeclareVariable(temp);
             temps.Add(temp);
-            statements.Add(new BoundVariableDeclaration(null, temp, initializer));
+            statements.Add(new BoundVariableDeclaration(syntax, temp, initializer));
         }
 
         for (var i = 0; i < targets.Length; i++)
@@ -2530,10 +2530,10 @@ public sealed class Binder
 
             var tempRef = new BoundVariableExpression(null, temps[i]);
             var converted = BindConversion(values[i].Location, tempRef, variable.Type);
-            statements.Add(new BoundExpressionStatement(null, new BoundAssignmentExpression(null, variable, converted)));
+            statements.Add(new BoundExpressionStatement(syntax, new BoundAssignmentExpression(null, variable, converted)));
         }
 
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
@@ -2866,7 +2866,7 @@ public sealed class Binder
             return BindErrorStatement();
         }
 
-        return new BoundTryStatement(null, tryBlock, catches.ToImmutable(), finallyBlock);
+        return new BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock);
     }
 
     private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
@@ -2883,7 +2883,7 @@ public sealed class Binder
             }
         }
 
-        return new BoundThrowStatement(null, expression);
+        return new BoundThrowStatement(syntax, expression);
     }
 
     private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
@@ -2895,7 +2895,7 @@ public sealed class Binder
         }
 
         var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, usingLowering.Cleanup);
-        return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
+        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
     }
 
     private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
@@ -2922,7 +2922,7 @@ public sealed class Binder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.AddRange(defer.PrefixStatements);
         statements.Add(tryStmt);
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private (ImmutableArray<BoundStatement> PrefixStatements, BoundExpression Cleanup, BoundStatement ErrorStatement) BindDeferStatementInBlock(DeferStatementSyntax syntax)
@@ -3015,7 +3015,7 @@ public sealed class Binder
 
         if (expression is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(null, expression);
+            return new BoundExpressionStatement(syntax, expression);
         }
 
         if (expression is not BoundCallExpression and
@@ -3025,10 +3025,10 @@ public sealed class Binder
             not BoundImportedInstanceCallExpression)
         {
             Diagnostics.ReportGoOperandIsNotACall(syntax.Expression.Location);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        return new BoundGoStatement(null, expression);
+        return new BoundGoStatement(syntax, expression);
     }
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
@@ -3037,17 +3037,17 @@ public sealed class Binder
         var channel = BindExpression(syntax.Channel);
         if (channel is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(null, channel);
+            return new BoundExpressionStatement(syntax, channel);
         }
 
         if (channel.Type is not ChannelTypeSymbol chan)
         {
             Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         var value = BindConversion(syntax.Value, chan.ElementType);
-        return new BoundChannelSendStatement(null, channel, value);
+        return new BoundChannelSendStatement(syntax, channel, value);
     }
 
     private BoundExpression BindMakeChannelExpression(MakeChannelExpressionSyntax syntax)
@@ -3138,7 +3138,7 @@ public sealed class Binder
         if (syntax.Cases.Length == 0)
         {
             Diagnostics.ReportSelectWithNoCases(syntax.SelectKeyword.Location);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         var bound = ImmutableArray.CreateBuilder<BoundSelectCase>();
@@ -3214,7 +3214,7 @@ public sealed class Binder
             bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
         }
 
-        return new BoundSelectStatement(null, bound.ToImmutable());
+        return new BoundSelectStatement(syntax, bound.ToImmutable());
     }
 
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)
@@ -3227,7 +3227,7 @@ public sealed class Binder
         scope = new BoundScope(scope);
         var body = BindStatement(syntax.Body);
         scope = scope.Parent;
-        return new BoundScopeStatement(null, body);
+        return new BoundScopeStatement(syntax, body);
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)
@@ -3242,13 +3242,13 @@ public sealed class Binder
         var stream = BindExpression(syntax.Stream);
         if (stream is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(null, stream);
+            return new BoundExpressionStatement(syntax, stream);
         }
 
         if (!TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
@@ -3265,7 +3265,7 @@ public sealed class Binder
         if (function == null || !IsIteratorReturnType(function.Type))
         {
             Diagnostics.ReportYieldOutsideIteratorFunction(syntax.YieldKeyword.Location);
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         var elementType = GetIteratorElementType(function.Type);
@@ -3275,7 +3275,7 @@ public sealed class Binder
             expression = BindConversion(syntax.Expression.Location, expression, elementType);
         }
 
-        return new BoundYieldStatement(null, expression);
+        return new BoundYieldStatement(syntax, expression);
     }
 
     private static bool IsIteratorReturnType(TypeSymbol type)
@@ -3536,7 +3536,7 @@ public sealed class Binder
                 else
                 {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
-                    return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+                    return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
                 }
 
                 break;
@@ -3557,7 +3557,7 @@ public sealed class Binder
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
                 }
 
-                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
@@ -3579,7 +3579,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundForRangeStatement(null, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
+        return new BoundForRangeStatement(syntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
 
     private static bool TryGetClrDictionaryTypes(System.Type clrType, out System.Type keyType, out System.Type valueType)
@@ -3719,15 +3719,15 @@ public sealed class Binder
         var checkLabel = new BoundLabel($"check{labelCounter}");
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundGotoStatement(null, checkLabel));
-        statements.Add(new BoundLabelStatement(null, bodyLabel));
+        statements.Add(new BoundGotoStatement(syntax, checkLabel));
+        statements.Add(new BoundLabelStatement(syntax, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(null, continueLabel));
-        statements.Add(new BoundLabelStatement(null, checkLabel));
-        statements.Add(new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true));
-        statements.Add(new BoundLabelStatement(null, breakLabel));
+        statements.Add(new BoundLabelStatement(syntax, continueLabel));
+        statements.Add(new BoundLabelStatement(syntax, checkLabel));
+        statements.Add(new BoundConditionalGotoStatement(syntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(syntax, breakLabel));
 
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private BoundStatement BindForClauseStatement(ForClauseStatementSyntax syntax)
@@ -3762,28 +3762,28 @@ public sealed class Binder
             statements.Add(init);
         }
 
-        statements.Add(new BoundGotoStatement(null, checkLabel));
-        statements.Add(new BoundLabelStatement(null, bodyLabel));
+        statements.Add(new BoundGotoStatement(syntax, checkLabel));
+        statements.Add(new BoundLabelStatement(syntax, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(null, continueLabel));
+        statements.Add(new BoundLabelStatement(syntax, continueLabel));
         if (post != null)
         {
             statements.Add(post);
         }
 
-        statements.Add(new BoundLabelStatement(null, checkLabel));
+        statements.Add(new BoundLabelStatement(syntax, checkLabel));
         if (condition == null)
         {
-            statements.Add(new BoundGotoStatement(null, bodyLabel));
+            statements.Add(new BoundGotoStatement(syntax, bodyLabel));
         }
         else
         {
-            statements.Add(new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true));
+            statements.Add(new BoundConditionalGotoStatement(syntax, bodyLabel, condition, jumpIfTrue: true));
         }
 
-        statements.Add(new BoundLabelStatement(null, breakLabel));
+        statements.Add(new BoundLabelStatement(syntax, breakLabel));
 
-        return new BoundBlockStatement(null, statements.ToImmutable());
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)
@@ -3808,7 +3808,7 @@ public sealed class Binder
         }
 
         var breakLabel = loopStack.Peek().BreakLabel;
-        return new BoundGotoStatement(null, breakLabel);
+        return new BoundGotoStatement(syntax, breakLabel);
     }
 
     private BoundStatement BindContinueStatement(ContinueStatementSyntax syntax)
@@ -3820,7 +3820,7 @@ public sealed class Binder
         }
 
         var continueLabel = loopStack.Peek().ContinueLabel;
-        return new BoundGotoStatement(null, continueLabel);
+        return new BoundGotoStatement(syntax, continueLabel);
     }
 
     private BoundStatement BindReturnStatement(ReturnStatementSyntax syntax)
@@ -3853,13 +3853,13 @@ public sealed class Binder
             }
         }
 
-        return new BoundReturnStatement(null, expression);
+        return new BoundReturnStatement(syntax, expression);
     }
 
     private BoundStatement BindExpressionStatement(ExpressionStatementSyntax syntax)
     {
         var expression = BindExpression(syntax.Expression, canBeVoid: true);
-        return new BoundExpressionStatement(null, expression);
+        return new BoundExpressionStatement(syntax, expression);
     }
 
     private BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)

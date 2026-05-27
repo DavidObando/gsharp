@@ -128,6 +128,11 @@ internal sealed class ReflectionMetadataEmitter
     // when debugInformation.Format is Portable; null in every other config.
     private Stream pdbStream;
 
+    // Phase 4 (ADR-0027 §7.7a) Portable PDB collaborator. Instantiated by
+    // EmitCore only when debugInformation.Format == Portable; null otherwise
+    // so the existing PE-only emit path stays bit-for-bit identical.
+    private PortablePdbEmitter pdb;
+
     // Maps async iterator SM class to its plan (populated during SynthesizeAsyncIteratorStateMachines).
     private readonly Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan> asyncIteratorInfos = new Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan>();
 
@@ -255,6 +260,16 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitCore(Stream peStream)
     {
+        // Phase 4 (ADR-0027 §7.7a): instantiate the Portable PDB collaborator
+        // before any method body is emitted, but only when the caller asked
+        // for portable PDBs and supplied a destination stream. Leaving `this.pdb`
+        // null in every other configuration is what keeps the legacy emit path
+        // bit-for-bit identical.
+        if (this.debugInformation.Format == DebugInformationFormat.Portable && this.pdbStream != null)
+        {
+            this.pdb = new PortablePdbEmitter();
+        }
+
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref
         //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
         //    target framework rather than the gsc host's System.Private.CoreLib.
@@ -963,6 +978,20 @@ internal sealed class ReflectionMetadataEmitter
         var contentId = peBuilder.Serialize(peBlob);
         mvidFixup.CreateWriter().WriteGuid(contentId.Guid);
         peBlob.WriteContentTo(peStream);
+
+        // Phase 4 (ADR-0027 §7.7a) PDB sidecar. Serialized after the PE so the
+        // MethodDef table row count and entry-point handle are stable. We emit
+        // exactly one MethodDebugInformation row per MethodDef (empty when no
+        // sequence points were captured), as required by the Portable PDB spec.
+        if (this.pdb != null)
+        {
+            var peRowCounts = this.metadata.GetRowCounts();
+            this.pdb.Serialize(
+                this.pdbStream,
+                peRowCounts,
+                this.metadataOnly ? default : entryHandle,
+                ComputeDeterministicContentId);
+        }
     }
 
     /// <summary>
@@ -2299,6 +2328,7 @@ internal sealed class ReflectionMetadataEmitter
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
 
         int bodyOffset = -1;
+        IReadOnlyList<SequencePoint> capturedSequencePoints = null;
         if (!this.metadataOnly)
         {
             var moveNextBody = MoveNextBodyRewriter.Build(plan);
@@ -2382,6 +2412,7 @@ internal sealed class ReflectionMetadataEmitter
             emitter.EmitBlock(body);
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            capturedSequencePoints = emitter.SequencePoints;
         }
 
         // MoveNext signature: void MoveNext() (instance)
@@ -2389,7 +2420,7 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        this.metadata.AddMethodDefinition(
+        var moveNextHandle = this.metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
                 | MethodAttributes.NewSlot | MethodAttributes.Final,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -2397,6 +2428,11 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
+
+        // Phase 4 (ADR-0027 §7.7a): MoveNext is the visible body for an async
+        // method post-lowering; sequence points captured here are what surface
+        // in debugger stack traces and `step` commands across `await` points.
+        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints);
     }
 
     /// <summary>
@@ -2780,6 +2816,7 @@ internal sealed class ReflectionMetadataEmitter
         // generics as the long-term goal; F2 will widen to GenericParam +
         // MVAR/VAR encoding and add a MethodSpec at call sites.
         int bodyOffset = -1;
+        IReadOnlyList<SequencePoint> capturedSequencePoints = null;
         if (!this.metadataOnly)
         {
             if (asyncPlan != null)
@@ -2894,6 +2931,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            capturedSequencePoints = emitter.SequencePoints;
             } // end else (non-async path)
         }
 
@@ -3012,6 +3050,13 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
+
+        // Phase 4 (ADR-0027 §7.7a): hand the body's sequence points to the PDB
+        // emitter, keyed by the freshly minted MethodDef row number. Skipped
+        // when PDB emit is off (pdb == null) or for the async-kickoff path
+        // (the kickoff stub is fully synthesised — visible PDB rows for the
+        // user's async body land via EmitStateMachineMoveNext below).
+        this.pdb?.RecordMethod(handle, capturedSequencePoints);
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
@@ -6468,6 +6513,14 @@ internal sealed class ReflectionMetadataEmitter
         // target lies outside the innermost region into the CLR-required `leave`.
         private readonly Stack<HashSet<BoundLabel>> protectedRegionStack = new Stack<HashSet<BoundLabel>>();
 
+        // Phase 4 (ADR-0027 §7.7a) Portable PDB sequence-point capture. Always
+        // allocated (cheap) so EmitStatement can append without a null check;
+        // the outer harvests this list via SequencePoints after EmitBlock and
+        // hands it to PortablePdbEmitter only when PDB emit is enabled. Empty
+        // for synthesized methods that go through other emit paths.
+        private readonly List<SequencePoint> sequencePoints = new List<SequencePoint>();
+        private int lastSequencePointIlOffset = -1;
+
         public BodyEmitter(
             ReflectionMetadataEmitter outer,
             InstructionEncoder il,
@@ -6512,6 +6565,8 @@ internal sealed class ReflectionMetadataEmitter
             this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
         }
 
+        public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
+
         public void EmitBlock(BoundBlockStatement block)
         {
             foreach (var statement in block.Statements)
@@ -6532,6 +6587,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitStatement(BoundStatement statement)
         {
+            this.RecordSequencePointFor(statement);
             switch (statement)
             {
                 case BoundBlockStatement block:
@@ -6597,6 +6653,61 @@ internal sealed class ReflectionMetadataEmitter
                     throw new NotSupportedException(
                         $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
             }
+        }
+
+        // Phase 4 (ADR-0027 §7.7a): record a sequence point for the current
+        // statement before its first opcode lands in the IL stream. Skipped for
+        // block / label statements (children record their own anchors and a
+        // label statement emits no IL of its own). BoundAwaitSequencePoint and
+        // synthesised statements with no Syntax map to hidden (0xfeefee).
+        private void RecordSequencePointFor(BoundStatement statement)
+        {
+            if (this.outer.pdb == null)
+            {
+                return;
+            }
+
+            switch (statement)
+            {
+                case BoundBlockStatement:
+                case BoundLabelStatement:
+                    return;
+            }
+
+            var ilOffset = this.il.Offset;
+            if (ilOffset == this.lastSequencePointIlOffset)
+            {
+                // Avoid two consecutive records at the same IL offset — the
+                // Portable PDB sequence-point encoding forbids δIL = 0 except
+                // for the first record.
+                return;
+            }
+
+            var syntax = statement.Syntax;
+            if (statement is BoundAwaitSequencePoint || syntax is null)
+            {
+                this.sequencePoints.Add(SequencePoint.Hidden(ilOffset, document: default));
+                this.lastSequencePointIlOffset = ilOffset;
+                return;
+            }
+
+            var location = syntax.Location;
+            if (location.Text is null)
+            {
+                this.sequencePoints.Add(SequencePoint.Hidden(ilOffset, document: default));
+                this.lastSequencePointIlOffset = ilOffset;
+                return;
+            }
+
+            var documentHandle = this.outer.pdb.GetOrAddDocument(syntax.SyntaxTree);
+            this.sequencePoints.Add(new SequencePoint(
+                ilOffset: ilOffset,
+                document: documentHandle,
+                startLine: location.StartLine + 1,
+                startColumn: location.StartCharacter + 1,
+                endLine: location.EndLine + 1,
+                endColumn: location.EndCharacter + 1));
+            this.lastSequencePointIlOffset = ilOffset;
         }
 
         private void EmitExpression(BoundExpression expression)
