@@ -100,6 +100,188 @@ public class AttributeEmitTests
         Assert.True(typeof(System.Attribute).IsAssignableFrom(trace));
     }
 
+    [Fact]
+    public void Emits_Typeof_Argument_On_Function()
+    {
+        // System.Diagnostics.DebuggerTypeProxyAttribute(Type) — exercises the
+        // ECMA-335 II.23.3 element-type 0x50 (SerString type-name) encoding.
+        var source = """
+            package P
+            import System
+            import System.Diagnostics
+
+            @DebuggerTypeProxy(typeof(int))
+            type Box data struct {
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var box = assembly.GetTypes().Single(t => t.Name == "Box");
+        var data = box
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.Diagnostics.DebuggerTypeProxyAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal(typeof(Type), arg.ArgumentType);
+
+        // The CLR rehydrates the SerString into either a System.Type or its
+        // canonical string name depending on whether the type resolves —
+        // accept either, but assert it identifies System.Int32.
+        var typeName = arg.Value switch
+        {
+            Type t => t.FullName,
+            string s => s,
+            _ => null,
+        };
+        Assert.StartsWith("System.Int32", typeName ?? string.Empty);
+    }
+
+    [Fact]
+    public void Emits_Typeof_Named_Argument()
+    {
+        // DebuggerDisplayAttribute exposes a settable `Target` property of
+        // type System.Type — verifies named-arg encoding of the 0x50 tag.
+        var source = """
+            package P
+            import System
+            import System.Diagnostics
+
+            @DebuggerDisplay("{Value}", Target = typeof(string))
+            type Holder data struct {
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var holder = assembly.GetTypes().Single(t => t.Name == "Holder");
+        var data = holder
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.Diagnostics.DebuggerDisplayAttribute");
+
+        var targetNamed = Assert.Single(data.NamedArguments, n => n.MemberName == "Target");
+        Assert.Equal(typeof(Type), targetNamed.TypedValue.ArgumentType);
+        var typeName = targetNamed.TypedValue.Value switch
+        {
+            Type t => t.FullName,
+            string s => s,
+            _ => null,
+        };
+        Assert.StartsWith("System.String", typeName ?? string.Empty);
+    }
+
+    [Fact]
+    public void Emits_Object_Argument_Carrying_Boxed_Int()
+    {
+        // DefaultValueAttribute(object) is the canonical boxed-object ctor —
+        // the emitter must precede the FixedArg with the runtime type tag
+        // (ECMA-335 II.23.3 element-type 0x51).
+        var source = """
+            package P
+            import System
+            import System.ComponentModel
+
+            @DefaultValue(42)
+            type Counter data struct {
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var counter = assembly.GetTypes().Single(t => t.Name == "Counter");
+        var data = counter
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.ComponentModel.DefaultValueAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        // CustomAttributeData unboxes a 0x51-wrapped value to its runtime element type.
+        Assert.Equal(typeof(int), arg.ArgumentType);
+        Assert.Equal(42, arg.Value);
+    }
+
+    [Fact]
+    public void Emits_Object_Argument_Carrying_String()
+    {
+        var source = """
+            package P
+            import System
+            import System.ComponentModel
+
+            @DefaultValue("hello")
+            type Greeter data struct {
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var greeter = assembly.GetTypes().Single(t => t.Name == "Greeter");
+        var data = greeter
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.ComponentModel.DefaultValueAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal(typeof(string), arg.ArgumentType);
+        Assert.Equal("hello", arg.Value);
+    }
+
+    [Fact]
+    public void Emits_Array_Argument()
+    {
+        // TupleElementNamesAttribute(string[]) — exercises the ECMA-335
+        // II.23.3 SZARRAY (0x1D) encoding for a string-array positional arg.
+        var source = """
+            package P
+            import System
+            import System.Runtime.CompilerServices
+
+            @TupleElementNames([]string{"first", "second"})
+            type Pair data struct {
+                A int
+                B int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var pair = assembly.GetTypes().Single(t => t.Name == "Pair");
+        var data = pair
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        var values = ((System.Collections.ObjectModel.ReadOnlyCollection<System.Reflection.CustomAttributeTypedArgument>)arg.Value)
+            .Select(v => (string)v.Value)
+            .ToArray();
+        Assert.Equal(new[] { "first", "second" }, values);
+    }
+
+    [Fact]
+    public void Emits_Object_Argument_Carrying_Type()
+    {
+        // DefaultValueAttribute(object) carrying a `typeof(T)` — verifies the
+        // recursive 0x51-boxed encoding nests a 0x50 type-name SerString.
+        var source = """
+            package P
+            import System
+            import System.ComponentModel
+
+            @DefaultValue(typeof(int))
+            type Holder data struct {
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var holder = assembly.GetTypes().Single(t => t.Name == "Holder");
+        var data = holder
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.ComponentModel.DefaultValueAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal(typeof(Type), arg.ArgumentType);
+        var typeName = arg.Value switch
+        {
+            Type t => t.FullName,
+            string s => s,
+            _ => null,
+        };
+        Assert.StartsWith("System.Int32", typeName ?? string.Empty);
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;
