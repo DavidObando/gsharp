@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,9 +16,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundAwaitExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundAwaitExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression being awaited.</param>
     /// <param name="type">The unwrapped type that the await yields.</param>
-    public BoundAwaitExpression(BoundExpression expression, TypeSymbol type)
+    public BoundAwaitExpression(SyntaxNode syntax, BoundExpression expression, TypeSymbol type)
+        : base(syntax)
     {
         Expression = expression;
         Type = type;

@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -17,7 +18,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundIndirectCallExpression : BoundExpression
 {
-    public BoundIndirectCallExpression(BoundExpression target, FunctionTypeSymbol functionType, ImmutableArray<BoundExpression> arguments)
+    public BoundIndirectCallExpression(SyntaxNode syntax, BoundExpression target, FunctionTypeSymbol functionType, ImmutableArray<BoundExpression> arguments)
+        : base(syntax)
     {
         Target = target;
         FunctionType = functionType;

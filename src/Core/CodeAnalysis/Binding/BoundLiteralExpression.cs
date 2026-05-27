@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,18 +16,21 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="value">The value.</param>
-    public BoundLiteralExpression(object value)
-        : this(value, InferType(value))
+    public BoundLiteralExpression(SyntaxNode syntax, object value)
+        : this(syntax, value, InferType(value))
     {
     }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class with an explicit type.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="value">The runtime value.</param>
     /// <param name="type">The static type.</param>
-    public BoundLiteralExpression(object value, TypeSymbol type)
+    public BoundLiteralExpression(SyntaxNode syntax, object value, TypeSymbol type)
+        : base(syntax)
     {
         Value = value;
         Type = type;

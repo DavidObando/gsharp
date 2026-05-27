@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Reflection;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -19,7 +20,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
-    public BoundClrPropertyAccessExpression(BoundExpression receiver, MemberInfo member, TypeSymbol resultType)
+    public BoundClrPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, MemberInfo member, TypeSymbol resultType)
+        : base(syntax)
     {
         Receiver = receiver;
         Member = member;

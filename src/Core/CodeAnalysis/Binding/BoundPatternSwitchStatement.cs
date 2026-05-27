@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -10,9 +11,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundPatternSwitchStatement : BoundStatement
 {
     /// <summary>Initializes a new instance of the <see cref="BoundPatternSwitchStatement"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="discriminant">The discriminant expression.</param>
     /// <param name="arms">The switch arms.</param>
-    public BoundPatternSwitchStatement(BoundExpression discriminant, ImmutableArray<BoundPatternSwitchArm> arms)
+    public BoundPatternSwitchStatement(SyntaxNode syntax, BoundExpression discriminant, ImmutableArray<BoundPatternSwitchArm> arms)
+        : base(syntax)
     {
         Discriminant = discriminant;
         Arms = arms;

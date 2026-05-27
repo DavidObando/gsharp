@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,9 +16,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundTypeOfExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundTypeOfExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="operandType">The type that this <c>typeof</c> references.</param>
     /// <param name="systemType">The <c>System.Type</c> symbol used as the result type.</param>
-    public BoundTypeOfExpression(TypeSymbol operandType, TypeSymbol systemType)
+    public BoundTypeOfExpression(SyntaxNode syntax, TypeSymbol operandType, TypeSymbol systemType)
+        : base(syntax)
     {
         OperandType = operandType;
         Type = systemType;

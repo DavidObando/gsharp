@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,9 +15,11 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundVariableDeclaration"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
     /// <param name="initializer">The bound expression.</param>
-    public BoundVariableDeclaration(VariableSymbol variable, BoundExpression initializer)
+    public BoundVariableDeclaration(SyntaxNode syntax, VariableSymbol variable, BoundExpression initializer)
+        : base(syntax)
     {
         Variable = variable;
         Initializer = initializer;

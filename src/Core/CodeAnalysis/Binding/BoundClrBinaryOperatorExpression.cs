@@ -20,7 +20,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrBinaryOperatorExpression : BoundExpression
 {
-    public BoundClrBinaryOperatorExpression(SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, TypeSymbol resultType)
+    public BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, TypeSymbol resultType)
+        : base(syntax)
     {
         OperatorKind = operatorKind;
         Left = left;

@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,9 +16,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundMakeChannelExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundMakeChannelExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="channelType">The constructed channel type.</param>
     /// <param name="capacity">The optional bounded-channel capacity expression.</param>
-    public BoundMakeChannelExpression(ChannelTypeSymbol channelType, BoundExpression capacity)
+    public BoundMakeChannelExpression(SyntaxNode syntax, ChannelTypeSymbol channelType, BoundExpression capacity)
+        : base(syntax)
     {
         ChannelType = channelType;
         Capacity = capacity;

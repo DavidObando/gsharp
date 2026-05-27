@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,10 +15,12 @@ public sealed class BoundIndexExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundIndexExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="target">The target expression (must have an array type).</param>
     /// <param name="index">The index expression (must be int).</param>
     /// <param name="resultType">The element type.</param>
-    public BoundIndexExpression(BoundExpression target, BoundExpression index, TypeSymbol resultType)
+    public BoundIndexExpression(SyntaxNode syntax, BoundExpression target, BoundExpression index, TypeSymbol resultType)
+        : base(syntax)
     {
         Target = target;
         Index = index;

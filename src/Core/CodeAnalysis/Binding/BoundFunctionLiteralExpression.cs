@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -19,10 +20,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundFunctionLiteralExpression : BoundExpression
 {
     public BoundFunctionLiteralExpression(
+        SyntaxNode syntax,
         FunctionSymbol function,
         FunctionTypeSymbol type,
         BoundBlockStatement body,
         ImmutableArray<VariableSymbol> capturedVariables)
+        : base(syntax)
     {
         Function = function;
         FunctionType = type;

@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,9 +15,11 @@ public sealed class BoundConversionExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundConversionExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The type symbol.</param>
     /// <param name="expression">The expression to convert.</param>
-    public BoundConversionExpression(TypeSymbol type, BoundExpression expression)
+    public BoundConversionExpression(SyntaxNode syntax, TypeSymbol type, BoundExpression expression)
+        : base(syntax)
     {
         Type = type;
         Expression = expression;

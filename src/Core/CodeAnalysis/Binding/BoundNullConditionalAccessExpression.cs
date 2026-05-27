@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -26,6 +27,7 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
     /// Initializes a new instance of the
     /// <see cref="BoundNullConditionalAccessExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="receiver">The nullable receiver expression.</param>
     /// <param name="capture">The synthetic local that the receiver value
     /// is captured into for the duration of <see cref="WhenNotNull"/>.</param>
@@ -34,10 +36,12 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
     /// <param name="type">The result type — always a
     /// <see cref="NullableTypeSymbol"/>.</param>
     public BoundNullConditionalAccessExpression(
+        SyntaxNode syntax,
         BoundExpression receiver,
         VariableSymbol capture,
         BoundExpression whenNotNull,
         TypeSymbol type)
+        : base(syntax)
     {
         Receiver = receiver;
         Capture = capture;

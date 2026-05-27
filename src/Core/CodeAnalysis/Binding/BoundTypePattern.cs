@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -10,11 +11,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundTypePattern : BoundPattern
 {
     /// <summary>Initializes a new instance of the <see cref="BoundTypePattern"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="targetType">The target type.</param>
     /// <param name="variable">The introduced variable.</param>
-    public BoundTypePattern(TypeSymbol type, TypeSymbol targetType, LocalVariableSymbol variable)
-        : base(type)
+    public BoundTypePattern(SyntaxNode syntax, TypeSymbol type, TypeSymbol targetType, LocalVariableSymbol variable)
+        : base(syntax, type)
     {
         TargetType = targetType;
         Variable = variable;

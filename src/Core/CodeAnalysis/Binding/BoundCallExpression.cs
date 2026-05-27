@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,19 +16,21 @@ public sealed class BoundCallExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundCallExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
-    public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments)
-        : this(function, arguments, returnType: null)
+    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments)
+        : this(syntax, function, arguments, returnType: null)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="BoundCallExpression"/> class with an explicit (substituted) return type for generic-call sites (Phase 4.1 / ADR-0020).</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
     /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
-    public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
-        : this(function, arguments, returnType, isConditionalElided: false)
+    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
+        : this(syntax, function, arguments, returnType, isConditionalElided: false)
     {
     }
 
@@ -39,11 +42,13 @@ public sealed class BoundCallExpression : BoundExpression
     /// list is empty because C# semantics forbid evaluating arguments to a
     /// conditional method whose symbol is undefined.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments; empty when elided.</param>
     /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
     /// <param name="isConditionalElided">When <c>true</c>, the call has been elided per <c>[Conditional]</c> rules.</param>
-    public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, bool isConditionalElided)
+    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, bool isConditionalElided)
+        : base(syntax)
     {
         Function = function;
         Arguments = arguments;

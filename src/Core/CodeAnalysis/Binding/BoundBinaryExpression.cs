@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,10 +15,12 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundBinaryExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="left">The left bound expression.</param>
     /// <param name="op">The bound binary operator.</param>
     /// <param name="right">The right bound expression.</param>
-    public BoundBinaryExpression(BoundExpression left, BoundBinaryOperator op, BoundExpression right)
+    public BoundBinaryExpression(SyntaxNode syntax, BoundExpression left, BoundBinaryOperator op, BoundExpression right)
+        : base(syntax)
     {
         Left = left;
         Op = op;

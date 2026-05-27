@@ -16,7 +16,7 @@ public class AsyncCaptureWalkerTests
     [Fact]
     public void Analyze_EmptyBody_NoLocals()
     {
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
         Assert.Empty(result.Parameters);
@@ -27,8 +27,9 @@ public class AsyncCaptureWalkerTests
     public void Analyze_DeclaredLocal_IsHoisted()
     {
         var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(local, new BoundLiteralExpression(0))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, local, new BoundLiteralExpression(null, 0))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
@@ -40,8 +41,9 @@ public class AsyncCaptureWalkerTests
     public void Analyze_ReferencedLocal_IsHoisted()
     {
         var local = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundExpressionStatement(new BoundVariableExpression(local))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, local))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
@@ -53,10 +55,11 @@ public class AsyncCaptureWalkerTests
     public void Analyze_SameLocalReferencedTwice_AppearsOnce()
     {
         var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(local, new BoundLiteralExpression(1)),
-            new BoundExpressionStatement(new BoundVariableExpression(local)),
-            new BoundExpressionStatement(new BoundVariableExpression(local))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, local, new BoundLiteralExpression(null, 1)),
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, local)),
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, local))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
@@ -70,11 +73,12 @@ public class AsyncCaptureWalkerTests
         var second = new LocalVariableSymbol("second", isReadOnly: false, TypeSymbol.Int);
         var third = new LocalVariableSymbol("third", isReadOnly: false, TypeSymbol.Int);
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(first, new BoundLiteralExpression(1)),
-            new BoundExpressionStatement(new BoundVariableExpression(second)),
-            new BoundVariableDeclaration(third, new BoundLiteralExpression(3)),
-            new BoundExpressionStatement(new BoundVariableExpression(first))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, first, new BoundLiteralExpression(null, 1)),
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, second)),
+            new BoundVariableDeclaration(null, third, new BoundLiteralExpression(null, 3)),
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, first))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
@@ -87,9 +91,10 @@ public class AsyncCaptureWalkerTests
         var userLocal = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
         var spillTemp = new LocalVariableSymbol(GeneratedNames.SpillTempField(0), isReadOnly: false, TypeSymbol.Int);
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(userLocal, new BoundLiteralExpression(1)),
-            new BoundVariableDeclaration(spillTemp, new BoundLiteralExpression(2))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, userLocal, new BoundLiteralExpression(null, 1)),
+            new BoundVariableDeclaration(null, spillTemp, new BoundLiteralExpression(null, 2))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
 
@@ -102,7 +107,7 @@ public class AsyncCaptureWalkerTests
     {
         var p1 = new ParameterSymbol("a", TypeSymbol.Int);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray.Create(p1, p2));
 
@@ -115,8 +120,9 @@ public class AsyncCaptureWalkerTests
     public void Analyze_ParameterReferencedInBody_NotDuplicatedIntoLocals()
     {
         var p1 = new ParameterSymbol("a", TypeSymbol.Int);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundExpressionStatement(new BoundVariableExpression(p1))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, p1))));
 
         var result = AsyncCaptureWalker.Analyze(body, ImmutableArray.Create(p1));
 

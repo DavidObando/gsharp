@@ -410,7 +410,7 @@ public sealed class Binder
             }
         }
 
-        var statement = Lowerer.Lower(new BoundBlockStatement(globalScope.Statements));
+        var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
         // the lowered top-level statements block. Register it under EntryPoint so
@@ -1561,7 +1561,7 @@ public sealed class Binder
 
     private BoundStatement BindErrorStatement()
     {
-        return new BoundExpressionStatement(new BoundErrorExpression());
+        return new BoundExpressionStatement(null, new BoundErrorExpression(null));
     }
 
     private BoundStatement BindStatement(StatementSyntax syntax)
@@ -1637,7 +1637,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private void BindBlockStatements(ImmutableArray<StatementSyntax> statementSyntaxes, int startIndex, ImmutableArray<BoundStatement>.Builder statements)
@@ -1699,9 +1699,9 @@ public sealed class Binder
 
     private BoundTryStatement BuildCleanupTryStatement(ImmutableArray<BoundStatement> protectedStatements, BoundExpression cleanup)
     {
-        var tryBlock = new BoundBlockStatement(protectedStatements);
-        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(cleanup)));
-        return new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+        var tryBlock = new BoundBlockStatement(null, protectedStatements);
+        var finallyBlock = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, cleanup)));
+        return new BoundTryStatement(null, tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
     }
 
     private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
@@ -1794,7 +1794,7 @@ public sealed class Binder
             variable.SetAttributes(boundAttrs);
         }
 
-        return new BoundVariableDeclaration(variable, convertedInitializer);
+        return new BoundVariableDeclaration(null, variable, convertedInitializer);
     }
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
@@ -1804,7 +1804,7 @@ public sealed class Binder
         var initializer = BindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
-            return new BoundExpressionStatement(initializer);
+            return new BoundExpressionStatement(null, initializer);
         }
 
         if (initializer.Type is TupleTypeSymbol tupleType)
@@ -1812,7 +1812,7 @@ public sealed class Binder
             if (syntax.Identifiers.Count != tupleType.Arity)
             {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, tupleType.Arity, syntax.Identifiers.Count);
-                return new BoundExpressionStatement(new BoundErrorExpression());
+                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
             }
 
             var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1820,18 +1820,18 @@ public sealed class Binder
             scope.TryDeclareVariable(tempVar);
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+            statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
 
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
                 var idTok = syntax.Identifiers[i];
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, elemType);
-                var access = new BoundTupleElementAccessExpression(new BoundVariableExpression(tempVar), tupleType, i);
-                statements.Add(new BoundVariableDeclaration(elemVar, access));
+                var access = new BoundTupleElementAccessExpression(null, new BoundVariableExpression(null, tempVar), tupleType, i);
+                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
             }
 
-            return new BoundBlockStatement(statements.ToImmutable());
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         if (initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline))
@@ -1840,7 +1840,7 @@ public sealed class Binder
             if (syntax.Identifiers.Count != fields.Length)
             {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, fields.Length, syntax.Identifiers.Count);
-                return new BoundExpressionStatement(new BoundErrorExpression());
+                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
             }
 
             var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1848,21 +1848,21 @@ public sealed class Binder
             scope.TryDeclareVariable(tempVar);
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+            statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
                 var idTok = syntax.Identifiers[i];
                 var field = fields[i];
                 var elemVar = BindVariableDeclaration(idTok, isReadOnly: true, field.Type);
-                var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), structType, field);
-                statements.Add(new BoundVariableDeclaration(elemVar, access));
+                var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
+                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
             }
 
-            return new BoundBlockStatement(statements.ToImmutable());
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type);
-        return new BoundExpressionStatement(new BoundErrorExpression());
+        return new BoundExpressionStatement(null, new BoundErrorExpression(null));
     }
 
     private BoundStatement BindNamedDeconstructionStatement(NamedDeconstructionStatementSyntax syntax)
@@ -1870,13 +1870,13 @@ public sealed class Binder
         var initializer = BindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
-            return new BoundExpressionStatement(initializer);
+            return new BoundExpressionStatement(null, initializer);
         }
 
         if (!(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline))
         {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
@@ -1885,7 +1885,7 @@ public sealed class Binder
 
         var seen = new HashSet<string>();
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundVariableDeclaration(tempVar, initializer));
+        statements.Add(new BoundVariableDeclaration(null, tempVar, initializer));
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.FieldIdentifier.Text;
@@ -1902,11 +1902,11 @@ public sealed class Binder
             }
 
             var variable = BindVariableDeclaration(fieldSyntax.LocalIdentifier, isReadOnly: true, field.Type);
-            var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), declaringType, field);
-            statements.Add(new BoundVariableDeclaration(variable, access));
+            var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), declaringType, field);
+            statements.Add(new BoundVariableDeclaration(null, variable, access));
         }
 
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)
@@ -2221,7 +2221,7 @@ public sealed class Binder
 
             var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
             var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
-            return new BoundIfStatement(condition, thenStatement, elseStatement);
+            return new BoundIfStatement(null, condition, thenStatement, elseStatement);
         }
 
         // `if init; cond { then } else { else }` lowers to a block that
@@ -2239,8 +2239,8 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        var inner = new BoundIfStatement(initCondition, initThen, initElse);
-        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(initStatement, inner));
+        var inner = new BoundIfStatement(null, initCondition, initThen, initElse);
+        return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(initStatement, inner));
     }
 
     private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
@@ -2478,7 +2478,7 @@ public sealed class Binder
         if (targets.Length != values.Length)
         {
             Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -2491,10 +2491,10 @@ public sealed class Binder
                 var nameExpr = (NameExpressionSyntax)targets[i];
                 var initializer = BindExpression(values[i]);
                 var variable = BindVariableDeclaration(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
-                statements.Add(new BoundVariableDeclaration(variable, initializer));
+                statements.Add(new BoundVariableDeclaration(null, variable, initializer));
             }
 
-            return new BoundBlockStatement(statements.ToImmutable());
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         // Plain assignment: evaluate every RHS into a fresh temp, then assign each temp to its target.
@@ -2510,7 +2510,7 @@ public sealed class Binder
                 : new LocalVariableSymbol(tempName, isReadOnly: true, initializer.Type);
             scope.TryDeclareVariable(temp);
             temps.Add(temp);
-            statements.Add(new BoundVariableDeclaration(temp, initializer));
+            statements.Add(new BoundVariableDeclaration(null, temp, initializer));
         }
 
         for (var i = 0; i < targets.Length; i++)
@@ -2528,12 +2528,12 @@ public sealed class Binder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
 
-            var tempRef = new BoundVariableExpression(temps[i]);
+            var tempRef = new BoundVariableExpression(null, temps[i]);
             var converted = BindConversion(values[i].Location, tempRef, variable.Type);
-            statements.Add(new BoundExpressionStatement(new BoundAssignmentExpression(variable, converted)));
+            statements.Add(new BoundExpressionStatement(null, new BoundAssignmentExpression(null, variable, converted)));
         }
 
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private BoundStatement BindSwitchStatement(SwitchStatementSyntax syntax)
@@ -2558,7 +2558,7 @@ public sealed class Binder
                 }
 
                 hasDefault = true;
-                arms.Add(new BoundPatternSwitchArm(pattern: null, BindBlockStatement(caseSyntax.Body)));
+                arms.Add(new BoundPatternSwitchArm(null, pattern: null, BindBlockStatement(caseSyntax.Body)));
                 continue;
             }
 
@@ -2577,7 +2577,7 @@ public sealed class Binder
             var frame = TryClassifyPatternNarrowing(discriminant, pattern);
             var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
             scope = scope.Parent;
-            arms.Add(new BoundPatternSwitchArm(pattern, body));
+            arms.Add(new BoundPatternSwitchArm(null, pattern, body));
         }
 
         var boundArms = arms.ToImmutable();
@@ -2588,7 +2588,7 @@ public sealed class Binder
             scope.GetDeclaredStructs(),
             Diagnostics);
 
-        return new BoundPatternSwitchStatement(discriminant, boundArms);
+        return new BoundPatternSwitchStatement(null, discriminant, boundArms);
     }
 
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
@@ -2598,7 +2598,7 @@ public sealed class Binder
 
         if (switchType == TypeSymbol.Error)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (syntax.Arms.Length == 0)
@@ -2617,7 +2617,7 @@ public sealed class Binder
                 Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location);
             }
 
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var hasDefault = false;
@@ -2675,14 +2675,14 @@ public sealed class Binder
                     Diagnostics.ReportSwitchExpressionArmTypeMismatch(arm.Syntax.Result.Location, result.Type, resultType);
                 }
 
-                result = new BoundErrorExpression();
+                result = new BoundErrorExpression(null);
             }
             else if (!conversion.IsIdentity)
             {
-                result = new BoundConversionExpression(resultType, result);
+                result = new BoundConversionExpression(null, resultType, result);
             }
 
-            arms.Add(new BoundSwitchExpressionArm(arm.Pattern, result));
+            arms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, result));
         }
 
         var boundArms = arms.ToImmutable();
@@ -2693,7 +2693,7 @@ public sealed class Binder
             scope.GetDeclaredStructs(),
             Diagnostics);
 
-        return new BoundSwitchExpression(discriminant, boundArms, resultType);
+        return new BoundSwitchExpression(null, discriminant, boundArms, resultType);
     }
 
     private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
@@ -2703,7 +2703,7 @@ public sealed class Binder
             case SyntaxKind.ConstantPattern:
                 return BindConstantPattern((ConstantPatternSyntax)syntax, discriminantType);
             case SyntaxKind.DiscardPattern:
-                return new BoundDiscardPattern(discriminantType);
+                return new BoundDiscardPattern(syntax, discriminantType);
             case SyntaxKind.TypePattern:
                 return BindTypePattern((TypePatternSyntax)syntax, discriminantType);
             case SyntaxKind.PropertyPattern:
@@ -2728,10 +2728,10 @@ public sealed class Binder
                 Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
             }
 
-            return new BoundConstantPattern(discriminantType, new BoundErrorExpression());
+            return new BoundConstantPattern(syntax, discriminantType, new BoundErrorExpression(syntax));
         }
 
-        var value = conversion.IsIdentity ? expression : new BoundConversionExpression(discriminantType, expression);
+        var value = conversion.IsIdentity ? expression : new BoundConversionExpression(syntax, discriminantType, expression);
         var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, discriminantType);
         if (op == null && discriminantType is NullableTypeSymbol nullable)
         {
@@ -2745,7 +2745,7 @@ public sealed class Binder
             Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
         }
 
-        return new BoundConstantPattern(discriminantType, value);
+        return new BoundConstantPattern(syntax, discriminantType, value);
     }
 
     private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType)
@@ -2757,7 +2757,7 @@ public sealed class Binder
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
         }
 
-        return new BoundTypePattern(discriminantType, targetType, variable);
+        return new BoundTypePattern(syntax, discriminantType, targetType, variable);
     }
 
     private BoundPattern BindPropertyPattern(PropertyPatternSyntax syntax, TypeSymbol discriminantType)
@@ -2766,7 +2766,7 @@ public sealed class Binder
         if (discriminantType is not StructSymbol structType)
         {
             Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
-            return new BoundPropertyPattern(discriminantType, fields.ToImmutable());
+            return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
         }
 
         foreach (var fieldSyntax in syntax.Fields)
@@ -2774,14 +2774,14 @@ public sealed class Binder
             if (!structType.TryGetFieldIncludingInherited(fieldSyntax.Identifier.Text, out var field, out _))
             {
                 Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
-                fields.Add(new BoundPropertyPatternField(new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
+                fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
                 continue;
             }
 
-            fields.Add(new BoundPropertyPatternField(field, BindPattern(fieldSyntax.Pattern, field.Type)));
+            fields.Add(new BoundPropertyPatternField(syntax, field, BindPattern(fieldSyntax.Pattern, field.Type)));
         }
 
-        return new BoundPropertyPattern(discriminantType, fields.ToImmutable());
+        return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
     }
 
     private BoundPattern BindRelationalPattern(RelationalPatternSyntax syntax, TypeSymbol discriminantType)
@@ -2794,7 +2794,7 @@ public sealed class Binder
             op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int);
         }
 
-        return new BoundRelationalPattern(discriminantType, op, value);
+        return new BoundRelationalPattern(syntax, discriminantType, op, value);
     }
 
     private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
@@ -2819,7 +2819,7 @@ public sealed class Binder
             elements.Add(BindPattern(elementSyntax, elementType));
         }
 
-        return new BoundListPattern(discriminantType, elements.ToImmutable(), elementType);
+        return new BoundListPattern(syntax, discriminantType, elements.ToImmutable(), elementType);
     }
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
@@ -2866,7 +2866,7 @@ public sealed class Binder
             return BindErrorStatement();
         }
 
-        return new BoundTryStatement(tryBlock, catches.ToImmutable(), finallyBlock);
+        return new BoundTryStatement(null, tryBlock, catches.ToImmutable(), finallyBlock);
     }
 
     private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
@@ -2883,7 +2883,7 @@ public sealed class Binder
             }
         }
 
-        return new BoundThrowStatement(expression);
+        return new BoundThrowStatement(null, expression);
     }
 
     private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
@@ -2895,7 +2895,7 @@ public sealed class Binder
         }
 
         var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, usingLowering.Cleanup);
-        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
+        return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
     }
 
     private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
@@ -2922,7 +2922,7 @@ public sealed class Binder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.AddRange(defer.PrefixStatements);
         statements.Add(tryStmt);
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private (ImmutableArray<BoundStatement> PrefixStatements, BoundExpression Cleanup, BoundStatement ErrorStatement) BindDeferStatementInBlock(DeferStatementSyntax syntax)
@@ -2930,13 +2930,13 @@ public sealed class Binder
         var expression = BindExpression(syntax.Expression, canBeVoid: true);
         if (expression is BoundErrorExpression)
         {
-            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(expression));
+            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(null, expression));
         }
 
         if (!IsDeferableCall(expression))
         {
             Diagnostics.ReportDeferOperandIsNotACall(syntax.Expression.Location);
-            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(new BoundErrorExpression()));
+            return (ImmutableArray<BoundStatement>.Empty, null, new BoundExpressionStatement(null, new BoundErrorExpression(null)));
         }
 
         var prefix = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -2956,15 +2956,15 @@ public sealed class Binder
         switch (expression)
         {
             case BoundCallExpression call:
-                return new BoundCallExpression(call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType);
+                return new BoundCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix), call.ReturnType);
             case BoundIndirectCallExpression call:
-                return new BoundIndirectCallExpression(call.Target, call.FunctionType, CaptureArguments(call.Arguments, prefix));
+                return new BoundIndirectCallExpression(null, call.Target, call.FunctionType, CaptureArguments(call.Arguments, prefix));
             case BoundUserInstanceCallExpression call:
-                return new BoundUserInstanceCallExpression(call.Receiver, call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
+                return new BoundUserInstanceCallExpression(null, call.Receiver, call.Method, CaptureArguments(call.Arguments, prefix), call.Type);
             case BoundImportedCallExpression call:
-                return new BoundImportedCallExpression(call.Function, CaptureArguments(call.Arguments, prefix));
+                return new BoundImportedCallExpression(null, call.Function, CaptureArguments(call.Arguments, prefix));
             case BoundImportedInstanceCallExpression call:
-                return new BoundImportedInstanceCallExpression(call.Receiver, call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
+                return new BoundImportedInstanceCallExpression(null, call.Receiver, call.Method, call.Type, CaptureArguments(call.Arguments, prefix));
             default:
                 throw new InvalidOperationException($"Unexpected deferred expression: {expression.Kind}");
         }
@@ -2982,8 +2982,8 @@ public sealed class Binder
         {
             var variable = new LocalVariableSymbol($"$defer$arg${deferArgumentCounter++}", isReadOnly: true, argument.Type ?? TypeSymbol.Error);
             scope.TryDeclareVariable(variable);
-            prefix.Add(new BoundVariableDeclaration(variable, argument));
-            capturedArguments.Add(new BoundVariableExpression(variable));
+            prefix.Add(new BoundVariableDeclaration(null, variable, argument));
+            capturedArguments.Add(new BoundVariableExpression(null, variable));
         }
 
         return capturedArguments.ToImmutable();
@@ -3005,8 +3005,8 @@ public sealed class Binder
             return null;
         }
 
-        var receiver = new BoundVariableExpression(variable);
-        return new BoundImportedInstanceCallExpression(receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+        var receiver = new BoundVariableExpression(null, variable);
+        return new BoundImportedInstanceCallExpression(null, receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
     }
 
     private BoundStatement BindGoStatement(GoStatementSyntax syntax)
@@ -3015,7 +3015,7 @@ public sealed class Binder
 
         if (expression is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(expression);
+            return new BoundExpressionStatement(null, expression);
         }
 
         if (expression is not BoundCallExpression and
@@ -3025,10 +3025,10 @@ public sealed class Binder
             not BoundImportedInstanceCallExpression)
         {
             Diagnostics.ReportGoOperandIsNotACall(syntax.Expression.Location);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
-        return new BoundGoStatement(expression);
+        return new BoundGoStatement(null, expression);
     }
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
@@ -3037,17 +3037,17 @@ public sealed class Binder
         var channel = BindExpression(syntax.Channel);
         if (channel is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(channel);
+            return new BoundExpressionStatement(null, channel);
         }
 
         if (channel.Type is not ChannelTypeSymbol chan)
         {
             Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var value = BindConversion(syntax.Value, chan.ElementType);
-        return new BoundChannelSendStatement(channel, value);
+        return new BoundChannelSendStatement(null, channel, value);
     }
 
     private BoundExpression BindMakeChannelExpression(MakeChannelExpressionSyntax syntax)
@@ -3056,7 +3056,7 @@ public sealed class Binder
         var typeSymbol = BindTypeClause(syntax.ChannelTypeClause);
         if (typeSymbol is not ChannelTypeSymbol chan)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         BoundExpression capacity = null;
@@ -3065,7 +3065,7 @@ public sealed class Binder
             capacity = BindConversion(syntax.Capacity, TypeSymbol.Int);
         }
 
-        return new BoundMakeChannelExpression(chan, capacity);
+        return new BoundMakeChannelExpression(null, chan, capacity);
     }
 
     private BoundExpression BindTypeOfExpression(TypeOfExpressionSyntax syntax)
@@ -3074,11 +3074,11 @@ public sealed class Binder
         var typeSymbol = BindTypeClause(syntax.TypeClause);
         if (typeSymbol == null || typeSymbol == TypeSymbol.Error)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var systemType = ImportedTypeSymbol.Get(typeof(Type));
-        return new BoundTypeOfExpression(typeSymbol, systemType);
+        return new BoundTypeOfExpression(null, typeSymbol, systemType);
     }
 
     private BoundExpression BindNameOfExpression(NameOfExpressionSyntax syntax)
@@ -3089,11 +3089,11 @@ public sealed class Binder
         // are rejected to match C# semantics.
         if (TryExtractNameOfName(syntax.Argument, out var name))
         {
-            return new BoundLiteralExpression(name);
+            return new BoundLiteralExpression(null, name);
         }
 
         Diagnostics.ReportNameOfRequiresNameReference(syntax.Argument.Location);
-        return new BoundErrorExpression();
+        return new BoundErrorExpression(null);
     }
 
     private static bool TryExtractNameOfName(ExpressionSyntax argument, out string name)
@@ -3138,7 +3138,7 @@ public sealed class Binder
         if (syntax.Cases.Length == 0)
         {
             Diagnostics.ReportSelectWithNoCases(syntax.SelectKeyword.Location);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var bound = ImmutableArray.CreateBuilder<BoundSelectCase>();
@@ -3214,7 +3214,7 @@ public sealed class Binder
             bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
         }
 
-        return new BoundSelectStatement(bound.ToImmutable());
+        return new BoundSelectStatement(null, bound.ToImmutable());
     }
 
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)
@@ -3227,7 +3227,7 @@ public sealed class Binder
         scope = new BoundScope(scope);
         var body = BindStatement(syntax.Body);
         scope = scope.Parent;
-        return new BoundScopeStatement(body);
+        return new BoundScopeStatement(null, body);
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)
@@ -3242,13 +3242,13 @@ public sealed class Binder
         var stream = BindExpression(syntax.Stream);
         if (stream is BoundErrorExpression)
         {
-            return new BoundExpressionStatement(stream);
+            return new BoundExpressionStatement(null, stream);
         }
 
         if (!TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
@@ -3256,7 +3256,7 @@ public sealed class Binder
         var body = BindStatement(syntax.Body);
         scope = scope.Parent;
 
-        return new BoundAwaitForRangeStatement(variable, stream, body);
+        return new BoundAwaitForRangeStatement(null, variable, stream, body);
     }
 
     private BoundStatement BindYieldStatement(YieldStatementSyntax syntax)
@@ -3265,7 +3265,7 @@ public sealed class Binder
         if (function == null || !IsIteratorReturnType(function.Type))
         {
             Diagnostics.ReportYieldOutsideIteratorFunction(syntax.YieldKeyword.Location);
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var elementType = GetIteratorElementType(function.Type);
@@ -3275,7 +3275,7 @@ public sealed class Binder
             expression = BindConversion(syntax.Expression.Location, expression, elementType);
         }
 
-        return new BoundYieldStatement(expression);
+        return new BoundYieldStatement(null, expression);
     }
 
     private static bool IsIteratorReturnType(TypeSymbol type)
@@ -3475,7 +3475,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundForInfiniteStatement(body, breakLabel, continueLabel);
+        return new BoundForInfiniteStatement(null, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
@@ -3490,7 +3490,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundForEllipsisStatement(variable, lowerBound, upperBound, body, breakLabel, continueLabel);
+        return new BoundForEllipsisStatement(null, variable, lowerBound, upperBound, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindForRangeStatement(ForRangeStatementSyntax syntax)
@@ -3536,7 +3536,7 @@ public sealed class Binder
                 else
                 {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
-                    return new BoundExpressionStatement(new BoundErrorExpression());
+                    return new BoundExpressionStatement(null, new BoundErrorExpression(null));
                 }
 
                 break;
@@ -3557,7 +3557,7 @@ public sealed class Binder
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
                 }
 
-                return new BoundExpressionStatement(new BoundErrorExpression());
+                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
@@ -3579,7 +3579,7 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        return new BoundForRangeStatement(keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
+        return new BoundForRangeStatement(null, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
 
     private static bool TryGetClrDictionaryTypes(System.Type clrType, out System.Type keyType, out System.Type valueType)
@@ -3719,15 +3719,15 @@ public sealed class Binder
         var checkLabel = new BoundLabel($"check{labelCounter}");
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundGotoStatement(checkLabel));
-        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(new BoundGotoStatement(null, checkLabel));
+        statements.Add(new BoundLabelStatement(null, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(continueLabel));
-        statements.Add(new BoundLabelStatement(checkLabel));
-        statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
-        statements.Add(new BoundLabelStatement(breakLabel));
+        statements.Add(new BoundLabelStatement(null, continueLabel));
+        statements.Add(new BoundLabelStatement(null, checkLabel));
+        statements.Add(new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(null, breakLabel));
 
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private BoundStatement BindForClauseStatement(ForClauseStatementSyntax syntax)
@@ -3762,28 +3762,28 @@ public sealed class Binder
             statements.Add(init);
         }
 
-        statements.Add(new BoundGotoStatement(checkLabel));
-        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(new BoundGotoStatement(null, checkLabel));
+        statements.Add(new BoundLabelStatement(null, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(continueLabel));
+        statements.Add(new BoundLabelStatement(null, continueLabel));
         if (post != null)
         {
             statements.Add(post);
         }
 
-        statements.Add(new BoundLabelStatement(checkLabel));
+        statements.Add(new BoundLabelStatement(null, checkLabel));
         if (condition == null)
         {
-            statements.Add(new BoundGotoStatement(bodyLabel));
+            statements.Add(new BoundGotoStatement(null, bodyLabel));
         }
         else
         {
-            statements.Add(new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true));
+            statements.Add(new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true));
         }
 
-        statements.Add(new BoundLabelStatement(breakLabel));
+        statements.Add(new BoundLabelStatement(null, breakLabel));
 
-        return new BoundBlockStatement(statements.ToImmutable());
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)
@@ -3808,7 +3808,7 @@ public sealed class Binder
         }
 
         var breakLabel = loopStack.Peek().BreakLabel;
-        return new BoundGotoStatement(breakLabel);
+        return new BoundGotoStatement(null, breakLabel);
     }
 
     private BoundStatement BindContinueStatement(ContinueStatementSyntax syntax)
@@ -3820,7 +3820,7 @@ public sealed class Binder
         }
 
         var continueLabel = loopStack.Peek().ContinueLabel;
-        return new BoundGotoStatement(continueLabel);
+        return new BoundGotoStatement(null, continueLabel);
     }
 
     private BoundStatement BindReturnStatement(ReturnStatementSyntax syntax)
@@ -3853,13 +3853,13 @@ public sealed class Binder
             }
         }
 
-        return new BoundReturnStatement(expression);
+        return new BoundReturnStatement(null, expression);
     }
 
     private BoundStatement BindExpressionStatement(ExpressionStatementSyntax syntax)
     {
         var expression = BindExpression(syntax.Expression, canBeVoid: true);
-        return new BoundExpressionStatement(expression);
+        return new BoundExpressionStatement(null, expression);
     }
 
     private BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
@@ -3873,7 +3873,7 @@ public sealed class Binder
         if (!canBeVoid && result.Type == TypeSymbol.Void)
         {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Location);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         return result;
@@ -3933,7 +3933,7 @@ public sealed class Binder
                 return BindWithExpression((WithExpressionSyntax)syntax);
             case SyntaxKind.NamedArgumentExpression:
                 Diagnostics.ReportNamedArgumentOnlyValidForCopy(syntax.Location);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -3956,7 +3956,7 @@ public sealed class Binder
             value = 0;
         }
 
-        return new BoundLiteralExpression(value);
+        return new BoundLiteralExpression(null, value);
     }
 
     private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
@@ -3986,13 +3986,13 @@ public sealed class Binder
             }
             else
             {
-                piece = new BoundLiteralExpression(segment.Text ?? string.Empty);
+                piece = new BoundLiteralExpression(null, segment.Text ?? string.Empty);
             }
 
             result = result == null ? piece : Concat(result, piece);
         }
 
-        return result ?? new BoundLiteralExpression(string.Empty);
+        return result ?? new BoundLiteralExpression(null, string.Empty);
     }
 
     private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
@@ -4006,7 +4006,7 @@ public sealed class Binder
         if (clrType == null)
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // Bind a call to `System.Convert.ToString(<expr.Type>)`. Convert.ToString
@@ -4019,18 +4019,18 @@ public sealed class Binder
         if (method == null)
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var importedClass = new ImportedClassSymbol(convertType, declaration: null);
         var importedFn = new ImportedFunctionSymbol(method.Name, importedClass, method, declaration: null);
-        return new BoundImportedCallExpression(importedFn, ImmutableArray.Create(expression));
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create(expression));
     }
 
     private static BoundExpression Concat(BoundExpression left, BoundExpression right)
     {
         var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
-        return new BoundBinaryExpression(left, op, right);
+        return new BoundBinaryExpression(null, left, op, right);
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)
@@ -4040,13 +4040,13 @@ public sealed class Binder
         {
             // This means the token was inserted by the parser. We already
             // reported error so we can just return an error expression.
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var variable = BindVariableReference(name, syntax.IdentifierToken.Location);
         if (variable == null)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (variable is ImplicitFieldVariableSymbol implicitField)
@@ -4058,12 +4058,13 @@ public sealed class Binder
                 implicitField.Field,
                 $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
             return new BoundFieldAccessExpression(
-                new BoundVariableExpression(implicitField.Receiver),
+                null,
+                new BoundVariableExpression(null, implicitField.Receiver),
                 implicitField.StructType,
                 implicitField.Field);
         }
 
-        return new BoundVariableExpression(variable, TryGetNarrowedType(variable));
+        return new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
     }
 
     private TypeSymbol TryGetNarrowedType(VariableSymbol variable)
@@ -4107,7 +4108,7 @@ public sealed class Binder
                 $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
 
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
-            return new BoundFieldAssignmentExpression(implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
+            return new BoundFieldAssignmentExpression(null, implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
         }
 
         if (variable.IsReadOnly)
@@ -4117,7 +4118,7 @@ public sealed class Binder
 
         var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
-        return new BoundAssignmentExpression(variable, convertedExpression);
+        return new BoundAssignmentExpression(null, variable, convertedExpression);
     }
 
     private BoundExpression BindWithExpression(WithExpressionSyntax syntax)
@@ -4130,13 +4131,13 @@ public sealed class Binder
     {
         if (receiver.Type == TypeSymbol.Error)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (!(receiver.Type is StructSymbol structType) || !structType.IsData)
         {
             Diagnostics.ReportCopyOrWithNotDataStruct(diagnosticLocation, receiver.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var tempName = "$copy" + System.Threading.Interlocked.Increment(ref syntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -4174,14 +4175,14 @@ public sealed class Binder
             }
             else
             {
-                var access = new BoundFieldAccessExpression(new BoundVariableExpression(tempVar), structType, field);
+                var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
                 initializers.Add(new BoundFieldInitializer(field, access));
             }
         }
 
-        var declaration = new BoundVariableDeclaration(tempVar, receiver);
-        var literal = new BoundStructLiteralExpression(structType, initializers.ToImmutable());
-        return new BoundBlockExpression(ImmutableArray.Create<BoundStatement>(declaration), literal);
+        var declaration = new BoundVariableDeclaration(null, tempVar, receiver);
+        var literal = new BoundStructLiteralExpression(null, structType, initializers.ToImmutable());
+        return new BoundBlockExpression(null, ImmutableArray.Create<BoundStatement>(declaration), literal);
     }
 
     private static bool TryGetCopyOverrides(CallExpressionSyntax call, out SeparatedSyntaxList<FieldInitializerSyntax> overrides)
@@ -4215,7 +4216,7 @@ public sealed class Binder
         if (!scope.TryLookupTypeAlias(typeName, out var resolvedType) || !(resolvedType is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
@@ -4239,7 +4240,7 @@ public sealed class Binder
                 if (explicitArgs.Count != tps.Length)
                 {
                     Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, typeName, tps.Length, explicitArgs.Count);
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
 
                 for (var i = 0; i < explicitArgs.Count; i++)
@@ -4247,7 +4248,7 @@ public sealed class Binder
                     var ta = BindTypeClause(explicitArgs[i]);
                     if (ta == null)
                     {
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     }
 
                     substitution[tps[i]] = ta;
@@ -4274,7 +4275,7 @@ public sealed class Binder
                     if (!substitution.ContainsKey(tp))
                     {
                         Diagnostics.ReportTypeArgumentInferenceFailed(syntax.TypeIdentifier.Location, typeName, tp.Name);
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     }
                 }
             }
@@ -4289,7 +4290,7 @@ public sealed class Binder
                 if (!SatisfiesConstraint(typeArg, tp))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
             }
 
@@ -4304,7 +4305,7 @@ public sealed class Binder
         else if (syntax.TypeArgumentList != null)
         {
             Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, typeName, 0, syntax.TypeArgumentList.Arguments.Count);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var seenFieldNames = new HashSet<string>();
@@ -4329,7 +4330,7 @@ public sealed class Binder
             inits.Add(new BoundFieldInitializer(field, valueExpr));
         }
 
-        return new BoundStructLiteralExpression(structSymbol, inits.ToImmutable());
+        return new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
     }
 
     private BoundExpression BindTupleLiteralExpression(TupleLiteralExpressionSyntax syntax)
@@ -4343,7 +4344,7 @@ public sealed class Binder
             var be = BindExpression(e);
             if (be.Type == TypeSymbol.Error)
             {
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             bound.Add(be);
@@ -4351,7 +4352,7 @@ public sealed class Binder
         }
 
         var tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable());
-        return new BoundTupleLiteralExpression(tupleType, bound.MoveToImmutable());
+        return new BoundTupleLiteralExpression(null, tupleType, bound.MoveToImmutable());
     }
 
     private BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax)
@@ -4420,7 +4421,7 @@ public sealed class Binder
         function = outerFunction;
 
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
-        return new BoundFunctionLiteralExpression(synthetic, fnType, (BoundBlockStatement)body, captured);
+        return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
     }
 
     private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)
@@ -4446,18 +4447,18 @@ public sealed class Binder
             if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             _ = staticWritable;
             var staticConverted = BindConversion(syntax.Value.Location, staticValue, TypeSymbol.FromClrType(staticTargetType));
-            return new BoundClrPropertyAssignmentExpression(receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
+            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
         }
 
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
@@ -4482,31 +4483,31 @@ public sealed class Binder
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             _ = instWritable;
-            var instReceiver = new BoundVariableExpression(variable);
+            var instReceiver = new BoundVariableExpression(null, variable);
             var instConverted = BindConversion(syntax.Value.Location, value, TypeSymbol.FromClrType(instTargetType));
-            return new BoundClrPropertyAssignmentExpression(instReceiver, instanceMember, instConverted, TypeSymbol.FromClrType(instTargetType));
+            return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, TypeSymbol.FromClrType(instTargetType));
         }
 
         if (!(variable.Type is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (variable.IsReadOnly)
@@ -4527,7 +4528,7 @@ public sealed class Binder
             $"{structSymbol.Name}.{field.Name}");
 
         var converted = BindConversion(syntax.Value.Location, value, field.Type);
-        return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
+        return new BoundFieldAssignmentExpression(null, variable, structSymbol, field, converted);
     }
 
     private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
@@ -4537,13 +4538,13 @@ public sealed class Binder
         if (syntax.LeftHandSide is not AccessorExpressionSyntax accessor)
         {
             Diagnostics.ReportUnableToFindMember(syntax.LeftHandSide.Location, syntax.OperatorToken.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (accessor.RightPart is not NameExpressionSyntax eventNameSyntax)
         {
             Diagnostics.ReportUnableToFindMember(accessor.RightPart.Location, syntax.OperatorToken.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var eventName = eventNameSyntax.IdentifierToken.Text;
@@ -4565,14 +4566,14 @@ public sealed class Binder
             boundReceiver = BindExpression(accessor.LeftPart);
             if (boundReceiver.Type == TypeSymbol.Error)
             {
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {
                 Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             flags = BindingFlags.Public | BindingFlags.Instance;
@@ -4582,7 +4583,7 @@ public sealed class Binder
         if (eventInfo == null)
         {
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var handlerType = eventInfo.EventHandlerType;
@@ -4606,7 +4607,7 @@ public sealed class Binder
             convertedHandler = BindConversion(syntax.Value.Location, boundHandler, handlerSymbol);
         }
 
-        return new BoundClrEventSubscriptionExpression(boundReceiver, eventInfo, convertedHandler, isAdd);
+        return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
     }
 
     private static bool IsSignatureCompatibleWithDelegate(FunctionTypeSymbol fn, Type delegateType)
@@ -4685,7 +4686,7 @@ public sealed class Binder
 
         if (boundOperand.Type == TypeSymbol.Error)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);
@@ -4716,10 +4717,10 @@ public sealed class Binder
                     var convertedOperand = BindConversion(syntax.Operand.Location, boundOperand, userOp.Parameters[0].Type);
                     if (isStructReceiver)
                     {
-                        return new BoundUserInstanceCallExpression(convertedOperand, userOp, ImmutableArray<BoundExpression>.Empty);
+                        return new BoundUserInstanceCallExpression(null, convertedOperand, userOp, ImmutableArray<BoundExpression>.Empty);
                     }
 
-                    return new BoundCallExpression(userOp, ImmutableArray.Create(convertedOperand));
+                    return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedOperand));
                 }
             }
 
@@ -4730,6 +4731,7 @@ public sealed class Binder
                 && ClrOperatorResolution.TryResolveUnary(syntax.OperatorToken.Kind, boundOperand.Type, out var clrMethod, out ambiguous))
             {
                 return new BoundClrUnaryOperatorExpression(
+                    null,
                     syntax.OperatorToken.Kind,
                     boundOperand,
                     clrMethod,
@@ -4738,14 +4740,14 @@ public sealed class Binder
             else if (ambiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(syntax.OperatorToken.Location, syntax.OperatorToken.Text, candidateCount: 2);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundOperand.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundUnaryExpression(boundOperator, boundOperand);
+        return new BoundUnaryExpression(null, boundOperator, boundOperand);
     }
 
     /// <summary>ADR-0039: Binds <c>&amp;expr</c> — takes managed pointer to an lvalue.</summary>
@@ -4761,7 +4763,7 @@ public sealed class Binder
         if (operand is BoundVariableExpression bve && bve.Variable.IsReadOnly)
         {
             Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, bve.Variable.Name);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // Lvalue check.
@@ -4769,10 +4771,10 @@ public sealed class Binder
         {
             var exprText = syntax.Operand.ToString();
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.OperatorToken.Location, exprText);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundAddressOfExpression(operand);
+        return new BoundAddressOfExpression(null, operand);
     }
 
     /// <summary>ADR-0039: Binds <c>*expr</c> — dereferences a managed pointer.</summary>
@@ -4787,10 +4789,10 @@ public sealed class Binder
         if (operand.Type is not ByRefTypeSymbol)
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, operand.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundDereferenceExpression(operand);
+        return new BoundDereferenceExpression(null, operand);
     }
 
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
@@ -4891,10 +4893,10 @@ public sealed class Binder
         if (operand.Type is not ChannelTypeSymbol chan)
         {
             Diagnostics.ReportReceiveOperandIsNotChannel(syntax.Operand.Location, operand.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundChannelReceiveExpression(operand, chan.ElementType);
+        return new BoundChannelReceiveExpression(null, operand, chan.ElementType);
     }
 
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)
@@ -4904,7 +4906,7 @@ public sealed class Binder
 
         if (boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
@@ -4946,15 +4948,15 @@ public sealed class Binder
                     var convertedRight = BindConversion(syntax.Right.Location, boundRight, userOp.Parameters[1].Type);
                     if (leftIsStructReceiver)
                     {
-                        return new BoundUserInstanceCallExpression(convertedLeft, userOp, ImmutableArray.Create(convertedRight));
+                        return new BoundUserInstanceCallExpression(null, convertedLeft, userOp, ImmutableArray.Create(convertedRight));
                     }
 
                     if (rightIsStructReceiver)
                     {
-                        return new BoundUserInstanceCallExpression(convertedRight, userOp, ImmutableArray.Create(convertedLeft));
+                        return new BoundUserInstanceCallExpression(null, convertedRight, userOp, ImmutableArray.Create(convertedLeft));
                     }
 
-                    return new BoundCallExpression(userOp, ImmutableArray.Create(convertedLeft, convertedRight));
+                    return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
                 }
             }
 
@@ -4965,6 +4967,7 @@ public sealed class Binder
                 && ClrOperatorResolution.TryResolveBinary(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type, out var clrMethod, out ambiguous))
             {
                 return new BoundClrBinaryOperatorExpression(
+                    null,
                     syntax.OperatorToken.Kind,
                     boundLeft,
                     boundRight,
@@ -4974,14 +4977,14 @@ public sealed class Binder
             else if (ambiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(syntax.OperatorToken.Location, syntax.OperatorToken.Text, candidateCount: 2);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundBinaryExpression(boundLeft, boundOperator, boundRight);
+        return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
     }
 
     private BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
@@ -5007,7 +5010,7 @@ public sealed class Binder
                 if (explicitArgs.Count != tps.Length)
                 {
                     Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, tps.Length, explicitArgs.Count);
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(syntax);
                 }
 
                 for (var i = 0; i < explicitArgs.Count; i++)
@@ -5015,7 +5018,7 @@ public sealed class Binder
                     var ta = BindTypeClause(explicitArgs[i]);
                     if (ta == null)
                     {
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(syntax);
                     }
 
                     substitution[tps[i]] = ta;
@@ -5035,7 +5038,7 @@ public sealed class Binder
                     if (!substitution.ContainsKey(tp))
                     {
                         Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(syntax);
                     }
                 }
             }
@@ -5049,7 +5052,7 @@ public sealed class Binder
                 if (!SatisfiesConstraint(typeArg, tp))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(syntax);
                 }
             }
 
@@ -5064,7 +5067,7 @@ public sealed class Binder
         else if (syntax.TypeArgumentList != null)
         {
             Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, 0, syntax.TypeArgumentList.Arguments.Count);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(syntax);
         }
 
         var parameters = classType.PrimaryConstructorParameters;
@@ -5098,7 +5101,7 @@ public sealed class Binder
             }
 
             Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), classType.Name, parameters.Length, syntax.Arguments.Count);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(syntax);
         }
 
         var hasErrors = false;
@@ -5120,7 +5123,7 @@ public sealed class Binder
 
         if (hasErrors)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(syntax);
         }
 
         if (!classType.IsClass)
@@ -5134,10 +5137,10 @@ public sealed class Binder
                 }
             }
 
-            return new BoundStructLiteralExpression(classType, fieldInitializers.ToImmutable());
+            return new BoundStructLiteralExpression(syntax, classType, fieldInitializers.ToImmutable());
         }
 
-        return new BoundConstructorCallExpression(classType, boundArguments.ToImmutable());
+        return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
     }
 
     private BoundExpression BindCallExpression(CallExpressionSyntax syntax)
@@ -5193,7 +5196,7 @@ public sealed class Binder
         if (symbol == null)
         {
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // Phase 4.7: invoking a function-typed variable goes through the
@@ -5204,7 +5207,7 @@ public sealed class Binder
             if (syntax.Arguments.Count != fnType.Arity)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, variable.Name, fnType.Arity, syntax.Arguments.Count);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
@@ -5213,14 +5216,14 @@ public sealed class Binder
                 convertedArgs.Add(BindConversion(syntax.Arguments[i].Location, boundArguments[i], fnType.ParameterTypes[i]));
             }
 
-            return new BoundIndirectCallExpression(new BoundVariableExpression(variable), fnType, convertedArgs.MoveToImmutable());
+            return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
         }
 
         var function = symbol as FunctionSymbol;
         if (function == null)
         {
             Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         ReportObsoleteUseIfApplicable(syntax.Identifier.Location, function, function.Name);
@@ -5233,7 +5236,7 @@ public sealed class Binder
             if (syntax.Arguments.Count < fixedParamCount)
             {
                 Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, function.Name, fixedParamCount, syntax.Arguments.Count);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
         }
         else if (syntax.Arguments.Count != function.Parameters.Length)
@@ -5260,7 +5263,7 @@ public sealed class Binder
             }
 
             Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), function.Name, function.Parameters.Length, syntax.Arguments.Count);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         bool hasErrors = false;
@@ -5279,7 +5282,7 @@ public sealed class Binder
                 if (explicitArgs.Count != function.TypeParameters.Length)
                 {
                     Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, function.Name, function.TypeParameters.Length, explicitArgs.Count);
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
 
                 for (var i = 0; i < explicitArgs.Count; i++)
@@ -5287,7 +5290,7 @@ public sealed class Binder
                     var ta = BindTypeClause(explicitArgs[i]);
                     if (ta == null)
                     {
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     }
 
                     substitution[function.TypeParameters[i]] = ta;
@@ -5305,7 +5308,7 @@ public sealed class Binder
                     if (!substitution.ContainsKey(tp))
                     {
                         Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, function.Name, tp.Name);
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     }
                 }
             }
@@ -5321,7 +5324,7 @@ public sealed class Binder
                 if (!SatisfiesConstraint(typeArg, tp))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
             }
         }
@@ -5376,14 +5379,14 @@ public sealed class Binder
                     finalArgs.Add(boundArguments[i]);
                 }
 
-                finalArgs.Add(new BoundArrayCreationExpression(sliceType, packed.MoveToImmutable()));
+                finalArgs.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
                 boundArguments = finalArgs;
             }
         }
 
         if (hasErrors)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(syntax);
         }
 
         if (substitution != null)
@@ -5424,10 +5427,10 @@ public sealed class Binder
     {
         if (KnownAttributes.IsConditionallyElided(function.Attributes, scope.PreprocessorSymbols))
         {
-            return new BoundCallExpression(function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true);
+            return new BoundCallExpression(null, function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true);
         }
 
-        return new BoundCallExpression(function, arguments, returnType);
+        return new BoundCallExpression(null, function, arguments, returnType);
     }
 
     private static void InferTypeArguments(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
@@ -5529,7 +5532,7 @@ public sealed class Binder
         if (function == null || (!function.IsAsync && !IsAsyncIteratorReturnType(function.Type)))
         {
             Diagnostics.ReportAwaitOutsideAsyncFunction(syntax.AwaitKeyword.Location);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (operand is BoundErrorExpression)
@@ -5540,10 +5543,10 @@ public sealed class Binder
         if (!TryGetTaskElementType(operand.Type, out var element))
         {
             Diagnostics.ReportTypeIsNotAwaitable(syntax.Expression.Location, operand.Type);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
-        return new BoundAwaitExpression(operand, element);
+        return new BoundAwaitExpression(null, operand, element);
     }
 
     private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
@@ -5673,14 +5676,14 @@ public sealed class Binder
                 if (syntax.Arguments.Count != 1)
                 {
                     Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var operand = BindExpression(syntax.Arguments[0]);
                 if (operand.Type == TypeSymbol.Error)
                 {
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
@@ -5689,13 +5692,13 @@ public sealed class Binder
                 if (!ok)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 result = name == "len"
-                    ? new BoundLenExpression(operand)
-                    : new BoundCapExpression(operand);
+                    ? new BoundLenExpression(syntax, operand)
+                    : new BoundCapExpression(syntax, operand);
                 return true;
             }
 
@@ -5704,26 +5707,26 @@ public sealed class Binder
                 if (syntax.Arguments.Count != 2)
                 {
                     Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var slice = BindExpression(syntax.Arguments[0]);
                 if (slice.Type == TypeSymbol.Error)
                 {
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 if (slice.Type is not SliceTypeSymbol sliceType)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, slice.Type);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var element = BindConversion(syntax.Arguments[1], sliceType.ElementType);
-                result = new BoundAppendExpression(slice, element, sliceType);
+                result = new BoundAppendExpression(syntax, slice, element, sliceType);
                 return true;
             }
 
@@ -5733,26 +5736,26 @@ public sealed class Binder
                 if (syntax.Arguments.Count != 2)
                 {
                     Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var mapExpr = BindExpression(syntax.Arguments[0]);
                 if (mapExpr.Type == TypeSymbol.Error)
                 {
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 if (mapExpr.Type is not MapTypeSymbol mapType)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, mapExpr.Type);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var keyExpr = BindConversion(syntax.Arguments[1], mapType.KeyType);
-                result = new BoundMapDeleteExpression(mapExpr, keyExpr);
+                result = new BoundMapDeleteExpression(syntax, mapExpr, keyExpr);
                 return true;
             }
 
@@ -5762,25 +5765,25 @@ public sealed class Binder
                 if (syntax.Arguments.Count != 1)
                 {
                     Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 var chanExpr = BindExpression(syntax.Arguments[0]);
                 if (chanExpr.Type == TypeSymbol.Error)
                 {
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
                 if (chanExpr.Type is not ChannelTypeSymbol)
                 {
                     Diagnostics.ReportCloseOperandIsNotChannel(syntax.Arguments[0].Location, chanExpr.Type);
-                    result = new BoundErrorExpression();
+                    result = new BoundErrorExpression(syntax);
                     return true;
                 }
 
-                result = new BoundChannelCloseExpression(chanExpr);
+                result = new BoundChannelCloseExpression(syntax, chanExpr);
                 return true;
             }
 
@@ -5902,6 +5905,7 @@ public sealed class Binder
         }
 
         result = new BoundClrConstructorCallExpression(
+            syntax,
             clrType,
             bestCtor,
             ctorArgs,
@@ -5949,13 +5953,14 @@ public sealed class Binder
                         implicitField.Field,
                         $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
                     receiver = new BoundFieldAccessExpression(
-                        new BoundVariableExpression(implicitField.Receiver),
+                        null,
+                        new BoundVariableExpression(null, implicitField.Receiver),
                         implicitField.StructType,
                         implicitField.Field);
                 }
                 else
                 {
-                    receiver = new BoundVariableExpression(variable, TryGetNarrowedType(variable));
+                    receiver = new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
                 }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)
@@ -5974,7 +5979,7 @@ public sealed class Binder
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
         }
         else
@@ -6007,7 +6012,7 @@ public sealed class Binder
         else if (receiverType == TypeSymbol.Null)
         {
             // `nil?.x` is statically nil.
-            return new BoundLiteralExpression(null);
+            return new BoundLiteralExpression(null, null);
         }
         else
         {
@@ -6028,13 +6033,13 @@ public sealed class Binder
         scope = new BoundScope(scope);
         scope.TryDeclareVariable(capture);
 
-        var captureRef = new BoundVariableExpression(capture);
+        var captureRef = new BoundVariableExpression(null, capture);
         var whenNotNull = BindAccessorStep(captureRef, null, syntax.RightPart);
 
         scope = scope.Parent;
 
         var resultType = whenNotNull.Type is NullableTypeSymbol ? whenNotNull.Type : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
-        return new BoundNullConditionalAccessExpression(receiver, capture, whenNotNull, resultType);
+        return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, resultType);
     }
 
     private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
@@ -6095,14 +6100,14 @@ public sealed class Binder
                     // member surfaces GS0204 at the member-identifier
                     // location (e.g. `Color.Red`).
                     ReportObsoleteUseIfApplicable(ne.Location, member, $"{enumSymbol.Name}.{member.Name}");
-                    return new BoundLiteralExpression(member.Value, enumSymbol);
+                    return new BoundLiteralExpression(null, member.Value, enumSymbol);
                 }
 
                 Diagnostics.ReportUndefinedEnumMember(ne.Location, memberName, enumSymbol.Name);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
 
             default:
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
         }
     }
 
@@ -6129,7 +6134,7 @@ public sealed class Binder
                     if (!foundMember)
                     {
                         Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     }
 
                     // Stream B: static field/property read on imported type.
@@ -6138,7 +6143,7 @@ public sealed class Binder
                     // their constant value rather than emit `ldsfld`.
                     if (staticMember is FieldInfo litField && litField.IsLiteral)
                     {
-                        return new BoundLiteralExpression(litField.GetRawConstantValue(), TypeSymbol.FromClrType(litField.FieldType));
+                        return new BoundLiteralExpression(null, litField.GetRawConstantValue(), TypeSymbol.FromClrType(litField.FieldType));
                     }
 
                     var staticType = staticMember switch
@@ -6147,7 +6152,7 @@ public sealed class Binder
                         FieldInfo sf => TypeSymbol.FromClrType(sf.FieldType),
                         _ => TypeSymbol.Error,
                     };
-                    return new BoundClrPropertyAccessExpression(null, staticMember, staticType);
+                    return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType);
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
                 {
@@ -6159,7 +6164,7 @@ public sealed class Binder
                             // Issue #186 / #175: dotted field read fires
                             // GS0204 if the field carries `@Obsolete`.
                             ReportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{c.Name}.{field.Name}");
-                            return new BoundFieldAccessExpression(receiver, c, field);
+                            return new BoundFieldAccessExpression(null, receiver, c, field);
                         }
                     }
 
@@ -6173,11 +6178,11 @@ public sealed class Binder
                         && int.TryParse(memberName.Substring(4), out var oneBased)
                         && oneBased >= 1 && oneBased <= tupleSym.Arity)
                     {
-                        return new BoundTupleElementAccessExpression(receiver, tupleSym, oneBased - 1);
+                        return new BoundTupleElementAccessExpression(null, receiver, tupleSym, oneBased - 1);
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
                 else if (receiver != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
@@ -6191,27 +6196,27 @@ public sealed class Binder
                     var prop = clrReceiverType.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
-                        return new BoundClrPropertyAccessExpression(receiver, prop, TypeSymbol.FromClrType(prop.PropertyType));
+                        return new BoundClrPropertyAccessExpression(null, receiver, prop, TypeSymbol.FromClrType(prop.PropertyType));
                     }
 
                     var fld = clrReceiverType.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (fld != null)
                     {
-                        return new BoundClrPropertyAccessExpression(receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
+                        return new BoundClrPropertyAccessExpression(null, receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
-                    return new BoundErrorExpression();
+                    return new BoundErrorExpression(null);
                 }
                 else
                 {
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
 
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
 
             default:
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
         }
     }
 
@@ -6227,13 +6232,13 @@ public sealed class Binder
             }
 
             Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (hasNamedArguments)
         {
             Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
@@ -6250,17 +6255,17 @@ public sealed class Binder
             {
                 var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
                 ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(staticFn, arguments, refKinds);
+                return new BoundImportedCallExpression(null, staticFn, arguments, refKinds);
             }
 
             if (staticAmbiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, candidateCount: 2);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (receiver == null || receiver.Type?.ClrType == null)
@@ -6296,7 +6301,7 @@ public sealed class Binder
             }
 
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // Prefer a user-defined class method when the receiver is a user
@@ -6336,10 +6341,10 @@ public sealed class Binder
                         var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
                         var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
                         ValidateRefArguments(arguments, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(receiver, resolution.Best, returnType, arguments, instRefKinds);
+                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, instRefKinds);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
-                        return new BoundErrorExpression();
+                        return new BoundErrorExpression(null);
                     default:
                         break;
                 }
@@ -6354,7 +6359,7 @@ public sealed class Binder
         }
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
-        return new BoundErrorExpression();
+        return new BoundErrorExpression(null);
     }
 
     private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
@@ -6365,7 +6370,7 @@ public sealed class Binder
         if (arguments.Length != userParamCount)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
@@ -6375,7 +6380,7 @@ public sealed class Binder
             convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], extension.Parameters[i + 1].Type));
         }
 
-        return new BoundCallExpression(extension, convertedArgs.MoveToImmutable());
+        return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
     }
 
     private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
@@ -6385,7 +6390,7 @@ public sealed class Binder
         if (arguments.Length != callableParameterCount)
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, callableParameterCount, arguments.Length);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         // Phase 4.3b / ADR-0020: if the receiver is a constructed generic
@@ -6408,11 +6413,11 @@ public sealed class Binder
             var substitutedReturn = SubstituteType(method.Type, substitution);
             if (!ReferenceEquals(substitutedReturn, method.Type))
             {
-                return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
+                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
             }
         }
 
-        return new BoundUserInstanceCallExpression(receiver, method, convertedArgs.ToImmutable());
+        return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable());
     }
 
     private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)
@@ -6444,7 +6449,7 @@ public sealed class Binder
         if (elementType == null)
         {
             Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
@@ -6455,13 +6460,13 @@ public sealed class Binder
 
         if (syntax.LengthToken == null)
         {
-            return new BoundArrayCreationExpression(SliceTypeSymbol.Get(elementType), elements.ToImmutable());
+            return new BoundArrayCreationExpression(null, SliceTypeSymbol.Get(elementType), elements.ToImmutable());
         }
 
         if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
         {
             Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (syntax.Elements.Count != length)
@@ -6469,7 +6474,7 @@ public sealed class Binder
             Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, syntax.Elements.Count);
         }
 
-        return new BoundArrayCreationExpression(ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
+        return new BoundArrayCreationExpression(null, ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
     }
 
     private BoundExpression BindMapCreationExpression(MapCreationExpressionSyntax syntax)
@@ -6478,14 +6483,14 @@ public sealed class Binder
         var mapType = BindTypeClause(syntax.TypeClause);
         if (mapType == null)
         {
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (mapType is not MapTypeSymbol mts)
         {
             // Defensive — the parser only produces a map type clause here.
             Diagnostics.ReportUndefinedType(syntax.TypeClause.Location, mapType.Name);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var entries = ImmutableArray.CreateBuilder<BoundMapEntry>(syntax.Entries.Count);
@@ -6496,7 +6501,7 @@ public sealed class Binder
             entries.Add(new BoundMapEntry(key, value));
         }
 
-        return new BoundMapLiteralExpression(mts, entries.ToImmutable());
+        return new BoundMapLiteralExpression(null, mts, entries.ToImmutable());
     }
 
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
@@ -6510,14 +6515,14 @@ public sealed class Binder
         if (target.Type is MapTypeSymbol mapType)
         {
             var key = BindConversion(syntax.Index, mapType.KeyType);
-            return new BoundIndexExpression(target, key, mapType.ValueType);
+            return new BoundIndexExpression(null, target, key, mapType.ValueType);
         }
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
             var index = BindConversion(syntax.Index, TypeSymbol.Int);
-            return new BoundIndexExpression(target, index, element);
+            return new BoundIndexExpression(null, target, index, element);
         }
 
         // Phase 4 exit: CLR indexer read on an imported reference type
@@ -6526,7 +6531,7 @@ public sealed class Binder
         // matches the single argument by assignability).
         if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
-            return new BoundClrIndexExpression(target, idxProp, idxArgs, TypeSymbol.FromClrType(idxProp.PropertyType));
+            return new BoundClrIndexExpression(null, target, idxProp, idxArgs, TypeSymbol.FromClrType(idxProp.PropertyType));
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -6534,7 +6539,7 @@ public sealed class Binder
             Diagnostics.ReportTypeNotIndexable(syntax.Target.Location, target.Type);
         }
 
-        return new BoundErrorExpression();
+        return new BoundErrorExpression(null);
     }
 
     private BoundExpression BindIndexAssignmentExpression(IndexAssignmentExpressionSyntax syntax)
@@ -6543,7 +6548,7 @@ public sealed class Binder
         if (scope.TryLookupSymbol(name) is not VariableSymbol variable)
         {
             Diagnostics.ReportUndefinedVariable(syntax.TargetIdentifier.Location, name);
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         var element = GetIndexElementType(variable.Type);
@@ -6551,7 +6556,7 @@ public sealed class Binder
         {
             var index = BindConversion(syntax.Index, TypeSymbol.Int);
             var value = BindConversion(syntax.Value, element);
-            return new BoundIndexAssignmentExpression(variable, index, value, element);
+            return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
 
         // Phase 3.A.4: map indexed assignment `m[k] = v` — key bound to K,
@@ -6560,7 +6565,7 @@ public sealed class Binder
         {
             var keyExpr = BindConversion(syntax.Index, mapType.KeyType);
             var valExpr = BindConversion(syntax.Value, mapType.ValueType);
-            return new BoundIndexAssignmentExpression(variable, keyExpr, valExpr, mapType.ValueType);
+            return new BoundIndexAssignmentExpression(null, variable, keyExpr, valExpr, mapType.ValueType);
         }
 
         // Phase 4 exit: CLR indexer write on an imported reference type
@@ -6570,12 +6575,12 @@ public sealed class Binder
             if (!idxProp.CanWrite)
             {
                 Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
-                return new BoundErrorExpression();
+                return new BoundErrorExpression(null);
             }
 
             var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
             var boundValue = BindConversion(syntax.Value, valueType);
-            return new BoundClrIndexAssignmentExpression(variable, idxProp, idxArgs, boundValue, valueType);
+            return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
         }
 
         if (variable.Type != TypeSymbol.Error)
@@ -6583,7 +6588,7 @@ public sealed class Binder
             Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
         }
 
-        return new BoundErrorExpression();
+        return new BoundErrorExpression(null);
     }
 
     private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)
@@ -6655,7 +6660,7 @@ public sealed class Binder
                 && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
             {
                 _ = isExplicit;
-                return new BoundClrConversionCallExpression(expression, convMethod, type);
+                return new BoundClrConversionCallExpression(null, expression, convMethod, type);
             }
 
             if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
@@ -6663,7 +6668,7 @@ public sealed class Binder
                 Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             }
 
-            return new BoundErrorExpression();
+            return new BoundErrorExpression(null);
         }
 
         if (!allowExplicit && conversion.IsExplicit)
@@ -6676,7 +6681,7 @@ public sealed class Binder
             return expression;
         }
 
-        return new BoundConversionExpression(type, expression);
+        return new BoundConversionExpression(null, type, expression);
     }
 
     private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)

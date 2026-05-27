@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -17,10 +18,12 @@ public sealed class BoundAppendExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAppendExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="slice">The slice operand.</param>
     /// <param name="element">The element to append.</param>
     /// <param name="sliceType">The slice type symbol that is also the expression type.</param>
-    public BoundAppendExpression(BoundExpression slice, BoundExpression element, SliceTypeSymbol sliceType)
+    public BoundAppendExpression(SyntaxNode syntax, BoundExpression slice, BoundExpression element, SliceTypeSymbol sliceType)
+        : base(syntax)
     {
         Slice = slice;
         Element = element;

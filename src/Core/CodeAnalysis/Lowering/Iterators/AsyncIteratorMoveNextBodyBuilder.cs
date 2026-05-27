@@ -124,13 +124,13 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var catchBody = BuildCatchBody(exLocal);
 
             var catchClause = new BoundCatchClause(TypeSymbol.FromClrType(typeof(Exception)), exLocal, catchBody);
-            var tryStmt = new BoundTryStatement(tryBody, ImmutableArray.Create(catchClause), finallyBlock: null);
+            var tryStmt = new BoundTryStatement(null, tryBody, ImmutableArray.Create(catchClause), finallyBlock: null);
             stmts.Add(tryStmt);
 
             // return; (after try/catch)
-            stmts.Add(new BoundReturnStatement(null));
+            stmts.Add(new BoundReturnStatement(null, null));
 
-            return new BoundBlockStatement(stmts.ToImmutable());
+            return new BoundBlockStatement(null, stmts.ToImmutable());
         }
 
         private BoundBlockStatement BuildTryBody()
@@ -153,14 +153,14 @@ public static class AsyncIteratorMoveNextBodyBuilder
             }
 
             // End of body: state = -2; promise.SetResult(false);
-            stmts.Add(new BoundLabelStatement(endOfBodyLabel));
+            stmts.Add(new BoundLabelStatement(null, endOfBodyLabel));
             stmts.Add(Stmt(WriteField(stateField, Literal(StateMachineStates.FinishedState))));
             stmts.Add(Stmt(EmitPromiseSetResult(false)));
 
             // Exit label (for suspension return paths).
-            stmts.Add(new BoundLabelStatement(exitLabel));
+            stmts.Add(new BoundLabelStatement(null, exitLabel));
 
-            return new BoundBlockStatement(stmts.ToImmutable());
+            return new BoundBlockStatement(null, stmts.ToImmutable());
         }
 
         private void EmitStateDispatch(ImmutableArray<BoundStatement>.Builder stmts)
@@ -172,8 +172,10 @@ public static class AsyncIteratorMoveNextBodyBuilder
             {
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(
+                    null,
                     yieldResumeLabels[state],
                     new BoundBinaryExpression(
+                        null,
                         stateRead,
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
                         Literal(state)),
@@ -185,8 +187,10 @@ public static class AsyncIteratorMoveNextBodyBuilder
             {
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(
+                    null,
                     awaitResumeLabels[state],
                     new BoundBinaryExpression(
+                        null,
                         ReadField(stateField),
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
                         Literal(state)),
@@ -205,15 +209,17 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
             var setExceptionMethod = promiseFieldType.GetMethod("SetException", new[] { typeof(Exception) });
             var promiseAddr = new BoundAddressOfExpression(
-                new BoundFieldAccessExpression(new BoundVariableExpression(thisParameter), smClass, promiseField));
+                null,
+                new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParameter), smClass, promiseField));
             var call = new BoundImportedInstanceCallExpression(
+                null,
                 promiseAddr,
                 setExceptionMethod,
                 TypeSymbol.Void,
-                ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(exLocal)));
+                ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, exLocal)));
             stmts.Add(Stmt(call));
 
-            return new BoundBlockStatement(stmts.ToImmutable());
+            return new BoundBlockStatement(null, stmts.ToImmutable());
         }
 
         private BoundExpression EmitPromiseSetResult(bool value)
@@ -221,27 +227,29 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
             var setResultMethod = promiseFieldType.GetMethod("SetResult", new[] { typeof(bool) });
             var promiseAddr = new BoundAddressOfExpression(
-                new BoundFieldAccessExpression(new BoundVariableExpression(thisParameter), smClass, promiseField));
+                null,
+                new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParameter), smClass, promiseField));
             return new BoundImportedInstanceCallExpression(
+                null,
                 promiseAddr,
                 setResultMethod,
                 TypeSymbol.Void,
-                ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(value)));
+                ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, value)));
         }
 
         private BoundExpression ReadField(FieldSymbol field)
         {
-            return new BoundFieldAccessExpression(new BoundVariableExpression(thisParameter), smClass, field);
+            return new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParameter), smClass, field);
         }
 
         private BoundExpression WriteField(FieldSymbol field, BoundExpression value)
         {
-            return new BoundFieldAssignmentExpression(thisParameter, smClass, field, value);
+            return new BoundFieldAssignmentExpression(null, thisParameter, smClass, field, value);
         }
 
-        private static BoundExpression Literal(int value) => new BoundLiteralExpression(value);
+        private static BoundExpression Literal(int value) => new BoundLiteralExpression(null, value);
 
-        private static BoundExpressionStatement Stmt(BoundExpression expr) => new BoundExpressionStatement(expr);
+        private static BoundExpressionStatement Stmt(BoundExpression expr) => new BoundExpressionStatement(null, expr);
 
         /// <summary>
         /// Walks the user body, replacing yields, awaits, variable accesses (hoisted to fields),
@@ -277,7 +285,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 if (rewrittenValue != node.Expression)
                 {
-                    return new BoundAssignmentExpression(node.Variable, rewrittenValue);
+                    return new BoundAssignmentExpression(null, node.Variable, rewrittenValue);
                 }
 
                 return node;
@@ -298,12 +306,12 @@ public static class AsyncIteratorMoveNextBodyBuilder
                         return Stmt(ctx.WriteField(field, rewrittenInit));
                     }
 
-                    return new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+                    return new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
                 }
 
                 if (rewrittenInit != node.Initializer)
                 {
-                    return new BoundVariableDeclaration(node.Variable, rewrittenInit);
+                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit);
                 }
 
                 return node;
@@ -353,21 +361,22 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 stmts.Add(Stmt(ctx.EmitPromiseSetResult(true)));
 
                 // return;
-                stmts.Add(new BoundGotoStatement(ctx.exitLabel));
+                stmts.Add(new BoundGotoStatement(null, ctx.exitLabel));
 
                 // yieldResumeK:
-                stmts.Add(new BoundLabelStatement(ctx.yieldResumeLabels[yieldState]));
+                stmts.Add(new BoundLabelStatement(null, ctx.yieldResumeLabels[yieldState]));
 
                 // this.<>1__state = -1;
                 stmts.Add(Stmt(ctx.WriteField(ctx.stateField, Literal(StateMachineStates.NotStartedOrRunningState))));
 
                 // if (<>w__disposeMode) goto endOfBody;
                 stmts.Add(new BoundConditionalGotoStatement(
+                    null,
                     ctx.endOfBodyLabel,
                     ctx.ReadField(ctx.disposeModeField),
                     jumpIfTrue: true));
 
-                return new BoundBlockStatement(stmts.ToImmutable());
+                return new BoundBlockStatement(null, stmts.ToImmutable());
             }
 
             protected override BoundStatement RewriteExpressionStatement(BoundExpressionStatement node)
@@ -394,7 +403,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
             {
                 // In an async iterator, `return` means end iteration.
-                return new BoundGotoStatement(ctx.endOfBodyLabel);
+                return new BoundGotoStatement(null, ctx.endOfBodyLabel);
             }
 
             private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol resultTarget)
@@ -435,8 +444,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     var awaitableTypeSymbol = TypeSymbol.FromClrType(awaitableClrType);
                     var tempLocal = new LocalVariableSymbol(
                         "<>awaitable_" + awaitState, isReadOnly: false, awaitableTypeSymbol);
-                    stmts.Add(new BoundVariableDeclaration(tempLocal, rewrittenOperand));
-                    getAwaiterReceiver = new BoundAddressOfExpression(new BoundVariableExpression(tempLocal));
+                    stmts.Add(new BoundVariableDeclaration(null, tempLocal, rewrittenOperand));
+                    getAwaiterReceiver = new BoundAddressOfExpression(null, new BoundVariableExpression(null, tempLocal));
                 }
                 else
                 {
@@ -444,6 +453,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 }
 
                 var getAwaiterCall = new BoundImportedInstanceCallExpression(
+                    null,
                     getAwaiterReceiver,
                     shape.GetAwaiterMethod,
                     awaiterTypeSymbol,
@@ -451,82 +461,85 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 var awaiterLocal = new LocalVariableSymbol(
                     "<>awaiter_" + awaitState, isReadOnly: false, awaiterTypeSymbol);
-                stmts.Add(new BoundVariableDeclaration(awaiterLocal, getAwaiterCall));
+                stmts.Add(new BoundVariableDeclaration(null, awaiterLocal, getAwaiterCall));
 
                 // if (awaiter.IsCompleted) goto resumeAfter;
                 var isCompletedGetter = shape.IsCompletedProperty.GetGetMethod();
                 BoundExpression isCompletedReceiver;
                 if (awaiterClrType.IsValueType)
                 {
-                    isCompletedReceiver = new BoundAddressOfExpression(new BoundVariableExpression(awaiterLocal));
+                    isCompletedReceiver = new BoundAddressOfExpression(null, new BoundVariableExpression(null, awaiterLocal));
                 }
                 else
                 {
-                    isCompletedReceiver = new BoundVariableExpression(awaiterLocal);
+                    isCompletedReceiver = new BoundVariableExpression(null, awaiterLocal);
                 }
 
                 var isCompletedCall = new BoundImportedInstanceCallExpression(
+                    null,
                     isCompletedReceiver,
                     isCompletedGetter,
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
-                stmts.Add(new BoundConditionalGotoStatement(resumeAfterLabel, isCompletedCall, jumpIfTrue: true));
+                stmts.Add(new BoundConditionalGotoStatement(null, resumeAfterLabel, isCompletedCall, jumpIfTrue: true));
 
                 // === Suspension path ===
                 // [AwaitYieldPoint] — hidden sequence point marker before state save.
-                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitYieldPoint, awaitState));
+                stmts.Add(new BoundAwaitSequencePoint(null, BoundNodeKind.AwaitYieldPoint, awaitState));
 
                 // this.<>1__state = awaitState;
                 stmts.Add(Stmt(ctx.WriteField(ctx.stateField, Literal(awaitState))));
 
                 // this.<>u__N = awaiter;
-                stmts.Add(Stmt(ctx.WriteField(awaiterField, new BoundVariableExpression(awaiterLocal))));
+                stmts.Add(Stmt(ctx.WriteField(awaiterField, new BoundVariableExpression(null, awaiterLocal))));
 
                 // builder.AwaitUnsafe/OnCompleted(ref awaiter, ref this);
                 var awaitOnCompletedMarker = new BoundStateMachineAwaitOnCompleted(
+                    null,
                     awaiterLocal, awaiterClrType, shape.ImplementsCriticalNotifyCompletion);
                 stmts.Add(Stmt(awaitOnCompletedMarker));
 
                 // goto exit;
-                stmts.Add(new BoundGotoStatement(ctx.exitLabel));
+                stmts.Add(new BoundGotoStatement(null, ctx.exitLabel));
 
                 // resumeLabel:
-                stmts.Add(new BoundLabelStatement(resumeLabel));
+                stmts.Add(new BoundLabelStatement(null, resumeLabel));
 
                 // [AwaitResumePoint] — hidden sequence point marker after resume dispatch.
-                stmts.Add(new BoundAwaitSequencePoint(BoundNodeKind.AwaitResumePoint, awaitState));
+                stmts.Add(new BoundAwaitSequencePoint(null, BoundNodeKind.AwaitResumePoint, awaitState));
 
                 // awaiter = this.<>u__N;
                 BoundExpression reloadedAwaiter = ctx.ReadField(awaiterField);
                 if (!awaiterClrType.IsValueType)
                 {
-                    reloadedAwaiter = new BoundConversionExpression(awaiterTypeSymbol, reloadedAwaiter);
+                    reloadedAwaiter = new BoundConversionExpression(null, awaiterTypeSymbol, reloadedAwaiter);
                 }
 
-                stmts.Add(Stmt(new BoundAssignmentExpression(awaiterLocal, reloadedAwaiter)));
+                stmts.Add(Stmt(new BoundAssignmentExpression(null, awaiterLocal, reloadedAwaiter)));
 
                 // this.<>u__N = default;
-                stmts.Add(Stmt(ctx.WriteField(awaiterField, new BoundDefaultExpression(awaiterTypeSymbol))));
+                stmts.Add(Stmt(ctx.WriteField(awaiterField, new BoundDefaultExpression(null, awaiterTypeSymbol))));
 
                 // this.<>1__state = -1;
                 stmts.Add(Stmt(ctx.WriteField(ctx.stateField, Literal(StateMachineStates.NotStartedOrRunningState))));
 
                 // resumeAfterLabel:
-                stmts.Add(new BoundLabelStatement(resumeAfterLabel));
+                stmts.Add(new BoundLabelStatement(null, resumeAfterLabel));
 
                 // result = awaiter.GetResult();
                 BoundExpression getResultReceiver;
                 if (awaiterClrType.IsValueType)
                 {
-                    getResultReceiver = new BoundAddressOfExpression(new BoundVariableExpression(awaiterLocal));
+                    getResultReceiver = new BoundAddressOfExpression(null, new BoundVariableExpression(null, awaiterLocal));
                 }
                 else
                 {
-                    getResultReceiver = new BoundVariableExpression(awaiterLocal);
+                    getResultReceiver = new BoundVariableExpression(null, awaiterLocal);
                 }
 
                 var resultType = awaitExpr.Type ?? TypeSymbol.Void;
                 var getResultCall = new BoundImportedInstanceCallExpression(
+                    null,
                     getResultReceiver,
                     shape.GetResultMethod,
                     resultType,
@@ -542,7 +555,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     }
                     else
                     {
-                        stmts.Add(new BoundVariableDeclaration(resultTarget, getResultCall));
+                        stmts.Add(new BoundVariableDeclaration(null, resultTarget, getResultCall));
                     }
                 }
                 else
@@ -550,7 +563,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     stmts.Add(Stmt(getResultCall));
                 }
 
-                return new BoundBlockStatement(stmts.ToImmutable());
+                return new BoundBlockStatement(null, stmts.ToImmutable());
             }
         }
     }

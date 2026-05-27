@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -10,8 +12,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundThrowStatement : BoundStatement
 {
     /// <summary>Initializes a new instance of the <see cref="BoundThrowStatement"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The bound exception expression.</param>
-    public BoundThrowStatement(BoundExpression expression)
+    public BoundThrowStatement(SyntaxNode syntax, BoundExpression expression)
+        : base(syntax)
     {
         Expression = expression;
     }

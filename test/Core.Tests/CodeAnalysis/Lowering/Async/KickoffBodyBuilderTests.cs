@@ -199,6 +199,6 @@ public class KickoffBodyBuilderTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 }

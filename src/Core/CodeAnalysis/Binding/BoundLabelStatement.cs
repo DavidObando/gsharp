@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -12,8 +14,10 @@ public sealed class BoundLabelStatement : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundLabelStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="label">The label.</param>
-    public BoundLabelStatement(BoundLabel label)
+    public BoundLabelStatement(SyntaxNode syntax, BoundLabel label)
+        : base(syntax)
     {
         Label = label;
     }

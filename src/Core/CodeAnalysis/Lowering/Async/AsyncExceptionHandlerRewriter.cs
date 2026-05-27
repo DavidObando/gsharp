@@ -70,7 +70,7 @@ public static class AsyncExceptionHandlerRewriter
 
         var rewriter = new Rewriter();
         var result = rewriter.RewriteStatement(body);
-        return result as BoundBlockStatement ?? new BoundBlockStatement(ImmutableArray.Create(result));
+        return result as BoundBlockStatement ?? new BoundBlockStatement(null, ImmutableArray.Create(result));
     }
 
     private static BoundLabel MakeLabel(string prefix)
@@ -129,7 +129,7 @@ public static class AsyncExceptionHandlerRewriter
                     return node;
                 }
 
-                return new BoundTryStatement(rewrittenTry, rewrittenClauses.ToImmutable(), rewrittenFinally);
+                return new BoundTryStatement(null, rewrittenTry, rewrittenClauses.ToImmutable(), rewrittenFinally);
             }
 
             // We need to rewrite. Build the output statement list.
@@ -140,7 +140,9 @@ public static class AsyncExceptionHandlerRewriter
             var pendingExLocal = new LocalVariableSymbol(
                 $"<>pending_ex_{localOrdinal++}", isReadOnly: false, nullableExceptionType);
             var pendingExNullInit = new BoundVariableDeclaration(
-                pendingExLocal, new BoundLiteralExpression(null, nullableExceptionType));
+                null,
+                pendingExLocal,
+                new BoundLiteralExpression(null, null, nullableExceptionType));
             statements.Add(pendingExNullInit);
 
             if (needsFinallyLift)
@@ -170,7 +172,7 @@ public static class AsyncExceptionHandlerRewriter
                     exceptionType);
             }
 
-            return new BoundBlockStatement(statements.ToImmutable());
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         private void RewriteCatchWithAwait(
@@ -193,13 +195,15 @@ public static class AsyncExceptionHandlerRewriter
                 {
                     // Replace body: pendingException = ex;
                     var assignPending = new BoundExpressionStatement(
+                        null,
                         new BoundAssignmentExpression(
+                            null,
                             pendingExLocal,
-                            new BoundVariableExpression(clause.Variable)));
+                            new BoundVariableExpression(null, clause.Variable)));
                     var catchAllClause = new BoundCatchClause(
                         exceptionType,
                         clause.Variable,
-                        new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(assignPending)));
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignPending)));
                     newClauses.Add(catchAllClause);
                     afterTryHandlers.Add((clause, clause.Body));
                 }
@@ -209,16 +213,17 @@ public static class AsyncExceptionHandlerRewriter
                 }
             }
 
-            var tryStmt = new BoundTryStatement(tryBody, newClauses.ToImmutable(), finallyBlock);
+            var tryStmt = new BoundTryStatement(null, tryBody, newClauses.ToImmutable(), finallyBlock);
             statements.Add(tryStmt);
 
             // After the try: if (pendingException != null) { T e = (T)pendingException; handlerBody; }
             foreach (var (original, body) in afterTryHandlers)
             {
                 var endLabel = MakeLabel("catch_end");
-                var pendingExRef = new BoundVariableExpression(pendingExLocal);
-                var nullLit = new BoundLiteralExpression(null, TypeSymbol.Null);
+                var pendingExRef = new BoundVariableExpression(null, pendingExLocal);
+                var nullLit = new BoundLiteralExpression(null, null, TypeSymbol.Null);
                 var condition = new BoundBinaryExpression(
+                    null,
                     pendingExRef,
                     BoundBinaryOperator.Bind(
                         CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
@@ -227,13 +232,14 @@ public static class AsyncExceptionHandlerRewriter
                     nullLit);
 
                 // Jump past the handler if pendingException == null
-                statements.Add(new BoundConditionalGotoStatement(endLabel, condition, jumpIfTrue: true));
+                statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
 
                 // Rebind the original catch variable: T e = (T)pendingException;
                 // Since GSharp's catch variable type may be same as Exception, just assign directly.
                 var rebind = new BoundVariableDeclaration(
+                    null,
                     original.Variable,
-                    new BoundVariableExpression(pendingExLocal));
+                    new BoundVariableExpression(null, pendingExLocal));
                 statements.Add(rebind);
 
                 // Emit the handler body
@@ -249,7 +255,7 @@ public static class AsyncExceptionHandlerRewriter
                     statements.Add(body);
                 }
 
-                statements.Add(new BoundLabelStatement(endLabel));
+                statements.Add(new BoundLabelStatement(null, endLabel));
             }
         }
 
@@ -273,13 +279,15 @@ public static class AsyncExceptionHandlerRewriter
                 {
                     // Capture into pending and lift body after finally
                     var assignPending = new BoundExpressionStatement(
+                        null,
                         new BoundAssignmentExpression(
+                            null,
                             pendingExLocal,
-                            new BoundVariableExpression(clause.Variable)));
+                            new BoundVariableExpression(null, clause.Variable)));
                     var captureClause = new BoundCatchClause(
                         exceptionType,
                         clause.Variable,
-                        new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(assignPending)));
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignPending)));
                     innerClauses.Add(captureClause);
                     liftedCatchHandlers.Add((clause, clause.Body));
                 }
@@ -294,23 +302,26 @@ public static class AsyncExceptionHandlerRewriter
             var catchAllVar = new LocalVariableSymbol(
                 $"<>ex_finally_{localOrdinal++}", isReadOnly: false, exceptionType);
             var catchAllAssign = new BoundExpressionStatement(
+                null,
                 new BoundAssignmentExpression(
+                    null,
                     pendingExLocal,
-                    new BoundVariableExpression(catchAllVar)));
-            var catchAllBody = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(catchAllAssign));
+                    new BoundVariableExpression(null, catchAllVar)));
+            var catchAllBody = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(catchAllAssign));
             var catchAllClause = new BoundCatchClause(exceptionType, catchAllVar, catchAllBody);
             innerClauses.Add(catchAllClause);
 
-            var innerTry = new BoundTryStatement(tryBody, innerClauses.ToImmutable(), finallyBlock: null);
+            var innerTry = new BoundTryStatement(null, tryBody, innerClauses.ToImmutable(), finallyBlock: null);
             statements.Add(innerTry);
 
             // Emit lifted catch handlers (for catch-with-await in try/catch/finally)
             foreach (var (original, body) in liftedCatchHandlers)
             {
                 var endLabel = MakeLabel("liftcatch_end");
-                var pendingExRef = new BoundVariableExpression(pendingExLocal);
-                var nullLit = new BoundLiteralExpression(null, TypeSymbol.Null);
+                var pendingExRef = new BoundVariableExpression(null, pendingExLocal);
+                var nullLit = new BoundLiteralExpression(null, null, TypeSymbol.Null);
                 var condition = new BoundBinaryExpression(
+                    null,
                     pendingExRef,
                     BoundBinaryOperator.Bind(
                         CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
@@ -318,11 +329,12 @@ public static class AsyncExceptionHandlerRewriter
                         TypeSymbol.Null),
                     nullLit);
 
-                statements.Add(new BoundConditionalGotoStatement(endLabel, condition, jumpIfTrue: true));
+                statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
 
                 var rebind = new BoundVariableDeclaration(
+                    null,
                     original.Variable,
-                    new BoundVariableExpression(pendingExLocal));
+                    new BoundVariableExpression(null, pendingExLocal));
                 statements.Add(rebind);
 
                 if (body is BoundBlockStatement block)
@@ -339,10 +351,12 @@ public static class AsyncExceptionHandlerRewriter
 
                 // Clear pendingException after handling so the rethrow below doesn't fire
                 statements.Add(new BoundExpressionStatement(
+                    null,
                     new BoundAssignmentExpression(
+                        null,
                         pendingExLocal,
-                        new BoundLiteralExpression(null, TypeSymbol.Null))));
-                statements.Add(new BoundLabelStatement(endLabel));
+                        new BoundLiteralExpression(null, null, TypeSymbol.Null))));
+                statements.Add(new BoundLabelStatement(null, endLabel));
             }
 
             // Emit the finally body (now outside any handler region)
@@ -360,9 +374,10 @@ public static class AsyncExceptionHandlerRewriter
 
             // if (pendingException != null) { throw pendingException; }
             var rethrowEndLabel = MakeLabel("rethrow_end");
-            var pendingRef = new BoundVariableExpression(pendingExLocal);
-            var nullLitFinal = new BoundLiteralExpression(null, TypeSymbol.Null);
+            var pendingRef = new BoundVariableExpression(null, pendingExLocal);
+            var nullLitFinal = new BoundLiteralExpression(null, null, TypeSymbol.Null);
             var rethrowCondition = new BoundBinaryExpression(
+                null,
                 pendingRef,
                 BoundBinaryOperator.Bind(
                     CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
@@ -370,9 +385,9 @@ public static class AsyncExceptionHandlerRewriter
                     TypeSymbol.Null),
                 nullLitFinal);
 
-            statements.Add(new BoundConditionalGotoStatement(rethrowEndLabel, rethrowCondition, jumpIfTrue: true));
-            statements.Add(new BoundThrowStatement(new BoundVariableExpression(pendingExLocal)));
-            statements.Add(new BoundLabelStatement(rethrowEndLabel));
+            statements.Add(new BoundConditionalGotoStatement(null, rethrowEndLabel, rethrowCondition, jumpIfTrue: true));
+            statements.Add(new BoundThrowStatement(null, new BoundVariableExpression(null, pendingExLocal)));
+            statements.Add(new BoundLabelStatement(null, rethrowEndLabel));
         }
 
         private static bool CatchesChanged(

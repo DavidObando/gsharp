@@ -3780,9 +3780,9 @@ internal sealed class ReflectionMetadataEmitter
             var isAsync = exprClr != null && typeof(System.Threading.Tasks.Task).IsAssignableFrom(exprClr);
             var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
             BoundStatement bodyStatement = isAsync
-                ? new BoundReturnStatement(go.Expression)
-                : new BoundExpressionStatement(go.Expression);
-            var body = new BoundBlockStatement(ImmutableArray.Create(bodyStatement));
+                ? new BoundReturnStatement(null, go.Expression)
+                : new BoundExpressionStatement(null, go.Expression);
+            var body = new BoundBlockStatement(null, ImmutableArray.Create(bodyStatement));
 
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
             var info = this.SynthesizeDisplayClass(
@@ -3862,25 +3862,34 @@ internal sealed class ReflectionMetadataEmitter
 
             var moveNextBody = IteratorMoveNextBodyBuilder.BuildWithFieldAccess(plan, stateField, currentField, moveNext.ThisParameter, smClass, fieldMap).Body;
             this.lambdaBodies[moveNext] = moveNextBody;
-            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(new BoundFieldAccessExpression(new BoundVariableExpression(getCurrent.ThisParameter), smClass, currentField)))));
-            this.lambdaBodies[getCurrentObject] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(new BoundConversionExpression(
+            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrent.ThisParameter), smClass, currentField)))));
+            this.lambdaBodies[getCurrentObject] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null,
+                    new BoundConversionExpression(
+                    null,
                     TypeSymbol.FromClrType(typeof(object)),
-                    new BoundFieldAccessExpression(new BoundVariableExpression(getCurrentObject.ThisParameter), smClass, currentField))))));
-            this.lambdaBodies[dispose] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundExpressionStatement(new BoundFieldAssignmentExpression(dispose.ThisParameter, smClass, stateField, new BoundLiteralExpression(-1))),
-                new BoundReturnStatement(null))));
-            this.lambdaBodies[reset] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundExpressionStatement(new BoundFieldAssignmentExpression(reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(-1))),
-                new BoundReturnStatement(null))));
-            this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(new BoundVariableExpression(getEnumerator.ThisParameter), smClass, parameterFields[p]))))));
-            this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(new BoundVariableExpression(getEnumeratorObject.ThisParameter), smClass, parameterFields[p]))))));
+                    new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrentObject.ThisParameter), smClass, currentField))))));
+            this.lambdaBodies[dispose] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, dispose.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
+                new BoundReturnStatement(null, null))));
+            this.lambdaBodies[reset] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
+                new BoundReturnStatement(null, null))));
+            this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, parameterFields[p]))))));
+            this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, parameterFields[p]))))));
 
-            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(p))))));
+            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p))))));
             this.iteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass);
             this.synthesizedClosureClasses.Add(smClass);
         }
@@ -3894,13 +3903,13 @@ internal sealed class ReflectionMetadataEmitter
         Func<ParameterSymbol, BoundExpression> parameterValueFactory)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(0)));
+        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, 0)));
         foreach (var parameter in parameters)
         {
             initializers.Add(new BoundFieldInitializer(parameterFields[parameter], parameterValueFactory(parameter)));
         }
 
-        return new BoundStructLiteralExpression(smClass, initializers.ToImmutable());
+        return new BoundStructLiteralExpression(null, smClass, initializers.ToImmutable());
     }
 
     private void AddIteratorInterfaceImplementations(StructSymbol smClass, IteratorStateMachineInfo info)
@@ -4042,8 +4051,9 @@ internal sealed class ReflectionMetadataEmitter
             this.lambdaBodies[moveNext] = Lowerer.Lower(moveNextBody);
 
             // get_Current: return this.<>2__current;
-            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(new BoundFieldAccessExpression(new BoundVariableExpression(getCurrent.ThisParameter), smClass, currentField)))));
+            this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrent.ThisParameter), smClass, currentField)))));
 
             // MoveNextAsync: reset promise, call builder.MoveNext(ref this), return ValueTask<bool>
             // For simplicity: directly set result. The builder calls MoveNext synchronously first;
@@ -4086,12 +4096,14 @@ internal sealed class ReflectionMetadataEmitter
             this.lambdaBodies[onCompleted] = this.BuildVtsOnCompletedBody(onCompleted, smClass, promiseField);
 
             // IAsyncStateMachine.SetStateMachine: no-op (just return)
-            this.lambdaBodies[setStateMachine] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null))));
+            this.lambdaBodies[setStateMachine] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, null))));
 
             // Kickoff body: new SM { state = -3, params... }
-            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters)))));
+            this.iteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
+                ImmutableArray.Create<BoundStatement>(
+                new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters)))));
 
             this.asyncIteratorInfos[smClass] = plan;
             this.synthesizedClosureClasses.Add(smClass);
@@ -4117,51 +4129,59 @@ internal sealed class ReflectionMetadataEmitter
         // if (state == -2) return default(ValueTask<bool>); // completed
         var finishedLabel = new BoundLabel("<>mna_notFinished");
         stmts.Add(new BoundConditionalGotoStatement(
+            null,
             finishedLabel,
             new BoundBinaryExpression(
-                new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, stateField),
+                null,
+                new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
                 BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                new BoundLiteralExpression(StateMachineStates.FinishedState)),
+                new BoundLiteralExpression(null, StateMachineStates.FinishedState)),
             jumpIfTrue: false));
         // Return a completed ValueTask<bool>(false)
-        stmts.Add(new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)))));
-        stmts.Add(new BoundLabelStatement(finishedLabel));
+        stmts.Add(new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)))));
+        stmts.Add(new BoundLabelStatement(null, finishedLabel));
 
         // promise.Reset();
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var resetMethod = promiseType.GetMethod("Reset");
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
-        stmts.Add(new BoundExpressionStatement(new BoundImportedInstanceCallExpression(
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
+        stmts.Add(new BoundExpressionStatement(null,
+            new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr, resetMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty)));
 
         // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
-        stmts.Add(new BoundExpressionStatement(new BoundStateMachineBuilderMoveNext(builderField, thisParam, smClass)));
+        stmts.Add(new BoundExpressionStatement(null, new BoundStateMachineBuilderMoveNext(null, builderField, thisParam, smClass)));
 
         // short version = promise.Version;
         var versionProp = promiseType.GetProperty("Version");
         var versionGetter = versionProp.GetGetMethod();
         var promiseAddr2 = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var versionCall = new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr2, versionGetter, TypeSymbol.FromClrType(typeof(short)), ImmutableArray<BoundExpression>.Empty);
         var versionLocal = new LocalVariableSymbol("<>version", isReadOnly: false, TypeSymbol.FromClrType(typeof(short)));
-        stmts.Add(new BoundVariableDeclaration(versionLocal, versionCall));
+        stmts.Add(new BoundVariableDeclaration(null, versionLocal, versionCall));
 
         // return new ValueTask<bool>(this, version);
         // The ValueTask<bool>(IValueTaskSource<bool>, short) constructor
         var vtCtor = typeof(System.Threading.Tasks.ValueTask<bool>).GetConstructor(
             new[] { typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>), typeof(short) });
         var vtConstruct = new BoundClrConstructorCallExpression(
+            null,
             typeof(System.Threading.Tasks.ValueTask<bool>),
             vtCtor,
             ImmutableArray.Create<BoundExpression>(
-                new BoundVariableExpression(thisParam),
-                new BoundVariableExpression(versionLocal)),
+                new BoundVariableExpression(null, thisParam),
+                new BoundVariableExpression(null, versionLocal)),
             TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)));
-        stmts.Add(new BoundReturnStatement(vtConstruct));
+        stmts.Add(new BoundReturnStatement(null, vtConstruct));
 
-        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+        return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
     }
 
     private BoundBlockStatement BuildDisposeAsyncBody(
@@ -4178,31 +4198,36 @@ internal sealed class ReflectionMetadataEmitter
 
         // if (state == -2) return default(ValueTask);
         var finishedCheck = new BoundBinaryExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, stateField),
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
             BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-            new BoundLiteralExpression(StateMachineStates.FinishedState));
-        var earlyReturn = new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
-        stmts.Add(new BoundIfStatement(finishedCheck, earlyReturn, null));
+            new BoundLiteralExpression(null, StateMachineStates.FinishedState));
+        var earlyReturn = new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
+        stmts.Add(new BoundIfStatement(null, finishedCheck, earlyReturn, null));
 
         // this.<>w__disposeMode = true;
         stmts.Add(new BoundExpressionStatement(
-            new BoundFieldAssignmentExpression(thisParam, smClass, disposeModeField, new BoundLiteralExpression(true))));
+            null,
+            new BoundFieldAssignmentExpression(null, thisParam, smClass, disposeModeField, new BoundLiteralExpression(null, true))));
 
         // promise.Reset();
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var resetMethod = promiseType.GetMethod("Reset");
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
-        stmts.Add(new BoundExpressionStatement(new BoundImportedInstanceCallExpression(
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
+        stmts.Add(new BoundExpressionStatement(null,
+            new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr, resetMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty)));
 
         // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
-        stmts.Add(new BoundExpressionStatement(new BoundStateMachineBuilderMoveNext(builderField, thisParam, smClass)));
+        stmts.Add(new BoundExpressionStatement(null, new BoundStateMachineBuilderMoveNext(null, builderField, thisParam, smClass)));
 
         // Return default ValueTask (completed).
-        stmts.Add(new BoundReturnStatement(new BoundDefaultExpression(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)))));
+        stmts.Add(new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)))));
 
-        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+        return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
     }
 
     private BoundBlockStatement BuildGetAsyncEnumeratorBody(
@@ -4219,13 +4244,17 @@ internal sealed class ReflectionMetadataEmitter
 
         // this.<>1__state = -1; (running state)
         stmts.Add(new BoundExpressionStatement(
-            new BoundFieldAssignmentExpression(thisParam, smClass, stateField,
-                new BoundLiteralExpression(StateMachineStates.NotStartedOrRunningState))));
+            null,
+            new BoundFieldAssignmentExpression(null,
+                thisParam, smClass, stateField,
+                new BoundLiteralExpression(null, StateMachineStates.NotStartedOrRunningState))));
 
         // this.<>w__disposeMode = false; (reset dispose flag for re-enumeration)
         stmts.Add(new BoundExpressionStatement(
-            new BoundFieldAssignmentExpression(thisParam, smClass, disposeModeField,
-                new BoundLiteralExpression(false))));
+            null,
+            new BoundFieldAssignmentExpression(null,
+                thisParam, smClass, disposeModeField,
+                new BoundLiteralExpression(null, false))));
 
         // Issue #180 / ADR-0040: thread the runtime-supplied cancellation
         // token into the user's @EnumeratorCancellation parameter. The C#
@@ -4262,19 +4291,23 @@ internal sealed class ReflectionMetadataEmitter
                     .GetProperty(nameof(System.Threading.CancellationToken.CanBeCanceled))
                     .GetGetMethod();
                 var canBeCanceledCall = new BoundImportedInstanceCallExpression(
-                    new BoundAddressOfExpression(new BoundVariableExpression(ctParam)),
+                    null,
+                    new BoundAddressOfExpression(null, new BoundVariableExpression(null, ctParam)),
                     canBeCanceledGetter,
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
 
                 var assign = new BoundExpressionStatement(
+                    null,
                     new BoundFieldAssignmentExpression(
+                        null,
                         thisParam, smClass, paramField,
-                        new BoundVariableExpression(ctParam)));
+                        new BoundVariableExpression(null, ctParam)));
 
                 stmts.Add(new BoundIfStatement(
+                    null,
                     canBeCanceledCall,
-                    new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(assign)),
+                    new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assign)),
                     elseStatement: null));
 
                 // Only one parameter may carry the marker; if a user wrote
@@ -4285,9 +4318,9 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // return this;
-        stmts.Add(new BoundReturnStatement(new BoundVariableExpression(thisParam)));
+        stmts.Add(new BoundReturnStatement(null, new BoundVariableExpression(null, thisParam)));
 
-        return Lowerer.Lower(new BoundBlockStatement(stmts.ToImmutable()));
+        return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
     }
 
     private BoundBlockStatement BuildVtsGetStatusBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
@@ -4298,11 +4331,13 @@ internal sealed class ReflectionMetadataEmitter
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = promiseType.GetMethod("GetStatus", new[] { typeof(short) });
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var call = new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr, method, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus)),
-            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
-        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(call))));
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, call))));
     }
 
     private BoundBlockStatement BuildVtsGetResultBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
@@ -4313,11 +4348,13 @@ internal sealed class ReflectionMetadataEmitter
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var call = new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr, method, TypeSymbol.Bool,
-            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
-        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(call))));
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, call))));
     }
 
     private BoundBlockStatement BuildVtsOnCompletedBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
@@ -4327,16 +4364,18 @@ internal sealed class ReflectionMetadataEmitter
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = promiseType.GetMethod("OnCompleted");
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var args = ImmutableArray.Create<BoundExpression>(
-            new BoundVariableExpression(func.Parameters[0]),
-            new BoundVariableExpression(func.Parameters[1]),
-            new BoundVariableExpression(func.Parameters[2]),
-            new BoundVariableExpression(func.Parameters[3]));
-        var call = new BoundImportedInstanceCallExpression(promiseAddr, method, TypeSymbol.Void, args);
-        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundExpressionStatement(call),
-            new BoundReturnStatement(null))));
+            new BoundVariableExpression(null, func.Parameters[0]),
+            new BoundVariableExpression(null, func.Parameters[1]),
+            new BoundVariableExpression(null, func.Parameters[2]),
+            new BoundVariableExpression(null, func.Parameters[3]));
+        var call = new BoundImportedInstanceCallExpression(null, promiseAddr, method, TypeSymbol.Void, args);
+        return Lowerer.Lower(new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, call),
+            new BoundReturnStatement(null, null))));
     }
 
     private BoundBlockStatement BuildVtsGetResultVoidBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
@@ -4347,13 +4386,16 @@ internal sealed class ReflectionMetadataEmitter
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
         var promiseAddr = new BoundAddressOfExpression(
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParam), smClass, promiseField));
+            null,
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var call = new BoundImportedInstanceCallExpression(
+            null,
             promiseAddr, method, TypeSymbol.Bool,
-            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(tokenParam)));
-        return Lowerer.Lower(new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundExpressionStatement(call),
-            new BoundReturnStatement(null))));
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, tokenParam)));
+        return Lowerer.Lower(new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, call),
+            new BoundReturnStatement(null, null))));
     }
 
     private BoundStructLiteralExpression CreateAsyncIteratorKickoffLiteral(
@@ -4364,20 +4406,20 @@ internal sealed class ReflectionMetadataEmitter
         ImmutableArray<ParameterSymbol> parameters)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(StateMachineStates.InitialAsyncIteratorState)));
+        initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, StateMachineStates.InitialAsyncIteratorState)));
 
         // Builder: AsyncIteratorMethodBuilder.Create()
         var createMethod = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)
             .GetMethod("Create", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, Type.EmptyTypes, null);
         initializers.Add(new BoundFieldInitializer(builderField,
-            new BoundClrStaticCallExpression(createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
+            new BoundClrStaticCallExpression(null, createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
 
         foreach (var parameter in parameters)
         {
-            initializers.Add(new BoundFieldInitializer(parameterFields[parameter], new BoundVariableExpression(parameter)));
+            initializers.Add(new BoundFieldInitializer(parameterFields[parameter], new BoundVariableExpression(null, parameter)));
         }
 
-        return new BoundStructLiteralExpression(smClass, initializers.ToImmutable());
+        return new BoundStructLiteralExpression(null, smClass, initializers.ToImmutable());
     }
 
     private void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, Lowering.Iterators.AsyncIteratorPlan plan)
@@ -6100,7 +6142,8 @@ internal sealed class ReflectionMetadataEmitter
             if (this.captureFields.TryGetValue(node.Variable, out var field))
             {
                 return new BoundFieldAccessExpression(
-                    new BoundVariableExpression(this.thisParam),
+                    null,
+                    new BoundVariableExpression(null, this.thisParam),
                     this.closureClass,
                     field);
             }
@@ -6113,7 +6156,7 @@ internal sealed class ReflectionMetadataEmitter
             if (this.captureFields.TryGetValue(node.Variable, out var field))
             {
                 var value = this.RewriteExpression(node.Expression);
-                return new BoundFieldAssignmentExpression(this.thisParam, this.closureClass, field, value);
+                return new BoundFieldAssignmentExpression(null, this.thisParam, this.closureClass, field, value);
             }
 
             return base.RewriteAssignmentExpression(node);
@@ -6275,7 +6318,7 @@ internal sealed class ReflectionMetadataEmitter
             this.declared.Add(node.Variable);
             return initializer == node.Initializer
                 ? node
-                : new BoundVariableDeclaration(node.Variable, initializer);
+                : new BoundVariableDeclaration(null, node.Variable, initializer);
         }
 
         private void CaptureIfFree(VariableSymbol variable)
@@ -9067,7 +9110,7 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            this.EmitExpression(new BoundVariableExpression(captured));
+            this.EmitExpression(new BoundVariableExpression(null, captured));
         }
 
         // Phase 4 emit parity (E1): indirect call through a func-typed value.
@@ -9400,7 +9443,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.il.OpCode(ILOpCode.Dup);
-                this.EmitExpression(new BoundVariableExpression(captured));
+                this.EmitExpression(new BoundVariableExpression(null, captured));
                 this.il.OpCode(ILOpCode.Stfld);
                 this.il.Token(fieldHandle);
             }

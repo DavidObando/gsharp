@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -12,13 +14,16 @@ public sealed class BoundIfStatement : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundIfStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="condition">The bound if statement condition.</param>
     /// <param name="thenStatement">The then statement.</param>
     /// <param name="elseStatement">The else statement.</param>
     public BoundIfStatement(
+        SyntaxNode syntax,
         BoundExpression condition,
         BoundStatement thenStatement,
         BoundStatement elseStatement)
+        : base(syntax)
     {
         Condition = condition;
         ThenStatement = thenStatement;

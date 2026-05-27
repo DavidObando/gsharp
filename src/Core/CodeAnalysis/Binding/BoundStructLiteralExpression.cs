@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -15,7 +16,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
-    public BoundStructLiteralExpression(StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+    public BoundStructLiteralExpression(SyntaxNode syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+        : base(syntax)
     {
         StructType = structType;
         Initializers = initializers;

@@ -29,11 +29,11 @@ public class MoveNextBodyBuilderTests
     [Fact]
     public void Build_AwaitStates_CreatesResumeLabelsOrderedByState()
     {
-        var firstAwait = new BoundAwaitExpression(new BoundLiteralExpression(1), TypeSymbol.Int);
-        var secondAwait = new BoundAwaitExpression(new BoundLiteralExpression(2), TypeSymbol.Int);
+        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int);
+        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int);
         var body = Block(
-            new BoundExpressionStatement(secondAwait),
-            new BoundExpressionStatement(firstAwait));
+            new BoundExpressionStatement(null, secondAwait),
+            new BoundExpressionStatement(null, firstAwait));
         var states = ImmutableDictionary.CreateRange(new[]
         {
             new System.Collections.Generic.KeyValuePair<BoundAwaitExpression, int>(secondAwait, 1),
@@ -78,6 +78,6 @@ public class MoveNextBodyBuilderTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 }

@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -22,13 +23,16 @@ public sealed class BoundAwaitForRangeStatement : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAwaitForRangeStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="valueVariable">The element variable.</param>
     /// <param name="stream">The async-stream expression.</param>
     /// <param name="body">The loop body.</param>
     public BoundAwaitForRangeStatement(
+        SyntaxNode syntax,
         VariableSymbol valueVariable,
         BoundExpression stream,
         BoundStatement body)
+        : base(syntax)
     {
         ValueVariable = valueVariable;
         Stream = stream;

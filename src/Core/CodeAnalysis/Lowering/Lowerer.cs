@@ -48,9 +48,9 @@ public sealed class Lowerer : BoundTreeRewriter
             // <then>
             // end:
             var endLabel = GenerateLabel();
-            var gotoFalse = new BoundConditionalGotoStatement(endLabel, node.Condition, false);
-            var endLabelStatement = new BoundLabelStatement(endLabel);
-            var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(gotoFalse, node.ThenStatement, endLabelStatement));
+            var gotoFalse = new BoundConditionalGotoStatement(null, endLabel, node.Condition, false);
+            var endLabelStatement = new BoundLabelStatement(null, endLabel);
+            var result = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(gotoFalse, node.ThenStatement, endLabelStatement));
             return RewriteStatement(result);
         }
         else
@@ -71,11 +71,13 @@ public sealed class Lowerer : BoundTreeRewriter
             var elseLabel = GenerateLabel();
             var endLabel = GenerateLabel();
 
-            var gotoFalse = new BoundConditionalGotoStatement(elseLabel, node.Condition, false);
-            var gotoEndStatement = new BoundGotoStatement(endLabel);
-            var elseLabelStatement = new BoundLabelStatement(elseLabel);
-            var endLabelStatement = new BoundLabelStatement(endLabel);
-            var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+            var gotoFalse = new BoundConditionalGotoStatement(null, elseLabel, node.Condition, false);
+            var gotoEndStatement = new BoundGotoStatement(null, endLabel);
+            var elseLabelStatement = new BoundLabelStatement(null, elseLabel);
+            var endLabelStatement = new BoundLabelStatement(null, endLabel);
+            var result = new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
                 gotoFalse,
                 node.ThenStatement,
                 gotoEndStatement,
@@ -100,11 +102,13 @@ public sealed class Lowerer : BoundTreeRewriter
         //     goto continue
         //     break:
         // }
-        var continueLabelStatement = new BoundLabelStatement(node.ContinueLabel);
-        var gotoContinue = new BoundGotoStatement(node.ContinueLabel);
-        var breakLabelStatement = new BoundLabelStatement(node.BreakLabel);
+        var continueLabelStatement = new BoundLabelStatement(null, node.ContinueLabel);
+        var gotoContinue = new BoundGotoStatement(null, node.ContinueLabel);
+        var breakLabelStatement = new BoundLabelStatement(null, node.BreakLabel);
 
-        var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+        var result = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
             continueLabelStatement,
             node.Body,
             gotoContinue,
@@ -136,74 +140,91 @@ public sealed class Lowerer : BoundTreeRewriter
         //     gotoTrue ((step > 0 && lower < upper) || (step < 0 && lower > upper)) body
         //     break:
         // }
-        var variableDeclaration = new BoundVariableDeclaration(node.Variable, node.LowerBound);
+        var variableDeclaration = new BoundVariableDeclaration(null, node.Variable, node.LowerBound);
         var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int);
-        var upperBoundDeclaration = new BoundVariableDeclaration(upperBoundSymbol, node.UpperBound);
+        var upperBoundDeclaration = new BoundVariableDeclaration(null, upperBoundSymbol, node.UpperBound);
         var stepBoundSymbol = new LocalVariableSymbol("step", isReadOnly: false, type: TypeSymbol.Int);
         var stepBoundDeclaration = new BoundVariableDeclaration(
+            null,
             variable: stepBoundSymbol,
-            initializer: new BoundLiteralExpression(1));
-        var variableExpression = new BoundVariableExpression(node.Variable);
-        var upperBoundExpression = new BoundVariableExpression(upperBoundSymbol);
-        var stepBoundExpression = new BoundVariableExpression(stepBoundSymbol);
+            initializer: new BoundLiteralExpression(null, 1));
+        var variableExpression = new BoundVariableExpression(null, node.Variable);
+        var upperBoundExpression = new BoundVariableExpression(null, upperBoundSymbol);
+        var stepBoundExpression = new BoundVariableExpression(null, stepBoundSymbol);
         var ifLowerIsGreaterThanUpperExpression = new BoundBinaryExpression(
+            null,
             left: variableExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
             right: upperBoundExpression);
         var stepBoundAssingment = new BoundExpressionStatement(
+            null,
             expression: new BoundAssignmentExpression(
+                null,
                 variable: stepBoundSymbol,
-                expression: new BoundLiteralExpression(-1)));
+                expression: new BoundLiteralExpression(null, -1)));
         var ifLowerIsGreaterThanUpperIfStatement = new BoundIfStatement(
+            null,
             condition: ifLowerIsGreaterThanUpperExpression,
             thenStatement: stepBoundAssingment,
             elseStatement: null);
         var startLabel = GenerateLabel();
-        var gotoStart = new BoundGotoStatement(startLabel);
+        var gotoStart = new BoundGotoStatement(null, startLabel);
         var bodyLabel = GenerateLabel();
-        var bodyLabelStatement = new BoundLabelStatement(bodyLabel);
-        var continueLabelStatement = new BoundLabelStatement(node.ContinueLabel);
+        var bodyLabelStatement = new BoundLabelStatement(null, bodyLabel);
+        var continueLabelStatement = new BoundLabelStatement(null, node.ContinueLabel);
         var increment = new BoundExpressionStatement(
+            null,
             expression: new BoundAssignmentExpression(
+                null,
                 variable: node.Variable,
                 expression: new BoundBinaryExpression(
+                    null,
                     left: variableExpression,
                     op: BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
                     right: stepBoundExpression)));
-        var startLabelStatement = new BoundLabelStatement(startLabel);
-        var zeroLiteralExpression = new BoundLiteralExpression(0);
+        var startLabelStatement = new BoundLabelStatement(null, startLabel);
+        var zeroLiteralExpression = new BoundLiteralExpression(null, 0);
         var stepGreaterThanZeroExpression = new BoundBinaryExpression(
+            null,
             left: stepBoundExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
             right: zeroLiteralExpression);
         var lowerLessThanUpperExpression = new BoundBinaryExpression(
+            null,
             left: variableExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
             right: upperBoundExpression);
         var positiveStepAndLowerLessThanUpper = new BoundBinaryExpression(
+            null,
             left: stepGreaterThanZeroExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
             right: lowerLessThanUpperExpression);
         var stepLessThanZeroExpression = new BoundBinaryExpression(
+            null,
             left: stepBoundExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
             right: zeroLiteralExpression);
         var lowerGreaterThanUpperExpression = new BoundBinaryExpression(
+            null,
             left: variableExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
             right: upperBoundExpression);
         var negativeStepAndLowerGreaterThanUpper = new BoundBinaryExpression(
+            null,
             left: stepLessThanZeroExpression,
             op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
             right: lowerGreaterThanUpperExpression);
         var condition = new BoundBinaryExpression(
+            null,
             positiveStepAndLowerLessThanUpper,
             BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
             negativeStepAndLowerGreaterThanUpper);
-        var gotoTrue = new BoundConditionalGotoStatement(bodyLabel, condition, jumpIfTrue: true);
-        var breakLabelStatement = new BoundLabelStatement(node.BreakLabel);
+        var gotoTrue = new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true);
+        var breakLabelStatement = new BoundLabelStatement(null, node.BreakLabel);
 
-        var result = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
+        var result = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
             variableDeclaration,
             upperBoundDeclaration,
             stepBoundDeclaration,
@@ -281,7 +302,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var streamClr = stream.Type?.ClrType;
         if (streamClr == null)
         {
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         System.Type asyncEnumerableInterface = null;
@@ -307,7 +328,7 @@ public sealed class Lowerer : BoundTreeRewriter
 
         if (asyncEnumerableInterface == null)
         {
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var elementClr = asyncEnumerableInterface.GetGenericArguments()[0];
@@ -323,7 +344,7 @@ public sealed class Lowerer : BoundTreeRewriter
 
         if (getAsyncEnumerator == null || moveNextAsync == null || currentProperty == null || disposeAsync == null)
         {
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
         var cancellationTokenType = TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken));
@@ -333,52 +354,58 @@ public sealed class Lowerer : BoundTreeRewriter
         var currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
 
         var enumeratorSymbol = new LocalVariableSymbol("$awaitEnum", isReadOnly: true, type: enumeratorType);
-        var enumeratorExpr = new BoundVariableExpression(enumeratorSymbol);
+        var enumeratorExpr = new BoundVariableExpression(null, enumeratorSymbol);
         var getEnumCall = new BoundImportedInstanceCallExpression(
+            null,
             stream,
             getAsyncEnumerator,
             enumeratorType,
-            ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(cancellationTokenType)));
-        var enumeratorDecl = new BoundVariableDeclaration(enumeratorSymbol, getEnumCall);
+            ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, cancellationTokenType)));
+        var enumeratorDecl = new BoundVariableDeclaration(null, enumeratorSymbol, getEnumCall);
 
         var startLabel = GenerateLabel();
         var endLabel = GenerateLabel();
         var moreSymbol = new LocalVariableSymbol("$more", isReadOnly: false, type: TypeSymbol.Bool);
 
         var moveNextCall = new BoundImportedInstanceCallExpression(
+            null,
             enumeratorExpr,
             moveNextAsync,
             valueTaskBoolType,
             ImmutableArray<BoundExpression>.Empty);
-        var moveNextAwait = new BoundAwaitExpression(moveNextCall, TypeSymbol.Bool);
-        var moreDecl = new BoundVariableDeclaration(moreSymbol, moveNextAwait);
+        var moveNextAwait = new BoundAwaitExpression(null, moveNextCall, TypeSymbol.Bool);
+        var moreDecl = new BoundVariableDeclaration(null, moreSymbol, moveNextAwait);
 
-        var currentAccess = new BoundClrPropertyAccessExpression(enumeratorExpr, currentProperty, currentType);
+        var currentAccess = new BoundClrPropertyAccessExpression(null, enumeratorExpr, currentProperty, currentType);
         var assignValue = new BoundExpressionStatement(
-            new BoundAssignmentExpression(valueVariable, currentAccess));
+            null,
+            new BoundAssignmentExpression(null, valueVariable, currentAccess));
 
         var tryStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-        tryStatements.Add(new BoundLabelStatement(startLabel));
+        tryStatements.Add(new BoundLabelStatement(null, startLabel));
         tryStatements.Add(moreDecl);
-        tryStatements.Add(new BoundConditionalGotoStatement(endLabel, new BoundVariableExpression(moreSymbol), jumpIfTrue: false));
+        tryStatements.Add(new BoundConditionalGotoStatement(null, endLabel, new BoundVariableExpression(null, moreSymbol), jumpIfTrue: false));
         tryStatements.Add(assignValue);
         tryStatements.Add(body);
-        tryStatements.Add(new BoundGotoStatement(startLabel));
-        tryStatements.Add(new BoundLabelStatement(endLabel));
-        var tryBlock = new BoundBlockStatement(tryStatements.ToImmutable());
+        tryStatements.Add(new BoundGotoStatement(null, startLabel));
+        tryStatements.Add(new BoundLabelStatement(null, endLabel));
+        var tryBlock = new BoundBlockStatement(null, tryStatements.ToImmutable());
 
         var disposeCall = new BoundImportedInstanceCallExpression(
+            null,
             enumeratorExpr,
             disposeAsync,
             valueTaskType,
             ImmutableArray<BoundExpression>.Empty);
-        var disposeAwait = new BoundAwaitExpression(disposeCall, TypeSymbol.Void);
-        var finallyBlock = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundExpressionStatement(disposeAwait)));
+        var disposeAwait = new BoundAwaitExpression(null, disposeCall, TypeSymbol.Void);
+        var finallyBlock = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, disposeAwait)));
 
-        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
 
-        return new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(enumeratorDecl, tryStmt));
+        return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(enumeratorDecl, tryStmt));
     }
 
     private BoundStatement LowerIndexedRange(BoundForRangeStatement node)
@@ -398,12 +425,12 @@ public sealed class Lowerer : BoundTreeRewriter
         //   break:
         // }
         var collectionSymbol = new LocalVariableSymbol("$coll", isReadOnly: true, type: node.Collection.Type);
-        var collectionDecl = new BoundVariableDeclaration(collectionSymbol, node.Collection);
-        var collectionExpr = new BoundVariableExpression(collectionSymbol);
+        var collectionDecl = new BoundVariableDeclaration(null, collectionSymbol, node.Collection);
+        var collectionExpr = new BoundVariableExpression(null, collectionSymbol);
 
         var indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
-        var indexDecl = new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0));
-        var indexExpr = new BoundVariableExpression(indexSymbol);
+        var indexDecl = new BoundVariableDeclaration(null, indexSymbol, new BoundLiteralExpression(null, 0));
+        var indexExpr = new BoundVariableExpression(null, indexSymbol);
 
         var startLabel = GenerateLabel();
         var bodyLabel = GenerateLabel();
@@ -411,40 +438,45 @@ public sealed class Lowerer : BoundTreeRewriter
         var perIterationStatements = ImmutableArray.CreateBuilder<BoundStatement>();
         if (node.KeyVariable != null)
         {
-            perIterationStatements.Add(new BoundVariableDeclaration(node.KeyVariable, indexExpr));
+            perIterationStatements.Add(new BoundVariableDeclaration(null, node.KeyVariable, indexExpr));
         }
 
         perIterationStatements.Add(new BoundVariableDeclaration(
+            null,
             node.ValueVariable,
-            new BoundIndexExpression(collectionExpr, indexExpr, node.ValueVariable.Type)));
+            new BoundIndexExpression(null, collectionExpr, indexExpr, node.ValueVariable.Type)));
 
         perIterationStatements.Add(node.Body);
 
         var increment = new BoundExpressionStatement(
+            null,
             new BoundAssignmentExpression(
+                null,
                 indexSymbol,
                 new BoundBinaryExpression(
+                    null,
                     indexExpr,
                     BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
-                    new BoundLiteralExpression(1))));
+                    new BoundLiteralExpression(null, 1))));
 
         var hasMore = new BoundBinaryExpression(
+            null,
             indexExpr,
             BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
-            new BoundLenExpression(collectionExpr));
+            new BoundLenExpression(null, collectionExpr));
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(collectionDecl);
         statements.Add(indexDecl);
-        statements.Add(new BoundGotoStatement(startLabel));
-        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(new BoundGotoStatement(null, startLabel));
+        statements.Add(new BoundLabelStatement(null, bodyLabel));
         statements.AddRange(perIterationStatements);
-        statements.Add(new BoundLabelStatement(node.ContinueLabel));
+        statements.Add(new BoundLabelStatement(null, node.ContinueLabel));
         statements.Add(increment);
-        statements.Add(new BoundLabelStatement(startLabel));
-        statements.Add(new BoundConditionalGotoStatement(bodyLabel, hasMore, jumpIfTrue: true));
-        statements.Add(new BoundLabelStatement(node.BreakLabel));
-        return new BoundBlockStatement(statements.ToImmutable());
+        statements.Add(new BoundLabelStatement(null, startLabel));
+        statements.Add(new BoundConditionalGotoStatement(null, bodyLabel, hasMore, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(null, node.BreakLabel));
+        return new BoundBlockStatement(null, statements.ToImmutable());
     }
 
     private BoundStatement LowerCollectionRange(BoundForRangeStatement node, bool isDictionary)
@@ -467,17 +499,17 @@ public sealed class Lowerer : BoundTreeRewriter
         {
             // Defensive: bail out unchanged if we can't resolve. The
             // binder already validated this case, so this shouldn't fire.
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(node.Syntax, new BoundErrorExpression(node.Syntax));
         }
 
         if (!TryBuildMoveNextAndCurrent(enumeratorType, out var moveNextCallFactory, out var currentAccessFactory))
         {
-            return new BoundExpressionStatement(new BoundErrorExpression());
+            return new BoundExpressionStatement(node.Syntax, new BoundErrorExpression(node.Syntax));
         }
 
         var enumeratorSymbol = new LocalVariableSymbol("$enum", isReadOnly: true, type: enumeratorType);
-        var enumeratorDecl = new BoundVariableDeclaration(enumeratorSymbol, getEnumCall);
-        var enumeratorExpr = new BoundVariableExpression(enumeratorSymbol);
+        var enumeratorDecl = new BoundVariableDeclaration(node.Syntax, enumeratorSymbol, getEnumCall);
+        var enumeratorExpr = new BoundVariableExpression(node.Syntax, enumeratorSymbol);
 
         var startLabel = GenerateLabel();
         var bodyLabel = GenerateLabel();
@@ -489,11 +521,11 @@ public sealed class Lowerer : BoundTreeRewriter
         if (!isDictionary && node.KeyVariable != null)
         {
             indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
-            statements.Add(new BoundVariableDeclaration(indexSymbol, new BoundLiteralExpression(0)));
+            statements.Add(new BoundVariableDeclaration(node.Syntax, indexSymbol, new BoundLiteralExpression(node.Syntax, 0)));
         }
 
-        statements.Add(new BoundGotoStatement(startLabel));
-        statements.Add(new BoundLabelStatement(bodyLabel));
+        statements.Add(new BoundGotoStatement(node.Syntax, startLabel));
+        statements.Add(new BoundLabelStatement(node.Syntax, bodyLabel));
 
         var currentAccess = currentAccessFactory(enumeratorExpr);
 
@@ -503,49 +535,54 @@ public sealed class Lowerer : BoundTreeRewriter
             var keyProp = kvpClr.GetProperty("Key");
             var valueProp = kvpClr.GetProperty("Value");
             var kvpSymbol = new LocalVariableSymbol("$kvp", isReadOnly: true, type: TypeSymbol.FromClrType(kvpClr));
-            statements.Add(new BoundVariableDeclaration(kvpSymbol, currentAccess));
-            var kvpExpr = new BoundVariableExpression(kvpSymbol);
+            statements.Add(new BoundVariableDeclaration(node.Syntax, kvpSymbol, currentAccess));
+            var kvpExpr = new BoundVariableExpression(node.Syntax, kvpSymbol);
 
             if (node.KeyVariable != null)
             {
                 statements.Add(new BoundVariableDeclaration(
+                    node.Syntax,
                     node.KeyVariable,
-                    new BoundClrPropertyAccessExpression(kvpExpr, keyProp, TypeSymbol.FromClrType(keyProp.PropertyType))));
+                    new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, keyProp, TypeSymbol.FromClrType(keyProp.PropertyType))));
             }
 
             statements.Add(new BoundVariableDeclaration(
+                node.Syntax,
                 node.ValueVariable,
-                new BoundClrPropertyAccessExpression(kvpExpr, valueProp, TypeSymbol.FromClrType(valueProp.PropertyType))));
+                new BoundClrPropertyAccessExpression(node.Syntax, kvpExpr, valueProp, TypeSymbol.FromClrType(valueProp.PropertyType))));
         }
         else
         {
             if (node.KeyVariable != null)
             {
-                statements.Add(new BoundVariableDeclaration(node.KeyVariable, new BoundVariableExpression(indexSymbol)));
+                statements.Add(new BoundVariableDeclaration(node.Syntax, node.KeyVariable, new BoundVariableExpression(node.Syntax, indexSymbol)));
             }
 
-            statements.Add(new BoundVariableDeclaration(node.ValueVariable, currentAccess));
+            statements.Add(new BoundVariableDeclaration(node.Syntax, node.ValueVariable, currentAccess));
         }
 
         statements.Add(node.Body);
-        statements.Add(new BoundLabelStatement(node.ContinueLabel));
+        statements.Add(new BoundLabelStatement(node.Syntax, node.ContinueLabel));
 
         if (indexSymbol != null)
         {
-            var indexExpr = new BoundVariableExpression(indexSymbol);
+            var indexExpr = new BoundVariableExpression(node.Syntax, indexSymbol);
             statements.Add(new BoundExpressionStatement(
+                node.Syntax,
                 new BoundAssignmentExpression(
+                    node.Syntax,
                     indexSymbol,
                     new BoundBinaryExpression(
+                        node.Syntax,
                         indexExpr,
                         BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
-                        new BoundLiteralExpression(1)))));
+                        new BoundLiteralExpression(node.Syntax, 1)))));
         }
 
-        statements.Add(new BoundLabelStatement(startLabel));
-        statements.Add(new BoundConditionalGotoStatement(bodyLabel, moveNextCallFactory(enumeratorExpr), jumpIfTrue: true));
-        statements.Add(new BoundLabelStatement(node.BreakLabel));
-        return new BoundBlockStatement(statements.ToImmutable());
+        statements.Add(new BoundLabelStatement(node.Syntax, startLabel));
+        statements.Add(new BoundConditionalGotoStatement(node.Syntax, bodyLabel, moveNextCallFactory(enumeratorExpr), jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(node.Syntax, node.BreakLabel));
+        return new BoundBlockStatement(node.Syntax, statements.ToImmutable());
     }
 
     private static bool TryBuildGetEnumeratorCall(
@@ -566,6 +603,7 @@ public sealed class Lowerer : BoundTreeRewriter
             {
                 enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
                 getEnumeratorCall = new BoundImportedInstanceCallExpression(
+                    null,
                     collection,
                     getEnumerator,
                     enumeratorType,
@@ -580,6 +618,7 @@ public sealed class Lowerer : BoundTreeRewriter
         {
             enumeratorType = userGetEnumerator.Type;
             getEnumeratorCall = new BoundUserInstanceCallExpression(
+                null,
                 collection,
                 userGetEnumerator,
                 ImmutableArray<BoundExpression>.Empty);
@@ -614,11 +653,13 @@ public sealed class Lowerer : BoundTreeRewriter
             if (moveNext != null && currentMember != null)
             {
                 moveNextCallFactory = receiver => new BoundImportedInstanceCallExpression(
+                    null,
                     receiver,
                     moveNext,
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
                 currentAccessFactory = receiver => new BoundClrPropertyAccessExpression(
+                    null,
                     receiver,
                     currentMember,
                     GetClrMemberType(currentMember));
@@ -633,10 +674,11 @@ public sealed class Lowerer : BoundTreeRewriter
             userEnumerator.TryGetField("Current", out var currentField))
         {
             moveNextCallFactory = receiver => new BoundUserInstanceCallExpression(
+                null,
                 receiver,
                 userMoveNext,
                 ImmutableArray<BoundExpression>.Empty);
-            currentAccessFactory = receiver => new BoundFieldAccessExpression(receiver, userEnumerator, currentField);
+            currentAccessFactory = receiver => new BoundFieldAccessExpression(null, receiver, userEnumerator, currentField);
             return true;
         }
 
@@ -682,24 +724,24 @@ public sealed class Lowerer : BoundTreeRewriter
                 }
 
                 var flatFinally = t.FinallyBlock == null ? null : (BoundStatement)Flatten(t.FinallyBlock);
-                builder.Add(new BoundTryStatement(flatTry, flatCatches.ToImmutable(), flatFinally));
+                builder.Add(new BoundTryStatement(null, flatTry, flatCatches.ToImmutable(), flatFinally));
             }
             else if (current is BoundScopeStatement scope)
             {
                 // Phase 5.7: flatten the scope body so the evaluator's flat-statement
                 // walker sees lowered gotos/conditionals instead of nested blocks.
                 var flatScopeBody = Flatten(scope.Body);
-                builder.Add(new BoundScopeStatement(flatScopeBody));
+                builder.Add(new BoundScopeStatement(null, flatScopeBody));
             }
             else if (current is BoundPatternSwitchStatement ps)
             {
                 var flatArms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(ps.Arms.Length);
                 foreach (var arm in ps.Arms)
                 {
-                    flatArms.Add(new BoundPatternSwitchArm(arm.Pattern, Flatten(arm.Body)));
+                    flatArms.Add(new BoundPatternSwitchArm(null, arm.Pattern, Flatten(arm.Body)));
                 }
 
-                builder.Add(new BoundPatternSwitchStatement(ps.Discriminant, flatArms.ToImmutable()));
+                builder.Add(new BoundPatternSwitchStatement(null, ps.Discriminant, flatArms.ToImmutable()));
             }
             else if (current is BoundSelectStatement sel)
             {
@@ -711,7 +753,7 @@ public sealed class Lowerer : BoundTreeRewriter
                     flatCases.Add(new BoundSelectCase(arm.CaseKind, arm.Channel, arm.Value, arm.Variable, flatArmBody));
                 }
 
-                builder.Add(new BoundSelectStatement(flatCases.ToImmutable()));
+                builder.Add(new BoundSelectStatement(null, flatCases.ToImmutable()));
             }
             else
             {
@@ -719,7 +761,7 @@ public sealed class Lowerer : BoundTreeRewriter
             }
         }
 
-        return new BoundBlockStatement(builder.ToImmutable());
+        return new BoundBlockStatement(null, builder.ToImmutable());
     }
 
     private BoundLabel GenerateLabel()

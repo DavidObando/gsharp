@@ -25,12 +25,15 @@ public class RefInitializationHoisterTests
 
         // var x = 42
         // var y = x + 1
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(x, new BoundLiteralExpression(42)),
-            new BoundVariableDeclaration(y, new BoundBinaryExpression(
-                new BoundVariableExpression(x),
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 42)),
+            new BoundVariableDeclaration(null,
+y, new BoundBinaryExpression(
+                null,
+                new BoundVariableExpression(null, x),
                 BoundBinaryOperator.Bind(Core.CodeAnalysis.Syntax.SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
-                new BoundLiteralExpression(1)))));
+                new BoundLiteralExpression(null, 1)))));
 
         var result = RefInitializationHoister.Rewrite(body);
 
@@ -48,14 +51,14 @@ public class RefInitializationHoisterTests
         var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
         var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
 
-        var declX = new BoundVariableDeclaration(x, new BoundLiteralExpression(10));
-        var declSlot = new BoundVariableDeclaration(slot, new BoundAddressOfExpression(new BoundVariableExpression(x)));
+        var declX = new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 10));
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, new BoundVariableExpression(null, x)));
 
         // Use: *slot (dereference)
-        var deref = new BoundDereferenceExpression(new BoundVariableExpression(slot));
-        var useStmt = new BoundExpressionStatement(deref);
+        var deref = new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot));
+        var useStmt = new BoundExpressionStatement(null, deref);
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declX, declSlot, useStmt));
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declX, declSlot, useStmt));
 
         var result = RefInitializationHoister.Rewrite(body);
 
@@ -91,15 +94,16 @@ public class RefInitializationHoisterTests
         var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
 
         var indexExpr = new BoundIndexExpression(
-            new BoundVariableExpression(arr),
-            new BoundVariableExpression(i),
+            null,
+            new BoundVariableExpression(null, arr),
+            new BoundVariableExpression(null, i),
             TypeSymbol.Int);
-        var declSlot = new BoundVariableDeclaration(slot, new BoundAddressOfExpression(indexExpr));
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, indexExpr));
 
-        var deref = new BoundDereferenceExpression(new BoundVariableExpression(slot));
-        var useStmt = new BoundExpressionStatement(deref);
+        var deref = new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot));
+        var useStmt = new BoundExpressionStatement(null, deref);
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declSlot, useStmt));
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, useStmt));
 
         var result = RefInitializationHoister.Rewrite(body);
         var stmts = result.Statements;
@@ -129,13 +133,14 @@ public class RefInitializationHoisterTests
         var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
 
         var fieldAccess = new BoundFieldAccessExpression(
-            new BoundVariableExpression(obj), structType, field);
-        var declSlot = new BoundVariableDeclaration(slot, new BoundAddressOfExpression(fieldAccess));
+            null,
+            new BoundVariableExpression(null, obj), structType, field);
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, fieldAccess));
 
-        var deref = new BoundDereferenceExpression(new BoundVariableExpression(slot));
-        var useStmt = new BoundExpressionStatement(deref);
+        var deref = new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot));
+        var useStmt = new BoundExpressionStatement(null, deref);
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declSlot, useStmt));
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, useStmt));
 
         var result = RefInitializationHoister.Rewrite(body);
         var stmts = result.Statements;
@@ -164,13 +169,13 @@ public class RefInitializationHoisterTests
         var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
         var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
 
-        var declX = new BoundVariableDeclaration(x, new BoundLiteralExpression(10));
-        var declSlot = new BoundVariableDeclaration(slot, new BoundAddressOfExpression(new BoundVariableExpression(x)));
+        var declX = new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 10));
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, new BoundVariableExpression(null, x)));
 
         // Bare usage of slot (not dereferenced)
-        var bareUse = new BoundExpressionStatement(new BoundVariableExpression(slot));
+        var bareUse = new BoundExpressionStatement(null, new BoundVariableExpression(null, slot));
 
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(declX, declSlot, bareUse));
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declX, declSlot, bareUse));
 
         var result = RefInitializationHoister.Rewrite(body);
         var stmts = result.Statements;

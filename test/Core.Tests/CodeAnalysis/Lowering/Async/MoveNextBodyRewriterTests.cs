@@ -28,7 +28,7 @@ public class MoveNextBodyRewriterTests
     {
         // Arrange: async body with no awaits
         var function = new FunctionSymbol("noAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundExpressionStatement(new BoundLiteralExpression(42)));
+        var body = Block(new BoundExpressionStatement(null, new BoundLiteralExpression(null, 42)));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -79,7 +79,7 @@ public class MoveNextBodyRewriterTests
         // Arrange: async body with one await
         var awaitExpr = MakeTaskAwait();
         var function = new FunctionSymbol("oneAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundExpressionStatement(awaitExpr));
+        var body = Block(new BoundExpressionStatement(null, awaitExpr));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -127,8 +127,8 @@ public class MoveNextBodyRewriterTests
         var await2 = MakeTaskAwait();
         var function = new FunctionSymbol("twoAwaits", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         var body = Block(
-            new BoundExpressionStatement(await1),
-            new BoundExpressionStatement(await2));
+            new BoundExpressionStatement(null, await1),
+            new BoundExpressionStatement(null, await2));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -155,7 +155,7 @@ public class MoveNextBodyRewriterTests
         var awaitExpr = MakeTaskIntAwait();
         var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
         var function = new FunctionSymbol("initAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundVariableDeclaration(x, awaitExpr));
+        var body = Block(new BoundVariableDeclaration(null, x, awaitExpr));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -178,8 +178,8 @@ public class MoveNextBodyRewriterTests
         var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
         var function = new FunctionSymbol("assignAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         var body = Block(
-            new BoundVariableDeclaration(x, new BoundLiteralExpression(0)),
-            new BoundExpressionStatement(new BoundAssignmentExpression(x, awaitExpr)));
+            new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 0)),
+            new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, awaitExpr)));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -199,7 +199,7 @@ public class MoveNextBodyRewriterTests
         // Arrange: body with single await — both markers must share state number
         var awaitExpr = MakeTaskAwait();
         var function = new FunctionSymbol("markers", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundExpressionStatement(awaitExpr));
+        var body = Block(new BoundExpressionStatement(null, awaitExpr));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -221,7 +221,7 @@ public class MoveNextBodyRewriterTests
     {
         // Arrange: async function returning int with explicit return
         var function = new FunctionSymbol("retVal", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
-        var body = Block(new BoundReturnStatement(new BoundLiteralExpression(99)));
+        var body = Block(new BoundReturnStatement(null, new BoundLiteralExpression(null, 99)));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -247,9 +247,9 @@ public class MoveNextBodyRewriterTests
         var function = new FunctionSymbol("hoisted", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         // x := 5; await ...; use x
         var body = Block(
-            new BoundVariableDeclaration(x, new BoundLiteralExpression(5)),
-            new BoundExpressionStatement(awaitExpr),
-            new BoundExpressionStatement(new BoundVariableExpression(x)));
+            new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 5)),
+            new BoundExpressionStatement(null, awaitExpr),
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, x)));
         var plan = BuildPlan(function, body);
 
         // Act
@@ -293,14 +293,15 @@ public class MoveNextBodyRewriterTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 
     private static BoundAwaitExpression MakeTaskAwait()
     {
         // Await on a Task (void result) — use Task type so AwaitableShape resolves
         return new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task))),
             TypeSymbol.Void);
     }
 
@@ -308,7 +309,8 @@ public class MoveNextBodyRewriterTests
     {
         // Await on a Task<int> — result type is int
         return new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task<int>))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task<int>))),
             TypeSymbol.Int);
     }
 

@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -11,11 +12,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundListPattern : BoundPattern
 {
     /// <summary>Initializes a new instance of the <see cref="BoundListPattern"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="elements">The element patterns.</param>
     /// <param name="elementType">The element type.</param>
-    public BoundListPattern(TypeSymbol type, ImmutableArray<BoundPattern> elements, TypeSymbol elementType)
-        : base(type)
+    public BoundListPattern(SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundPattern> elements, TypeSymbol elementType)
+        : base(syntax, type)
     {
         Elements = elements;
         ElementType = elementType;

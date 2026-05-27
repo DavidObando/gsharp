@@ -2,9 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 using System.Reflection;
-using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -16,10 +17,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrStaticCallExpression : BoundExpression
 {
     public BoundClrStaticCallExpression(
+        SyntaxNode syntax,
         MethodInfo method,
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default)
+        : base(syntax)
     {
         Method = method;
         Type = returnType;

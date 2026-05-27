@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -12,10 +14,12 @@ public sealed class BoundConditionalGotoStatement : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundConditionalGotoStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="label">The label.</param>
     /// <param name="condition">The condition.</param>
     /// <param name="jumpIfTrue">Whether to jump on true, or on false.</param>
-    public BoundConditionalGotoStatement(BoundLabel label, BoundExpression condition, bool jumpIfTrue = true)
+    public BoundConditionalGotoStatement(SyntaxNode syntax, BoundLabel label, BoundExpression condition, bool jumpIfTrue = true)
+        : base(syntax)
     {
         Label = label;
         Condition = condition;

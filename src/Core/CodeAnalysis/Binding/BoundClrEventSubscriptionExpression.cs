@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Reflection;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -18,7 +19,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 {
-    public BoundClrEventSubscriptionExpression(BoundExpression receiver, EventInfo eventInfo, BoundExpression handler, bool isAdd)
+    public BoundClrEventSubscriptionExpression(SyntaxNode syntax, BoundExpression receiver, EventInfo eventInfo, BoundExpression handler, bool isAdd)
+        : base(syntax)
     {
         Receiver = receiver;
         Event = eventInfo;
