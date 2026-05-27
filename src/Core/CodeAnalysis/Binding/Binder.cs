@@ -1137,8 +1137,13 @@ public sealed class Binder
                 }
             }
 
-            foreach (var parameterSyntax in syntax.Parameters)
+            // Tracks the bound ParameterSymbol corresponding to each parameter
+            // syntax position (null for duplicates) so per-parameter annotations
+            // can be attached to the right symbol below.
+            var parameterSymbolBySyntax = new ParameterSymbol[syntax.Parameters.Count];
+            for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
             {
+                var parameterSyntax = syntax.Parameters[pIndex];
                 var parameterName = parameterSyntax.Identifier.Text;
                 var parameterType = BindTypeClause(parameterSyntax.Type);
                 if (!seenParameterNames.Add(parameterName))
@@ -1158,6 +1163,7 @@ public sealed class Binder
 
                     var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic);
                     parameters.Add(parameter);
+                    parameterSymbolBySyntax[pIndex] = parameter;
                 }
             }
 
@@ -1186,14 +1192,24 @@ public sealed class Binder
                 "a function declaration");
 
             // Per-parameter annotations: each ParameterSyntax owns its own
-            // annotation list; the default target is `param`.
-            foreach (var parameterSyntax in syntax.Parameters)
+            // annotation list; the default target is `param`. Issue #170 /
+            // ADR-0047 §3: the bound list is stored on the ParameterSymbol so
+            // the emitter can emit a `CustomAttribute` row keyed to the
+            // corresponding `Parameter` metadata handle.
+            for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
             {
-                BindAttributes(
+                var parameterSyntax = syntax.Parameters[pIndex];
+                var paramAttrs = BindAttributes(
                     parameterSyntax.Annotations,
                     AttributeTargetKind.Param,
                     ParameterAllowedTargets,
                     "a parameter declaration");
+
+                var parameterSymbol = parameterSymbolBySyntax[pIndex];
+                if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
+                {
+                    parameterSymbol.SetAttributes(paramAttrs);
+                }
             }
 
             FunctionSymbol function;
