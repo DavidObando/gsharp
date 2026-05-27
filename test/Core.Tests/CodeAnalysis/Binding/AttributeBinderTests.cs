@@ -77,7 +77,9 @@ public class AttributeBinderTests
     [Fact]
     public void Allows_Return_Use_Site_Target_On_Function()
     {
-        var globalScope = BindSource("@return:Obsolete\nfunc Helper() {\n}\n");
+        // `[Description]` carries `[AttributeUsage(All)]`, which includes
+        // ReturnValue (issue #177).
+        var globalScope = BindSource("import System.ComponentModel\n@return:Description(\"x\")\nfunc Helper() int {\nreturn 0\n}\n");
 
         Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
         var helper = globalScope.Functions.Single(f => f.Name == "Helper");
@@ -369,22 +371,24 @@ type Point struct {
     }
 
     [Fact]
-    public void Obsolete_Warning_Is_Reported_At_Parameter_Use_Site()
+    public void Obsolete_On_Parameter_Reports_GS0209()
     {
-        // #175: parameters that carry @Obsolete surface GS0204 at every
-        // read or write site (parameters already carry attribute storage
-        // per #170).
+        // Issue #177: `[Obsolete]`'s [AttributeUsage] excludes Parameter,
+        // so applying `@Obsolete` to a parameter is rejected at the
+        // declaration site (and never propagates to the parameter's
+        // attribute list, so the #175 GS0204 use-site warning cannot
+        // fire on the parameter).
         var source = """
             func Foo(@Obsolete("dead") x int) int {
                 return x + 1
             }
             """;
 
-        var program = BindProgramFromSource(source);
-        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
-        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
-        Assert.Contains("x", diag.Message);
-        Assert.Contains("dead", diag.Message);
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0209");
+
+        var program = Binder.BindProgram(globalScope);
+        Assert.DoesNotContain(program.Diagnostics, d => d.Id == "GS0204");
     }
 
     [Fact]
@@ -814,6 +818,124 @@ type Point struct {
 
         var globalScope = BindSource(source);
         Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0208");
+    }
+
+    [Fact]
+    public void AttributeUsage_Obsolete_On_Parameter_Reports_GS0209()
+    {
+        // Issue #177: `[Obsolete]`'s [AttributeUsage] does NOT include
+        // AttributeTargets.Parameter, so applying `@Obsolete` to a parameter
+        // must be rejected.
+        var source = """
+            import System
+
+            func Foo(@Obsolete("x") name string) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0209" && d.Message.Contains("Obsolete"));
+    }
+
+    [Fact]
+    public void AttributeUsage_Obsolete_On_Return_Reports_GS0209()
+    {
+        // Issue #177: `[Obsolete]`'s [AttributeUsage] excludes
+        // AttributeTargets.ReturnValue, so `@return:Obsolete` is rejected.
+        var source = """
+            import System
+
+            @return:Obsolete("x")
+            func Foo() int {
+                return 0
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0209" && d.Message.Contains("Obsolete"));
+    }
+
+    [Fact]
+    public void AttributeUsage_DuplicateObsolete_On_Function_Reports_GS0210()
+    {
+        // Issue #177: `[Obsolete]`'s [AttributeUsage(AllowMultiple = false)]
+        // — applying it twice to the same declaration is an error.
+        var source = """
+            @Obsolete("first")
+            @Obsolete("second")
+            func Foo() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0210" && d.Message.Contains("Obsolete"));
+    }
+
+    [Fact]
+    public void AttributeUsage_AllowMultiple_True_Permits_Duplicates()
+    {
+        // Issue #177: `[Conditional]` carries
+        // `[AttributeUsage(Method, AllowMultiple = true)]`, so two
+        // applications on the same method must NOT report GS0210.
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            @Conditional("TRACE")
+            func Log() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0210");
+    }
+
+    [Fact]
+    public void AttributeUsage_UserAttribute_With_ValidOn_Method_On_Field_Reports_GS0209()
+    {
+        // Issue #177: a user-declared `@Attribute` class whose
+        // `@AttributeUsage(AttributeTargets.Method)` excludes Field must be
+        // rejected when applied to a field.
+        var source = """
+            import System
+
+            @Attribute
+            @AttributeUsage(AttributeTargets.Method)
+            type MethodOnly class {
+            }
+
+            type Box class {
+                @MethodOnly
+                Value int
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0209" && d.Message.Contains("MethodOnly"));
+    }
+
+    [Fact]
+    public void AttributeUsage_UserAttribute_AllowMultiple_True_Permits_Duplicates()
+    {
+        // Issue #177: a user-declared `@Attribute` class whose
+        // `@AttributeUsage(All, AllowMultiple := true)` opts into multiple
+        // applications — two applications must NOT report GS0210.
+        var source = """
+            import System
+
+            @Attribute
+            @AttributeUsage(AttributeTargets.All, AllowMultiple := true)
+            type Tag class {
+            }
+
+            @Tag
+            @Tag
+            func Foo() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0210");
     }
 
     private static BoundGlobalScope BindSource(string source)

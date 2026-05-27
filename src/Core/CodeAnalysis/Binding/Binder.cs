@@ -508,7 +508,8 @@ public sealed class Binder
             syntax.Annotations,
             AttributeTargetKind.Type,
             TypeDeclarationAllowedTargets,
-            "a type alias declaration");
+            "a type alias declaration",
+            System.AttributeTargets.Class);
 
         if (!scope.TryDeclareTypeAlias(name, aliasedType))
         {
@@ -532,7 +533,8 @@ public sealed class Binder
             syntax.Annotations,
             AttributeTargetKind.Type,
             TypeDeclarationAllowedTargets,
-            "an enum declaration"));
+            "an enum declaration",
+            System.AttributeTargets.Enum));
 
         var seenMemberNames = new HashSet<string>();
         var members = ImmutableArray.CreateBuilder<EnumMemberSymbol>();
@@ -558,7 +560,8 @@ public sealed class Binder
                     memberSyntax.Annotations,
                     AttributeTargetKind.Field,
                     VariableDeclarationAllowedTargets,
-                    "an enum member declaration"));
+                    "an enum member declaration",
+                    System.AttributeTargets.Field));
             }
 
             members.Add(memberSymbol);
@@ -681,7 +684,8 @@ public sealed class Binder
                     fieldSyntax.Annotations,
                     AttributeTargetKind.Field,
                     FieldDeclarationAllowedTargets,
-                    "a field declaration"));
+                    "a field declaration",
+                    System.AttributeTargets.Field));
             }
 
             fields.Add(fieldSymbol);
@@ -817,7 +821,8 @@ public sealed class Binder
             syntax.Annotations,
             AttributeTargetKind.Type,
             TypeDeclarationAllowedTargets,
-            syntax.IsClass ? "a class declaration" : "a struct declaration"));
+            syntax.IsClass ? "a class declaration" : "a struct declaration",
+            syntax.IsClass ? System.AttributeTargets.Class : System.AttributeTargets.Struct));
 
         if (hasAttributeSugar && syntax.IsClass)
         {
@@ -984,7 +989,8 @@ public sealed class Binder
             syntax.Annotations,
             AttributeTargetKind.Type,
             TypeDeclarationAllowedTargets,
-            "an interface declaration"));
+            "an interface declaration",
+            System.AttributeTargets.Interface));
 
         // Phase 4.3c / ADR-0020: bind type parameters at declaration time so
         // method-signature binding (which happens later) can resolve them.
@@ -1242,7 +1248,8 @@ public sealed class Binder
                 syntax.Annotations,
                 AttributeTargetKind.Method,
                 FunctionDeclarationAllowedTargets,
-                "a function declaration");
+                "a function declaration",
+                System.AttributeTargets.Method);
 
             // Per-parameter annotations: each ParameterSyntax owns its own
             // annotation list; the default target is `param`. Issue #170 /
@@ -1256,7 +1263,8 @@ public sealed class Binder
                     parameterSyntax.Annotations,
                     AttributeTargetKind.Param,
                     ParameterAllowedTargets,
-                    "a parameter declaration");
+                    "a parameter declaration",
+                    System.AttributeTargets.Parameter);
 
                 var parameterSymbol = parameterSymbolBySyntax[pIndex];
                 if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
@@ -1752,7 +1760,8 @@ public sealed class Binder
                 syntax.Annotations,
                 AttributeTargetKind.Field,
                 VariableDeclarationAllowedTargets,
-                positionDescription);
+                positionDescription,
+                System.AttributeTargets.Field);
             variable.SetAttributes(boundAttrs);
         }
 
@@ -6820,12 +6829,16 @@ public sealed class Binder
     /// <param name="defaultTarget">Default target inferred from the declaration position.</param>
     /// <param name="allowedTargets">Target kinds permitted at this declaration position.</param>
     /// <param name="positionDescription">Human-readable position for diagnostics.</param>
+    /// <param name="defaultSystemTarget">CLR-side <see cref="System.AttributeTargets"/>
+    /// value used when validating <c>[AttributeUsage(ValidOn)]</c> for the
+    /// <c>Type</c> kind, which is ambiguous in source.</param>
     /// <returns>The resolved attribute list (skipping unresolved entries).</returns>
     private ImmutableArray<BoundAttribute> BindAttributes(
         ImmutableArray<AnnotationSyntax> annotations,
         AttributeTargetKind defaultTarget,
         ImmutableHashSet<AttributeTargetKind> allowedTargets,
-        string positionDescription)
+        string positionDescription,
+        System.AttributeTargets defaultSystemTarget)
     {
         if (annotations.IsDefaultOrEmpty)
         {
@@ -6833,6 +6846,13 @@ public sealed class Binder
         }
 
         var builder = ImmutableArray.CreateBuilder<BoundAttribute>(annotations.Length);
+
+        // Track applications per (attribute-type identity, effective target)
+        // so we can fire GS0210 when AllowMultiple = false. We key on the
+        // resolved TypeSymbol (reference identity is sufficient — each
+        // attribute class has a single Symbol instance).
+        var applications = new Dictionary<(TypeSymbol Type, AttributeTargetKind Target), int>();
+
         foreach (var annotation in annotations)
         {
             // Phase 4 of #141 / ADR-0047 §5: the `@Attribute` marker on a
@@ -6844,9 +6864,27 @@ public sealed class Binder
                 continue;
             }
 
-            var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription);
+            var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription, defaultSystemTarget);
             if (bound != null)
             {
+                var key = (bound.AttributeType, bound.Target);
+                if (applications.TryGetValue(key, out var count))
+                {
+                    KnownAttributes.GetAttributeUsage(bound.AttributeType, out _, out var allowMultiple);
+                    if (!allowMultiple)
+                    {
+                        Diagnostics.ReportAttributeUsageDuplicate(
+                            GetAnnotationNameLocation(annotation),
+                            annotation.GetNameText());
+                    }
+
+                    applications[key] = count + 1;
+                }
+                else
+                {
+                    applications[key] = 1;
+                }
+
                 builder.Add(bound);
             }
         }
@@ -6858,7 +6896,8 @@ public sealed class Binder
         AnnotationSyntax annotation,
         AttributeTargetKind defaultTarget,
         ImmutableHashSet<AttributeTargetKind> allowedTargets,
-        string positionDescription)
+        string positionDescription,
+        System.AttributeTargets defaultSystemTarget)
     {
         // 1) Resolve target — parser already filtered to canonical kinds; if
         // the user wrote an unrecognised one a GS0197 was already reported,
@@ -6909,6 +6948,24 @@ public sealed class Binder
         if (KnownAttributes.IsReservedForCompiler(attrType.ClrType))
         {
             Diagnostics.ReportAttributeReservedForCompiler(GetAnnotationNameLocation(annotation), nameText);
+            return null;
+        }
+
+        // 3b) Issue #177 / ADR-0047 §6: enforce [AttributeUsage(ValidOn)].
+        // For the `Type` target the actual CLR target depends on the kind
+        // of type being declared (class/struct/enum/interface), which the
+        // caller passes via defaultSystemTarget. For all other targets the
+        // effective CLR target is derived directly from targetKind, since
+        // any use-site qualifier (`@return:` etc.) already narrows it.
+        var effectiveSystemTarget = MapToSystemAttributeTargets(targetKind, defaultSystemTarget);
+        KnownAttributes.GetAttributeUsage(attrType, out var validOn, out _);
+        if ((validOn & effectiveSystemTarget) == 0)
+        {
+            Diagnostics.ReportAttributeUsageInvalidTarget(
+                GetAnnotationNameLocation(annotation),
+                nameText,
+                positionDescription,
+                validOn);
             return null;
         }
 
@@ -6987,6 +7044,11 @@ public sealed class Binder
 
     private static bool IsAttributeType(TypeSymbol typeSymbol)
     {
+        if (typeSymbol is StructSymbol structSym && structSym.IsAttributeClass)
+        {
+            return true;
+        }
+
         var clr = typeSymbol?.ClrType;
         if (clr == null)
         {
@@ -7018,6 +7080,17 @@ public sealed class Binder
         return annotation.Location;
     }
 
+    private static bool IsEnumLikeType(TypeSymbol type)
+    {
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        var clr = type?.ClrType;
+        return clr != null && clr.IsEnum;
+    }
+
     private static bool TryParseTargetKind(string text, out AttributeTargetKind kind)
     {
         switch (text)
@@ -7033,6 +7106,32 @@ public sealed class Binder
             case "assembly": kind = AttributeTargetKind.Assembly; return true;
             case "genericparam": kind = AttributeTargetKind.GenericParam; return true;
             default: kind = AttributeTargetKind.Method; return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #177: maps a GSharp <see cref="AttributeTargetKind"/> to the
+    /// corresponding CLR <see cref="System.AttributeTargets"/> flag used by
+    /// <see cref="System.AttributeUsageAttribute"/>. The <c>Type</c> kind
+    /// is intentionally ambiguous in GSharp (class/struct/enum/interface
+    /// share a single source-level position), so the caller supplies the
+    /// concrete CLR target via <paramref name="typePositionFallback"/>.
+    /// </summary>
+    private static System.AttributeTargets MapToSystemAttributeTargets(AttributeTargetKind kind, System.AttributeTargets typePositionFallback)
+    {
+        switch (kind)
+        {
+            case AttributeTargetKind.Field: return System.AttributeTargets.Field;
+            case AttributeTargetKind.Param: return System.AttributeTargets.Parameter;
+            case AttributeTargetKind.Return: return System.AttributeTargets.ReturnValue;
+            case AttributeTargetKind.Method: return System.AttributeTargets.Method;
+            case AttributeTargetKind.Property: return System.AttributeTargets.Property;
+            case AttributeTargetKind.Event: return System.AttributeTargets.Event;
+            case AttributeTargetKind.Module: return System.AttributeTargets.Module;
+            case AttributeTargetKind.Assembly: return System.AttributeTargets.Assembly;
+            case AttributeTargetKind.GenericParam: return System.AttributeTargets.GenericParameter;
+            case AttributeTargetKind.Type: return typePositionFallback;
+            default: return System.AttributeTargets.All;
         }
     }
 
@@ -7079,6 +7178,21 @@ public sealed class Binder
 
             case ArrayCreationExpressionSyntax arraySyntax:
                 return TryBindAttributeArrayArgument(arraySyntax, out value, out type);
+        }
+
+        // Issue #177: accept BoundLiteralExpression whose static type is an
+        // enum (e.g. `AttributeTargets.Method`) — required by [AttributeUsage]
+        // and other enum-valued attribute arguments. The emitter serialises
+        // the underlying primitive per ECMA-335 II.23.3. Other expressions
+        // that incidentally fold to a constant (e.g. `nameof(...)`) remain
+        // out of scope here; they go through GS0202.
+        if (BindExpression(syntax) is BoundLiteralExpression lit
+            && lit.Value != null
+            && IsEnumLikeType(lit.Type))
+        {
+            value = lit.Value;
+            type = lit.Type;
+            return true;
         }
 
         return false;

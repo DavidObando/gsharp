@@ -288,11 +288,13 @@ public class AttributeEmitTests
         // Issue #170 / ADR-0047 §3: per-parameter annotations attach to the
         // Parameter metadata row, round-tripping through
         // `MethodInfo.GetParameters()[i].GetCustomAttributesData()`.
+        // Uses `[Description]` because its [AttributeUsage(All)] permits the
+        // Parameter target (issue #177 enforces ValidOn).
         var source = """
             package P
-            import System
+            import System.ComponentModel
 
-            func Foo(@Obsolete("old name") name string) {
+            func Foo(@Description("old name") name string) {
             }
             """;
 
@@ -304,14 +306,14 @@ public class AttributeEmitTests
         var nameParam = Assert.Single(parameters);
         Assert.Equal("name", nameParam.Name);
 
-        var data = nameParam.GetCustomAttributesData().Single(d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+        var data = nameParam.GetCustomAttributesData().Single(d => d.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
         var arg = Assert.Single(data.ConstructorArguments);
         Assert.Equal("old name", arg.Value);
 
         // The MethodDef itself should not carry the parameter-target attribute.
         Assert.DoesNotContain(
             foo.GetCustomAttributesData(),
-            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+            d => d.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
     }
 
     [Fact]
@@ -320,11 +322,13 @@ public class AttributeEmitTests
         // Issue #172 / ADR-0047 §3: `@return:` annotations attach to the
         // synthesised sequence-0 Parameter row (ECMA-335 II.22.33), surfacing
         // through `MethodInfo.ReturnParameter.GetCustomAttributesData()`.
+        // Uses `[Description]` because its [AttributeUsage(All)] permits the
+        // ReturnValue target (issue #177 enforces ValidOn).
         var source = """
             package P
-            import System
+            import System.ComponentModel
 
-            @return:Obsolete("old return")
+            @return:Description("old return")
             func Foo() int {
                 return 0
             }
@@ -338,14 +342,14 @@ public class AttributeEmitTests
         var returnParam = foo.ReturnParameter;
         Assert.NotNull(returnParam);
         var data = returnParam.GetCustomAttributesData()
-            .Single(d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+            .Single(d => d.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
         var arg = Assert.Single(data.ConstructorArguments);
         Assert.Equal("old return", arg.Value);
 
         // The MethodDef itself should not carry the return-target attribute.
         Assert.DoesNotContain(
             foo.GetCustomAttributesData(),
-            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+            d => d.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
     }
 
     [Fact]

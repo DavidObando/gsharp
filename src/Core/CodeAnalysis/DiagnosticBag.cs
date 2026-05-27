@@ -1304,6 +1304,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0208", $"Parameter '{parameterName}' is annotated '@EnumeratorCancellation' but its enclosing function is not an async sequence (does not return 'IAsyncEnumerable[T]').");
     }
 
+    /// <summary>
+    /// Reports GS0209 when an attribute is applied to a declaration whose CLR
+    /// target is excluded by the attribute's <c>[AttributeUsage(ValidOn)]</c>.
+    /// </summary>
+    /// <param name="location">The annotation name location.</param>
+    /// <param name="attributeName">The source-form attribute name.</param>
+    /// <param name="position">A human description of the use-site declaration.</param>
+    /// <param name="validOn">The flag set declared on the attribute class.</param>
+    public void ReportAttributeUsageInvalidTarget(TextLocation location, string attributeName, string position, System.AttributeTargets validOn)
+    {
+        Report(location, "GS0209", $"Attribute '{attributeName}' is not valid on {position}; its [AttributeUsage] permits only: {validOn}.");
+    }
+
+    /// <summary>
+    /// Reports GS0210 when an attribute is applied more than once to the
+    /// same target and its <c>[AttributeUsage(AllowMultiple = false)]</c>
+    /// (the C# default) forbids duplicates.
+    /// </summary>
+    /// <param name="location">The location of the duplicate annotation.</param>
+    /// <param name="attributeName">The source-form attribute name.</param>
+    public void ReportAttributeUsageDuplicate(TextLocation location, string attributeName)
+    {
+        Report(location, "GS0210", $"Duplicate attribute '{attributeName}'; this attribute type does not allow multiple applications (AllowMultiple = false).");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
