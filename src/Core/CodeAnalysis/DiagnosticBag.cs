@@ -1342,6 +1342,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0211", $"Attribute '{name}' is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature.");
     }
 
+    /// <summary>
+    /// Reports GS0212 when <c>[Conditional("SYMBOL")]</c> is applied to a
+    /// function whose return type is not <c>void</c>. The CLR rule
+    /// (matching C# <c>CS0578</c>) is that conditional-method calls may be
+    /// elided at the call site, which is incompatible with a non-void result
+    /// flowing into the surrounding expression. ADR-0047 §6 / issue #176.
+    /// </summary>
+    /// <param name="location">The source location of the function declaration.</param>
+    /// <param name="functionName">The function's declared name.</param>
+    public void ReportConditionalMethodMustReturnVoid(TextLocation location, string functionName)
+    {
+        Report(location, "GS0212", $"Function '{functionName}' is marked '@Conditional' but does not return 'void'; conditional methods must return 'void' because calls may be elided at the call site.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

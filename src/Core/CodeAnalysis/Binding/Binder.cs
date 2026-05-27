@@ -188,8 +188,23 @@ public sealed class Binder
     /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols: null);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full
+    /// control over implicit-import seeding and the active preprocessor
+    /// symbol set used by <c>[Conditional("SYMBOL")]</c> call-site elision
+    /// (ADR-0047 §6 / issue #176).
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols)
     {
-        var parentScope = CreateParentScope(previous, references);
+        var parentScope = CreateParentScope(previous, references, preprocessorSymbols);
         var binder = new Binder(parentScope, function: null);
 
         if (implicitSystemImport && previous == null)
@@ -329,7 +344,9 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        return new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, entryPoint, statements.ToImmutable());
+        var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, entryPoint, statements.ToImmutable());
+        result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet<string>.Empty;
+        return result;
     }
 
     /// <summary>
@@ -339,7 +356,7 @@ public sealed class Binder
     /// <returns>A bound program.</returns>
     public static BoundProgram BindProgram(BoundGlobalScope globalScope)
     {
-        var parentScope = CreateParentScope(globalScope, references: null);
+        var parentScope = CreateParentScope(globalScope, references: null, preprocessorSymbols: globalScope?.PreprocessorSymbols);
 
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
@@ -415,7 +432,7 @@ public sealed class Binder
         return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals);
     }
 
-    private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)
+    private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
         var stack = new Stack<BoundGlobalScope>();
         while (previous != null)
@@ -424,7 +441,7 @@ public sealed class Binder
             previous = previous.Previous;
         }
 
-        var parent = CreateRootScope(references);
+        var parent = CreateRootScope(references, preprocessorSymbols);
 
         while (stack.Count > 0)
         {
@@ -457,9 +474,9 @@ public sealed class Binder
         return parent;
     }
 
-    private static BoundScope CreateRootScope(ReferenceResolver references)
+    private static BoundScope CreateRootScope(ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
-        var result = new BoundScope(parent: null, references: references);
+        var result = new BoundScope(parent: null, references: references, preprocessorSymbols: preprocessorSymbols);
 
         foreach (var f in BuiltinFunctions.GetAll())
         {
@@ -1250,6 +1267,18 @@ public sealed class Binder
                 FunctionDeclarationAllowedTargets,
                 "a function declaration",
                 System.AttributeTargets.Method);
+
+            // Issue #176 / ADR-0047 §6: a function marked `@Conditional`
+            // must return void. The CLR rule (matching C# CS0578) is that
+            // conditional-method calls may be elided at the call site, which
+            // is incompatible with a non-void result feeding the surrounding
+            // expression. The attribute is still attached to the function
+            // symbol so downstream tools see the user's intent and so the
+            // call site still elides; the diagnostic is per-declaration.
+            if (KnownAttributes.HasConditional(functionAttributes) && type != TypeSymbol.Void)
+            {
+                Diagnostics.ReportConditionalMethodMustReturnVoid(syntax.Identifier.Location, syntax.Identifier.Text);
+            }
 
             // Per-parameter annotations: each ParameterSyntax owns its own
             // annotation list; the default target is `param`. Issue #170 /
@@ -5365,16 +5394,40 @@ public sealed class Binder
                 returnType = WrapAsTask(returnType);
             }
 
-            return new BoundCallExpression(function, boundArguments.ToImmutable(), returnType);
+            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType);
         }
 
         if (function.IsAsync && !IsAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = WrapAsTask(function.Type);
-            return new BoundCallExpression(function, boundArguments.ToImmutable(), asyncReturn);
+            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), asyncReturn);
         }
 
-        return new BoundCallExpression(function, boundArguments.ToImmutable());
+        return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType: null);
+    }
+
+    /// <summary>
+    /// Constructs a <see cref="BoundCallExpression"/> for a direct function
+    /// call, applying ADR-0047 §6 / issue #176 <c>[Conditional]</c> call-site
+    /// elision. When elision applies, the resulting call carries an empty
+    /// argument list (C# semantics: arguments to a conditional method are
+    /// not evaluated when the symbol is undefined) and the
+    /// <see cref="BoundCallExpression.IsConditionalElided"/> flag is set so
+    /// the emitter and interpreter skip both argument evaluation and the
+    /// method invocation. The validation that the function returns
+    /// <c>void</c> was performed at declaration time (GS0212), so callers
+    /// can rely on the elided call being a no-op of type <c>void</c>.
+    /// Argument binding still ran above so wrong-type diagnostics on the
+    /// elided arguments are reported normally.
+    /// </summary>
+    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
+    {
+        if (KnownAttributes.IsConditionallyElided(function.Attributes, scope.PreprocessorSymbols))
+        {
+            return new BoundCallExpression(function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true);
+        }
+
+        return new BoundCallExpression(function, arguments, returnType);
     }
 
     private static void InferTypeArguments(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)

@@ -1381,6 +1381,14 @@ public sealed class Evaluator
 
     private object EvaluateCallExpression(BoundCallExpression node)
     {
+        // ADR-0047 §6 / issue #176: a [Conditional("SYMBOL")] call whose
+        // symbol is undefined is elided — neither the arguments nor the
+        // target function body are evaluated.
+        if (node.IsConditionalElided)
+        {
+            return null;
+        }
+
         if (node.Function == BuiltinFunctions.Input)
         {
             return Console.ReadLine();

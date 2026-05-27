@@ -27,10 +27,28 @@ public sealed class BoundCallExpression : BoundExpression
     /// <param name="arguments">The provided arguments.</param>
     /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
     public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
+        : this(function, arguments, returnType, isConditionalElided: false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundCallExpression"/>
+    /// class, optionally marking it as a <c>[Conditional]</c>-elided call
+    /// (ADR-0047 §6 / issue #176). When elided the emitter and interpreter
+    /// emit / evaluate no IL or behaviour at the call site, and the argument
+    /// list is empty because C# semantics forbid evaluating arguments to a
+    /// conditional method whose symbol is undefined.
+    /// </summary>
+    /// <param name="function">The function symbol.</param>
+    /// <param name="arguments">The provided arguments; empty when elided.</param>
+    /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
+    /// <param name="isConditionalElided">When <c>true</c>, the call has been elided per <c>[Conditional]</c> rules.</param>
+    public BoundCallExpression(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, bool isConditionalElided)
     {
         Function = function;
         Arguments = arguments;
         ReturnType = returnType;
+        IsConditionalElided = isConditionalElided;
     }
 
     /// <inheritdoc/>
@@ -51,4 +69,13 @@ public sealed class BoundCallExpression : BoundExpression
 
     /// <summary>Gets the call-site (post-substitution) return type for generic-function calls, or <c>null</c> for non-generic calls. Phase 4.1 / ADR-0020.</summary>
     public TypeSymbol ReturnType { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this call has been elided by
+    /// <c>[Conditional]</c> processing (ADR-0047 §6 / issue #176). When
+    /// <c>true</c>, the emitter and interpreter must not evaluate the
+    /// receiver, the arguments, or invoke the target method; the call is a
+    /// no-op of type <c>void</c> at the call site.
+    /// </summary>
+    public bool IsConditionalElided { get; }
 }

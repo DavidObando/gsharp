@@ -26,7 +26,7 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="parent">The parent scope.</param>
     public BoundScope(BoundScope parent)
-        : this(parent, references: null)
+        : this(parent, references: null, preprocessorSymbols: null)
     {
     }
 
@@ -38,11 +38,26 @@ public sealed class BoundScope
     /// <param name="parent">The parent scope.</param>
     /// <param name="references">The reference resolver; defaults to the parent's resolver, or <see cref="ReferenceResolver.Default"/> if none.</param>
     public BoundScope(BoundScope parent, ReferenceResolver references)
+        : this(parent, references, preprocessorSymbols: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundScope"/> class with
+    /// an explicit reference resolver and an active preprocessor-symbol set
+    /// (ADR-0047 §6 / issue #176). Child scopes inherit both from the parent
+    /// when not supplied.
+    /// </summary>
+    /// <param name="parent">The parent scope.</param>
+    /// <param name="references">The reference resolver; defaults to the parent's resolver, or <see cref="ReferenceResolver.Default"/> if none.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; defaults to the parent's set, or an empty set if none.</param>
+    public BoundScope(BoundScope parent, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
         Parent = parent;
         imports = parent?.imports ?? new List<ImportSymbol>();
         typeAliases = parent?.typeAliases ?? new Dictionary<string, TypeSymbol>();
         References = references ?? parent?.References ?? ReferenceResolver.Default();
+        PreprocessorSymbols = preprocessorSymbols ?? parent?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
     }
 
     /// <summary>
@@ -54,6 +69,14 @@ public sealed class BoundScope
     /// Gets the reference resolver used to look up imported CLR types.
     /// </summary>
     public ReferenceResolver References { get; }
+
+    /// <summary>
+    /// Gets the active preprocessor symbol set (ADR-0047 §6 / issue #176).
+    /// Empty by default. <c>[Conditional("SYMBOL")]</c> call-site elision
+    /// keys off this set: a call is elided when *none* of the symbols named
+    /// by the function's <c>[Conditional]</c> applications is in this set.
+    /// </summary>
+    public ImmutableHashSet<string> PreprocessorSymbols { get; }
 
     /// <summary>
     /// Tries to add an import to this scope.

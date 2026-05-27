@@ -977,6 +977,172 @@ type Point struct {
         Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0210");
     }
 
+    [Fact]
+    public void Conditional_On_Non_Void_Function_Reports_GS0212()
+    {
+        // Issue #176 / ADR-0047 §6: `[Conditional]` requires a void return
+        // type because the call may be elided at the call site.
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            func DebugLog() int {
+                return 1
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        var diag = Assert.Single(GetBinderDiagnostics(globalScope), d => d.Id == "GS0212");
+        Assert.Contains("DebugLog", diag.Message);
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, diag.Severity);
+    }
+
+    [Fact]
+    public void Conditional_On_Void_Function_Does_Not_Report_GS0212()
+    {
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            func DebugLog() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0212");
+
+        var trace = globalScope.Functions.Single(f => f.Name == "DebugLog");
+        Assert.Single(trace.Attributes);
+        Assert.Equal("System.Diagnostics.ConditionalAttribute", trace.Attributes[0].AttributeType.Name);
+    }
+
+    [Fact]
+    public void Conditional_Call_Is_Elided_When_Symbol_Not_Defined()
+    {
+        // Issue #176 / ADR-0047 §6: when no preprocessor symbol matches any
+        // of the function's `[Conditional("SYMBOL")]` applications, the call
+        // is replaced by a no-op and argument evaluation is suppressed.
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            func DebugLog(message string) {
+            }
+
+            func Main() {
+                DebugLog("hello")
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
+        var program = Binder.BindProgram(globalScope);
+
+        var main = program.Functions.Keys.Single(f => f.Name == "Main" && f.Declaration != null);
+        var call = FindCalls(program.Functions[main]).Single();
+        Assert.True(call.IsConditionalElided);
+        Assert.Empty(call.Arguments);
+    }
+
+    [Fact]
+    public void Conditional_Call_Is_Kept_When_Symbol_Defined()
+    {
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            func DebugLog(message string) {
+            }
+
+            func Main() {
+                DebugLog("hello")
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var preprocessorSymbols = ImmutableHashSet.Create("DEBUG");
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), references: null, implicitSystemImport: true, preprocessorSymbols);
+        var program = Binder.BindProgram(globalScope);
+
+        var main = program.Functions.Keys.Single(f => f.Name == "Main");
+        var call = FindCalls(program.Functions[main]).Single();
+        Assert.False(call.IsConditionalElided);
+        Assert.Single(call.Arguments);
+    }
+
+    [Fact]
+    public void Conditional_Call_Is_Kept_When_Any_Of_Multiple_Symbols_Defined()
+    {
+        // Issue #176 / ADR-0047 §6 / C# CS0578 semantics: multiple
+        // `[Conditional]` applications are combined disjunctively — the call
+        // is emitted if *any* named symbol is defined.
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            @Conditional("TRACE")
+            func DebugLog() {
+            }
+
+            func Main() {
+                DebugLog()
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var preprocessorSymbols = ImmutableHashSet.Create("TRACE");
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), references: null, implicitSystemImport: true, preprocessorSymbols);
+        var program = Binder.BindProgram(globalScope);
+
+        var main = program.Functions.Keys.Single(f => f.Name == "Main");
+        var call = FindCalls(program.Functions[main]).Single();
+        Assert.False(call.IsConditionalElided);
+    }
+
+    [Fact]
+    public void Conditional_Call_Is_Elided_When_None_Of_Multiple_Symbols_Defined()
+    {
+        var source = """
+            import System.Diagnostics
+
+            @Conditional("DEBUG")
+            @Conditional("TRACE")
+            func DebugLog() {
+            }
+
+            func Main() {
+                DebugLog()
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var preprocessorSymbols = ImmutableHashSet.Create("PROFILE");
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), references: null, implicitSystemImport: true, preprocessorSymbols);
+        var program = Binder.BindProgram(globalScope);
+
+        var main = program.Functions.Keys.Single(f => f.Name == "Main");
+        var call = FindCalls(program.Functions[main]).Single();
+        Assert.True(call.IsConditionalElided);
+    }
+
+    private static System.Collections.Generic.IEnumerable<BoundCallExpression> FindCalls(BoundStatement node)
+    {
+        var collector = new CallCollector();
+        collector.RewriteStatement(node);
+        return collector.Calls;
+    }
+
+    private sealed class CallCollector : BoundTreeRewriter
+    {
+        public System.Collections.Generic.List<BoundCallExpression> Calls { get; } = new();
+
+        protected override BoundExpression RewriteCallExpression(BoundCallExpression node)
+        {
+            Calls.Add(node);
+            return base.RewriteCallExpression(node);
+        }
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

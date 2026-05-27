@@ -249,6 +249,106 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Diagnostics.ConditionalAttribute"/>. ADR-0047 §6 /
+    /// issue #176: calls to a method carrying one or more
+    /// <c>[Conditional("SYMBOL")]</c> applications are elided at every call
+    /// site at which none of the named symbols is in the active preprocessor
+    /// symbol set. Recognition is type-identity based so renaming or shadowing
+    /// the source-level name cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[Conditional]</c>.</returns>
+    public static bool IsConditional(Type clrType)
+    {
+        return clrType == typeof(System.Diagnostics.ConditionalAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Diagnostics.ConditionalAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[Conditional]</c>.</returns>
+    public static bool IsConditional(BoundAttribute attribute)
+    {
+        return IsConditional(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when any attribute in <paramref name="attributes"/>
+    /// is <see cref="System.Diagnostics.ConditionalAttribute"/>. Used by the
+    /// function-declaration binder to drive the void-return validation
+    /// (ADR-0047 §6 / issue #176).
+    /// </summary>
+    /// <param name="attributes">The attribute list on a function symbol.</param>
+    /// <returns><c>true</c> when at least one <c>[Conditional]</c> is present.</returns>
+    public static bool HasConditional(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsConditional(attr))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attributes"/> contains at
+    /// least one <c>[Conditional("SYMBOL")]</c> application and *none* of the
+    /// named symbols is present in <paramref name="preprocessorSymbols"/>. In
+    /// that case the call site must be elided per ADR-0047 §6 / issue #176.
+    /// Returns <c>false</c> when no <c>[Conditional]</c> attribute is present
+    /// (so the caller emits the call normally) or when at least one named
+    /// symbol is defined (the C# rule is "any defined symbol keeps the call").
+    /// Attributes whose positional argument is missing or not a string are
+    /// ignored for the purpose of elision; they were already reported as
+    /// invalid by attribute argument binding.
+    /// </summary>
+    /// <param name="attributes">The attribute list on the called function.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; never <c>null</c>.</param>
+    /// <returns><c>true</c> when the call should be elided.</returns>
+    public static bool IsConditionallyElided(ImmutableArray<BoundAttribute> attributes, System.Collections.Generic.ICollection<string> preprocessorSymbols)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var sawConditional = false;
+        foreach (var attr in attributes)
+        {
+            if (!IsConditional(attr))
+            {
+                continue;
+            }
+
+            sawConditional = true;
+            if (attr.PositionalArguments.IsDefaultOrEmpty || attr.PositionalArguments.Length < 1)
+            {
+                continue;
+            }
+
+            if (attr.PositionalArguments[0].Value is string symbol
+                && preprocessorSymbols != null
+                && preprocessorSymbols.Contains(symbol))
+            {
+                return false;
+            }
+        }
+
+        return sawConditional;
+    }
+
+    /// <summary>
     /// Looks for an <c>[Obsolete]</c> attribute in <paramref name="attributes"/>
     /// and extracts its <c>message</c> and <c>isError</c> arguments.
     /// </summary>
