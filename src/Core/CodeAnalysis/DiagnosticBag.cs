@@ -1329,6 +1329,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0210", $"Duplicate attribute '{attributeName}'; this attribute type does not allow multiple applications (AllowMultiple = false).");
     }
 
+    /// <summary>
+    /// Reports GS0211 when <c>[DllImport]</c> is applied in source. ADR-0047 §6
+    /// recognises <see cref="System.Runtime.InteropServices.DllImportAttribute"/>
+    /// but only on declarations whose body marker is <c>extern</c>; emit of the
+    /// underlying P/Invoke metadata is post-v1.0, so v1.0 rejects every use.
+    /// </summary>
+    /// <param name="location">The source location of the annotation.</param>
+    /// <param name="name">The attribute name as written in source.</param>
+    public void ReportDllImportNotSupported(TextLocation location, string name)
+    {
+        Report(location, "GS0211", $"Attribute '{name}' is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

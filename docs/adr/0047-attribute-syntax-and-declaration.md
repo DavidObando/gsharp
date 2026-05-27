@@ -133,7 +133,7 @@ A small, closed set of attributes drive compiler behaviour today (the binder's h
 | `System.Runtime.CompilerServices.CompilerGeneratedAttribute` | any | Synthesis-only; user-written form is rejected. |
 | `System.ObsoleteAttribute`             | any                             | Diagnostic on uses of the marked symbol (warning by default, error if `IsError` arg is `true`). |
 | `System.Diagnostics.ConditionalAttribute` | method                       | Calls are elided when the named symbol is not defined in the compilation. |
-| `System.Runtime.InteropServices.DllImportAttribute` | method (extern body)    | Recognised but only valid on declarations whose body marker is `extern` (post-v1.0; v1.0 rejects with `ERR_DllImportNotSupported`). |
+| `System.Runtime.InteropServices.DllImportAttribute` | method (extern body)    | Recognised but only valid on declarations whose body marker is `extern` (post-v1.0; v1.0 rejects with `ERR_DllImportNotSupported`, diagnostic `GS0211`). |
 | `System.AttributeUsageAttribute`       | attribute class only            | Validates targets / multi-apply on every subsequent use of the attribute. |
 | `System.Runtime.CompilerServices.NullableAttribute` and `NullableContextAttribute` | any | Read-only; written exclusively by the emitter from ADR-0001 nullability state. User-written form is rejected. |
 | `System.Diagnostics.CodeAnalysis.NotNullWhenAttribute` (and the `MaybeNullWhen` / `MemberNotNull*` family) | parameter / return | Recognised on imported metadata for nullability flow; user-written form is accepted and influences the binder's nullability state machine identically to C#. |
