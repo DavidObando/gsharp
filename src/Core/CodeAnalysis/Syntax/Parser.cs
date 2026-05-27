@@ -548,8 +548,13 @@ public class Parser
                Current.Kind != SyntaxKind.CloseBraceToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            // Issue #188 / ADR-0047 §3: each enum-member entry may be
+            // preceded by Kotlin-style `@Foo` annotations (default target
+            // `field`, since enum members are emitted as static literal
+            // fields on the enum type per ECMA-335 §I.8.5.2).
+            var annotations = ParseAnnotations();
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            nodesAndSeparators.Add(new EnumMemberSyntax(syntaxTree, identifier));
+            nodesAndSeparators.Add(new EnumMemberSyntax(syntaxTree, identifier).WithAnnotations(annotations));
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {

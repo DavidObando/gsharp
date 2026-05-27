@@ -506,6 +506,98 @@ type Point struct {
         Assert.Contains(tree.Diagnostics, d => d.Id == "GS0206");
     }
 
+    [Fact]
+    public void Attaches_Attributes_To_Enum_Member_Symbol()
+    {
+        // Issue #188: enum-member annotations (default target `field`) flow
+        // onto the EnumMemberSymbol so #175 use-site diagnostics fire on
+        // `Color.Red` references.
+        var source = """
+            type Color enum {
+                @Obsolete("retired")
+                Red,
+                Green,
+                Blue,
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Empty(GetBinderDiagnostics(globalScope));
+
+        var color = (GSharp.Core.CodeAnalysis.Symbols.EnumSymbol)globalScope.TypeAliases["Color"];
+        var red = color.Members.Single(m => m.Name == "Red");
+        var green = color.Members.Single(m => m.Name == "Green");
+
+        Assert.Single(red.Attributes);
+        Assert.Equal("System.ObsoleteAttribute", red.Attributes[0].AttributeType.Name);
+        Assert.Equal(AttributeTargetKind.Field, red.Attributes[0].Target);
+        Assert.Empty(green.Attributes);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Fires_On_Enum_Member_Reference()
+    {
+        // Issue #188: every read of an `@Obsolete` enum member surfaces
+        // GS0204 at the member-identifier location.
+        var source = """
+            type Color enum {
+                @Obsolete("use Crimson instead")
+                Red,
+                Green,
+            }
+
+            func Main() {
+                let c = Color.Red
+                _ = c
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("Color.Red", diag.Message);
+        Assert.Contains("use Crimson instead", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_With_IsError_On_Enum_Member_Promotes_To_Error()
+    {
+        // Issue #188: `@Obsolete("gone", true)` on an enum member promotes
+        // the use-site GS0204 to an error.
+        var source = """
+            type Color enum {
+                @Obsolete("gone", true)
+                Red,
+                Green,
+            }
+
+            func Main() {
+                let c = Color.Red
+                _ = c
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, diag.Severity);
+    }
+
+    [Fact]
+    public void Reports_Invalid_Use_Site_Target_On_Enum_Member()
+    {
+        // `@method:` is not a valid target on an enum-member declaration.
+        var source = """
+            type Color enum {
+                @method:Obsolete
+                Red,
+                Green,
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
