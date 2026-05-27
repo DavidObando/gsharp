@@ -109,6 +109,87 @@ len
         Assert.Equal(5, result.Value);
     }
 
+    [Fact]
+    public void If_UserDefinedNotNullWhenTrue_NarrowsThenArm()
+    {
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func TryFetch(@NotNullWhen(true) s string?) bool {
+    return s != nil
+}
+
+let v string? = ""hello""
+if TryFetch(v) {
+    var len = v.Length
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void If_NegatedUserDefinedNotNullWhenTrue_NarrowsElseArm()
+    {
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func TryFetch(@NotNullWhen(true) s string?) bool {
+    return s != nil
+}
+
+let v string? = ""hello""
+if !TryFetch(v) {
+} else {
+    var len = v.Length
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void If_UserDefinedNotNullWhenFalse_NarrowsElseArm()
+    {
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func IsMissing(@NotNullWhen(false) s string?) bool {
+    return s == nil
+}
+
+let v string? = ""hello""
+if IsMissing(v) {
+} else {
+    var len = v.Length
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void If_UserDefinedMaybeNullWhen_DoesNotNarrow()
+    {
+        // [MaybeNullWhen] only weakens postconditions; it cannot prove an
+        // argument is non-null, so the then-arm body should still see the
+        // parameter as nullable and accessing .Length must error.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func Probe(@MaybeNullWhen(false) s string?) bool {
+    return s != nil
+}
+
+let v string? = ""hello""
+if Probe(v) {
+    var len = v.Length
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
