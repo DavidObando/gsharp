@@ -112,7 +112,7 @@ public class Compilation
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (diagnostics.Any())
+        if (diagnostics.Any(d => d.IsError))
         {
             return new EvaluationResult(diagnostics, null);
         }
@@ -131,16 +131,24 @@ public class Compilation
             cfg.WriteTo(streamWriter);
         }
 
-        if (program.Diagnostics.Any())
+        // ADR-0047 Phase 6 / #141: combine all non-error diagnostics (warnings,
+        // info) collected so far so they surface to the REPL alongside the
+        // evaluated value, mirroring the emit pipeline's IsError filter.
+        var allWarnings = diagnostics
+            .Concat(program.Diagnostics)
+            .Where(d => !d.IsError)
+            .ToImmutableArray();
+
+        if (program.Diagnostics.Any(d => d.IsError))
         {
-            return new EvaluationResult(program.Diagnostics.ToImmutableArray(), null);
+            return new EvaluationResult(allWarnings.Concat(program.Diagnostics.Where(d => d.IsError)).ToImmutableArray(), null);
         }
 
         var evaluator = new Evaluator(program, variables);
         try
         {
             var value = evaluator.Evaluate();
-            return new EvaluationResult(ImmutableArray<Diagnostic>.Empty, value);
+            return new EvaluationResult(allWarnings, value);
         }
         catch (EvaluatorException ex)
         {
@@ -150,7 +158,7 @@ public class Compilation
             var location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
             var message = ex.Message;
             var diagnostic = new Diagnostic(location, "GS9999", DiagnosticSeverity.Error, message);
-            return new EvaluationResult(ImmutableArray.Create(diagnostic), null);
+            return new EvaluationResult(allWarnings.Add(diagnostic), null);
         }
     }
 

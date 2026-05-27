@@ -48,7 +48,17 @@ public class GSharpRepl : Repl
 
         var result = compilation.Evaluate(variables);
 
-        if (!result.Diagnostics.Any())
+        // ADR-0047 Phase 6 / #141: a non-empty Diagnostics list no longer
+        // implies failure — warnings (e.g. GS0204 [Obsolete]) coexist with a
+        // valid value. Print any diagnostics first, then the value, and treat
+        // the compilation as successful unless an error severity is present.
+        if (result.Diagnostics.Any())
+        {
+            Console.Out.WriteDiagnostics(result.Diagnostics);
+        }
+
+        var hasError = result.Diagnostics.Any(d => d.IsError);
+        if (!hasError)
         {
             if (result.Value != null)
             {
@@ -58,10 +68,6 @@ public class GSharpRepl : Repl
             }
 
             previous = compilation;
-        }
-        else
-        {
-            Console.Out.WriteDiagnostics(result.Diagnostics);
         }
     }
 
