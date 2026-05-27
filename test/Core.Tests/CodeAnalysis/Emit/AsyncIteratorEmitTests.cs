@@ -167,6 +167,60 @@ func delayed() IAsyncEnumerable[int] {
         Assert.Equal(new[] { 100, 200, 300 }, items);
     }
 
+    [Fact]
+    public async Task AsyncIterator_EnumeratorCancellation_RuntimeTokenIsThreaded()
+    {
+        // Issue #180 / ADR-0040: a CancellationToken parameter annotated
+        // @EnumeratorCancellation on an `async sequence` receives the token
+        // supplied at GetAsyncEnumerator(ct) time. We verify by passing
+        // an already-cancelled token; the iterator's first await on
+        // Task.Delay(token) must observe the cancellation and throw.
+        const string Source = @"package AsyncIterEC
+import System
+import System.Collections.Generic
+import System.Runtime.CompilerServices
+import System.Threading
+import System.Threading.Tasks
+
+func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int] {
+    yield 1
+    await Task.Delay(1000, ct)
+    yield 2
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(AsyncIterator_EnumeratorCancellation_RuntimeTokenIsThreaded));
+        try
+        {
+            // Kickoff with default token; runtime token comes via GetAsyncEnumerator.
+            var enumerable = (IAsyncEnumerable<int>)InvokeFunction(asm, "numbers", new object[] { default(CancellationToken) });
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var enumerator = enumerable.GetAsyncEnumerator(cts.Token);
+            try
+            {
+                // First MoveNextAsync should produce the first yielded value.
+                Assert.True(await enumerator.MoveNextAsync());
+                Assert.Equal(1, enumerator.Current);
+
+                // Second MoveNextAsync awaits Task.Delay(..., ct); since the
+                // runtime-supplied token (already cancelled) was threaded into
+                // the user parameter, the delay throws OperationCanceledException.
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    async () => await enumerator.MoveNextAsync());
+            }
+            finally
+            {
+                await enumerator.DisposeAsync();
+            }
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
     private static List<T> CompileAndEnumerate<T>(string source, string functionName, string contextName)
     {
         return CompileAndEnumerateWithArgs<T>(source, functionName, null, contextName);

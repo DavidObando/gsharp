@@ -4072,7 +4072,8 @@ internal sealed class ReflectionMetadataEmitter
             if (getAsyncEnumerator != null)
             {
                 this.lambdaBodies[getAsyncEnumerator] = this.BuildGetAsyncEnumeratorBody(
-                    getAsyncEnumerator, smClass, stateField, disposeModeField);
+                    getAsyncEnumerator, smClass, stateField, disposeModeField,
+                    plan.Function.Parameters, parameterFields);
             }
 
             // IValueTaskSource<bool>.GetStatus(short token): return promise.GetStatus(token);
@@ -4208,9 +4209,12 @@ internal sealed class ReflectionMetadataEmitter
         FunctionSymbol getAsyncEnumerator,
         StructSymbol smClass,
         FieldSymbol stateField,
-        FieldSymbol disposeModeField)
+        FieldSymbol disposeModeField,
+        ImmutableArray<ParameterSymbol> userParameters,
+        Dictionary<ParameterSymbol, FieldSymbol> parameterFields)
     {
         var thisParam = getAsyncEnumerator.ThisParameter;
+        var ctParam = getAsyncEnumerator.Parameters[0];
         var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
         // this.<>1__state = -1; (running state)
@@ -4222,6 +4226,63 @@ internal sealed class ReflectionMetadataEmitter
         stmts.Add(new BoundExpressionStatement(
             new BoundFieldAssignmentExpression(thisParam, smClass, disposeModeField,
                 new BoundLiteralExpression(false))));
+
+        // Issue #180 / ADR-0040: thread the runtime-supplied cancellation
+        // token into the user's @EnumeratorCancellation parameter. The C#
+        // semantics combine the original kickoff token with the per-enumerator
+        // token via CancellationTokenSource.CreateLinkedTokenSource; for this
+        // slice we adopt the conservative "override when meaningful" rule:
+        // if the caller passed a real (cancellable) token via WithCancellation,
+        // assign it to the parameter field; otherwise keep the kickoff value.
+        //     if (cancellationToken.CanBeCanceled) {
+        //         this.<param> = cancellationToken;
+        //     }
+        if (!userParameters.IsDefaultOrEmpty)
+        {
+            foreach (var userParam in userParameters)
+            {
+                var ecAttr = KnownAttributes.FindEnumeratorCancellation(userParam.Attributes);
+                if (ecAttr == null)
+                {
+                    continue;
+                }
+
+                if (userParam.Type?.ClrType != typeof(System.Threading.CancellationToken))
+                {
+                    // Binder already reported GS0207; skip emit-time threading.
+                    continue;
+                }
+
+                if (!parameterFields.TryGetValue(userParam, out var paramField))
+                {
+                    continue;
+                }
+
+                var canBeCanceledGetter = typeof(System.Threading.CancellationToken)
+                    .GetProperty(nameof(System.Threading.CancellationToken.CanBeCanceled))
+                    .GetGetMethod();
+                var canBeCanceledCall = new BoundImportedInstanceCallExpression(
+                    new BoundAddressOfExpression(new BoundVariableExpression(ctParam)),
+                    canBeCanceledGetter,
+                    TypeSymbol.Bool,
+                    ImmutableArray<BoundExpression>.Empty);
+
+                var assign = new BoundExpressionStatement(
+                    new BoundFieldAssignmentExpression(
+                        thisParam, smClass, paramField,
+                        new BoundVariableExpression(ctParam)));
+
+                stmts.Add(new BoundIfStatement(
+                    canBeCanceledCall,
+                    new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(assign)),
+                    elseStatement: null));
+
+                // Only one parameter may carry the marker; if a user wrote
+                // multiple, the binder accepts the first and downstream emit
+                // honours that same parameter.
+                break;
+            }
+        }
 
         // return this;
         stmts.Add(new BoundReturnStatement(new BoundVariableExpression(thisParam)));

@@ -1274,6 +1274,36 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0206", "Annotations are only allowed on variable declarations (var/let/const), not on this statement.");
     }
 
+    /// <summary>
+    /// Reports GS0207 when <c>@EnumeratorCancellation</c> is applied to a
+    /// parameter whose type is not <see cref="System.Threading.CancellationToken"/>
+    /// (ADR-0047 §6 / ADR-0040: <c>EnumeratorCancellationAttribute</c> marks
+    /// the cancellation-token parameter that the async-sequence rewriter
+    /// threads through; non-token parameters cannot be threaded).
+    /// </summary>
+    /// <param name="location">The source location of the parameter declaration.</param>
+    /// <param name="parameterName">The parameter's declared name.</param>
+    /// <param name="actualTypeName">The parameter's declared type (display string).</param>
+    public void ReportEnumeratorCancellationWrongType(TextLocation location, string parameterName, string actualTypeName)
+    {
+        Report(location, "GS0207", $"Parameter '{parameterName}' is annotated '@EnumeratorCancellation' but has type '{actualTypeName}'; only 'System.Threading.CancellationToken' parameters can carry this annotation.");
+    }
+
+    /// <summary>
+    /// Reports GS0208 when <c>@EnumeratorCancellation</c> is applied to a
+    /// parameter on a function whose return type is not an
+    /// <c>async sequence</c> (i.e. <see cref="System.Collections.Generic.IAsyncEnumerable{T}"/>).
+    /// The runtime only threads the per-enumerator cancellation token through
+    /// <c>IAsyncEnumerable.GetAsyncEnumerator(CancellationToken)</c>, so the
+    /// attribute is meaningless elsewhere (ADR-0040).
+    /// </summary>
+    /// <param name="location">The source location of the parameter declaration.</param>
+    /// <param name="parameterName">The parameter's declared name.</param>
+    public void ReportEnumeratorCancellationNotAsyncSequence(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0208", $"Parameter '{parameterName}' is annotated '@EnumeratorCancellation' but its enclosing function is not an async sequence (does not return 'IAsyncEnumerable[T]').");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

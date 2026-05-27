@@ -1262,6 +1262,33 @@ public sealed class Binder
                 if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
                 {
                     parameterSymbol.SetAttributes(paramAttrs);
+
+                    // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
+                    // The attribute marks the cancellation-token parameter that
+                    // the async-sequence rewriter threads through, so it is
+                    // only meaningful when (a) the parameter's type is
+                    // System.Threading.CancellationToken and (b) the enclosing
+                    // function returns IAsyncEnumerable[T] (an `async sequence`).
+                    // Diagnostics are reported per offending attribute; the
+                    // attribute is still attached so downstream tooling can
+                    // observe the user's intent.
+                    var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
+                    if (ecAttr != null)
+                    {
+                        if (parameterSymbol.Type?.ClrType != typeof(System.Threading.CancellationToken))
+                        {
+                            Diagnostics.ReportEnumeratorCancellationWrongType(
+                                parameterSyntax.Location,
+                                parameterSymbol.Name,
+                                parameterSymbol.Type?.Name ?? "?");
+                        }
+                        else if (!IsAsyncSequenceReturnType(type))
+                        {
+                            Diagnostics.ReportEnumeratorCancellationNotAsyncSequence(
+                                parameterSyntax.Location,
+                                parameterSymbol.Name);
+                        }
+                    }
                 }
             }
 
@@ -3207,6 +3234,27 @@ public sealed class Binder
         var fullName = def?.FullName;
         return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
             || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="type"/> denotes an
+    /// <c>async sequence</c> — i.e. <c>IAsyncEnumerable&lt;T&gt;</c>. Used
+    /// by the <c>@EnumeratorCancellation</c> binder check (ADR-0040 /
+    /// issue #180): only sequences expose
+    /// <c>GetAsyncEnumerator(CancellationToken)</c> so threading a token
+    /// through a marked parameter is only meaningful here, not on a bare
+    /// <c>IAsyncEnumerator&lt;T&gt;</c>.
+    /// </summary>
+    private static bool IsAsyncSequenceReturnType(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var def = clr.GetGenericTypeDefinition();
+        return def?.FullName == "System.Collections.Generic.IAsyncEnumerable`1";
     }
 
     /// <summary>

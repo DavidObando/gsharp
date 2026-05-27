@@ -50,6 +50,55 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.CompilerServices.EnumeratorCancellationAttribute"/>.
+    /// Recognition is type-identity based (ADR-0047 §6 / ADR-0040): the
+    /// resolved CLR type — not the source name — selects the behaviour, so a
+    /// renamed or shadowed alias cannot bypass the validation rules.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[EnumeratorCancellation]</c>.</returns>
+    public static bool IsEnumeratorCancellation(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.CompilerServices.EnumeratorCancellationAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.CompilerServices.EnumeratorCancellationAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[EnumeratorCancellation]</c>.</returns>
+    public static bool IsEnumeratorCancellation(BoundAttribute attribute)
+    {
+        return IsEnumeratorCancellation(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns the first <c>[EnumeratorCancellation]</c> attribute in
+    /// <paramref name="attributes"/>, or <c>null</c> if none is present.
+    /// </summary>
+    /// <param name="attributes">The attribute list on a parameter symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindEnumeratorCancellation(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsEnumeratorCancellation(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Looks for an <c>[Obsolete]</c> attribute in <paramref name="attributes"/>
     /// and extracts its <c>message</c> and <c>isError</c> arguments.
     /// </summary>
