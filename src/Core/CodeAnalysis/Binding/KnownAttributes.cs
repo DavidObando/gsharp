@@ -79,6 +79,128 @@ internal static class KnownAttributes
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.NotNullWhenAttribute"/>.
+    /// ADR-0047 §6 / issue #178: recognised on imported metadata and on
+    /// user-written annotations alike; type-identity based so renaming or
+    /// shadowing the source-level name cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[NotNullWhen]</c>.</returns>
+    public static bool IsNotNullWhen(Type clrType)
+    {
+        return clrType == typeof(System.Diagnostics.CodeAnalysis.NotNullWhenAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.NotNullWhenAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[NotNullWhen]</c>.</returns>
+    public static bool IsNotNullWhen(BoundAttribute attribute)
+    {
+        return IsNotNullWhen(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute"/>.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MaybeNullWhen]</c>.</returns>
+    public static bool IsMaybeNullWhen(Type clrType)
+    {
+        return clrType == typeof(System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MaybeNullWhen]</c>.</returns>
+    public static bool IsMaybeNullWhen(BoundAttribute attribute)
+    {
+        return IsMaybeNullWhen(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullAttribute"/>.
+    /// Recognised so it round-trips through the attribute pipeline; field
+    /// post-condition tracking is a follow-up.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MemberNotNull]</c>.</returns>
+    public static bool IsMemberNotNull(Type clrType)
+    {
+        return clrType == typeof(System.Diagnostics.CodeAnalysis.MemberNotNullAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MemberNotNull]</c>.</returns>
+    public static bool IsMemberNotNull(BoundAttribute attribute)
+    {
+        return IsMemberNotNull(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute"/>.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MemberNotNullWhen]</c>.</returns>
+    public static bool IsMemberNotNullWhen(Type clrType)
+    {
+        return clrType == typeof(System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[MemberNotNullWhen]</c>.</returns>
+    public static bool IsMemberNotNullWhen(BoundAttribute attribute)
+    {
+        return IsMemberNotNullWhen(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Extracts the <c>returnValue</c> boolean from a <c>[NotNullWhen(...)]</c>
+    /// application. The single positional argument is the boolean trigger
+    /// (issue #178 / ADR-0047 §6): when the method's <c>bool</c> return
+    /// matches this value, the annotated parameter is known non-null in the
+    /// caller's post-state.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <param name="returnValue">Receives the <c>returnValue</c> argument.</param>
+    /// <returns><c>true</c> when <paramref name="attribute"/> is <c>[NotNullWhen]</c> and the argument is a constant <see cref="bool"/>.</returns>
+    public static bool TryGetNotNullWhenReturnValue(BoundAttribute attribute, out bool returnValue)
+    {
+        returnValue = false;
+        return IsNotNullWhen(attribute) && TryGetSingleBoolArgument(attribute, out returnValue);
+    }
+
+    /// <summary>
+    /// Extracts the <c>returnValue</c> boolean from a <c>[MaybeNullWhen(...)]</c>
+    /// application — the inverse postcondition to <see cref="TryGetNotNullWhenReturnValue"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <param name="returnValue">Receives the <c>returnValue</c> argument.</param>
+    /// <returns><c>true</c> when <paramref name="attribute"/> is <c>[MaybeNullWhen]</c> and the argument is a constant <see cref="bool"/>.</returns>
+    public static bool TryGetMaybeNullWhenReturnValue(BoundAttribute attribute, out bool returnValue)
+    {
+        returnValue = false;
+        return IsMaybeNullWhen(attribute) && TryGetSingleBoolArgument(attribute, out returnValue);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
     /// <see cref="System.Runtime.CompilerServices.EnumeratorCancellationAttribute"/>.
     /// Recognition is type-identity based (ADR-0047 §6 / ADR-0040): the
     /// resolved CLR type — not the source name — selects the behaviour, so a
@@ -271,5 +393,22 @@ internal static class KnownAttributes
             case AttributeTargets at: result = (int)at; return true;
             default: result = 0; return false;
         }
+    }
+
+    private static bool TryGetSingleBoolArgument(BoundAttribute attribute, out bool value)
+    {
+        value = false;
+        if (attribute == null || attribute.PositionalArguments.IsDefaultOrEmpty || attribute.PositionalArguments.Length < 1)
+        {
+            return false;
+        }
+
+        if (attribute.PositionalArguments[0].Value is bool b)
+        {
+            value = b;
+            return true;
+        }
+
+        return false;
     }
 }

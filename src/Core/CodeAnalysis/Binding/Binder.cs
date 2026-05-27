@@ -2264,11 +2264,21 @@ public sealed class Binder
             inner = unary.Operand;
         }
 
-        if (inner is not BoundImportedCallExpression call || call.Type != TypeSymbol.Bool)
+        if (inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool)
         {
-            return (null, null);
+            return ClassifyImportedBoolCallNarrowing(importedCall, negate);
         }
 
+        if (inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool)
+        {
+            return ClassifyUserBoolCallNarrowing(userCall, negate);
+        }
+
+        return (null, null);
+    }
+
+    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
+    {
         var parameters = call.Function.Method.GetParameters();
         Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
         Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
@@ -2285,6 +2295,63 @@ public sealed class Binder
 
             if (!ClrNullability.TryGetNotNullWhen(parameter, out var returnValue)
                 || call.Arguments[i] is not BoundVariableExpression variableExpression
+                || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
+            {
+                continue;
+            }
+
+            var narrowThen = returnValue != negate;
+            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+            frame[variableExpression.Variable] = nullable.UnderlyingType;
+        }
+
+        return (thenFrame, elseFrame);
+    }
+
+    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyUserBoolCallNarrowing(BoundCallExpression call, bool negate)
+    {
+        // Issue #178 / ADR-0047 §6: a user-declared function may carry the
+        // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
+        // Recognition is type-identity based via KnownAttributes so renaming
+        // or shadowing the source name cannot bypass the narrowing rule.
+        var parameters = call.Function.Parameters;
+        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
+        Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
+        var count = Math.Min(parameters.Length, call.Arguments.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var parameter = parameters[i];
+            var attributes = parameter.Attributes;
+            if (attributes.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            var hasMaybeNullWhen = false;
+            bool? notNullWhenReturnValue = null;
+            foreach (var attribute in attributes)
+            {
+                if (KnownAttributes.TryGetNotNullWhenReturnValue(attribute, out var rv))
+                {
+                    notNullWhenReturnValue = rv;
+                }
+                else if (KnownAttributes.IsMaybeNullWhen(attribute))
+                {
+                    hasMaybeNullWhen = true;
+                }
+            }
+
+            // [MaybeNullWhen] alone only weakens postconditions; it cannot
+            // prove non-nullness on its own, so a parameter carrying only
+            // [MaybeNullWhen] is intentionally not narrowed (matches the
+            // imported-metadata path above).
+            if (notNullWhenReturnValue is not bool returnValue)
+            {
+                _ = hasMaybeNullWhen;
+                continue;
+            }
+
+            if (call.Arguments[i] is not BoundVariableExpression variableExpression
                 || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
             {
                 continue;
