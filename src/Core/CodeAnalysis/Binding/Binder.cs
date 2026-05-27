@@ -535,7 +535,23 @@ public sealed class Binder
                 continue;
             }
 
-            members.Add(new EnumMemberSymbol(memberName, enumSymbol, members.Count));
+            var memberSymbol = new EnumMemberSymbol(memberName, enumSymbol, members.Count);
+
+            // Issue #188 / ADR-0047 §3: bind any `@Foo` annotations attached
+            // to the enum-member entry with default target `field` (enum
+            // members are emitted as static literal fields on the enum type
+            // per ECMA-335 §I.8.5.2), so #175 use-site diagnostics
+            // (e.g. `@Obsolete`) fire on `Color.Red` references.
+            if (!memberSyntax.Annotations.IsDefaultOrEmpty)
+            {
+                memberSymbol.SetAttributes(BindAttributes(
+                    memberSyntax.Annotations,
+                    AttributeTargetKind.Field,
+                    VariableDeclarationAllowedTargets,
+                    "an enum member declaration"));
+            }
+
+            members.Add(memberSymbol);
         }
 
         if (members.Count == 0)
@@ -5846,6 +5862,10 @@ public sealed class Binder
                 var memberName = ne.IdentifierToken.Text;
                 if (enumSymbol.TryGetMember(memberName, out var member))
                 {
+                    // Issue #188 / #175: every read of an `@Obsolete` enum
+                    // member surfaces GS0204 at the member-identifier
+                    // location (e.g. `Color.Red`).
+                    ReportObsoleteUseIfApplicable(ne.Location, member, $"{enumSymbol.Name}.{member.Name}");
                     return new BoundLiteralExpression(member.Value, enumSymbol);
                 }
 

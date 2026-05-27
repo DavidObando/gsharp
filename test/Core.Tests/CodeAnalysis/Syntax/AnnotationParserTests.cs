@@ -335,6 +335,59 @@ func Main() {
         Assert.Contains(tree.Diagnostics, d => d.Id == "GS0206");
     }
 
+    [Fact]
+    public void Parses_Annotation_On_Enum_Member()
+    {
+        // Issue #188: each entry in an `enum { ... }` body accepts a leading
+        // `@`-annotation list, which lands on EnumMemberSyntax.Annotations.
+        const string source = @"
+package P
+
+type Color enum {
+    @Obsolete(""retired"")
+    Red,
+    Green,
+    Blue,
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var enumDecl = tree.Root.Members.OfType<EnumDeclarationSyntax>().Single();
+        var red = enumDecl.Members.Single(m => m.Identifier.Text == "Red");
+        var green = enumDecl.Members.Single(m => m.Identifier.Text == "Green");
+
+        var annotation = Assert.Single(red.Annotations);
+        Assert.Equal("Obsolete", annotation.GetNameText());
+        Assert.Empty(green.Annotations);
+    }
+
+    [Fact]
+    public void Parses_Multiple_Annotations_On_Enum_Member()
+    {
+        // Stacked `@A @B Red` is parsed as one EnumMemberSyntax with two
+        // annotations; only the entry the `@`-list leads gets the annotations.
+        const string source = @"
+package P
+
+type Color enum {
+    @Obsolete
+    @Serializable
+    Red,
+    Green,
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var enumDecl = tree.Root.Members.OfType<EnumDeclarationSyntax>().Single();
+        var red = enumDecl.Members.Single(m => m.Identifier.Text == "Red");
+        var green = enumDecl.Members.Single(m => m.Identifier.Text == "Green");
+
+        Assert.Equal(2, red.Annotations.Length);
+        Assert.Empty(green.Annotations);
+    }
+
     private static System.Collections.Generic.IEnumerable<SyntaxToken> EnumerateTokens(SyntaxNode node)
     {
         if (node is SyntaxToken t)
