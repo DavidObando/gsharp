@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -139,5 +140,109 @@ internal static class KnownAttributes
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves the effective <see cref="AttributeUsageAttribute"/> for the
+    /// candidate attribute class <paramref name="attributeType"/>. ADR-0047
+    /// §6 / issue #177: an <c>@AttributeUsage(...)</c> annotation on a
+    /// user-declared <c>@Attribute</c> class supplies <c>ValidOn</c> and
+    /// <c>AllowMultiple</c>; CLR-imported attribute types are read via
+    /// reflection. When the attribute carries no <c>AttributeUsage</c> the
+    /// C# defaults apply: <see cref="AttributeTargets.All"/> /
+    /// <c>AllowMultiple = false</c>.
+    /// </summary>
+    /// <param name="attributeType">The resolved attribute type symbol.</param>
+    /// <param name="validOn">Receives the <c>ValidOn</c> flag set.</param>
+    /// <param name="allowMultiple">Receives the <c>AllowMultiple</c> flag.</param>
+    public static void GetAttributeUsage(TypeSymbol attributeType, out AttributeTargets validOn, out bool allowMultiple)
+    {
+        validOn = AttributeTargets.All;
+        allowMultiple = false;
+
+        if (attributeType == null)
+        {
+            return;
+        }
+
+        if (attributeType is StructSymbol structSym && structSym.IsAttributeClass)
+        {
+            if (TryReadAttributeUsageFromBound(structSym.Attributes, out var v, out var am))
+            {
+                validOn = v;
+                allowMultiple = am;
+            }
+
+            return;
+        }
+
+        var clr = attributeType.ClrType;
+        if (clr == null)
+        {
+            return;
+        }
+
+        var usage = (AttributeUsageAttribute)Attribute.GetCustomAttribute(clr, typeof(AttributeUsageAttribute), inherit: true);
+        if (usage != null)
+        {
+            validOn = usage.ValidOn;
+            allowMultiple = usage.AllowMultiple;
+        }
+    }
+
+    private static bool TryReadAttributeUsageFromBound(ImmutableArray<BoundAttribute> attributes, out AttributeTargets validOn, out bool allowMultiple)
+    {
+        validOn = AttributeTargets.All;
+        allowMultiple = false;
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (attr?.AttributeType?.ClrType != typeof(AttributeUsageAttribute))
+            {
+                continue;
+            }
+
+            if (!attr.PositionalArguments.IsDefaultOrEmpty
+                && attr.PositionalArguments.Length >= 1
+                && TryConvertToInt32(attr.PositionalArguments[0].Value, out var raw))
+            {
+                validOn = (AttributeTargets)raw;
+            }
+
+            if (!attr.NamedArguments.IsDefaultOrEmpty)
+            {
+                foreach (var named in attr.NamedArguments)
+                {
+                    if (named.Name == "AllowMultiple" && named.Value is bool b)
+                    {
+                        allowMultiple = b;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryConvertToInt32(object value, out int result)
+    {
+        switch (value)
+        {
+            case int i: result = i; return true;
+            case short s: result = s; return true;
+            case byte by: result = by; return true;
+            case sbyte sb: result = sb; return true;
+            case ushort us: result = us; return true;
+            case uint ui: result = (int)ui; return true;
+            case long l: result = (int)l; return true;
+            case AttributeTargets at: result = (int)at; return true;
+            default: result = 0; return false;
+        }
     }
 }
