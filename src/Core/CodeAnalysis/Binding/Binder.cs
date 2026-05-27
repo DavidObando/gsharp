@@ -4945,6 +4945,13 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        // ADR-0047 §6: if the resolved callee is marked [Obsolete], surface
+        // a use-site diagnostic (warning by default, error if IsError=true).
+        if (KnownAttributes.TryGetObsolete(function.Attributes, out var obsoleteMessage, out var obsoleteIsError))
+        {
+            Diagnostics.ReportObsoleteUse(syntax.Identifier.Location, function.Name, obsoleteMessage, obsoleteIsError);
+        }
+
         var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
 
@@ -6691,6 +6698,17 @@ public sealed class Binder
         {
             var displayName = nameIsExact ? nameText : (nameText + "Attribute");
             Diagnostics.ReportNotAnAttributeType(GetAnnotationNameLocation(annotation), displayName);
+            return null;
+        }
+
+        // 3a) Reject user-written instances of attributes ADR-0047 §6
+        // reserves for compiler synthesis (Extension, AsyncStateMachine,
+        // CompilerGenerated, Nullable, NullableContext). Recognition is
+        // type-identity based on the resolved CLR type so renaming or
+        // shadowing the source-level name cannot bypass the rule.
+        if (KnownAttributes.IsReservedForCompiler(attrType.ClrType))
+        {
+            Diagnostics.ReportAttributeReservedForCompiler(GetAnnotationNameLocation(annotation), nameText);
             return null;
         }
 

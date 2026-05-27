@@ -197,10 +197,88 @@ type Point struct {
         Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0203");
     }
 
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Call_Site()
+    {
+        var source = """
+            @Obsolete("use Bar")
+            func Old() {
+            }
+
+            func Main() {
+                Old()
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diags = program.Diagnostics.Where(d => d.Id == "GS0204").ToList();
+
+        var obsoleteDiag = Assert.Single(diags);
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, obsoleteDiag.Severity);
+        Assert.Contains("Old", obsoleteDiag.Message);
+        Assert.Contains("use Bar", obsoleteDiag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_With_IsError_Promotes_To_Error()
+    {
+        var source = """
+            @Obsolete("dead", true)
+            func Old() {
+            }
+
+            func Main() {
+                Old()
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var obsoleteDiag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, obsoleteDiag.Severity);
+    }
+
+    [Fact]
+    public void Reserved_CompilerGenerated_Attribute_Is_Rejected()
+    {
+        var source = """
+            import System.Runtime.CompilerServices
+
+            @CompilerGenerated
+            func Helper() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0205");
+
+        var helper = globalScope.Functions.Single(f => f.Name == "Helper");
+        Assert.Empty(helper.Attributes);
+    }
+
+    [Fact]
+    public void Reserved_Extension_Attribute_Is_Rejected()
+    {
+        var source = """
+            import System.Runtime.CompilerServices
+
+            @Extension
+            func Helper() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0205");
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         return Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
+    }
+
+    private static BoundProgram BindProgramFromSource(string source)
+    {
+        return Binder.BindProgram(BindSource(source));
     }
 
     private static System.Collections.Generic.IEnumerable<GSharp.Core.CodeAnalysis.Diagnostic> GetBinderDiagnostics(BoundGlobalScope scope)
