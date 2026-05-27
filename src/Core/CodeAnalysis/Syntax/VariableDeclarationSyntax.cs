@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
@@ -55,10 +57,21 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
         TypeClause = typeClause;
         EqualsToken = equalsToken;
         Initializer = initializer;
+        Annotations = ImmutableArray<AnnotationSyntax>.Empty;
     }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.VariableDeclaration;
+
+    /// <summary>
+    /// Gets the Kotlin-style annotations (ADR-0047) attached to this variable
+    /// declaration. Empty when no <c>@</c> lead-ins are present. Populated by
+    /// the parser via <see cref="WithAnnotations"/> so existing constructor
+    /// overloads do not need to be touched. Declared first so that
+    /// <see cref="SyntaxNode.GetChildren"/> visits annotations before the
+    /// remaining tokens — keeping spans and first/last-token lookups stable.
+    /// </summary>
+    public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>
     /// Gets the optional accessibility modifier token. Only meaningful for top-level declarations.
@@ -89,4 +102,13 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// Gets the initializer expression.
     /// </summary>
     public ExpressionSyntax Initializer { get; }
+
+    /// <summary>Attaches the given annotation list to this variable declaration and returns this same instance for fluent parser use.</summary>
+    /// <param name="annotations">The annotation list to attach (may be empty).</param>
+    /// <returns>This same <see cref="VariableDeclarationSyntax"/>, with <see cref="Annotations"/> updated.</returns>
+    internal VariableDeclarationSyntax WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
+    {
+        Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+        return this;
+    }
 }
