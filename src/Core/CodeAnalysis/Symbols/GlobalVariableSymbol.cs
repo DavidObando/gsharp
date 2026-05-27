@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -16,8 +18,13 @@ public sealed class GlobalVariableSymbol : VariableSymbol
     /// <param name="isReadOnly">Whether it's read-only or not.</param>
     /// <param name="type">The type of the variable.</param>
     /// <param name="accessibility">The CLR visibility level (defaults to <see cref="Accessibility.Public"/>).</param>
-    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, Accessibility accessibility = Accessibility.Public)
-        : base(name, isReadOnly, type)
+    /// <param name="declaringSyntax">
+    /// The originating declaration syntax (may be <see langword="null"/> for
+    /// synthesised globals such as host-package bootstrap state). Used by the
+    /// PDB emitter to anchor field-declaration locations per ADR-0027 §7.7a.
+    /// </param>
+    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, Accessibility accessibility = Accessibility.Public, SyntaxNode declaringSyntax = null)
+        : base(name, isReadOnly, type, declaringSyntax)
     {
         Accessibility = accessibility;
     }

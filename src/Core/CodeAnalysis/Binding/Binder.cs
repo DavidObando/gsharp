@@ -665,7 +665,7 @@ public sealed class Binder
                     continue;
                 }
 
-                ctorBuilder.Add(new ParameterSymbol(paramName, paramType));
+                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier));
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
 
@@ -893,7 +893,7 @@ public sealed class Binder
                     }
                     else
                     {
-                        parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                        parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
                     }
                 }
 
@@ -1089,7 +1089,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    parameters.Add(new ParameterSymbol(parameterName, parameterType));
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
                 }
             }
 
@@ -1198,7 +1198,7 @@ public sealed class Binder
                     receiverType = TypeSymbol.Error;
                 }
 
-                explicitReceiverParameter = new ParameterSymbol(recvName, receiverType);
+                explicitReceiverParameter = new ParameterSymbol(recvName, receiverType, declaringSyntax: syntax.Receiver);
                 seenParameterNames.Add(recvName);
                 parameters.Add(explicitReceiverParameter);
 
@@ -1237,7 +1237,7 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic);
+                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier);
                     parameters.Add(parameter);
                     parameterSymbolBySyntax[pIndex] = parameter;
                 }
@@ -2751,7 +2751,7 @@ public sealed class Binder
     private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType)
     {
         var targetType = BindTypeClause(syntax.Type) ?? TypeSymbol.Error;
-        var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType);
+        var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType, declaringSyntax: syntax.Identifier);
         if (!scope.TryDeclareVariable(variable))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
@@ -3196,7 +3196,7 @@ public sealed class Binder
                 // Introduce a scope so the bound variable is visible only inside
                 // the case body — matches `for v := range` lexical hygiene.
                 scope = new BoundScope(scope);
-                variable = new LocalVariableSymbol(caseSyntax.Identifier.Text, isReadOnly: true, chan.ElementType);
+                variable = new LocalVariableSymbol(caseSyntax.Identifier.Text, isReadOnly: true, chan.ElementType, declaringSyntax: caseSyntax.Identifier);
                 if (!scope.TryDeclareVariable(variable))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(caseSyntax.Identifier.Location, caseSyntax.Identifier.Text);
@@ -4380,7 +4380,7 @@ public sealed class Binder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            parameterSymbols.Add(new ParameterSymbol(pname, ptype));
+            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier));
             parameterTypes.Add(ptype);
         }
 
@@ -6694,8 +6694,8 @@ public sealed class Binder
         var name = identifier.Text ?? "?";
         var declare = !identifier.IsMissing;
         var variable = function == null
-                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type, accessibility)
-                            : new LocalVariableSymbol(name, isReadOnly, type);
+                            ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type, accessibility, declaringSyntax: identifier)
+                            : new LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier);
 
         if (declare && !scope.TryDeclareVariable(variable))
         {
