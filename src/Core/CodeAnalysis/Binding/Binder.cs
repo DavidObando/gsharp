@@ -1959,6 +1959,12 @@ public sealed class Binder
             return null;
         }
 
+        // ADR-0047 §6 / #175: report obsolete-use for any named struct,
+        // class, interface, or enum reference appearing in type position
+        // (parameter types, return types, field types, generic-argument
+        // positions, type aliases, etc.).
+        ReportObsoleteUseIfApplicable(syntax.Identifier.Location, element, element.Name);
+
         // Phase 4.3c / ADR-0020: handle generic type construction `Foo[T1, T2]` in
         // type position (currently interfaces; structs follow up later).
         if (syntax.HasTypeArguments)
@@ -3974,6 +3980,10 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
+        // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
+        // use of the named type.
+        ReportObsoleteUseIfApplicable(syntax.TypeIdentifier.Location, structSymbol, structSymbol.Name);
+
         // Phase 4.3 / ADR-0020: if the declared struct is generic, build a
         // type-argument substitution (explicit or inferred from initializers)
         // and construct a closed StructSymbol to bind against. Constructed
@@ -4731,6 +4741,10 @@ public sealed class Binder
 
     private BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        // ADR-0047 §6 / #175: primary-constructor call `Foo(...)` is a
+        // use of the class type itself.
+        ReportObsoleteUseIfApplicable(syntax.Identifier.Location, classType, classType.Name);
+
         // Phase 4.3b / ADR-0020: a primary-constructor call on a generic
         // class definition (`Box(5)` or `Box[int](5)`) builds a type-argument
         // substitution before resolving the parameter list against the
@@ -4902,6 +4916,9 @@ public sealed class Binder
             // ctor call instead.
             if (!(type is StructSymbol singleArgStruct && (singleArgStruct.IsClass || singleArgStruct.IsInline) && singleArgStruct.HasPrimaryConstructor))
             {
+                // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
+                // is still a use of the named type.
+                ReportObsoleteUseIfApplicable(syntax.Identifier.Location, type, type.Name);
                 return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
             }
         }
@@ -4961,12 +4978,7 @@ public sealed class Binder
             return new BoundErrorExpression();
         }
 
-        // ADR-0047 §6: if the resolved callee is marked [Obsolete], surface
-        // a use-site diagnostic (warning by default, error if IsError=true).
-        if (KnownAttributes.TryGetObsolete(function.Attributes, out var obsoleteMessage, out var obsoleteIsError))
-        {
-            Diagnostics.ReportObsoleteUse(syntax.Identifier.Location, function.Name, obsoleteMessage, obsoleteIsError);
-        }
+        ReportObsoleteUseIfApplicable(syntax.Identifier.Location, function, function.Name);
 
         var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
@@ -6411,6 +6423,7 @@ public sealed class Binder
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
+                ReportObsoleteUseIfApplicable(location, variable, variable.Name);
                 return variable;
 
             case null:
@@ -6420,6 +6433,24 @@ public sealed class Binder
             default:
                 Diagnostics.ReportNotAVariable(location, name);
                 return null;
+        }
+    }
+
+    // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an
+    // [Obsolete] attribute, surface a use-site diagnostic at
+    // <paramref name="location"/>. Severity is Warning by default,
+    // promoted to Error when the attribute's second positional
+    // argument (IsError) is true.
+    private void ReportObsoleteUseIfApplicable(TextLocation location, Symbol symbol, string displayName)
+    {
+        if (symbol == null)
+        {
+            return;
+        }
+
+        if (KnownAttributes.TryGetObsolete(symbol.Attributes, out var message, out var isError))
+        {
+            Diagnostics.ReportObsoleteUse(location, displayName, message, isError);
         }
     }
 
