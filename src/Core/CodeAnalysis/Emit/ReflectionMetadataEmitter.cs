@@ -1045,6 +1045,42 @@ internal sealed class ReflectionMetadataEmitter
         return BlobContentId.FromHash(sha.GetHashAndReset());
     }
 
+    /// <summary>
+    /// Converts the per-method <c>locals</c> dictionary used during IL emit
+    /// into a stable, slot-ordered list suitable for the Portable PDB
+    /// <c>LocalVariable</c> table. Compiler-generated names (synthesized by
+    /// lowering) are reported with <see cref="LocalInfo.IsCompilerGenerated"/>
+    /// set so debuggers can hide them from the locals window.
+    /// </summary>
+    private static IReadOnlyList<LocalInfo> CollectLocalInfo(Dictionary<VariableSymbol, int> locals)
+    {
+        if (locals == null || locals.Count == 0)
+        {
+            return System.Array.Empty<LocalInfo>();
+        }
+
+        var result = new List<LocalInfo>(locals.Count);
+        foreach (var kvp in locals)
+        {
+            var name = kvp.Key.Name ?? string.Empty;
+            var isGenerated = name.Length == 0
+                || name[0] == '<'
+                || name[0] == '$'
+                || name.Contains('$');
+            if (isGenerated && name.Length == 0)
+            {
+                // Anonymous slot — give it a deterministic placeholder so the
+                // PDB row is still valid (debuggers ignore hidden names).
+                name = "<slot" + kvp.Value + ">";
+            }
+
+            result.Add(new LocalInfo(kvp.Value, name, isGenerated));
+        }
+
+        result.Sort((a, b) => a.SlotIndex.CompareTo(b.SlotIndex));
+        return result;
+    }
+
     private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
         // Phase 4 emit parity (F2, type-erased): generic type definitions
@@ -2329,6 +2365,9 @@ internal sealed class ReflectionMetadataEmitter
 
         int bodyOffset = -1;
         IReadOnlyList<SequencePoint> capturedSequencePoints = null;
+        IReadOnlyList<LocalInfo> capturedLocals = null;
+        int capturedCodeSize = 0;
+        StandaloneSignatureHandle capturedLocalsSignature = default;
         if (!this.metadataOnly)
         {
             var moveNextBody = MoveNextBodyRewriter.Build(plan);
@@ -2413,6 +2452,9 @@ internal sealed class ReflectionMetadataEmitter
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
+            capturedLocals = CollectLocalInfo(locals);
+            capturedCodeSize = il.Offset;
+            capturedLocalsSignature = localsSignature;
         }
 
         // MoveNext signature: void MoveNext() (instance)
@@ -2429,10 +2471,11 @@ internal sealed class ReflectionMetadataEmitter
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
 
-        // Phase 4 (ADR-0027 §7.7a): MoveNext is the visible body for an async
-        // method post-lowering; sequence points captured here are what surface
-        // in debugger stack traces and `step` commands across `await` points.
-        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints);
+        // Phase 4/5 (ADR-0027 §7.7a): MoveNext is the visible body for an async
+        // method post-lowering; sequence points and locals captured here surface
+        // in debugger stack traces, locals window, and `step` commands across
+        // `await` points.
+        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedCodeSize, capturedLocalsSignature);
     }
 
     /// <summary>
@@ -2817,6 +2860,9 @@ internal sealed class ReflectionMetadataEmitter
         // MVAR/VAR encoding and add a MethodSpec at call sites.
         int bodyOffset = -1;
         IReadOnlyList<SequencePoint> capturedSequencePoints = null;
+        IReadOnlyList<LocalInfo> capturedLocals = null;
+        int capturedCodeSize = 0;
+        StandaloneSignatureHandle capturedLocalsSignature = default;
         if (!this.metadataOnly)
         {
             if (asyncPlan != null)
@@ -2932,6 +2978,9 @@ internal sealed class ReflectionMetadataEmitter
 
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
+            capturedLocals = CollectLocalInfo(locals);
+            capturedCodeSize = il.Offset;
+            capturedLocalsSignature = localsSignature;
             } // end else (non-async path)
         }
 
@@ -3051,12 +3100,13 @@ internal sealed class ReflectionMetadataEmitter
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
 
-        // Phase 4 (ADR-0027 §7.7a): hand the body's sequence points to the PDB
-        // emitter, keyed by the freshly minted MethodDef row number. Skipped
-        // when PDB emit is off (pdb == null) or for the async-kickoff path
-        // (the kickoff stub is fully synthesised — visible PDB rows for the
-        // user's async body land via EmitStateMachineMoveNext below).
-        this.pdb?.RecordMethod(handle, capturedSequencePoints);
+        // Phase 4/5 (ADR-0027 §7.7a): hand the body's sequence points and
+        // locals to the PDB emitter, keyed by the freshly minted MethodDef row
+        // number. Skipped when PDB emit is off (pdb == null) or for the
+        // async-kickoff path (the kickoff stub is fully synthesised — visible
+        // PDB rows for the user's async body land via EmitStateMachineMoveNext
+        // below).
+        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedCodeSize, capturedLocalsSignature);
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
