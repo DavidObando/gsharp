@@ -6723,25 +6723,23 @@ public sealed class Binder
             {
                 if (argSyntax is NamedArgumentExpressionSyntax namedArg)
                 {
-                    var bound = TryBindAttributeConstant(namedArg.Expression);
-                    if (bound == null)
+                    if (!TryBindAttributeArgument(namedArg.Expression, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location);
                         continue;
                     }
 
-                    named.Add(new BoundAttributeArgument(namedArg.NameToken.Text, bound.Value, bound.Type));
+                    named.Add(new BoundAttributeArgument(namedArg.NameToken.Text, value, valueType));
                 }
                 else
                 {
-                    var bound = TryBindAttributeConstant(argSyntax);
-                    if (bound == null)
+                    if (!TryBindAttributeArgument(argSyntax, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(argSyntax.Location);
                         continue;
                     }
 
-                    positional.Add(new BoundAttributeArgument(name: null, bound.Value, bound.Type));
+                    positional.Add(new BoundAttributeArgument(name: null, value, valueType));
                 }
             }
         }
@@ -6840,22 +6838,118 @@ public sealed class Binder
 
     /// <summary>
     /// Tries to bind an attribute argument expression as a compile-time
-    /// constant. v1 accepts only direct literal-shaped expressions
-    /// (numbers, strings, chars, bool, nil); broader constant folding —
-    /// <c>typeof(T)</c>, enum member access, array literals, signed
-    /// numeric literals — is a follow-up once the corresponding binder
-    /// paths land in Phase 3 / Phase 5.
+    /// constant value of one of the shapes permitted by ECMA-335 II.23.3 /
+    /// ADR-0047 §3: literal (numeric, char, string, bool, nil), a
+    /// <c>typeof(T)</c> expression (carried as the resolved CLR
+    /// <see cref="Type"/>), or a single-dimensional array literal of any
+    /// supported element shape. Returns <c>false</c> for any expression the
+    /// emitter cannot serialise.
     /// </summary>
     /// <param name="syntax">The argument expression.</param>
-    /// <returns>The bound literal, or <c>null</c> if not a recognised constant.</returns>
-    private BoundLiteralExpression TryBindAttributeConstant(ExpressionSyntax syntax)
+    /// <param name="value">The extracted compile-time value when the method returns <c>true</c>.</param>
+    /// <param name="type">The static type carried by the argument when the method returns <c>true</c>.</param>
+    /// <returns><c>true</c> if the expression maps to a supported attribute constant; otherwise <c>false</c>.</returns>
+    private bool TryBindAttributeArgument(ExpressionSyntax syntax, out object value, out TypeSymbol type)
     {
-        if (syntax is LiteralExpressionSyntax literal)
+        value = null;
+        type = null;
+
+        switch (syntax)
         {
-            return BindExpression(literal) as BoundLiteralExpression;
+            case LiteralExpressionSyntax literal:
+                if (BindExpression(literal) is BoundLiteralExpression bl)
+                {
+                    value = bl.Value;
+                    type = bl.Type;
+                    return true;
+                }
+
+                return false;
+
+            case TypeOfExpressionSyntax typeOfSyntax:
+                if (BindTypeOfExpression(typeOfSyntax) is BoundTypeOfExpression bt
+                    && bt.OperandType?.ClrType is { } clr)
+                {
+                    value = clr;
+                    type = bt.Type;
+                    return true;
+                }
+
+                return false;
+
+            case ArrayCreationExpressionSyntax arraySyntax:
+                return TryBindAttributeArrayArgument(arraySyntax, out value, out type);
         }
 
-        return null;
+        return false;
+    }
+
+    private bool TryBindAttributeArrayArgument(
+        ArrayCreationExpressionSyntax syntax,
+        out object value,
+        out TypeSymbol type)
+    {
+        value = null;
+        type = null;
+
+        if (BindArrayCreationExpression(syntax) is not BoundArrayCreationExpression bound)
+        {
+            return false;
+        }
+
+        // Attribute arrays must be a serialisable SZARRAY (1-D) shape per
+        // ECMA-335 II.23.3. Both `[]T{...}` (slice) and `[N]T{...}` (array)
+        // produce a CLR `T[]` for the element type clause.
+        var clrArrayType = bound.Type?.ClrType;
+        if (clrArrayType == null || !clrArrayType.IsArray || clrArrayType.GetArrayRank() != 1)
+        {
+            return false;
+        }
+
+        var elementClrType = clrArrayType.GetElementType();
+        if (elementClrType == null)
+        {
+            return false;
+        }
+
+        var result = Array.CreateInstance(elementClrType, syntax.Elements.Count);
+        for (int i = 0; i < syntax.Elements.Count; i++)
+        {
+            if (!TryBindAttributeArgument(syntax.Elements[i], out var elementValue, out _))
+            {
+                return false;
+            }
+
+            try
+            {
+                result.SetValue(CoerceAttributeElement(elementValue, elementClrType), i);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        value = result;
+        type = bound.Type;
+        return true;
+    }
+
+    private static object CoerceAttributeElement(object value, Type elementType)
+    {
+        if (value == null || elementType.IsInstanceOfType(value))
+        {
+            return value;
+        }
+
+        if (elementType.IsEnum)
+        {
+            var underlying = Enum.GetUnderlyingType(elementType);
+            return Convert.ChangeType(value, underlying, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        // Numeric / char widening between primitives (e.g. int → long).
+        return Convert.ChangeType(value, elementType, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private sealed class CapturedVariableCollector : BoundTreeRewriter

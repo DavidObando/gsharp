@@ -1201,7 +1201,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     foreach (var p in ctorParams)
                     {
-                        EncodeClrTypeForCtorSig(ps.AddParameter().Type(), p.ParameterType);
+                        this.EncodeClrTypeForCtorSig(ps.AddParameter().Type(), p.ParameterType);
                     }
                 });
 
@@ -1257,7 +1257,8 @@ internal sealed class ReflectionMetadataEmitter
                 }
                 else if (!paramType.IsInstanceOfType(supplied))
                 {
-                    // Allow numeric widening (int → long, etc.) and char → int.
+                    // Allow numeric widening (int → long, etc.), char → int,
+                    // and source-array → target-array element widening.
                     if (!IsTriviallyConvertible(supplied.GetType(), paramType))
                     {
                         match = false;
@@ -1287,10 +1288,15 @@ internal sealed class ReflectionMetadataEmitter
             return from == Enum.GetUnderlyingType(to);
         }
 
+        if (from.IsArray && to.IsArray && from.GetArrayRank() == 1 && to.GetArrayRank() == 1)
+        {
+            return IsTriviallyConvertible(from.GetElementType()!, to.GetElementType()!);
+        }
+
         return false;
     }
 
-    private static void EncodeClrTypeForCtorSig(SignatureTypeEncoder enc, Type t)
+    private void EncodeClrTypeForCtorSig(SignatureTypeEncoder enc, Type t)
     {
         if (t == typeof(bool))
         {
@@ -1351,6 +1357,16 @@ internal sealed class ReflectionMetadataEmitter
         else if (t.IsEnum)
         {
             EncodeClrTypeForCtorSig(enc, Enum.GetUnderlyingType(t));
+        }
+        else if (t.IsArray && t.GetArrayRank() == 1)
+        {
+            // ECMA-335 II.23.2.12: SZARRAY element-type for a single-dimensional array parameter.
+            this.EncodeClrTypeForCtorSig(enc.SZArray(), t.GetElementType()!);
+        }
+        else if (typeof(Type).IsAssignableFrom(t))
+        {
+            // System.Type parameter: encoded as a CLASS type reference in the ctor signature.
+            enc.Type(this.GetTypeReference(t), isValueType: false);
         }
         else
         {
@@ -1419,11 +1435,67 @@ internal sealed class ReflectionMetadataEmitter
         {
             bb.WriteSerializedString((string)value);
         }
+        else if (typeof(Type).IsAssignableFrom(paramType))
+        {
+            // ECMA-335 II.23.3: a System.Type argument is encoded as a
+            // SerString carrying the canonical type-name. A null Type
+            // serialises as the SerString null marker (0xFF).
+            bb.WriteSerializedString(value is Type t ? GetSerializedTypeName(t) : null);
+        }
+        else if (paramType.IsArray && paramType.GetArrayRank() == 1)
+        {
+            WriteCustomAttributeArrayArg(bb, paramType.GetElementType()!, value);
+        }
+        else if (paramType == typeof(object))
+        {
+            // ECMA-335 II.23.3: boxed object argument carries the
+            // FieldOrPropType tag of the runtime type then the value.
+            if (value == null)
+            {
+                // Null object: encode as STRING null marker per common practice.
+                WriteCustomAttributeFieldOrPropertyType(bb, typeof(string));
+                bb.WriteSerializedString(null);
+            }
+            else
+            {
+                var runtimeType = value.GetType();
+                WriteCustomAttributeFieldOrPropertyType(bb, runtimeType);
+                WriteCustomAttributeFixedArg(bb, runtimeType, value);
+            }
+        }
         else
         {
             // Fallback: serialise as string round-trip (best-effort).
             bb.WriteSerializedString(value?.ToString());
         }
+    }
+
+    private static void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object value)
+    {
+        // ECMA-335 II.23.3: an SZARRAY argument is encoded as an Int32 length
+        // (or 0xFFFFFFFF for a null array) followed by length elements of
+        // FixedArg(elementType).
+        if (value == null)
+        {
+            bb.WriteUInt32(0xFFFFFFFFu);
+            return;
+        }
+
+        var array = (Array)value;
+        bb.WriteInt32(array.Length);
+        for (int i = 0; i < array.Length; i++)
+        {
+            WriteCustomAttributeFixedArg(bb, elementType, array.GetValue(i));
+        }
+    }
+
+    private static string GetSerializedTypeName(Type t)
+    {
+        // ECMA-335 II.23.3 + I.8.5.2: the canonical serialised form is the
+        // assembly-qualified name; types from mscorlib / System.Private.CoreLib
+        // may omit the assembly portion. We always emit the assembly-qualified
+        // form so the consumer can unambiguously rebind the type.
+        return t.AssemblyQualifiedName ?? t.FullName ?? t.Name;
     }
 
     private static void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
@@ -1511,11 +1583,28 @@ internal sealed class ReflectionMetadataEmitter
         {
             bb.WriteByte(0x0E);
         }
+        else if (typeof(Type).IsAssignableFrom(t))
+        {
+            // 0x50 — System.Type (no payload byte; the FixedArg holds the SerString).
+            bb.WriteByte(0x50);
+        }
+        else if (t == typeof(object))
+        {
+            // 0x51 — boxed object. The FixedArg writer prefixes the runtime
+            // type tag and value when emitting the argument body.
+            bb.WriteByte(0x51);
+        }
+        else if (t.IsArray && t.GetArrayRank() == 1)
+        {
+            // 0x1D SZARRAY followed by the element type's FieldOrPropType byte.
+            bb.WriteByte(0x1D);
+            WriteCustomAttributeFieldOrPropertyType(bb, t.GetElementType()!);
+        }
         else if (t.IsEnum)
         {
             // 0x55 then serialised type name (assembly-qualified).
             bb.WriteByte(0x55);
-            bb.WriteSerializedString(t.AssemblyQualifiedName);
+            bb.WriteSerializedString(GetSerializedTypeName(t));
         }
         else
         {
