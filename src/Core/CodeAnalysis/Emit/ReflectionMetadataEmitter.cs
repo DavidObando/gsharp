@@ -119,6 +119,15 @@ internal sealed class ReflectionMetadataEmitter
     // Async iterator state-machine plans produced by AsyncIteratorRewriter.
     private ImmutableArray<Lowering.Iterators.AsyncIteratorPlan> asyncIteratorPlans = ImmutableArray<Lowering.Iterators.AsyncIteratorPlan>.Empty;
 
+    // Phase 3 (ADR-0027 §7.7a) Portable PDB options. Defaults to a None-format
+    // instance so the existing PE-only emit path stays bit-for-bit identical
+    // until Phases 4-7 light up the actual PDB pipeline.
+    private DebugInformationOptions debugInformation = new();
+
+    // Phase 3 (ADR-0027 §7.7a) Portable PDB destination stream. Only consumed
+    // when debugInformation.Format is Portable; null in every other config.
+    private Stream pdbStream;
+
     // Maps async iterator SM class to its plan (populated during SynthesizeAsyncIteratorStateMachines).
     private readonly Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan> asyncIteratorInfos = new Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan>();
 
@@ -194,6 +203,22 @@ internal sealed class ReflectionMetadataEmitter
     /// Optional result from the async iterator rewriter. When non-null, contains plans
     /// for emitting async iterator state-machine types and kickoff bodies.
     /// </param>
+    /// <param name="debugInformation">
+    /// Phase 3 (ADR-0027 §7.7a) PDB-related emit options. When <see langword="null"/>
+    /// or when <see cref="DebugInformationOptions.Format"/> is
+    /// <see cref="DebugInformationFormat.None"/> the emitter behaves exactly as
+    /// it did before Phase 3 (no PDB sidecar, no <c>DebugDirectory</c> entries).
+    /// The actual production of PDB content lands across Phases 4–7; Phase 3
+    /// only plumbs the option onto the emitter so subsequent phases can consume
+    /// it without further signature churn.
+    /// </param>
+    /// <param name="pdbStream">
+    /// Optional destination for the Portable PDB sidecar stream. Only consumed
+    /// when <paramref name="debugInformation"/> requests
+    /// <see cref="DebugInformationFormat.Portable"/>; ignored in every other
+    /// configuration. Plumbed here so callers can open the file once and have
+    /// the emitter write to it directly without intermediate buffering.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -202,7 +227,9 @@ internal sealed class ReflectionMetadataEmitter
         bool metadataOnly = false,
         AsyncStateMachineRewriteResult asyncRewriteResult = null,
         IteratorRewriteResult iteratorRewriteResult = null,
-        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null)
+        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null,
+        DebugInformationOptions debugInformation = null,
+        Stream pdbStream = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
         if (asyncRewriteResult != null)
@@ -219,6 +246,9 @@ internal sealed class ReflectionMetadataEmitter
         {
             emitter.asyncIteratorPlans = asyncIteratorRewriteResult.Plans;
         }
+
+        emitter.debugInformation = debugInformation ?? new DebugInformationOptions();
+        emitter.pdbStream = pdbStream;
 
         emitter.EmitCore(peStream);
     }

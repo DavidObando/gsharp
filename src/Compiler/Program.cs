@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.IO;
@@ -77,6 +78,13 @@ public class Program
         var compilation = new Compilation(references, syntaxTrees.ToArray())
         {
             ImplicitSystemImport = parsed.ImplicitSystemImport,
+            DebugInformation =
+            {
+                Format = parsed.DebugFormat,
+                PdbFilePath = parsed.PdbPath,
+                SourceLinkFilePath = parsed.SourceLinkPath,
+                Deterministic = parsed.Deterministic,
+            },
         };
 
         if (parsed.OutputPath is null)
@@ -125,11 +133,33 @@ public class Program
             }
         }
 
+        // Phase 3 / ADR-0027 §7.7a: when Portable PDB is requested, open the
+        // sidecar stream alongside the PE. If the caller did not supply an
+        // explicit /pdb:<path>, default to "<PE>.pdb" (csc.exe convention).
+        // Embedded format keeps the PDB content inside the PE — no sidecar.
+        string pdbOutputPath = null;
+        if (compilation.DebugInformation.Format == DebugInformationFormat.Portable)
+        {
+            pdbOutputPath = compilation.DebugInformation.PdbFilePath;
+            if (string.IsNullOrEmpty(pdbOutputPath))
+            {
+                pdbOutputPath = Path.ChangeExtension(outputPath, ".pdb");
+                compilation.DebugInformation.PdbFilePath = pdbOutputPath;
+            }
+
+            var pdbDir = Path.GetDirectoryName(pdbOutputPath);
+            if (!string.IsNullOrEmpty(pdbDir))
+            {
+                Directory.CreateDirectory(pdbDir);
+            }
+        }
+
         EmitResult result;
         using (var peStream = File.Create(outputPath))
         using (var refStream = string.IsNullOrEmpty(refOutputPath) ? null : File.Create(refOutputPath))
+        using (var pdbStream = pdbOutputPath is null ? null : File.Create(pdbOutputPath))
         {
-            result = compilation.Emit(peStream, refStream, args.AssemblyName);
+            result = compilation.Emit(peStream, pdbStream, refStream, args.AssemblyName);
         }
 
         // Apply /nowarn, /warnaserror filtering.
@@ -149,6 +179,11 @@ public class Program
             if (!string.IsNullOrEmpty(refOutputPath))
             {
                 TryDelete(refOutputPath);
+            }
+
+            if (!string.IsNullOrEmpty(pdbOutputPath))
+            {
+                TryDelete(pdbOutputPath);
             }
 
             Console.Error.WriteLine("Failed.");
@@ -368,8 +403,58 @@ public class Program
                         break;
 
                     case "debug":
+                        result.DebugFormat = ParseDebugValue(value);
+                        result.DebugFlagSeen = true;
+                        break;
+
+                    case "debug+":
+                        // /debug+ is an alias for /debug with no value: enable portable.
+                        result.DebugFormat = DebugInformationFormat.Portable;
+                        result.DebugFlagSeen = true;
+                        break;
+
+                    case "debug-":
+                        // /debug- explicitly disables debug emit, overriding any earlier /debug.
+                        result.DebugFormat = DebugInformationFormat.None;
+                        result.DebugFlagSeen = true;
+                        break;
+
                     case "pdb":
-                        // Accepted for SDK compatibility; debug info emit is Phase 2.
+                        // /pdb:<path> sets the sidecar PDB path. Only meaningful with
+                        // a Portable format — if no /debug flag has been seen yet we
+                        // imply Portable here, matching csc.exe behaviour.
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            throw new CommandLineException("/pdb requires a path: /pdb:<file>.");
+                        }
+
+                        result.PdbPath = value;
+                        if (!result.DebugFlagSeen)
+                        {
+                            result.DebugFormat = DebugInformationFormat.Portable;
+                        }
+
+                        break;
+
+                    case "sourcelink":
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            throw new CommandLineException("/sourcelink requires a path: /sourcelink:<file>.");
+                        }
+
+                        result.SourceLinkPath = value;
+                        break;
+
+                    case "deterministic":
+                        result.Deterministic = ParseBoolFlag(value, defaultIfEmpty: true);
+                        break;
+
+                    case "deterministic+":
+                        result.Deterministic = true;
+                        break;
+
+                    case "deterministic-":
+                        result.Deterministic = false;
                         break;
 
                     case "?":
@@ -452,6 +537,25 @@ public class Program
         }
 
         return result;
+    }
+
+    private static DebugInformationFormat ParseDebugValue(string value)
+    {
+        // /debug, /debug+, /debug:portable, /debug:full → Portable
+        // /debug:embedded → Embedded
+        // /debug:none, /debug- → None
+        if (string.IsNullOrEmpty(value))
+        {
+            return DebugInformationFormat.Portable;
+        }
+
+        return value.ToLowerInvariant() switch
+        {
+            "none" => DebugInformationFormat.None,
+            "portable" or "full" or "pdbonly" => DebugInformationFormat.Portable,
+            "embedded" => DebugInformationFormat.Embedded,
+            _ => throw new CommandLineException($"Unsupported /debug value: {value}. Expected one of: none, portable, full, pdbonly, embedded."),
+        };
     }
 
     private static bool ParseBoolFlag(string value, bool defaultIfEmpty)
@@ -540,6 +644,21 @@ public class Program
 
         /// <summary>Gets the set of diagnostic IDs that should remain as warnings (from /warnaserror-:&lt;ids&gt;), overriding /warnaserror.</summary>
         public HashSet<string> WarnNotAsErrorIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets or sets the requested PDB emit format (from /debug, /debug:&lt;value&gt;, /debug+/-). Defaults to None.</summary>
+        public DebugInformationFormat DebugFormat { get; set; } = DebugInformationFormat.None;
+
+        /// <summary>Gets or sets a value indicating whether a /debug, /debug+, or /debug- switch was observed on the command line. Used so that a bare /pdb:&lt;path&gt; can default the format to Portable without overriding a later /debug-.</summary>
+        public bool DebugFlagSeen { get; set; }
+
+        /// <summary>Gets or sets the explicit sidecar PDB path (from /pdb:&lt;path&gt;). Null means "default to {OutputPath}.pdb".</summary>
+        public string PdbPath { get; set; }
+
+        /// <summary>Gets or sets the path to a Source Link JSON file (from /sourcelink:&lt;path&gt;).</summary>
+        public string SourceLinkPath { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether the emit should be deterministic (from /deterministic, /deterministic+/-).</summary>
+        public bool Deterministic { get; set; }
     }
 
     private sealed class CommandLineException : Exception

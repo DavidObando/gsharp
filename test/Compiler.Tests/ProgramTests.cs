@@ -314,4 +314,105 @@ public class ProgramTests
             try { File.Delete(sample); } catch { }
         }
     }
+
+    [Theory]
+    [InlineData("/debug", true)]
+    [InlineData("/debug+", true)]
+    [InlineData("/debug:portable", true)]
+    [InlineData("/debug:full", true)]
+    [InlineData("/debug:pdbonly", true)]
+    [InlineData("/debug:embedded", false)]
+    [InlineData("/debug:none", false)]
+    [InlineData("/debug-", false)]
+    public void Main_DebugFlag_CreatesPdbWhenPortable(string debugFlag, bool expectPdb)
+    {
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package DbgLib\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_dbg_").FullName;
+        var outPath = Path.Combine(tempDir, "DbgLib.dll");
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", debugFlag, sample });
+            Assert.Equal(0, exit);
+            Assert.True(File.Exists(outPath));
+            var pdbPath = Path.ChangeExtension(outPath, ".pdb");
+            Assert.Equal(expectPdb, File.Exists(pdbPath));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_PdbFlag_ImpliesPortableAndUsesExplicitPath()
+    {
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package DbgPath\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_pdb_").FullName;
+        var outPath = Path.Combine(tempDir, "DbgPath.dll");
+        var pdbPath = Path.Combine(tempDir, "custom-name.pdb");
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/pdb:" + pdbPath, sample });
+            Assert.Equal(0, exit);
+            Assert.True(File.Exists(outPath));
+            Assert.True(File.Exists(pdbPath), "explicit /pdb:<path> sidecar should exist");
+            // The default {PE}.pdb should NOT have been written when /pdb redirected it.
+            Assert.False(File.Exists(Path.ChangeExtension(outPath, ".pdb")));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_DebugMinusOverridesPdbFlag()
+    {
+        // /debug- should win over an earlier /pdb:<path>: no PDB written.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package DbgOff\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_off_").FullName;
+        var outPath = Path.Combine(tempDir, "DbgOff.dll");
+        var pdbPath = Path.Combine(tempDir, "DbgOff.pdb");
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/pdb:" + pdbPath, "/debug-", sample });
+            Assert.Equal(0, exit);
+            Assert.True(File.Exists(outPath));
+            Assert.False(File.Exists(pdbPath));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_UnknownDebugValue_ReturnsErrorExitCode()
+    {
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_bad_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+        using var errWriter = new StringWriter();
+        var prevErr = Console.Error;
+        Console.SetError(errWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/debug:bogus", sample });
+            Assert.NotEqual(0, exit);
+            Assert.Contains("/debug", errWriter.ToString());
+        }
+        finally
+        {
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
 }
