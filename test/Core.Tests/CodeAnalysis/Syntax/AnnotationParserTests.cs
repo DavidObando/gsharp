@@ -388,6 +388,85 @@ type Color enum {
         Assert.Empty(green.Annotations);
     }
 
+    [Fact]
+    public void Parses_Annotation_On_Struct_Field()
+    {
+        // Issue #186: each field declaration inside a `struct { ... }` body
+        // accepts a leading `@`-annotation list, which lands on
+        // FieldDeclarationSyntax.Annotations.
+        const string source = @"
+package P
+
+type Point data struct {
+    @Obsolete(""retired"")
+    X int
+    Y int
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var x = structDecl.Fields.Single(f => f.Identifier.Text == "X");
+        var y = structDecl.Fields.Single(f => f.Identifier.Text == "Y");
+
+        var annotation = Assert.Single(x.Annotations);
+        Assert.Equal("Obsolete", annotation.GetNameText());
+        Assert.Empty(y.Annotations);
+    }
+
+    [Fact]
+    public void Parses_Multiple_Annotations_On_Struct_Field()
+    {
+        // Stacked `@A @B X int` is parsed as one FieldDeclarationSyntax with
+        // two annotations; only the field the `@`-list leads gets them.
+        const string source = @"
+package P
+
+type Point struct {
+    @Obsolete
+    @Serializable
+    X int
+    Y int
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var x = structDecl.Fields.Single(f => f.Identifier.Text == "X");
+        var y = structDecl.Fields.Single(f => f.Identifier.Text == "Y");
+
+        Assert.Equal(2, x.Annotations.Length);
+        Assert.Empty(y.Annotations);
+    }
+
+    [Fact]
+    public void Parses_Annotation_On_Class_Field_With_Accessibility()
+    {
+        // Annotations precede the accessibility modifier; the parser
+        // resolves them onto the FieldDeclarationSyntax for the field that
+        // follows, not onto sibling fields.
+        const string source = @"
+package P
+
+type Box class {
+    @Obsolete
+    public Value int
+    public Other int
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var classDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var value = classDecl.Fields.Single(f => f.Identifier.Text == "Value");
+        var other = classDecl.Fields.Single(f => f.Identifier.Text == "Other");
+
+        Assert.Single(value.Annotations);
+        Assert.Empty(other.Annotations);
+    }
+
     private static System.Collections.Generic.IEnumerable<SyntaxToken> EnumerateTokens(SyntaxNode node)
     {
         if (node is SyntaxToken t)

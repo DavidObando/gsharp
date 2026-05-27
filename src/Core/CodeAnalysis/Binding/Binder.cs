@@ -668,7 +668,23 @@ public sealed class Binder
             }
 
             var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
-            fields.Add(new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline));
+            var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline);
+
+            // Issue #186 / ADR-0047 §3: bind any `@Foo` annotations attached
+            // to the field declaration with default target `field` so #175
+            // use-site diagnostics (e.g. `@Obsolete`) fire on field reads
+            // and writes, and #170-style `CustomAttribute` rows are emitted
+            // onto the FieldDef.
+            if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
+            {
+                fieldSymbol.SetAttributes(BindAttributes(
+                    fieldSyntax.Annotations,
+                    AttributeTargetKind.Field,
+                    FieldDeclarationAllowedTargets,
+                    "a field declaration"));
+            }
+
+            fields.Add(fieldSymbol);
         }
 
         if (syntax.IsData && fields.Count == 0)
@@ -3882,6 +3898,12 @@ public sealed class Binder
 
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
+            // Issue #186 / #175: bare field-name read inside a method fires
+            // GS0204 if the underlying field carries `@Obsolete`.
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitField.Field,
+                $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
             return new BoundFieldAccessExpression(
                 new BoundVariableExpression(implicitField.Receiver),
                 implicitField.StructType,
@@ -3923,6 +3945,13 @@ public sealed class Binder
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
             }
+
+            // Issue #186 / #175: bare field-name write inside a method fires
+            // GS0204 if the underlying field carries `@Obsolete`.
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitField.Field,
+                $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
 
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
             return new BoundFieldAssignmentExpression(implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
@@ -4336,6 +4365,13 @@ public sealed class Binder
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
         }
+
+        // Issue #186 / #175: dotted field write fires GS0204 if the field
+        // carries `@Obsolete`.
+        ReportObsoleteUseIfApplicable(
+            syntax.FieldIdentifier.Location,
+            field,
+            $"{structSymbol.Name}.{field.Name}");
 
         var converted = BindConversion(syntax.Value.Location, value, field.Type);
         return new BoundFieldAssignmentExpression(variable, structSymbol, field, converted);
@@ -5729,6 +5765,12 @@ public sealed class Binder
                     // Bare field name inside a method: rebind as `this.field`
                     // so chained access (`Field.Sub`) emits a load of the
                     // backing field through the `this` receiver.
+                    // Issue #186 / #175: implicit field as accessor receiver
+                    // fires GS0204 if the field carries `@Obsolete`.
+                    ReportObsoleteUseIfApplicable(
+                        leftName.IdentifierToken.Location,
+                        implicitField.Field,
+                        $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
                     receiver = new BoundFieldAccessExpression(
                         new BoundVariableExpression(implicitField.Receiver),
                         implicitField.StructType,
@@ -5937,6 +5979,9 @@ public sealed class Binder
                     {
                         if (c.TryGetField(ne.IdentifierToken.Text, out var field))
                         {
+                            // Issue #186 / #175: dotted field read fires
+                            // GS0204 if the field carries `@Obsolete`.
+                            ReportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{c.Name}.{field.Name}");
                             return new BoundFieldAccessExpression(receiver, c, field);
                         }
                     }

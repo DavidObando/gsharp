@@ -348,6 +348,63 @@ public class AttributeEmitTests
             d => d.AttributeType.FullName == "System.ObsoleteAttribute");
     }
 
+    [Fact]
+    public void Emits_Obsolete_On_Struct_Field()
+    {
+        // Issue #186: `@Obsolete` on a field declaration round-trips to a
+        // CustomAttribute row on the field's FieldDef.
+        var source = """
+            package P
+            import System
+
+            type Point data struct {
+                @Obsolete("use NewX")
+                X int
+                Y int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var point = assembly.GetTypes().Single(t => t.Name == "Point");
+        var xField = point.GetField("X", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(xField);
+        var data = xField.GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal("use NewX", arg.Value);
+
+        // Sibling field carries no attribute rows.
+        var yField = point.GetField("Y", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(yField);
+        Assert.DoesNotContain(
+            yField.GetCustomAttributesData(),
+            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+    }
+
+    [Fact]
+    public void Emits_Obsolete_On_Class_Field()
+    {
+        // Issue #186: same round-trip for class-declared fields. Verifies the
+        // EmitNestedStructTypeDef-shared field-emit path also writes the row.
+        var source = """
+            package P
+            import System
+
+            type Box class {
+                @Obsolete("retired")
+                Value int
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var box = assembly.GetTypes().Single(t => t.Name == "Box");
+        var valueField = box.GetField("Value", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(valueField);
+        Assert.Contains(
+            valueField.GetCustomAttributesData(),
+            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;

@@ -681,6 +681,12 @@ public class Parser
         {
             var startToken = Current;
 
+            // Issue #186 / ADR-0047 §3: each struct/class body member may be
+            // preceded by Kotlin-style `@Foo` annotations. For field members
+            // the default target is `field`; for method members the existing
+            // method-binder path picks them up via MemberSyntax.Annotations.
+            var memberAnnotations = ParseAnnotations();
+
             // Phase 3.B.3 sub-step 2b: method declarations inside the body.
             // Use the existing `func Name(args) Ret { body }` parser; the
             // method has no explicit receiver clause — the receiver is the
@@ -734,6 +740,7 @@ public class Parser
                 }
 
                 var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                method.WithAnnotations(memberAnnotations);
                 methods.Add(method);
             }
             else
@@ -744,7 +751,7 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                fields.Add(ParseFieldDeclaration());
+                fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
             }
 
             if (Current == startToken)
