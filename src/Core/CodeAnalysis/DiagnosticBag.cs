@@ -1262,6 +1262,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0205", $"Attribute '{name}' is reserved for compiler synthesis and cannot be written in source.");
     }
 
+    /// <summary>
+    /// Reports GS0206 when an annotation lead-in (<c>@Name</c>) precedes a
+    /// statement that does not accept annotations (only local
+    /// <c>var</c>/<c>let</c>/<c>const</c> declarations do — see ADR-0047 §2
+    /// and issue #187).
+    /// </summary>
+    /// <param name="location">The source location of the leading <c>@</c>.</param>
+    public void ReportAnnotationsNotAllowedOnStatement(TextLocation location)
+    {
+        Report(location, "GS0206", "Annotations are only allowed on variable declarations (var/let/const), not on this statement.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

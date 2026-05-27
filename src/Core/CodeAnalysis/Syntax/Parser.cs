@@ -186,6 +186,19 @@ public class Parser
              Current.Kind == SyntaxKind.ConstKeyword))
         {
             var declaration = ParseVariableDeclaration(accessibilityModifier);
+
+            // Issue #187: annotations on a top-level `var`/`let`/`const`
+            // belong to the variable declaration itself (default target
+            // `field` per ADR-0047 §2), not to the wrapping GlobalStatement.
+            // Forward the parsed annotations onto the declaration and clear
+            // the local so the trailing `member.WithAnnotations(annotations)`
+            // does not double-attach.
+            if (declaration is VariableDeclarationSyntax variableDeclaration)
+            {
+                variableDeclaration.WithAnnotations(annotations);
+                annotations = ImmutableArray<AnnotationSyntax>.Empty;
+            }
+
             member = new GlobalStatementSyntax(syntaxTree, declaration);
         }
         else
@@ -202,6 +215,19 @@ public class Parser
             }
 
             member = ParseGlobalStatement();
+
+            // Issue #187: a top-level `var`/`let`/`const` without an
+            // accessibility modifier is parsed through ParseGlobalStatement →
+            // ParseStatement, which has no awareness of member-level
+            // annotations. Forward them onto the inner variable declaration
+            // so the binder picks them up via VariableDeclarationSyntax.
+            if (!annotations.IsDefaultOrEmpty &&
+                member is GlobalStatementSyntax wrappingGlobal &&
+                wrappingGlobal.Statement is VariableDeclarationSyntax forwardingDeclaration)
+            {
+                forwardingDeclaration.WithAnnotations(annotations);
+                annotations = ImmutableArray<AnnotationSyntax>.Empty;
+            }
         }
 
         return member.WithAnnotations(annotations);
@@ -1442,6 +1468,30 @@ public class Parser
 
     private StatementSyntax ParseStatement()
     {
+        // Issue #187 / ADR-0047 §2: a local `var`/`let`/`const` can be
+        // preceded by Kotlin-style `@` annotations (default target `field`).
+        // Other statement kinds do not accept annotations — for those we
+        // still parse the leading `@...` (to drive a normal binder
+        // diagnostic against the synthesized declaration) but fall through
+        // to the regular dispatch and drop the annotations on the floor
+        // after reporting via ReportAnnotationsNotAllowedOnStatement.
+        ImmutableArray<AnnotationSyntax> leadingAnnotations = ImmutableArray<AnnotationSyntax>.Empty;
+        if (Current.Kind == SyntaxKind.AtToken)
+        {
+            leadingAnnotations = ParseAnnotations();
+            if (Current.Kind != SyntaxKind.ConstKeyword &&
+                Current.Kind != SyntaxKind.LetKeyword &&
+                Current.Kind != SyntaxKind.VarKeyword)
+            {
+                if (leadingAnnotations.Length > 0)
+                {
+                    Diagnostics.ReportAnnotationsNotAllowedOnStatement(leadingAnnotations[0].AtToken.Location);
+                }
+
+                leadingAnnotations = ImmutableArray<AnnotationSyntax>.Empty;
+            }
+        }
+
         switch (Current.Kind)
         {
             case SyntaxKind.OpenBraceToken:
@@ -1449,7 +1499,14 @@ public class Parser
             case SyntaxKind.ConstKeyword:
             case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
-                return ParseVariableDeclaration();
+                var declaration = ParseVariableDeclaration();
+                if (declaration is VariableDeclarationSyntax variableDeclaration &&
+                    !leadingAnnotations.IsDefaultOrEmpty)
+                {
+                    variableDeclaration.WithAnnotations(leadingAnnotations);
+                }
+
+                return declaration;
             case SyntaxKind.IfKeyword:
                 return ParseIfStatement();
             case SyntaxKind.ForKeyword:

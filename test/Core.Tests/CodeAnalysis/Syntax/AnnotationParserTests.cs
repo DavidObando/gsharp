@@ -253,6 +253,88 @@ type Point struct {
         Assert.Equal(SyntaxKind.AtToken, token.Kind);
     }
 
+    [Fact]
+    public void Parses_Annotation_On_Top_Level_Variable_With_Accessibility()
+    {
+        // Issue #187: a `@`-led annotation precedes `public var` at top
+        // level and lands on the underlying VariableDeclarationSyntax, not
+        // on the wrapping GlobalStatementSyntax.
+        const string source = @"
+package P
+
+@Obsolete(""dead"")
+public var counter = 0
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var member = tree.Root.Members.OfType<GlobalStatementSyntax>().Single();
+        var decl = Assert.IsType<VariableDeclarationSyntax>(member.Statement);
+        var annotation = Assert.Single(decl.Annotations);
+        Assert.Equal("Obsolete", annotation.GetNameText());
+        Assert.Empty(member.Annotations);
+    }
+
+    [Fact]
+    public void Parses_Annotation_On_Top_Level_Variable_Without_Accessibility()
+    {
+        // Issue #187: same as above but with no accessibility modifier;
+        // ParseGlobalStatement → ParseStatement path must still forward the
+        // member-level annotations onto the VariableDeclarationSyntax.
+        const string source = @"
+package P
+
+@Obsolete
+let limit = 10
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var member = tree.Root.Members.OfType<GlobalStatementSyntax>().Single();
+        var decl = Assert.IsType<VariableDeclarationSyntax>(member.Statement);
+        Assert.Single(decl.Annotations);
+        Assert.Empty(member.Annotations);
+    }
+
+    [Fact]
+    public void Parses_Annotation_On_Local_Variable_Declaration()
+    {
+        // Issue #187: locals accept the same `@` lead-in surface syntax.
+        const string source = @"
+package P
+
+func Main() {
+    @Obsolete(""dead local"")
+    let x = 1
+    _ = x
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        var block = Assert.IsType<BlockStatementSyntax>(fn.Body);
+        var decl = block.Statements.OfType<VariableDeclarationSyntax>().Single();
+        var annotation = Assert.Single(decl.Annotations);
+        Assert.Equal("Obsolete", annotation.GetNameText());
+    }
+
+    [Fact]
+    public void Reports_GS0206_On_Annotation_Before_Non_Variable_Statement()
+    {
+        // Issue #187: `@` before a non-variable statement reports GS0206.
+        const string source = @"
+package P
+
+func Main() {
+    @Obsolete
+    return
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0206");
+    }
+
     private static System.Collections.Generic.IEnumerable<SyntaxToken> EnumerateTokens(SyntaxNode node)
     {
         if (node is SyntaxToken t)

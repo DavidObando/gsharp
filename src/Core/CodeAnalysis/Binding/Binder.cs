@@ -50,6 +50,17 @@ public sealed class Binder
     private static readonly ImmutableHashSet<AttributeTargetKind> FieldDeclarationAllowedTargets =
         ImmutableHashSet.Create(AttributeTargetKind.Field);
 
+    /// <summary>
+    /// Targets permitted on a <c>var</c>/<c>let</c>/<c>const</c> variable
+    /// declaration. ADR-0047 §2 assigns the default target <c>field</c> to
+    /// these declarations (both at top level — where the variable becomes a
+    /// CLR static field — and in local scope — where the attribute carries
+    /// compiler-recognised semantics like <c>@Obsolete</c> for use-site
+    /// diagnostics).
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> VariableDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Field);
+
     private FunctionSymbol function;
 
     private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
@@ -1656,6 +1667,25 @@ public sealed class Binder
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
         var convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+
+        // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach
+        // them to the variable symbol so #175 use-site diagnostics
+        // (e.g. `@Obsolete`) fire when the variable is read or written.
+        // Globals (`GlobalVariableSymbol`) will eventually round-trip these
+        // to CLR `CustomAttribute` rows on their backing static field; for
+        // locals the attributes carry compiler-recognised semantics only.
+        if (variable != null && !syntax.Annotations.IsDefaultOrEmpty)
+        {
+            var positionDescription = variable is GlobalVariableSymbol
+                ? "a top-level variable declaration"
+                : "a local variable declaration";
+            var boundAttrs = BindAttributes(
+                syntax.Annotations,
+                AttributeTargetKind.Field,
+                VariableDeclarationAllowedTargets,
+                positionDescription);
+            variable.SetAttributes(boundAttrs);
+        }
 
         return new BoundVariableDeclaration(variable, convertedInitializer);
     }

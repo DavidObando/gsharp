@@ -405,6 +405,107 @@ type Point struct {
         Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, diag.Severity);
     }
 
+    [Fact]
+    public void Attaches_Attributes_To_Global_Variable_Symbol()
+    {
+        // Issue #187: a top-level `var`/`let`/`const` accepts annotations
+        // (default target `field`). Verify the attributes flow onto the
+        // GlobalVariableSymbol regardless of whether an accessibility
+        // modifier is present.
+        var source = """
+            @Obsolete("retired")
+            let limit = 10
+
+            @Obsolete
+            public var counter = 0
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Empty(GetBinderDiagnostics(globalScope));
+
+        var limit = globalScope.Variables.Single(v => v.Name == "limit");
+        var counter = globalScope.Variables.Single(v => v.Name == "counter");
+
+        Assert.Single(limit.Attributes);
+        Assert.Equal("System.ObsoleteAttribute", limit.Attributes[0].AttributeType.Name);
+        Assert.Equal(AttributeTargetKind.Field, limit.Attributes[0].Target);
+
+        Assert.Single(counter.Attributes);
+        Assert.Equal(AttributeTargetKind.Field, counter.Attributes[0].Target);
+    }
+
+    [Fact]
+    public void Attaches_Attributes_To_Local_Variable_Symbol_For_Use_Site_Diagnostics()
+    {
+        // Issue #187: locals also accept annotations; the binder must
+        // populate the LocalVariableSymbol.Attributes slot so #175 use-site
+        // diagnostics fire on subsequent reads / writes.
+        var source = """
+            func Main() {
+                @Obsolete("dead local")
+                let x = 1
+                let y = x + 1
+                _ = y
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("x", diag.Message);
+        Assert.Contains("dead local", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Fires_On_Global_Variable_Read_And_Write()
+    {
+        // Issue #187 + #175: every read or write of an `@Obsolete` global
+        // surfaces GS0204.
+        var source = """
+            @Obsolete("dead global")
+            var counter = 0
+
+            func Main() {
+                counter = counter + 1
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var obsoleteDiags = program.Diagnostics.Where(d => d.Id == "GS0204").ToList();
+        Assert.Equal(2, obsoleteDiags.Count);
+        Assert.All(obsoleteDiags, d => Assert.Contains("counter", d.Message));
+        Assert.All(obsoleteDiags, d => Assert.Contains("dead global", d.Message));
+    }
+
+    [Fact]
+    public void Reports_Invalid_Use_Site_Target_On_Variable()
+    {
+        // `@method:` is not a valid target on a variable declaration.
+        var source = """
+            @method:Obsolete
+            let x = 1
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
+    }
+
+    [Fact]
+    public void Reports_Annotations_Not_Allowed_On_Non_Variable_Statement()
+    {
+        // Issue #187: an `@` lead-in on a statement that is not a variable
+        // declaration surfaces GS0206.
+        var source = """
+            func Main() {
+                @Obsolete
+                return
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0206");
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
