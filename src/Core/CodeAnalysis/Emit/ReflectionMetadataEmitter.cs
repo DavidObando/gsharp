@@ -6548,6 +6548,17 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitBinary(b);
                     break;
                 case BoundCallExpression call:
+                    // ADR-0047 §6 / issue #176: a [Conditional("SYMBOL")] call
+                    // whose symbol is undefined is elided at the call site —
+                    // emit no IL for arguments or the call itself. The call
+                    // is a no-op of type void; the enclosing
+                    // BoundExpressionStatement already skips the Pop because
+                    // call.Type == Void.
+                    if (call.IsConditionalElided)
+                    {
+                        break;
+                    }
+
                     for (int i = 0; i < call.Arguments.Length; i++)
                     {
                         var arg = call.Arguments[i];

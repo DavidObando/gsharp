@@ -24,6 +24,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation;
 public class Compilation
 {
     private BoundGlobalScope globalScope;
+    private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Compilation"/> class.
@@ -51,6 +52,7 @@ public class Compilation
         SyntaxTrees = syntaxTrees.ToImmutableArray();
         References = references ?? previous?.References;
         ImplicitSystemImport = previous?.ImplicitSystemImport ?? true;
+        PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
     }
 
     /// <summary>
@@ -76,6 +78,25 @@ public class Compilation
     public bool ImplicitSystemImport { get; set; }
 
     /// <summary>
+    /// Gets or sets the active preprocessor symbol set used by
+    /// <c>[Conditional("SYMBOL")]</c> call-site elision (ADR-0047 §6 /
+    /// issue #176). A call to a function marked
+    /// <c>[Conditional("SYMBOL")]</c> is elided when *none* of the named
+    /// symbols is in this set; if any named symbol is present, the call is
+    /// emitted normally. Defaults to <see cref="ImmutableHashSet{T}.Empty"/>
+    /// — equivalent to "no preprocessor symbols defined" — so
+    /// conditional methods are elided by default unless the embedder opts
+    /// in. Setting <c>null</c> is normalised to the empty set. Inherits
+    /// from <see cref="Previous"/> when chained, matching the inheritance
+    /// shape of <see cref="ImplicitSystemImport"/>.
+    /// </summary>
+    public ImmutableHashSet<string> PreprocessorSymbols
+    {
+        get => preprocessorSymbols;
+        set => preprocessorSymbols = value ?? ImmutableHashSet<string>.Empty;
+    }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -84,7 +105,7 @@ public class Compilation
         {
             if (globalScope == null)
             {
-                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport);
+                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 
