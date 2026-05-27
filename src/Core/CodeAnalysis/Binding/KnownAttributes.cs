@@ -52,6 +52,33 @@ internal static class KnownAttributes
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Runtime.InteropServices.DllImportAttribute"/>. ADR-0047 §6
+    /// recognises <c>[DllImport]</c> but only on declarations whose body marker is
+    /// <c>extern</c>, which is post-v1.0; for v1.0 the binder reports
+    /// <c>GS0211</c> (<c>ERR_DllImportNotSupported</c>) on any use in source.
+    /// Recognition is type-identity based so renaming or shadowing the
+    /// source-level name cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[DllImport]</c>.</returns>
+    public static bool IsDllImport(Type clrType)
+    {
+        return clrType == typeof(System.Runtime.InteropServices.DllImportAttribute);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Runtime.InteropServices.DllImportAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[DllImport]</c>.</returns>
+    public static bool IsDllImport(BoundAttribute attribute)
+    {
+        return IsDllImport(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
     /// <see cref="System.Runtime.CompilerServices.EnumeratorCancellationAttribute"/>.
     /// Recognition is type-identity based (ADR-0047 §6 / ADR-0040): the
     /// resolved CLR type — not the source name — selects the behaviour, so a

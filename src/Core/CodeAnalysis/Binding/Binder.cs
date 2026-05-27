@@ -6951,6 +6951,17 @@ public sealed class Binder
             return null;
         }
 
+        // 3a.1) Issue #179 / ADR-0047 §6: recognise [DllImport] but reject it in
+        // v1.0. The attribute is only valid on declarations whose body marker is
+        // `extern`, which (together with the underlying P/Invoke metadata emit)
+        // is a post-v1.0 feature. Type-identity recognition prevents aliasing
+        // or shadowing the source-level name from bypassing the rule.
+        if (KnownAttributes.IsDllImport(attrType.ClrType))
+        {
+            Diagnostics.ReportDllImportNotSupported(GetAnnotationNameLocation(annotation), nameText);
+            return null;
+        }
+
         // 3b) Issue #177 / ADR-0047 §6: enforce [AttributeUsage(ValidOn)].
         // For the `Type` target the actual CLR target depends on the kind
         // of type being declared (class/struct/enum/interface), which the

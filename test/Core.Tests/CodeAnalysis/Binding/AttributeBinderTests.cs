@@ -273,6 +273,45 @@ type Point struct {
     }
 
     [Fact]
+    public void DllImport_Attribute_Is_Rejected_In_V1()
+    {
+        // Issue #179 / ADR-0047 §6: v1.0 recognises [DllImport] (suffix rule
+        // resolves @DllImport to System.Runtime.InteropServices.DllImportAttribute)
+        // but rejects it because P/Invoke + extern function bodies are post-v1.0.
+        var source = """
+            import System.Runtime.InteropServices
+
+            @DllImport("user32.dll")
+            func MessageBox() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        var diag = Assert.Single(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
+        Assert.Contains("DllImport", diag.Message);
+
+        var fn = globalScope.Functions.Single(f => f.Name == "MessageBox");
+        Assert.Empty(fn.Attributes);
+    }
+
+    [Fact]
+    public void DllImport_Attribute_Is_Rejected_Even_With_Attribute_Suffix()
+    {
+        // Type-identity check must catch the explicit `DllImportAttribute` name
+        // as well, not just the suffix-resolved short form.
+        var source = """
+            import System.Runtime.InteropServices
+
+            @DllImportAttribute("user32.dll")
+            func MessageBox() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
+    }
+
+    [Fact]
     public void Obsolete_Warning_Is_Reported_At_Class_Constructor_Call()
     {
         // #175: extend GS0204 to primary-constructor calls on classes.
