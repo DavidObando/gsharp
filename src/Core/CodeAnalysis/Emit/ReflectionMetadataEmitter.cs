@@ -2730,7 +2730,23 @@ internal sealed class ReflectionMetadataEmitter
         // so we can attach a CustomAttribute to each one. The first emitted
         // ParameterHandle becomes the MethodDef.parameterList anchor; if the
         // function has no parameters we leave it pointing at the next ordinal.
+        //
+        // Issue #172: when the function carries any `@return:` annotations,
+        // emit a Parameter row with sequence number 0 (ECMA-335 II.22.33) in
+        // front of the source-parameter rows so we can attach return-target
+        // CustomAttribute rows to it.
         var firstParamHandle = this.NextParameterHandle();
+        var hasReturnAttributes = !function.Attributes.IsDefaultOrEmpty
+            && function.Attributes.Any(a => a.Target == AttributeTargetKind.Return);
+        ParameterHandle? returnParamHandle = null;
+        if (hasReturnAttributes)
+        {
+            returnParamHandle = this.metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: default(StringHandle),
+                sequenceNumber: 0);
+        }
+
         var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle)>();
         var sequenceNumber = 1;
         foreach (var p in function.Parameters)
@@ -2757,8 +2773,14 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
-        // emitted Parameter row. Return-target attributes still pending.
+        // emitted Parameter row. Issue #172: return-target annotations attach
+        // to the synthesised sequence-0 Parameter row.
         this.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
+        if (returnParamHandle is { } retHandle)
+        {
+            this.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return);
+        }
+
         foreach (var (paramSym, paramHandle) in paramHandles)
         {
             this.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
