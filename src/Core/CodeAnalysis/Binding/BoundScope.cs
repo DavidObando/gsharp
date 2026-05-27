@@ -332,6 +332,15 @@ public sealed class BoundScope
             ? ImmutableArray<InterfaceSymbol>.Empty
             : typeAliases.Values.OfType<InterfaceSymbol>().ToImmutableArray();
 
+    /// <summary>
+    /// Gets the set of declared user-defined enum types in this scope chain (#193).
+    /// </summary>
+    /// <returns>The enums in declaration order.</returns>
+    public ImmutableArray<EnumSymbol> GetDeclaredEnums()
+        => typeAliases == null
+            ? ImmutableArray<EnumSymbol>.Empty
+            : typeAliases.Values.OfType<EnumSymbol>().ToImmutableArray();
+
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {
