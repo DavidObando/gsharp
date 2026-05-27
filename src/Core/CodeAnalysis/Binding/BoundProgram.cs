@@ -78,6 +78,34 @@ public sealed class BoundProgram
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
         ImmutableArray<EnumSymbol> enums)
+        : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, structs, interfaces, enums, ImmutableArray<GlobalVariableSymbol>.Empty)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundProgram"/> class with declared globals (#191).
+    /// </summary>
+    /// <param name="entryPointPackage">The entry-point package; its name is exposed via <see cref="PackageName"/> for back-compat.</param>
+    /// <param name="packages">All distinct packages in this program, in declaration order.</param>
+    /// <param name="diagnostics">The diagnostics.</param>
+    /// <param name="functions">The functions. Each <see cref="FunctionSymbol"/> key carries its owning package via <see cref="FunctionSymbol.Package"/>.</param>
+    /// <param name="entryPoint">The entry-point function, or null if the compilation is a library.</param>
+    /// <param name="statement">The statements.</param>
+    /// <param name="structs">User-defined struct types declared in this program, grouped by declaring package.</param>
+    /// <param name="interfaces">User-defined interface types declared in this program (Phase 3.B.4).</param>
+    /// <param name="enums">User-defined enum types declared in this program (#193).</param>
+    /// <param name="globals">User-declared top-level <c>var</c>/<c>let</c>/<c>const</c> declarations (#191).</param>
+    public BoundProgram(
+        PackageSymbol entryPointPackage,
+        ImmutableArray<PackageSymbol> packages,
+        ImmutableArray<Diagnostic> diagnostics,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
+        FunctionSymbol entryPoint,
+        BoundBlockStatement statement,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces,
+        ImmutableArray<EnumSymbol> enums,
+        ImmutableArray<GlobalVariableSymbol> globals)
     {
         EntryPointPackage = entryPointPackage;
         Packages = packages;
@@ -88,6 +116,7 @@ public sealed class BoundProgram
         Structs = structs;
         Interfaces = interfaces;
         Enums = enums;
+        Globals = globals;
     }
 
     /// <summary>
@@ -172,4 +201,13 @@ public sealed class BoundProgram
     /// Each enum carries its declaring package via <see cref="EnumSymbol.PackageName"/>.
     /// </summary>
     public ImmutableArray<EnumSymbol> Enums { get; }
+
+    /// <summary>
+    /// Gets the user-declared top-level <c>var</c>/<c>let</c>/<c>const</c>
+    /// declarations (#191). Each is emitted as a static <c>FieldDef</c> on the
+    /// entry-point package's <c>&lt;Program&gt;</c> TypeDef so attribute
+    /// metadata (#187) can attach to a real field row and so the global is
+    /// observable from other assemblies.
+    /// </summary>
+    public ImmutableArray<GlobalVariableSymbol> Globals { get; }
 }

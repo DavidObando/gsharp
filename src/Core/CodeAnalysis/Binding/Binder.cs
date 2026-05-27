@@ -403,7 +403,16 @@ public sealed class Binder
             functionBodies[globalScope.EntryPoint] = statement;
         }
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums);
+        // #191: surface user-declared top-level var/let/const so the emitter can
+        // round-trip them as CLR static fields on <Program>. Filter out
+        // compiler-synthesized temps (e.g. tuple-destructuring "<>m_..." vars)
+        // by the C#-style "<>" name prefix — those remain local-slot scoped.
+        var globals = globalScope.Variables
+            .OfType<GlobalVariableSymbol>()
+            .Where(g => !g.Name.StartsWith("<>"))
+            .ToImmutableArray();
+
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals);
     }
 
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references)

@@ -73,6 +73,12 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<EnumSymbol, TypeDefinitionHandle> enumTypeDefs = new Dictionary<EnumSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<EnumMemberSymbol, FieldDefinitionHandle> enumMemberFieldDefs = new Dictionary<EnumMemberSymbol, FieldDefinitionHandle>();
 
+    // Issue #191: each user-declared top-level var/let/const becomes a static
+    // FieldDef on the entry-point package's <Program> TypeDef. Mapping symbol
+    // → field handle so EmitLoadVariable/EmitStoreVariable can route through
+    // ldsfld/stsfld instead of allocating a local slot.
+    private readonly Dictionary<GlobalVariableSymbol, FieldDefinitionHandle> globalFieldDefs = new Dictionary<GlobalVariableSymbol, FieldDefinitionHandle>();
+
     // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
@@ -375,7 +381,20 @@ internal sealed class ReflectionMetadataEmitter
             nextFieldRow += 1 + e.Members.Length;
         }
 
+        // Issue #191: user-declared top-level var/let/const live as static
+        // fields on the entry-point package's <Program> TypeDef. Reserve their
+        // field rows immediately before <Program>'s fieldList pointer so the
+        // existing monotone constraint holds and programFirstFieldRow points
+        // at the first global field (when any). SM struct fields are planned
+        // after these globals so SM field rows remain strictly greater than
+        // <Program>'s fieldList pointer.
+        var globals = this.program.Globals;
         int programFirstFieldRow = nextFieldRow;
+        var globalFieldRows = new Dictionary<GlobalVariableSymbol, int>();
+        foreach (var g in globals)
+        {
+            globalFieldRows[g] = nextFieldRow++;
+        }
 
         // SM types get field rows after <Program>'s fieldList pointer.
         foreach (var s in smClasses)
@@ -638,15 +657,52 @@ internal sealed class ReflectionMetadataEmitter
         // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
         // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
         var programTypeDefHandles = new Dictionary<PackageSymbol, TypeDefinitionHandle>();
+
+        // Issue #191: emit global FieldDefs into the entry-point package's
+        // <Program> field range. The entry-point package's <Program> TypeDef
+        // is emitted first so its fieldList (= start of globals) is strictly
+        // less than every subsequent <Program>'s fieldList (= past globals).
+        var globalsHostPkg = entryPointPackage
+            ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
+        if (globals.Length > 0 && globalsHostPkg != null && packages.Contains(globalsHostPkg))
+        {
+            // Globals whose type is a constructed generic (e.g. Box[int]) need
+            // the alias map populated so EncodeTypeSymbol can resolve the
+            // constructed StructSymbol to its definition's TypeDef. We call
+            // RegisterConstructedTypeAliases again later (line 798) to pick
+            // up ctor handles populated during the rest of Phase A.
+            this.RegisterConstructedTypeAliases();
+            this.EmitGlobalFieldDefs(globals);
+
+            var programHandle = this.metadata.AddTypeDefinition(
+                attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
+                    | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
+                @namespace: this.metadata.GetOrAddString(globalsHostPkg.Name),
+                name: this.metadata.GetOrAddString("<Program>"),
+                baseType: this.objectTypeRef,
+                fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
+                methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[globalsHostPkg]));
+            programTypeDefHandles[globalsHostPkg] = programHandle;
+        }
+
         foreach (var pkg in packages)
         {
+            if (programTypeDefHandles.ContainsKey(pkg))
+            {
+                continue;
+            }
+
+            // Packages without globals (or non-entry-point packages when globals
+            // were emitted above) point their fieldList past the global field
+            // range so the monotone <Program> fieldList constraint holds.
+            var fieldListRow = programFirstFieldRow + globals.Length;
             var programHandle = this.metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
                 @namespace: this.metadata.GetOrAddString(pkg.Name),
                 name: this.metadata.GetOrAddString("<Program>"),
                 baseType: this.objectTypeRef,
-                fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
+                fieldList: MetadataTokens.FieldDefinitionHandle(fieldListRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[pkg]));
             programTypeDefHandles[pkg] = programHandle;
         }
@@ -1197,6 +1253,42 @@ internal sealed class ReflectionMetadataEmitter
         for (int i = 0; i < enumSym.Members.Length; i++)
         {
             this.EmitUserAttributes(memberFieldHandles[i], enumSym.Members[i], AttributeTargetKind.Field);
+        }
+    }
+
+    /// <summary>
+    /// Issue #191: emits one static <c>FieldDef</c> per user-declared top-level
+    /// <c>var</c>/<c>let</c>/<c>const</c> on the entry-point package's
+    /// <c>&lt;Program&gt;</c> TypeDef. Initialization stays in the entry-point
+    /// method body and runs via <c>stsfld</c> as each declaration is reached,
+    /// preserving existing side-effect ordering (e.g. a top-level
+    /// <c>let ch = make(chan int)</c> followed by sends/receives).
+    /// </summary>
+    /// <remarks>
+    /// The <c>InitOnly</c> flag is intentionally omitted for <c>let</c>/<c>const</c>
+    /// globals: enforcing it would require moving initialization into a
+    /// <c>.cctor</c>, which would reorder execution relative to interleaved
+    /// top-level statements. Tracking InitOnly is left as a #191 follow-up.
+    /// </remarks>
+    private void EmitGlobalFieldDefs(ImmutableArray<GlobalVariableSymbol> globals)
+    {
+        foreach (var g in globals)
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), g.Type);
+
+            var attrs = MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
+
+            var handle = this.metadata.AddFieldDefinition(
+                attributes: attrs,
+                name: this.metadata.GetOrAddString(g.Name),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+
+            this.globalFieldDefs[g] = handle;
+
+            // Route any @-annotations bound by #187 onto the FieldDef row so
+            // attributes like @Obsolete round-trip into CustomAttribute rows.
+            this.EmitUserAttributes(handle, g, AttributeTargetKind.Field);
         }
     }
 
@@ -2914,7 +3006,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static void CollectLocalsAndLabels(
+    private void CollectLocalsAndLabels(
         BoundBlockStatement body,
         FunctionSymbol function,
         Dictionary<VariableSymbol, int> locals,
@@ -2933,9 +3025,9 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         InstructionEncoder il)
     {
-        CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
         CollectBlockExpressionLocals(body, locals, localTypes);
-        CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
 
         // Phase B: pattern switch statements bring three classes of locals
         // into the host method:
@@ -4511,7 +4603,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static void CollectStatements(
+    private void CollectStatements(
         ImmutableArray<BoundStatement> statements,
         FunctionSymbol function,
         Dictionary<VariableSymbol, int> locals,
@@ -4528,6 +4620,14 @@ internal sealed class ReflectionMetadataEmitter
                 switch (s)
                 {
                     case BoundVariableDeclaration decl:
+                        // Issue #191: a GlobalVariableSymbol with a registered
+                        // FieldDef stores into <Program>'s static field via
+                        // stsfld; do not also allocate a local slot for it.
+                        if (decl.Variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+                        {
+                            break;
+                        }
+
                         if (!locals.ContainsKey(decl.Variable))
                         {
                             locals[decl.Variable] = localTypes.Count;
@@ -4543,7 +4643,7 @@ internal sealed class ReflectionMetadataEmitter
 
                         break;
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
-                        CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                     case BoundSelectStatement sel:
                         foreach (var arm in sel.Cases)
@@ -4556,13 +4656,13 @@ internal sealed class ReflectionMetadataEmitter
 
                             if (arm.Body is BoundBlockStatement armBlock)
                             {
-                                CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                             }
                         }
 
                         break;
                     case BoundTryStatement t:
-                        CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
                             if (!locals.ContainsKey(clause.Variable))
@@ -4571,17 +4671,17 @@ internal sealed class ReflectionMetadataEmitter
                                 localTypes.Add(clause.Variable.Type);
                             }
 
-                            CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                 }
             }
@@ -4604,33 +4704,33 @@ internal sealed class ReflectionMetadataEmitter
 
                         break;
                     case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
-                        CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                     case BoundSelectStatement sel:
                         foreach (var arm in sel.Cases)
                         {
                             if (arm.Body is BoundBlockStatement armBlock)
                             {
-                                CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                             }
                         }
 
                         break;
                     case BoundTryStatement t:
-                        CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
-                            CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         break;
                 }
             }
@@ -7230,6 +7330,17 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Issue #191: top-level globals were emitted as static fields on
+            // <Program>; load via ldsfld so cross-method access (and reads
+            // from other assemblies) share storage.
+            if (variable is GlobalVariableSymbol gv
+                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+            {
+                this.il.OpCode(ILOpCode.Ldsfld);
+                this.il.Token(fieldHandle);
+                return;
+            }
+
             throw new InvalidOperationException(
                 $"Variable '{variable.Name}' has no local slot or parameter index in the current method.");
         }
@@ -7245,6 +7356,17 @@ internal sealed class ReflectionMetadataEmitter
             if (this.locals.TryGetValue(variable, out var slot))
             {
                 this.il.StoreLocal(slot);
+                return;
+            }
+
+            // Issue #191: top-level globals store via stsfld into their backing
+            // <Program> static field (initialized in declaration order from
+            // the entry-point method body).
+            if (variable is GlobalVariableSymbol gv
+                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+            {
+                this.il.OpCode(ILOpCode.Stsfld);
+                this.il.Token(fieldHandle);
                 return;
             }
 
