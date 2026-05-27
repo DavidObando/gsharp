@@ -314,6 +314,40 @@ public class AttributeEmitTests
             d => d.AttributeType.FullName == "System.ObsoleteAttribute");
     }
 
+    [Fact]
+    public void Emits_Attribute_On_Return_Parameter()
+    {
+        // Issue #172 / ADR-0047 §3: `@return:` annotations attach to the
+        // synthesised sequence-0 Parameter row (ECMA-335 II.22.33), surfacing
+        // through `MethodInfo.ReturnParameter.GetCustomAttributesData()`.
+        var source = """
+            package P
+            import System
+
+            @return:Obsolete("old return")
+            func Foo() int {
+                return 0
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var foo = program.GetMethod("Foo", BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(foo);
+
+        var returnParam = foo.ReturnParameter;
+        Assert.NotNull(returnParam);
+        var data = returnParam.GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal("old return", arg.Value);
+
+        // The MethodDef itself should not carry the return-target attribute.
+        Assert.DoesNotContain(
+            foo.GetCustomAttributesData(),
+            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;
