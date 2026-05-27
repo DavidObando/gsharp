@@ -1231,6 +1231,37 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0203", $"Class is tagged @Attribute and cannot also declare an explicit base class '{baseName}'. The @Attribute sugar implies ': System.Attribute'.");
     }
 
+    /// <summary>
+    /// Reports a reference to a symbol marked with
+    /// <see cref="System.ObsoleteAttribute"/>. The diagnostic is a
+    /// warning by default; if the attribute's <c>error</c> flag is set
+    /// it is reported as an error (ADR-0047 §6).
+    /// </summary>
+    /// <param name="location">The source location of the use site.</param>
+    /// <param name="name">The display name of the obsolete symbol.</param>
+    /// <param name="message">The optional user message; may be <c>null</c>.</param>
+    /// <param name="isError">When <c>true</c>, the diagnostic is reported as an error.</param>
+    public void ReportObsoleteUse(TextLocation location, string name, string message, bool isError)
+    {
+        var text = string.IsNullOrEmpty(message)
+            ? $"'{name}' is obsolete."
+            : $"'{name}' is obsolete: '{message}'.";
+        Report(location, "GS0204", text, isError ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// Reports a user-written annotation that names an attribute the
+    /// compiler reserves for its own synthesis (ADR-0047 §6: the
+    /// <c>Extension</c>, <c>AsyncStateMachine</c>, <c>CompilerGenerated</c>,
+    /// <c>Nullable</c>, <c>NullableContext</c> family).
+    /// </summary>
+    /// <param name="location">The source location of the annotation.</param>
+    /// <param name="name">The attribute name as written in source.</param>
+    public void ReportAttributeReservedForCompiler(TextLocation location, string name)
+    {
+        Report(location, "GS0205", $"Attribute '{name}' is reserved for compiler synthesis and cannot be written in source.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
