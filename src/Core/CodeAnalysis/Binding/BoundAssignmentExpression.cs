@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,9 +15,11 @@ public sealed class BoundAssignmentExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAssignmentExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
     /// <param name="expression">The expression.</param>
-    public BoundAssignmentExpression(VariableSymbol variable, BoundExpression expression)
+    public BoundAssignmentExpression(SyntaxNode syntax, VariableSymbol variable, BoundExpression expression)
+        : base(syntax)
     {
         Variable = variable;
         Expression = expression;

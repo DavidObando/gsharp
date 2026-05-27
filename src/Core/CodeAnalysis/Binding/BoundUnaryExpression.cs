@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,9 +15,11 @@ public sealed class BoundUnaryExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundUnaryExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="op">The bound unary operator.</param>
     /// <param name="operand">The bound expression.</param>
-    public BoundUnaryExpression(BoundUnaryOperator op, BoundExpression operand)
+    public BoundUnaryExpression(SyntaxNode syntax, BoundUnaryOperator op, BoundExpression operand)
+        : base(syntax)
     {
         Op = op;
         Operand = operand;

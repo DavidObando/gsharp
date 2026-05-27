@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,8 +16,10 @@ public sealed class BoundAddressOfExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAddressOfExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The lvalue operand whose address is being taken.</param>
-    public BoundAddressOfExpression(BoundExpression operand)
+    public BoundAddressOfExpression(SyntaxNode syntax, BoundExpression operand)
+        : base(syntax)
     {
         Operand = operand;
         Type = ByRefTypeSymbol.Get(operand.Type);

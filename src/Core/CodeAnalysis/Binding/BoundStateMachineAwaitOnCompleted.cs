@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -17,10 +18,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundStateMachineAwaitOnCompleted : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundStateMachineAwaitOnCompleted"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="awaiterLocal">The local variable holding the awaiter.</param>
     /// <param name="awaiterClrType">The CLR type of the awaiter.</param>
     /// <param name="useCritical">Whether to use <c>AwaitUnsafeOnCompleted</c> (true) or <c>AwaitOnCompleted</c> (false).</param>
-    public BoundStateMachineAwaitOnCompleted(VariableSymbol awaiterLocal, Type awaiterClrType, bool useCritical)
+    public BoundStateMachineAwaitOnCompleted(SyntaxNode syntax, VariableSymbol awaiterLocal, Type awaiterClrType, bool useCritical)
+        : base(syntax)
     {
         AwaiterLocal = awaiterLocal ?? throw new ArgumentNullException(nameof(awaiterLocal));
         AwaiterClrType = awaiterClrType ?? throw new ArgumentNullException(nameof(awaiterClrType));

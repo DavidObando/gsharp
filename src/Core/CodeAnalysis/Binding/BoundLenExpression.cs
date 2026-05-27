@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,8 +16,10 @@ public sealed class BoundLenExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundLenExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The operand expression.</param>
-    public BoundLenExpression(BoundExpression operand)
+    public BoundLenExpression(SyntaxNode syntax, BoundExpression operand)
+        : base(syntax)
     {
         Operand = operand;
     }

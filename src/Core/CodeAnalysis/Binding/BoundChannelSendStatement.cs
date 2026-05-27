@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -11,9 +13,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundChannelSendStatement : BoundStatement
 {
     /// <summary>Initializes a new instance of the <see cref="BoundChannelSendStatement"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="channel">The bound channel expression.</param>
     /// <param name="value">The bound value expression (converted to the channel's element type).</param>
-    public BoundChannelSendStatement(BoundExpression channel, BoundExpression value)
+    public BoundChannelSendStatement(SyntaxNode syntax, BoundExpression channel, BoundExpression value)
+        : base(syntax)
     {
         Channel = channel;
         Value = value;

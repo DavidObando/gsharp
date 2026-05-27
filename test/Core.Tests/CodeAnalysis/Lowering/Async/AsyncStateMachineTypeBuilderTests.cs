@@ -20,7 +20,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_NonAsyncKickoff_Throws()
     {
         var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void);
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         Assert.Throws<ArgumentException>(() => AsyncStateMachineTypeBuilder.Build(fn, body, Resolver));
     }
@@ -29,7 +29,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_VoidAsyncKickoff_BindsTaskBuilder()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -44,7 +44,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_IntAsyncKickoff_BindsGenericTaskBuilder()
     {
         var fn = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -57,7 +57,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_PopulatesStateAndBuilderFields_InOrder()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -76,7 +76,7 @@ public class AsyncStateMachineTypeBuilderTests
         var p1 = new ParameterSymbol("a", TypeSymbol.Int);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
         var fn = new FunctionSymbol("doIt", ImmutableArray.Create(p1, p2), TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -94,9 +94,10 @@ public class AsyncStateMachineTypeBuilderTests
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
         var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
         var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.String);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(x, new BoundLiteralExpression(1)),
-            new BoundVariableDeclaration(y, new BoundLiteralExpression("hello"))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 1)),
+            new BoundVariableDeclaration(null, y, new BoundLiteralExpression(null, "hello"))));
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -116,7 +117,7 @@ public class AsyncStateMachineTypeBuilderTests
 
         var elem = TypeSymbol.FromClrType(typeof(int));
         var fn = new FunctionSymbol("stream", ImmutableArray<ParameterSymbol>.Empty, elem) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
@@ -129,7 +130,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_OrdinalAffectsTypeName()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm0 = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver, ordinal: 0);
         var sm3 = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver, ordinal: 3);
@@ -142,7 +143,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_PopulatedTypeIs_BackLinkable_FromFunctionSymbol()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
         fn.StateMachineType = sm;

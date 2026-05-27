@@ -2,15 +2,19 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>Bound arm for a pattern switch statement.</summary>
 public sealed class BoundPatternSwitchArm : BoundNode
 {
     /// <summary>Initializes a new instance of the <see cref="BoundPatternSwitchArm"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="pattern">The arm pattern, or null for default.</param>
     /// <param name="body">The arm body.</param>
-    public BoundPatternSwitchArm(BoundPattern pattern, BoundStatement body)
+    public BoundPatternSwitchArm(SyntaxNode syntax, BoundPattern pattern, BoundStatement body)
+        : base(syntax)
     {
         Pattern = pattern;
         Body = body;

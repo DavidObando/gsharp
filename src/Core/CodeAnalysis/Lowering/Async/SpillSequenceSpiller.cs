@@ -74,7 +74,7 @@ public static class SpillSequenceSpiller
                 return block;
             }
 
-            return new BoundBlockStatement(builder.ToImmutable());
+            return new BoundBlockStatement(null, builder.ToImmutable());
         }
 
         /// <summary>
@@ -118,7 +118,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(decl.Initializer);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundVariableDeclaration(decl.Variable, spilled.Value));
+            builder.Add(new BoundVariableDeclaration(null, decl.Variable, spilled.Value));
             return true;
         }
 
@@ -148,7 +148,7 @@ public static class SpillSequenceSpiller
             FlushSideEffects(spilled, builder);
             if (spilled.Value is not BoundLiteralExpression)
             {
-                builder.Add(new BoundExpressionStatement(spilled.Value));
+                builder.Add(new BoundExpressionStatement(null, spilled.Value));
             }
 
             return true;
@@ -169,7 +169,7 @@ public static class SpillSequenceSpiller
             // would leak an un-rewritten await to the emitter (issue #132).
             var spilled = SpillExpression(ret.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundReturnStatement(spilled.Value));
+            builder.Add(new BoundReturnStatement(null, spilled.Value));
             return true;
         }
 
@@ -191,7 +191,7 @@ public static class SpillSequenceSpiller
             var thenBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
             var thenChanged = RewriteStatementToList(ifStmt.ThenStatement, thenBuilder);
             var thenStmt = thenChanged
-                ? (thenBuilder.Count == 1 ? thenBuilder[0] : new BoundBlockStatement(thenBuilder.ToImmutable()))
+                ? (thenBuilder.Count == 1 ? thenBuilder[0] : new BoundBlockStatement(null, thenBuilder.ToImmutable()))
                 : ifStmt.ThenStatement;
 
             BoundStatement elseStmt = ifStmt.ElseStatement;
@@ -202,7 +202,7 @@ public static class SpillSequenceSpiller
                 elseChanged = RewriteStatementToList(elseStmt, elseBuilder);
                 if (elseChanged)
                 {
-                    elseStmt = elseBuilder.Count == 1 ? elseBuilder[0] : new BoundBlockStatement(elseBuilder.ToImmutable());
+                    elseStmt = elseBuilder.Count == 1 ? elseBuilder[0] : new BoundBlockStatement(null, elseBuilder.ToImmutable());
                 }
             }
 
@@ -212,7 +212,7 @@ public static class SpillSequenceSpiller
                 return false;
             }
 
-            builder.Add(new BoundIfStatement(condition, thenStmt, elseStmt));
+            builder.Add(new BoundIfStatement(null, condition, thenStmt, elseStmt));
             return true;
         }
 
@@ -270,8 +270,8 @@ public static class SpillSequenceSpiller
 
             // Create a spill temp for the await result.
             var spillLocal = MakeSpillTemp(awaitExpr.Type);
-            var awaitNode = new BoundAwaitExpression(innerExpr, awaitExpr.Type);
-            var assignStmt = new BoundVariableDeclaration(spillLocal, awaitNode);
+            var awaitNode = new BoundAwaitExpression(null, innerExpr, awaitExpr.Type);
+            var assignStmt = new BoundVariableDeclaration(null, spillLocal, awaitNode);
 
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -286,9 +286,10 @@ public static class SpillSequenceSpiller
             sideEffects.Add(assignStmt);
 
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
-                new BoundVariableExpression(spillLocal));
+                new BoundVariableExpression(null, spillLocal));
         }
 
         private BoundSpillSequenceExpression SpillBinary(BoundBinaryExpression binary)
@@ -334,8 +335,8 @@ public static class SpillSequenceSpiller
             {
                 var leftTemp = MakeSpillTemp(left.Type);
                 locals.Add(leftTemp);
-                sideEffects.Add(new BoundVariableDeclaration(leftTemp, left));
-                left = new BoundVariableExpression(leftTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, leftTemp, left));
+                left = new BoundVariableExpression(null, leftTemp);
             }
 
             BoundExpression right;
@@ -351,7 +352,7 @@ public static class SpillSequenceSpiller
                 right = binary.Right;
             }
 
-            var value = new BoundBinaryExpression(left, binary.Op, right);
+            var value = new BoundBinaryExpression(null, left, binary.Op, right);
 
             if (locals.Count == 0 && sideEffects.Count == 0)
             {
@@ -359,6 +360,7 @@ public static class SpillSequenceSpiller
             }
 
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
                 value);
@@ -385,30 +387,33 @@ public static class SpillSequenceSpiller
             var endLabel = MakeLabel();
 
             // if (left) goto evalRight
-            sideEffects.Add(new BoundConditionalGotoStatement(evalRightLabel, left, jumpIfTrue: true));
+            sideEffects.Add(new BoundConditionalGotoStatement(null, evalRightLabel, left, jumpIfTrue: true));
 
             // tmp = false; goto end
             sideEffects.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(resultLocal, new BoundLiteralExpression(false))));
-            sideEffects.Add(new BoundGotoStatement(endLabel));
+                null,
+                new BoundAssignmentExpression(null, resultLocal, new BoundLiteralExpression(null, false))));
+            sideEffects.Add(new BoundGotoStatement(null, endLabel));
 
             // evalRight: tmp = await b
-            sideEffects.Add(new BoundLabelStatement(evalRightLabel));
+            sideEffects.Add(new BoundLabelStatement(null, evalRightLabel));
             var spilledRight = SpillExpression(binary.Right);
             locals.AddRange(spilledRight.Locals);
             sideEffects.AddRange(spilledRight.SideEffects);
             sideEffects.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(resultLocal, spilledRight.Value)));
+                null,
+                new BoundAssignmentExpression(null, resultLocal, spilledRight.Value)));
 
             // end:
-            sideEffects.Add(new BoundLabelStatement(endLabel));
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
 
             locals.Add(resultLocal);
 
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
-                new BoundVariableExpression(resultLocal));
+                new BoundVariableExpression(null, resultLocal));
         }
 
         private BoundSpillSequenceExpression SpillLogicalOr(BoundBinaryExpression binary)
@@ -430,31 +435,34 @@ public static class SpillSequenceSpiller
             var endLabel = MakeLabel();
 
             // if (left) { tmp = true; goto end }
-            sideEffects.Add(new BoundConditionalGotoStatement(endLabel, left, jumpIfTrue: true));
+            sideEffects.Add(new BoundConditionalGotoStatement(null, endLabel, left, jumpIfTrue: true));
 
             // else: tmp = await b
             var spilledRight = SpillExpression(binary.Right);
             locals.AddRange(spilledRight.Locals);
             sideEffects.AddRange(spilledRight.SideEffects);
             sideEffects.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(resultLocal, spilledRight.Value)));
+                null,
+                new BoundAssignmentExpression(null, resultLocal, spilledRight.Value)));
             var skipTrueLabel = MakeLabel();
-            sideEffects.Add(new BoundGotoStatement(skipTrueLabel));
+            sideEffects.Add(new BoundGotoStatement(null, skipTrueLabel));
 
             // end:  (jumped to when left is true)
-            sideEffects.Add(new BoundLabelStatement(endLabel));
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
             sideEffects.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(resultLocal, new BoundLiteralExpression(true))));
+                null,
+                new BoundAssignmentExpression(null, resultLocal, new BoundLiteralExpression(null, true))));
 
             // skipTrue:
-            sideEffects.Add(new BoundLabelStatement(skipTrueLabel));
+            sideEffects.Add(new BoundLabelStatement(null, skipTrueLabel));
 
             locals.Add(resultLocal);
 
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
-                new BoundVariableExpression(resultLocal));
+                new BoundVariableExpression(null, resultLocal));
         }
 
         private BoundSpillSequenceExpression SpillCall(BoundCallExpression call)
@@ -466,8 +474,9 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundCallExpression(call.Function, args.ToImmutable(), call.ReturnType);
+            var value = new BoundCallExpression(null, call.Function, args.ToImmutable(), call.ReturnType);
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
                 value);
@@ -482,8 +491,9 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundImportedCallExpression(call.Function, args.ToImmutable(), call.ArgumentRefKinds);
+            var value = new BoundImportedCallExpression(null, call.Function, args.ToImmutable(), call.ArgumentRefKinds);
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
                 value);
@@ -518,8 +528,8 @@ public static class SpillSequenceSpiller
             {
                 var recvTemp = MakeSpillTemp(receiver.Type);
                 locals.Add(recvTemp);
-                sideEffects.Add(new BoundVariableDeclaration(recvTemp, receiver));
-                receiver = new BoundVariableExpression(recvTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, recvTemp, receiver));
+                receiver = new BoundVariableExpression(null, recvTemp);
             }
 
             var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
@@ -531,8 +541,9 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundImportedInstanceCallExpression(receiver, call.Method, call.Type, args.ToImmutable(), call.ArgumentRefKinds);
+            var value = new BoundImportedInstanceCallExpression(null, receiver, call.Method, call.Type, args.ToImmutable(), call.ArgumentRefKinds);
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
                 value);
@@ -566,8 +577,8 @@ public static class SpillSequenceSpiller
             {
                 var recvTemp = MakeSpillTemp(receiver.Type);
                 locals.Add(recvTemp);
-                sideEffects.Add(new BoundVariableDeclaration(recvTemp, receiver));
-                receiver = new BoundVariableExpression(recvTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, recvTemp, receiver));
+                receiver = new BoundVariableExpression(null, recvTemp);
             }
 
             var (argLocals, argSideEffects, args) = SpillArgumentList(call.Arguments);
@@ -579,8 +590,9 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundUserInstanceCallExpression(receiver, call.Method, args.ToImmutable());
+            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args.ToImmutable());
             return new BoundSpillSequenceExpression(
+                null,
                 locals.ToImmutable(),
                 sideEffects.ToImmutable(),
                 value);
@@ -594,8 +606,9 @@ public static class SpillSequenceSpiller
             }
 
             var spilled = SpillExpression(conv.Expression);
-            var value = new BoundConversionExpression(conv.Type, spilled.Value);
+            var value = new BoundConversionExpression(null, conv.Type, spilled.Value);
             return new BoundSpillSequenceExpression(
+                null,
                 spilled.Locals,
                 spilled.SideEffects,
                 value);
@@ -609,8 +622,9 @@ public static class SpillSequenceSpiller
             }
 
             var spilled = SpillExpression(assign.Expression);
-            var value = new BoundAssignmentExpression(assign.Variable, spilled.Value);
+            var value = new BoundAssignmentExpression(null, assign.Variable, spilled.Value);
             return new BoundSpillSequenceExpression(
+                null,
                 spilled.Locals,
                 spilled.SideEffects,
                 value);
@@ -671,8 +685,8 @@ public static class SpillSequenceSpiller
                     // This arg precedes an await — spill to temp.
                     var temp = MakeSpillTemp(arg.Type);
                     locals.Add(temp);
-                    sideEffects.Add(new BoundVariableDeclaration(temp, arg));
-                    args.Add(new BoundVariableExpression(temp));
+                    sideEffects.Add(new BoundVariableDeclaration(null, temp, arg));
+                    args.Add(new BoundVariableExpression(null, temp));
                 }
                 else if (i > firstAwaitIdx && !IsPureOrConstant(arg))
                 {
@@ -692,8 +706,8 @@ public static class SpillSequenceSpiller
                     {
                         var temp = MakeSpillTemp(arg.Type);
                         locals.Add(temp);
-                        sideEffects.Add(new BoundVariableDeclaration(temp, arg));
-                        args.Add(new BoundVariableExpression(temp));
+                        sideEffects.Add(new BoundVariableDeclaration(null, temp, arg));
+                        args.Add(new BoundVariableExpression(null, temp));
                     }
                     else
                     {
@@ -729,6 +743,7 @@ public static class SpillSequenceSpiller
         private static BoundSpillSequenceExpression Trivial(BoundExpression value)
         {
             return new BoundSpillSequenceExpression(
+                null,
                 ImmutableArray<LocalVariableSymbol>.Empty,
                 ImmutableArray<BoundStatement>.Empty,
                 value);
@@ -753,7 +768,7 @@ public static class SpillSequenceSpiller
 
                 if (!alreadyDeclared)
                 {
-                    builder.Add(new BoundVariableDeclaration(local, GetDefaultValue(local.Type)));
+                    builder.Add(new BoundVariableDeclaration(null, local, GetDefaultValue(local.Type)));
                 }
             }
 
@@ -767,22 +782,22 @@ public static class SpillSequenceSpiller
         {
             if (type == TypeSymbol.Int)
             {
-                return new BoundLiteralExpression(0);
+                return new BoundLiteralExpression(null, 0);
             }
 
             if (type == TypeSymbol.Bool)
             {
-                return new BoundLiteralExpression(false);
+                return new BoundLiteralExpression(null, false);
             }
 
             if (type == TypeSymbol.String)
             {
-                return new BoundLiteralExpression(string.Empty);
+                return new BoundLiteralExpression(null, string.Empty);
             }
 
             // For reference types or unknown types, use default(int) as placeholder.
             // The actual value will be overwritten before use.
-            return new BoundLiteralExpression(0);
+            return new BoundLiteralExpression(null, 0);
         }
     }
 }

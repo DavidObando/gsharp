@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -11,10 +12,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundPropertyPattern : BoundPattern
 {
     /// <summary>Initializes a new instance of the <see cref="BoundPropertyPattern"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="fields">The field patterns.</param>
-    public BoundPropertyPattern(TypeSymbol type, ImmutableArray<BoundPropertyPatternField> fields)
-        : base(type)
+    public BoundPropertyPattern(SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundPropertyPatternField> fields)
+        : base(syntax, type)
     {
         Fields = fields;
     }

@@ -29,7 +29,7 @@ public class IteratorRewriterTests
         var elementType = TypeSymbol.Int;
         var seqType = SequenceTypeSymbol.Get(elementType);
         var function = new FunctionSymbol("gen", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
-        var yieldStmt = new BoundYieldStatement(new BoundLiteralExpression(42));
+        var yieldStmt = new BoundYieldStatement(null, new BoundLiteralExpression(null, 42));
         var body = Block(yieldStmt);
         var program = MakeProgram(function, body);
 
@@ -50,9 +50,9 @@ public class IteratorRewriterTests
         // Arrange: function with three yields
         var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int);
         var function = new FunctionSymbol("multi", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
-        var yield1 = new BoundYieldStatement(new BoundLiteralExpression(1));
-        var yield2 = new BoundYieldStatement(new BoundLiteralExpression(2));
-        var yield3 = new BoundYieldStatement(new BoundLiteralExpression(3));
+        var yield1 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
+        var yield2 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 2));
+        var yield3 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 3));
         var body = Block(yield1, yield2, yield3);
         var program = MakeProgram(function, body);
 
@@ -73,7 +73,7 @@ public class IteratorRewriterTests
         // Arrange: non-iterator function
         var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int);
         var function = new FunctionSymbol("plain", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
-        var body = Block(new BoundExpressionStatement(new BoundLiteralExpression(1)));
+        var body = Block(new BoundExpressionStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -91,8 +91,8 @@ public class IteratorRewriterTests
         var function = new FunctionSymbol("withLocal", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
         var localVar = new LocalVariableSymbol("temp", false, TypeSymbol.Int);
         var body = Block(
-            new BoundVariableDeclaration(localVar, new BoundLiteralExpression(10)),
-            new BoundYieldStatement(new BoundVariableExpression(localVar)));
+            new BoundVariableDeclaration(null, localVar, new BoundLiteralExpression(null, 10)),
+            new BoundYieldStatement(null, new BoundVariableExpression(null, localVar)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -110,7 +110,7 @@ public class IteratorRewriterTests
         var stringType = TypeSymbol.FromClrType(typeof(string));
         var enumerableType = TypeSymbol.FromClrType(typeof(IEnumerable<string>));
         var function = new FunctionSymbol("strings", ImmutableArray<ParameterSymbol>.Empty, enumerableType, package: Package);
-        var body = Block(new BoundYieldStatement(new BoundLiteralExpression("hello")));
+        var body = Block(new BoundYieldStatement(null, new BoundLiteralExpression(null, "hello")));
         var program = MakeProgram(function, body);
 
         // Act
@@ -128,7 +128,7 @@ public class IteratorRewriterTests
         var asyncEnumerableType = TypeSymbol.FromClrType(
             typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("asyncGen", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
-        var body = Block(new BoundYieldStatement(new BoundLiteralExpression(1)));
+        var body = Block(new BoundYieldStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -142,7 +142,7 @@ public class IteratorRewriterTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 
     private static BoundProgram MakeProgram(FunctionSymbol function, BoundBlockStatement body)

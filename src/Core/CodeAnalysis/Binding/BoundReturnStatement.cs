@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -12,8 +14,10 @@ public sealed class BoundReturnStatement : BoundStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundReturnStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression to return.</param>
-    public BoundReturnStatement(BoundExpression expression)
+    public BoundReturnStatement(SyntaxNode syntax, BoundExpression expression)
+        : base(syntax)
     {
         Expression = expression;
     }

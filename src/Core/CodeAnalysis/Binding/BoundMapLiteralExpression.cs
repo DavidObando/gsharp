@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -17,9 +18,11 @@ public sealed class BoundMapLiteralExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundMapLiteralExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="mapType">The map type symbol.</param>
     /// <param name="entries">The bound key/value entries.</param>
-    public BoundMapLiteralExpression(MapTypeSymbol mapType, ImmutableArray<BoundMapEntry> entries)
+    public BoundMapLiteralExpression(SyntaxNode syntax, MapTypeSymbol mapType, ImmutableArray<BoundMapEntry> entries)
+        : base(syntax)
     {
         MapType = mapType ?? throw new ArgumentNullException(nameof(mapType));
         Entries = entries;

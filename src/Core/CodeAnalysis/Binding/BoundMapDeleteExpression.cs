@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -16,9 +17,11 @@ public sealed class BoundMapDeleteExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundMapDeleteExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="map">The bound map expression.</param>
     /// <param name="key">The bound key expression.</param>
-    public BoundMapDeleteExpression(BoundExpression map, BoundExpression key)
+    public BoundMapDeleteExpression(SyntaxNode syntax, BoundExpression map, BoundExpression key)
+        : base(syntax)
     {
         Map = map ?? throw new ArgumentNullException(nameof(map));
         Key = key ?? throw new ArgumentNullException(nameof(key));

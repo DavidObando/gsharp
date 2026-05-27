@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,10 +16,12 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundImportedCallExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
     /// <param name="argumentRefKinds">Per-argument ref-kind annotations (default all-None).</param>
-    public BoundImportedCallExpression(ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default)
+    public BoundImportedCallExpression(SyntaxNode syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default)
+        : base(syntax)
     {
         Function = function;
         Arguments = arguments;

@@ -112,7 +112,7 @@ public static class RefInitializationHoister
             // Remove ref local declarations entirely.
             if (node.Variable is LocalVariableSymbol local && refLocals.ContainsKey(local))
             {
-                return new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+                return new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
             }
 
             return base.RewriteVariableDeclaration(node);
@@ -139,7 +139,7 @@ public static class RefInitializationHoister
                 && refLocals.TryGetValue(local, out var operand))
             {
                 var rewrittenOperand = RewriteExpression(operand);
-                return new BoundAddressOfExpression(rewrittenOperand);
+                return new BoundAddressOfExpression(null, rewrittenOperand);
             }
 
             return base.RewriteVariableExpression(node);
@@ -161,7 +161,7 @@ public static class RefInitializationHoister
 
                 // Return a dummy expression (literal 0 cast away) — the statement
                 // wrapping this will be a no-op expression statement.
-                return new BoundLiteralExpression(0);
+                return new BoundLiteralExpression(null, 0);
             }
 
             return base.RewriteAssignmentExpression(node);

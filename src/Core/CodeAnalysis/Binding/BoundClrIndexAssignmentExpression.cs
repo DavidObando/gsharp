@@ -2,9 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 using System.Reflection;
-using GSharp.Core.CodeAnalysis.Symbols;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -19,7 +20,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 {
-    public BoundClrIndexAssignmentExpression(VariableSymbol target, PropertyInfo indexer, ImmutableArray<BoundExpression> arguments, BoundExpression value, TypeSymbol resultType)
+    public BoundClrIndexAssignmentExpression(SyntaxNode syntax, VariableSymbol target, PropertyInfo indexer, ImmutableArray<BoundExpression> arguments, BoundExpression value, TypeSymbol resultType)
+        : base(syntax)
     {
         Target = target;
         Indexer = indexer;

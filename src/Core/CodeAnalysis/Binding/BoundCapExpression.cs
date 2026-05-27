@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -16,8 +17,10 @@ public sealed class BoundCapExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundCapExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The operand expression.</param>
-    public BoundCapExpression(BoundExpression operand)
+    public BoundCapExpression(SyntaxNode syntax, BoundExpression operand)
+        : base(syntax)
     {
         Operand = operand;
     }

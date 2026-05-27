@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,6 +15,7 @@ public sealed class BoundForEllipsisStatement : BoundLoopStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundForEllipsisStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable.</param>
     /// <param name="lowerBound">The lower bound expression.</param>
     /// <param name="upperBound">The upper bound expression.</param>
@@ -21,13 +23,14 @@ public sealed class BoundForEllipsisStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForEllipsisStatement(
+        SyntaxNode syntax,
         VariableSymbol variable,
         BoundExpression lowerBound,
         BoundExpression upperBound,
         BoundStatement body,
         BoundLabel breakLabel,
         BoundLabel continueLabel)
-        : base(breakLabel, continueLabel)
+        : base(syntax, breakLabel, continueLabel)
     {
         Variable = variable;
         LowerBound = lowerBound;

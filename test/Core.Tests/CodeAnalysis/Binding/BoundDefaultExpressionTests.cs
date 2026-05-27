@@ -17,7 +17,7 @@ public class BoundDefaultExpressionTests
     public void BoundDefaultExpression_Has_Expected_Kind_And_Type()
     {
         var type = TypeSymbol.Int;
-        var expr = new BoundDefaultExpression(type);
+        var expr = new BoundDefaultExpression(null, type);
 
         Assert.Equal(BoundNodeKind.DefaultExpression, expr.Kind);
         Assert.Same(type, expr.Type);
@@ -27,7 +27,7 @@ public class BoundDefaultExpressionTests
     public void BoundDefaultExpression_With_ReferenceType_Has_Correct_Kind()
     {
         var type = TypeSymbol.String;
-        var expr = new BoundDefaultExpression(type);
+        var expr = new BoundDefaultExpression(null, type);
 
         Assert.Equal(BoundNodeKind.DefaultExpression, expr.Kind);
         Assert.Same(type, expr.Type);
@@ -37,7 +37,7 @@ public class BoundDefaultExpressionTests
     public void BoundDefaultExpression_With_ClrType_Preserves_Type()
     {
         var type = TypeSymbol.FromClrType(typeof(System.TimeSpan));
-        var expr = new BoundDefaultExpression(type);
+        var expr = new BoundDefaultExpression(null, type);
 
         Assert.Equal(BoundNodeKind.DefaultExpression, expr.Kind);
         Assert.Equal(typeof(System.TimeSpan), expr.Type.ClrType);

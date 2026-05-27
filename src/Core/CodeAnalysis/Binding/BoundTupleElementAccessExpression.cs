@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -14,7 +15,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundTupleElementAccessExpression : BoundExpression
 {
-    public BoundTupleElementAccessExpression(BoundExpression receiver, TupleTypeSymbol tupleType, int index)
+    public BoundTupleElementAccessExpression(SyntaxNode syntax, BoundExpression receiver, TupleTypeSymbol tupleType, int index)
+        : base(syntax)
     {
         Receiver = receiver;
         TupleType = tupleType;

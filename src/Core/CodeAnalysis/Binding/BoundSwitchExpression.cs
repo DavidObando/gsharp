@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,10 +16,12 @@ public sealed class BoundSwitchExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundSwitchExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="discriminant">The bound discriminant expression.</param>
     /// <param name="arms">The bound switch-expression arms.</param>
     /// <param name="type">The unified result type.</param>
-    public BoundSwitchExpression(BoundExpression discriminant, ImmutableArray<BoundSwitchExpressionArm> arms, TypeSymbol type)
+    public BoundSwitchExpression(SyntaxNode syntax, BoundExpression discriminant, ImmutableArray<BoundSwitchExpressionArm> arms, TypeSymbol type)
+        : base(syntax)
     {
         Discriminant = discriminant;
         Arms = arms;

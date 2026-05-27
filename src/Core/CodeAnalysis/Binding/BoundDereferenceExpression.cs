@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,8 +16,10 @@ public sealed class BoundDereferenceExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundDereferenceExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The pointer expression to dereference.</param>
-    public BoundDereferenceExpression(BoundExpression operand)
+    public BoundDereferenceExpression(SyntaxNode syntax, BoundExpression operand)
+        : base(syntax)
     {
         Operand = operand;
         Type = ((ByRefTypeSymbol)operand.Type).PointeeType;

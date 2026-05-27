@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -15,8 +17,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundScopeStatement : BoundStatement
 {
     /// <summary>Initializes a new instance of the <see cref="BoundScopeStatement"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="body">The bound body block.</param>
-    public BoundScopeStatement(BoundStatement body)
+    public BoundScopeStatement(SyntaxNode syntax, BoundStatement body)
+        : base(syntax)
     {
         Body = body;
     }

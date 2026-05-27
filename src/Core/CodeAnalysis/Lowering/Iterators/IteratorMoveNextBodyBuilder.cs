@@ -42,10 +42,10 @@ public static class IteratorMoveNextBodyBuilder
         Dictionary<VariableSymbol, FieldSymbol> hoistedFieldMap)
     {
         BoundExpression FieldRead(FieldSymbol field) =>
-            new BoundFieldAccessExpression(new BoundVariableExpression(thisParameter), smClass, field);
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParameter), smClass, field);
 
         BoundExpression FieldWrite(FieldSymbol field, BoundExpression value) =>
-            new BoundFieldAssignmentExpression(thisParameter, smClass, field, value);
+            new BoundFieldAssignmentExpression(null, thisParameter, smClass, field, value);
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -60,26 +60,30 @@ public static class IteratorMoveNextBodyBuilder
         var endLabel = new BoundLabel("$iterEnd");
 
         statements.Add(new BoundConditionalGotoStatement(
+            null,
             startLabel,
             new BoundBinaryExpression(
+                null,
                 FieldRead(stateField),
                 BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                new BoundLiteralExpression(0)),
+                new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
         foreach (var kvp in plan.YieldStates)
         {
             statements.Add(new BoundConditionalGotoStatement(
+                null,
                 yieldLabels[kvp.Value],
                 new BoundBinaryExpression(
+                    null,
                     FieldRead(stateField),
                     BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                    new BoundLiteralExpression(kvp.Value)),
+                    new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }
 
-        statements.Add(new BoundGotoStatement(endLabel));
-        statements.Add(new BoundLabelStatement(startLabel));
+        statements.Add(new BoundGotoStatement(null, endLabel));
+        statements.Add(new BoundLabelStatement(null, startLabel));
 
         var rewriter = new FieldAccessYieldRewriter(smClass, thisParameter, stateField, currentField, hoistedFieldMap, yieldLabels, endLabel);
         var rewrittenBody = rewriter.RewriteStatement(plan.Body);
@@ -92,11 +96,11 @@ public static class IteratorMoveNextBodyBuilder
             statements.Add(rewrittenBody);
         }
 
-        statements.Add(new BoundLabelStatement(endLabel));
-        statements.Add(new BoundExpressionStatement(FieldWrite(stateField, new BoundLiteralExpression(-1))));
-        statements.Add(new BoundReturnStatement(new BoundLiteralExpression(false)));
+        statements.Add(new BoundLabelStatement(null, endLabel));
+        statements.Add(new BoundExpressionStatement(null, FieldWrite(stateField, new BoundLiteralExpression(null, -1))));
+        statements.Add(new BoundReturnStatement(null, new BoundLiteralExpression(null, false)));
 
-        return new IteratorMoveNextBody(Lowerer.Lower(new BoundBlockStatement(statements.ToImmutable())), thisParameter);
+        return new IteratorMoveNextBody(Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable())), thisParameter);
     }
 
     public static IteratorMoveNextBody Build(
@@ -125,29 +129,33 @@ public static class IteratorMoveNextBodyBuilder
 
         // State dispatch: if state == 0 goto start; if state == K goto resumeK; else goto end
         statements.Add(new BoundConditionalGotoStatement(
+            null,
             startLabel,
             new BoundBinaryExpression(
-                new BoundVariableExpression(stateLocal),
+                null,
+                new BoundVariableExpression(null, stateLocal),
                 BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                new BoundLiteralExpression(0)),
+                new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
         foreach (var kvp in plan.YieldStates)
         {
             statements.Add(new BoundConditionalGotoStatement(
+                null,
                 yieldLabels[kvp.Value],
                 new BoundBinaryExpression(
-                    new BoundVariableExpression(stateLocal),
+                    null,
+                    new BoundVariableExpression(null, stateLocal),
                     BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
-                    new BoundLiteralExpression(kvp.Value)),
+                    new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }
 
         // Default: goto end
-        statements.Add(new BoundGotoStatement(endLabel));
+        statements.Add(new BoundGotoStatement(null, endLabel));
 
         // start:
-        statements.Add(new BoundLabelStatement(startLabel));
+        statements.Add(new BoundLabelStatement(null, startLabel));
 
         // Rewrite the user body: replace yields with state transitions
         var rewriter = new YieldReplacer(stateLocal, currentLocal, yieldLabels, endLabel);
@@ -164,12 +172,13 @@ public static class IteratorMoveNextBodyBuilder
         }
 
         // Fall through to end: state = -1; return false
-        statements.Add(new BoundLabelStatement(endLabel));
+        statements.Add(new BoundLabelStatement(null, endLabel));
         statements.Add(new BoundExpressionStatement(
-            new BoundAssignmentExpression(stateLocal, new BoundLiteralExpression(-1))));
-        statements.Add(new BoundReturnStatement(new BoundLiteralExpression(false)));
+            null,
+            new BoundAssignmentExpression(null, stateLocal, new BoundLiteralExpression(null, -1))));
+        statements.Add(new BoundReturnStatement(null, new BoundLiteralExpression(null, false)));
 
-        var body = new BoundBlockStatement(statements.ToImmutable());
+        var body = new BoundBlockStatement(null, statements.ToImmutable());
         return new IteratorMoveNextBody(body, thisParameter);
     }
 
@@ -226,7 +235,7 @@ public static class IteratorMoveNextBodyBuilder
         {
             if (this.fieldMap.TryGetValue(node.Variable, out var field))
             {
-                return new BoundExpressionStatement(this.FieldWrite(field, this.RewriteExpression(node.Initializer)));
+                return new BoundExpressionStatement(null, this.FieldWrite(field, this.RewriteExpression(node.Initializer)));
             }
 
             return base.RewriteVariableDeclaration(node);
@@ -237,24 +246,24 @@ public static class IteratorMoveNextBodyBuilder
             this.yieldIndex++;
             var label = this.yieldLabels[this.yieldIndex];
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            statements.Add(new BoundExpressionStatement(this.FieldWrite(this.currentField, this.RewriteExpression(node.Expression))));
-            statements.Add(new BoundExpressionStatement(this.FieldWrite(this.stateField, new BoundLiteralExpression(this.yieldIndex))));
-            statements.Add(new BoundReturnStatement(new BoundLiteralExpression(true)));
-            statements.Add(new BoundLabelStatement(label));
-            statements.Add(new BoundExpressionStatement(this.FieldWrite(this.stateField, new BoundLiteralExpression(0))));
-            return new BoundBlockStatement(statements.ToImmutable());
+            statements.Add(new BoundExpressionStatement(null, this.FieldWrite(this.currentField, this.RewriteExpression(node.Expression))));
+            statements.Add(new BoundExpressionStatement(null, this.FieldWrite(this.stateField, new BoundLiteralExpression(null, this.yieldIndex))));
+            statements.Add(new BoundReturnStatement(null, new BoundLiteralExpression(null, true)));
+            statements.Add(new BoundLabelStatement(null, label));
+            statements.Add(new BoundExpressionStatement(null, this.FieldWrite(this.stateField, new BoundLiteralExpression(null, 0))));
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
         {
-            return new BoundGotoStatement(this.endLabel);
+            return new BoundGotoStatement(null, this.endLabel);
         }
 
         private BoundExpression FieldRead(FieldSymbol field) =>
-            new BoundFieldAccessExpression(new BoundVariableExpression(this.thisParameter), this.smClass, field);
+            new BoundFieldAccessExpression(null, new BoundVariableExpression(null, this.thisParameter), this.smClass, field);
 
         private BoundExpression FieldWrite(FieldSymbol field, BoundExpression value) =>
-            new BoundFieldAssignmentExpression(this.thisParameter, this.smClass, field, value);
+            new BoundFieldAssignmentExpression(null, this.thisParameter, this.smClass, field, value);
     }
 
     private sealed class YieldReplacer : BoundTreeRewriter
@@ -285,21 +294,24 @@ public static class IteratorMoveNextBodyBuilder
             // current = expr; state = K; return true; resumeK: state = -1;
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             statements.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(currentLocal, node.Expression)));
+                null,
+                new BoundAssignmentExpression(null, currentLocal, node.Expression)));
             statements.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(stateLocal, new BoundLiteralExpression(yieldIndex))));
-            statements.Add(new BoundReturnStatement(new BoundLiteralExpression(true)));
-            statements.Add(new BoundLabelStatement(label));
+                null,
+                new BoundAssignmentExpression(null, stateLocal, new BoundLiteralExpression(null, yieldIndex))));
+            statements.Add(new BoundReturnStatement(null, new BoundLiteralExpression(null, true)));
+            statements.Add(new BoundLabelStatement(null, label));
             statements.Add(new BoundExpressionStatement(
-                new BoundAssignmentExpression(stateLocal, new BoundLiteralExpression(-1))));
+                null,
+                new BoundAssignmentExpression(null, stateLocal, new BoundLiteralExpression(null, -1))));
 
-            return new BoundBlockStatement(statements.ToImmutable());
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
 
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
         {
             // In an iterator, `return` (with or without value) means end iteration.
-            return new BoundGotoStatement(endLabel);
+            return new BoundGotoStatement(null, endLabel);
         }
     }
 }

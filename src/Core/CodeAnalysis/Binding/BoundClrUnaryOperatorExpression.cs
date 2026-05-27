@@ -19,7 +19,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrUnaryOperatorExpression : BoundExpression
 {
-    public BoundClrUnaryOperatorExpression(SyntaxKind operatorKind, BoundExpression operand, MethodInfo method, TypeSymbol resultType)
+    public BoundClrUnaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression operand, MethodInfo method, TypeSymbol resultType)
+        : base(syntax)
     {
         OperatorKind = operatorKind;
         Operand = operand;

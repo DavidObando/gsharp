@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -15,9 +16,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundChannelReceiveExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundChannelReceiveExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="channel">The bound channel expression.</param>
     /// <param name="elementType">The channel's element type (the type yielded by the receive).</param>
-    public BoundChannelReceiveExpression(BoundExpression channel, TypeSymbol elementType)
+    public BoundChannelReceiveExpression(SyntaxNode syntax, BoundExpression channel, TypeSymbol elementType)
+        : base(syntax)
     {
         Channel = channel;
         Type = elementType;

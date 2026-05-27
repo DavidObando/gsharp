@@ -18,7 +18,7 @@ public class AsyncStateMachineFieldMapTests
     public void Create_MaterializesStateMachineStruct()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
         var map = AsyncStateMachineFieldMap.Create(sm, body);
@@ -36,7 +36,7 @@ public class AsyncStateMachineFieldMapTests
         var p1 = new ParameterSymbol("a", TypeSymbol.Int);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
         var fn = new FunctionSymbol("doIt", ImmutableArray.Create(p1, p2), TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
         var map = AsyncStateMachineFieldMap.Create(sm, body);
@@ -53,9 +53,10 @@ public class AsyncStateMachineFieldMapTests
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
         var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
         var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.String);
-        var body = new BoundBlockStatement(ImmutableArray.Create<BoundStatement>(
-            new BoundVariableDeclaration(x, new BoundLiteralExpression(1)),
-            new BoundVariableDeclaration(y, new BoundLiteralExpression("hello"))));
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 1)),
+            new BoundVariableDeclaration(null, y, new BoundLiteralExpression(null, "hello"))));
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
         var map = AsyncStateMachineFieldMap.Create(sm, body);
@@ -70,12 +71,12 @@ public class AsyncStateMachineFieldMapTests
     public void Read_CreatesExistingFieldAccessNode()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
         var map = AsyncStateMachineFieldMap.Create(sm, body);
         var receiver = new LocalVariableSymbol("this", isReadOnly: false, map.StructType);
 
-        var access = map.Read(new BoundVariableExpression(receiver), map.StateField);
+        var access = map.Read(new BoundVariableExpression(null, receiver), map.StateField);
 
         Assert.Same(map.StructType, access.StructType);
         Assert.Same(map.StateField, access.Field);
@@ -86,11 +87,11 @@ public class AsyncStateMachineFieldMapTests
     public void Write_CreatesExistingFieldAssignmentNode()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
         var map = AsyncStateMachineFieldMap.Create(sm, body);
         var receiver = new LocalVariableSymbol("this", isReadOnly: false, map.StructType);
-        var value = new BoundLiteralExpression(-1);
+        var value = new BoundLiteralExpression(null, -1);
 
         var assignment = map.Write(receiver, map.StateField, value);
 
@@ -105,7 +106,7 @@ public class AsyncStateMachineFieldMapTests
     public void Create_FreezesSynthesizedFieldLayout()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var body = new BoundBlockStatement(ImmutableArray<BoundStatement>.Empty);
+        var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
 
         AsyncStateMachineFieldMap.Create(sm, body);

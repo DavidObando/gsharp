@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -14,8 +15,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundSelectStatement : BoundStatement
 {
     /// <summary>Initializes a new instance of the <see cref="BoundSelectStatement"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="cases">The arms in source order.</param>
-    public BoundSelectStatement(ImmutableArray<BoundSelectCase> cases)
+    public BoundSelectStatement(SyntaxNode syntax, ImmutableArray<BoundSelectCase> cases)
+        : base(syntax)
     {
         Cases = cases;
     }

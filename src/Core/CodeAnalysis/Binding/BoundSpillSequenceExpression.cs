@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -18,13 +19,16 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundSpillSequenceExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundSpillSequenceExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="locals">Spill-temp locals owned by this sequence.</param>
     /// <param name="sideEffects">Statements that must run before the value is observed.</param>
     /// <param name="value">The final value expression.</param>
     public BoundSpillSequenceExpression(
+        SyntaxNode syntax,
         ImmutableArray<LocalVariableSymbol> locals,
         ImmutableArray<BoundStatement> sideEffects,
         BoundExpression value)
+        : base(syntax)
     {
         Locals = locals;
         SideEffects = sideEffects;

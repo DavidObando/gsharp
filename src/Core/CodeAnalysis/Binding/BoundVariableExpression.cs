@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -14,9 +15,10 @@ public sealed class BoundVariableExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundVariableExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
-    public BoundVariableExpression(VariableSymbol variable)
-        : this(variable, narrowedType: null)
+    public BoundVariableExpression(SyntaxNode syntax, VariableSymbol variable)
+        : this(syntax, variable, narrowedType: null)
     {
     }
 
@@ -28,11 +30,13 @@ public sealed class BoundVariableExpression : BoundExpression
     /// underlying symbol identity (so the evaluator still loads from the
     /// original slot).
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
     /// <param name="narrowedType">The narrowed type to report from
     /// <see cref="Type"/>. Pass <c>null</c> to use the variable's declared
     /// type.</param>
-    public BoundVariableExpression(VariableSymbol variable, TypeSymbol narrowedType)
+    public BoundVariableExpression(SyntaxNode syntax, VariableSymbol variable, TypeSymbol narrowedType)
+        : base(syntax)
     {
         Variable = variable;
         NarrowedType = narrowedType;

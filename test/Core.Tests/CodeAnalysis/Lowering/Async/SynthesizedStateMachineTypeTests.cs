@@ -150,7 +150,7 @@ public class SynthesizedStateMachineTypeTests
         var projected = sm.MaterializeAsStructSymbol();
         var thisLocal = new LocalVariableSymbol("this", isReadOnly: false, projected);
 
-        var access = new BoundFieldAccessExpression(new BoundVariableExpression(thisLocal), projected, field);
+        var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisLocal), projected, field);
 
         Assert.Same(projected, access.StructType);
         Assert.Same(field, access.Field);

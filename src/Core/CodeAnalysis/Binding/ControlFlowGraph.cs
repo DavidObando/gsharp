@@ -468,11 +468,11 @@ public sealed class ControlFlowGraph
             if (condition is BoundLiteralExpression literal)
             {
                 var value = (bool)literal.Value;
-                return new BoundLiteralExpression(!value);
+                return new BoundLiteralExpression(null, !value);
             }
 
             var op = BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool);
-            return new BoundUnaryExpression(op, condition);
+            return new BoundUnaryExpression(null, op, condition);
         }
     }
 }

@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -35,6 +36,7 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundForRangeStatement"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="keyVariable">The key variable (may be null when no key was declared).</param>
     /// <param name="valueVariable">The value variable.</param>
     /// <param name="collection">The collection expression.</param>
@@ -43,6 +45,7 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForRangeStatement(
+        SyntaxNode syntax,
         VariableSymbol keyVariable,
         VariableSymbol valueVariable,
         BoundExpression collection,
@@ -50,7 +53,7 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
         BoundStatement body,
         BoundLabel breakLabel,
         BoundLabel continueLabel)
-        : base(breakLabel, continueLabel)
+        : base(syntax, breakLabel, continueLabel)
     {
         KeyVariable = keyVariable;
         ValueVariable = valueVariable;

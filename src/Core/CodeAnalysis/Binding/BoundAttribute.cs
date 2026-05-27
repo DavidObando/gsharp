@@ -29,8 +29,8 @@ public sealed class BoundAttribute : BoundNode
         AttributeTargetKind target,
         ImmutableArray<BoundAttributeArgument> positionalArguments,
         ImmutableArray<BoundAttributeArgument> namedArguments)
+        : base(syntax)
     {
-        Syntax = syntax;
         AttributeType = attributeType;
         Target = target;
         PositionalArguments = positionalArguments;
@@ -43,7 +43,7 @@ public sealed class BoundAttribute : BoundNode
     /// <summary>
     /// Gets the originating annotation syntax.
     /// </summary>
-    public AnnotationSyntax Syntax { get; }
+    public new AnnotationSyntax Syntax => (AnnotationSyntax)base.Syntax;
 
     /// <summary>
     /// Gets the resolved attribute type.

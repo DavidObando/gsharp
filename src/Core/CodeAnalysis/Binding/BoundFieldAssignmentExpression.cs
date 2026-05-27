@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -16,7 +17,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAssignmentExpression : BoundExpression
 {
-    public BoundFieldAssignmentExpression(VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value)
+    public BoundFieldAssignmentExpression(SyntaxNode syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value)
+        : base(syntax)
     {
         Receiver = receiver;
         StructType = structType;

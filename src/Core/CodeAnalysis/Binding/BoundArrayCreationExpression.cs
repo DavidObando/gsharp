@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -17,9 +18,11 @@ public sealed class BoundArrayCreationExpression : BoundExpression
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundArrayCreationExpression"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="containerType">The array or slice type symbol.</param>
     /// <param name="elements">The bound element initialisers.</param>
-    public BoundArrayCreationExpression(TypeSymbol containerType, ImmutableArray<BoundExpression> elements)
+    public BoundArrayCreationExpression(SyntaxNode syntax, TypeSymbol containerType, ImmutableArray<BoundExpression> elements)
+        : base(syntax)
     {
         ContainerType = containerType ?? throw new ArgumentNullException(nameof(containerType));
         Elements = elements;

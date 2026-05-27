@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -20,12 +21,13 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
 {
     private readonly TypeSymbol returnTypeOverride;
 
-    public BoundUserInstanceCallExpression(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments)
-        : this(receiver, method, arguments, returnTypeOverride: null)
+    public BoundUserInstanceCallExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments)
+        : this(syntax, receiver, method, arguments, returnTypeOverride: null)
     {
     }
 
-    public BoundUserInstanceCallExpression(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol returnTypeOverride)
+    public BoundUserInstanceCallExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol returnTypeOverride)
+        : base(syntax)
     {
         Receiver = receiver;
         Method = method;

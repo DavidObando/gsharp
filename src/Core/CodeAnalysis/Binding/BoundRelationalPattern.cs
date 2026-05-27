@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -10,11 +11,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundRelationalPattern : BoundPattern
 {
     /// <summary>Initializes a new instance of the <see cref="BoundRelationalPattern"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="op">The operator.</param>
     /// <param name="value">The right-hand value.</param>
-    public BoundRelationalPattern(TypeSymbol type, BoundBinaryOperator op, BoundExpression value)
-        : base(type)
+    public BoundRelationalPattern(SyntaxNode syntax, TypeSymbol type, BoundBinaryOperator op, BoundExpression value)
+        : base(syntax, type)
     {
         Op = op;
         Value = value;

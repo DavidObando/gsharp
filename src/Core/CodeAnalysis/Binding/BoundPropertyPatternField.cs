@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -10,9 +11,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundPropertyPatternField : BoundNode
 {
     /// <summary>Initializes a new instance of the <see cref="BoundPropertyPatternField"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="field">The matched field.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(FieldSymbol field, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode syntax, FieldSymbol field, BoundPattern pattern)
+        : base(syntax)
     {
         Field = field;
         Pattern = pattern;

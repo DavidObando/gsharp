@@ -31,7 +31,7 @@ public class AsyncIteratorRewriterTests
         // Arrange: async iterator function with one yield
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("asyncGen", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
-        var yieldStmt = new BoundYieldStatement(new BoundLiteralExpression(42));
+        var yieldStmt = new BoundYieldStatement(null, new BoundLiteralExpression(null, 42));
         var body = Block(yieldStmt);
         var program = MakeProgram(function, body);
 
@@ -51,8 +51,8 @@ public class AsyncIteratorRewriterTests
         // Arrange: two yields
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("multiYield", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
-        var yield1 = new BoundYieldStatement(new BoundLiteralExpression(1));
-        var yield2 = new BoundYieldStatement(new BoundLiteralExpression(2));
+        var yield1 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
+        var yield2 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 2));
         var body = Block(yield1, yield2);
         var program = MakeProgram(function, body);
 
@@ -73,15 +73,17 @@ public class AsyncIteratorRewriterTests
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("awaitGen", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
         var await1 = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task))),
             TypeSymbol.Void);
         var await2 = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task))),
             TypeSymbol.Void);
         var body = Block(
-            new BoundExpressionStatement(await1),
-            new BoundExpressionStatement(await2),
-            new BoundYieldStatement(new BoundLiteralExpression(99)));
+            new BoundExpressionStatement(null, await1),
+            new BoundExpressionStatement(null, await2),
+            new BoundYieldStatement(null, new BoundLiteralExpression(null, 99)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -102,11 +104,12 @@ public class AsyncIteratorRewriterTests
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("mixed", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
         var awaitExpr = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task))),
             TypeSymbol.Void);
-        var yieldStmt = new BoundYieldStatement(new BoundLiteralExpression(7));
+        var yieldStmt = new BoundYieldStatement(null, new BoundLiteralExpression(null, 7));
         var body = Block(
-            new BoundExpressionStatement(awaitExpr),
+            new BoundExpressionStatement(null, awaitExpr),
             yieldStmt);
         var program = MakeProgram(function, body);
 
@@ -132,11 +135,12 @@ public class AsyncIteratorRewriterTests
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("awaiterTypes", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
         var awaitExpr = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task))),
             TypeSymbol.Void);
         var body = Block(
-            new BoundExpressionStatement(awaitExpr),
-            new BoundYieldStatement(new BoundLiteralExpression(1)));
+            new BoundExpressionStatement(null, awaitExpr),
+            new BoundYieldStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -152,7 +156,7 @@ public class AsyncIteratorRewriterTests
     {
         // Arrange: plain async function (not returning IAsyncEnumerable)
         var function = new FunctionSymbol("notIterator", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundExpressionStatement(new BoundLiteralExpression(1)));
+        var body = Block(new BoundExpressionStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -168,7 +172,7 @@ public class AsyncIteratorRewriterTests
         // Arrange
         var asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>));
         var function = new FunctionSymbol("enumerable", ImmutableArray<ParameterSymbol>.Empty, asyncEnumerableType, package: Package);
-        var body = Block(new BoundYieldStatement(new BoundLiteralExpression(1)));
+        var body = Block(new BoundYieldStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
 
         // Act
@@ -183,7 +187,7 @@ public class AsyncIteratorRewriterTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 
     private static BoundProgram MakeProgram(FunctionSymbol function, BoundBlockStatement body)

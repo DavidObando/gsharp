@@ -59,7 +59,7 @@ public class AsyncStateMachineRewriterTests
     {
         var parameter = new ParameterSymbol("value", TypeSymbol.Int);
         var function = new FunctionSymbol("doIt", ImmutableArray.Create(parameter), TypeSymbol.Void, package: Package) { IsAsync = true };
-        var body = Block(new BoundExpressionStatement(new BoundVariableExpression(parameter)));
+        var body = Block(new BoundExpressionStatement(null, new BoundVariableExpression(null, parameter)));
         var program = Program(function, body);
 
         var result = AsyncStateMachineRewriter.Rewrite(program, Resolver);
@@ -75,12 +75,12 @@ public class AsyncStateMachineRewriterTests
     [Fact]
     public void Rewrite_AllocatesAwaitResumeStatesInTraversalOrder()
     {
-        var firstAwait = new BoundAwaitExpression(new BoundLiteralExpression(1), TypeSymbol.Int);
-        var secondAwait = new BoundAwaitExpression(new BoundLiteralExpression(2), TypeSymbol.Int);
+        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int);
+        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int);
         var function = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
         var body = Block(
-            new BoundExpressionStatement(firstAwait),
-            new BoundExpressionStatement(secondAwait));
+            new BoundExpressionStatement(null, firstAwait),
+            new BoundExpressionStatement(null, secondAwait));
         var program = Program(function, body);
 
         var result = AsyncStateMachineRewriter.Rewrite(program, Resolver);
@@ -131,24 +131,26 @@ public class AsyncStateMachineRewriterTests
         // We bind a program with try/catch around an await + an await in an expression,
         // run Rewrite, and assert the resulting plan demonstrates all passes ran.
         var awaitInTry = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task))),
             TypeSymbol.Void);
         var awaitInExpr = new BoundAwaitExpression(
-            new BoundLiteralExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<int>))),
+            null,
+            new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<int>))),
             TypeSymbol.Int);
 
         // try { await ...; } catch(Exception e) { }
         var catchVar = new LocalVariableSymbol("e", false, TypeSymbol.FromClrType(typeof(System.Exception)));
-        var tryBlock = Block(new BoundExpressionStatement(awaitInTry));
+        var tryBlock = Block(new BoundExpressionStatement(null, awaitInTry));
         var catchBody = Block();
         var catchClause = new BoundCatchClause(TypeSymbol.FromClrType(typeof(System.Exception)), catchVar, catchBody);
-        var tryStmt = new BoundTryStatement(tryBlock, ImmutableArray.Create(catchClause), finallyBlock: null);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), finallyBlock: null);
 
         // x = await Task<int>
         var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
         var body = Block(
             tryStmt,
-            new BoundVariableDeclaration(x, awaitInExpr));
+            new BoundVariableDeclaration(null, x, awaitInExpr));
 
         var function = new FunctionSymbol("pipeline", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
         var program = Program(function, body);
@@ -197,7 +199,7 @@ public class AsyncStateMachineRewriterTests
 
         protected override BoundExpression RewriteBinaryExpression(BoundBinaryExpression node)
         {
-            if (AsyncBoundTreeQueries.HasAwait(new BoundExpressionStatement(node)))
+            if (AsyncBoundTreeQueries.HasAwait(new BoundExpressionStatement(null, node)))
             {
                 Found = true;
             }
@@ -208,7 +210,7 @@ public class AsyncStateMachineRewriterTests
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)
     {
-        return new BoundBlockStatement(statements.ToImmutableArray());
+        return new BoundBlockStatement(null, statements.ToImmutableArray());
     }
 
     private static BoundProgram Program(FunctionSymbol function, BoundBlockStatement body)

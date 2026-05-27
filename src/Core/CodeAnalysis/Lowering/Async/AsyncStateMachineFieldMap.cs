@@ -133,7 +133,7 @@ public sealed class AsyncStateMachineFieldMap
             throw new ArgumentNullException(nameof(field));
         }
 
-        return new BoundFieldAccessExpression(receiver, StructType, field);
+        return new BoundFieldAccessExpression(null, receiver, StructType, field);
     }
 
     /// <summary>Creates a field assignment against a state-machine receiver variable.</summary>
@@ -158,7 +158,7 @@ public sealed class AsyncStateMachineFieldMap
             throw new ArgumentNullException(nameof(value));
         }
 
-        return new BoundFieldAssignmentExpression(receiver, StructType, field, value);
+        return new BoundFieldAssignmentExpression(null, receiver, StructType, field, value);
     }
 
     /// <summary>

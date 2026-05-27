@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
@@ -12,9 +14,11 @@ public sealed class BoundSwitchExpressionArm : BoundNode
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundSwitchExpressionArm"/> class.
     /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="pattern">The case pattern, or null for <c>default</c>.</param>
     /// <param name="result">The result expression.</param>
-    public BoundSwitchExpressionArm(BoundPattern pattern, BoundExpression result)
+    public BoundSwitchExpressionArm(SyntaxNode syntax, BoundPattern pattern, BoundExpression result)
+        : base(syntax)
     {
         Pattern = pattern;
         Result = result;

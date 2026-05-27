@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -16,8 +17,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundChannelCloseExpression : BoundExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundChannelCloseExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
     /// <param name="channel">The bound channel expression.</param>
-    public BoundChannelCloseExpression(BoundExpression channel)
+    public BoundChannelCloseExpression(SyntaxNode syntax, BoundExpression channel)
+        : base(syntax)
     {
         Channel = channel;
     }

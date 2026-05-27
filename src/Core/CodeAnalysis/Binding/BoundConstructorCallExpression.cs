@@ -2,8 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using System.Collections.Immutable;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -18,7 +19,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundConstructorCallExpression : BoundExpression
 {
-    public BoundConstructorCallExpression(StructSymbol structType, ImmutableArray<BoundExpression> arguments)
+    public BoundConstructorCallExpression(SyntaxNode syntax, StructSymbol structType, ImmutableArray<BoundExpression> arguments)
+        : base(syntax)
     {
         StructType = structType;
         Arguments = arguments;
