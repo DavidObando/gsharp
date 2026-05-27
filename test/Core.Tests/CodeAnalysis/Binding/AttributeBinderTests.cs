@@ -270,6 +270,141 @@ type Point struct {
         Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0205");
     }
 
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Class_Constructor_Call()
+    {
+        // #175: extend GS0204 to primary-constructor calls on classes.
+        var source = """
+            @Obsolete("retired")
+            type Old class (value int) {
+            }
+
+            func Main() {
+                let x = Old(5)
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("Old", diag.Message);
+        Assert.Contains("retired", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Struct_Literal()
+    {
+        // #175: extend GS0204 to struct/class literal expressions.
+        var source = """
+            @Obsolete
+            type Point data struct {
+                X int
+                Y int
+            }
+
+            func Main() {
+                let p = Point{ X: 1, Y: 2 }
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("Point", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Type_Clause_Reference()
+    {
+        // #175: extend GS0204 to named type references in type position.
+        // Marking a struct obsolete and naming it as a parameter type
+        // surfaces the diagnostic at the parameter's type clause. Such
+        // diagnostics are produced during declaration binding, so they
+        // live on the global-scope diagnostic bag rather than per-body.
+        var source = """
+            @Obsolete("legacy")
+            type Old data struct {
+                Value int
+            }
+
+            func Consume(o Old) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0204" && d.Message.Contains("Old") && d.Message.Contains("legacy"));
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Interface_Type_Reference()
+    {
+        // #175: extend GS0204 to interface type references.
+        var source = """
+            @Obsolete
+            type IOld interface {
+            }
+
+            func Consume(o IOld) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0204" && d.Message.Contains("IOld"));
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Enum_Type_Reference()
+    {
+        // #175: extend GS0204 to enum type references.
+        var source = """
+            @Obsolete
+            type Mode enum { A, B }
+
+            func Pick(m Mode) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0204" && d.Message.Contains("Mode"));
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Is_Reported_At_Parameter_Use_Site()
+    {
+        // #175: parameters that carry @Obsolete surface GS0204 at every
+        // read or write site (parameters already carry attribute storage
+        // per #170).
+        var source = """
+            func Foo(@Obsolete("dead") x int) int {
+                return x + 1
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("x", diag.Message);
+        Assert.Contains("dead", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_With_IsError_On_Class_Promotes_To_Error()
+    {
+        var source = """
+            @Obsolete("gone", true)
+            type Old class (value int) {
+            }
+
+            func Main() {
+                let x = Old(5)
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, diag.Severity);
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
