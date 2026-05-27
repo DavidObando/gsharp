@@ -598,6 +598,140 @@ type Point struct {
         Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
     }
 
+    [Fact]
+    public void Attaches_Attributes_To_Struct_Field_Symbol()
+    {
+        // Issue #186: field-declaration annotations (default target `field`)
+        // flow onto the FieldSymbol so #175 use-site diagnostics fire on
+        // `p.Old` reads and writes.
+        var source = """
+            type Point data struct {
+                @Obsolete("retired")
+                X int
+                Y int
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Empty(GetBinderDiagnostics(globalScope));
+
+        var point = (GSharp.Core.CodeAnalysis.Symbols.StructSymbol)globalScope.TypeAliases["Point"];
+        var x = point.Fields.Single(f => f.Name == "X");
+        var y = point.Fields.Single(f => f.Name == "Y");
+
+        Assert.Single(x.Attributes);
+        Assert.Equal("System.ObsoleteAttribute", x.Attributes[0].AttributeType.Name);
+        Assert.Equal(AttributeTargetKind.Field, x.Attributes[0].Target);
+        Assert.Empty(y.Attributes);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Fires_On_Struct_Field_Read()
+    {
+        // Issue #186: reading an obsolete field via `p.X` surfaces GS0204
+        // at the field-identifier location.
+        var source = """
+            type Point data struct {
+                @Obsolete("use NewX")
+                X int
+                Y int
+            }
+
+            func Main() {
+                let p = Point{ X: 1, Y: 2 }
+                _ = p.X
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("Point.X", diag.Message);
+        Assert.Contains("use NewX", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Fires_On_Struct_Field_Write()
+    {
+        // Issue #186: writing an obsolete field via `p.X = ...` surfaces
+        // GS0204 at the field-identifier location.
+        var source = """
+            type Point struct {
+                @Obsolete("use NewX")
+                X int
+            }
+
+            func Main() {
+                var p = Point{ X: 1 }
+                p.X = 5
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("Point.X", diag.Message);
+    }
+
+    [Fact]
+    public void Obsolete_With_IsError_On_Struct_Field_Promotes_To_Error()
+    {
+        // Issue #186: `@Obsolete("gone", true)` on a field promotes the
+        // use-site GS0204 to an error at the read site.
+        var source = """
+            type Point data struct {
+                @Obsolete("gone", true)
+                X int
+                Y int
+            }
+
+            func Main() {
+                let p = Point{ X: 1, Y: 2 }
+                _ = p.X
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        var diag = Assert.Single(program.Diagnostics, d => d.Id == "GS0204");
+        Assert.Equal(GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error, diag.Severity);
+    }
+
+    [Fact]
+    public void Reports_Invalid_Use_Site_Target_On_Struct_Field()
+    {
+        // `@method:` is not a valid target on a field declaration.
+        var source = """
+            type Point data struct {
+                @method:Obsolete
+                X int
+                Y int
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
+    }
+
+    [Fact]
+    public void Obsolete_Warning_Fires_On_Class_Field_Read_From_Method()
+    {
+        // Issue #186: bare field-name read inside a class method fires
+        // GS0204 when the field carries `@Obsolete`.
+        var source = """
+            type Box class {
+                @Obsolete("use NewValue")
+                Value int
+
+                public func Get() int {
+                    return Value
+                }
+            }
+            """;
+
+        var program = BindProgramFromSource(source);
+        Assert.Contains(program.Diagnostics, d => d.Id == "GS0204" && d.Message.Contains("Box.Value"));
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

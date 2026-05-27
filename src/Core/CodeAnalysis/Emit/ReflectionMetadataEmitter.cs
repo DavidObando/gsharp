@@ -1026,6 +1026,11 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.structFieldDefs[field] = handle;
+
+            // Issue #186 / ADR-0047 §3: route any @-annotations bound onto
+            // the field symbol onto the FieldDef row so attributes like
+            // @Obsolete round-trip into CustomAttribute rows.
+            this.EmitUserAttributes(handle, field, AttributeTargetKind.Field);
         }
 
         if (firstField.IsNil)
@@ -1127,6 +1132,11 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.structFieldDefs[field] = handle;
+
+            // Issue #186: mirror the EmitStructTypeDef path for nested types
+            // so user @-annotations on fields round-trip into CustomAttribute
+            // rows on the nested FieldDef as well.
+            this.EmitUserAttributes(handle, field, AttributeTargetKind.Field);
         }
 
         if (firstField.IsNil)

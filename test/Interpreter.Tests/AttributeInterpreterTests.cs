@@ -67,6 +67,19 @@ public class AttributeInterpreterTests
         Assert.DoesNotContain("error GS", output);
     }
 
+    [Fact]
+    public void Interpreter_Reports_Obsolete_Warning_On_Struct_Field_Read()
+    {
+        // Issue #186: reading an `@Obsolete` field surfaces GS0204 at the
+        // use site; the value still evaluates and prints.
+        var source = "type Point data struct {\n  @Obsolete(\"use NewX\")\n  X int\n  Y int\n}\nlet p = Point{ X: 1, Y: 2 }\np.X";
+        var output = RunSubmission(source);
+        Assert.Contains("warning GS0204", output);
+        Assert.Contains("Point.X", output);
+        Assert.Contains("use NewX", output);
+        Assert.DoesNotContain("error GS", output);
+    }
+
     private static string RunSubmission(string text)
     {
         using var outWriter = new StringWriter();
