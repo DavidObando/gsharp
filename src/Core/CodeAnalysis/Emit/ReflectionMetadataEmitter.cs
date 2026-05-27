@@ -1171,6 +1171,17 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    /// <summary>
+    /// Returns the next <see cref="ParameterHandle"/> that will be assigned by
+    /// the next call to <see cref="MetadataBuilder.AddParameter"/>. Issue #170:
+    /// every <c>AddMethodDefinition</c> call must thread this value into its
+    /// <c>parameterList</c> argument so the Param table's per-method runs stay
+    /// monotone — methods that emit no parameter rows must share the same
+    /// "next" handle, and methods that emit N rows anchor the run that follows.
+    /// </summary>
+    private ParameterHandle NextParameterHandle()
+        => MetadataTokens.ParameterHandle(this.metadata.GetRowCount(TableIndex.Param) + 1);
+
     private void EmitBoundAttribute(EntityHandle parent, BoundAttribute attr)
     {
         var clrType = attr.AttributeType.ClrType;
@@ -1669,7 +1680,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(method.Name),
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     /// <summary>
@@ -1703,7 +1714,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="objectCtorRef"/>.</summary>
@@ -1820,7 +1831,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
@@ -1915,7 +1926,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
@@ -1937,7 +1948,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
@@ -1956,7 +1967,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().Int32(), _ => { });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("GetHashCode"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("GetHashCode"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
@@ -1979,7 +1990,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().String(), _ => { });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("ToString"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("ToString"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
@@ -2015,7 +2026,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
                     this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
                 });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
@@ -2034,7 +2045,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type));
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Deconstruct"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), MetadataTokens.ParameterHandle(1));
+        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Deconstruct"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     /// <summary>
@@ -2143,7 +2154,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString("MoveNext"),
             signature: this.metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     /// <summary>
@@ -2175,7 +2186,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString("SetStateMachine"),
             signature: this.metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     /// <summary>
@@ -2494,7 +2505,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: this.NextParameterHandle());
     }
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
@@ -2715,18 +2726,43 @@ internal sealed class ReflectionMetadataEmitter
             methodAttrs |= MethodAttributes.Static;
         }
 
+        // Issue #170 / ADR-0047 §3: emit a Parameter row per source parameter
+        // so we can attach a CustomAttribute to each one. The first emitted
+        // ParameterHandle becomes the MethodDef.parameterList anchor; if the
+        // function has no parameters we leave it pointing at the next ordinal.
+        var firstParamHandle = this.NextParameterHandle();
+        var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle)>();
+        var sequenceNumber = 1;
+        foreach (var p in function.Parameters)
+        {
+            if (ReferenceEquals(p, function.ThisParameter))
+            {
+                continue;
+            }
+
+            var paramHandle = this.metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: sequenceNumber++);
+            paramHandles.Add((p, paramHandle));
+        }
+
         var handle = this.metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString(methodName),
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: MetadataTokens.ParameterHandle(1));
+            parameterList: firstParamHandle);
 
         // Phase 3 of #141: attach user annotations (method target) to the
-        // MethodDef. Return / param targets are wired alongside their
-        // respective handles in a follow-up.
+        // MethodDef. Issue #170: per-parameter annotations attach to each
+        // emitted Parameter row. Return-target attributes still pending.
         this.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
+        foreach (var (paramSym, paramHandle) in paramHandles)
+        {
+            this.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
+        }
 
         return handle;
     }

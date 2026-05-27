@@ -282,6 +282,38 @@ public class AttributeEmitTests
         Assert.StartsWith("System.Int32", typeName ?? string.Empty);
     }
 
+    [Fact]
+    public void Emits_Attribute_On_Parameter()
+    {
+        // Issue #170 / ADR-0047 §3: per-parameter annotations attach to the
+        // Parameter metadata row, round-tripping through
+        // `MethodInfo.GetParameters()[i].GetCustomAttributesData()`.
+        var source = """
+            package P
+            import System
+
+            func Foo(@Obsolete("old name") name string) {
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var foo = program.GetMethod("Foo", BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(foo);
+        var parameters = foo.GetParameters();
+        var nameParam = Assert.Single(parameters);
+        Assert.Equal("name", nameParam.Name);
+
+        var data = nameParam.GetCustomAttributesData().Single(d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal("old name", arg.Value);
+
+        // The MethodDef itself should not carry the parameter-target attribute.
+        Assert.DoesNotContain(
+            foo.GetCustomAttributesData(),
+            d => d.AttributeType.FullName == "System.ObsoleteAttribute");
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;
