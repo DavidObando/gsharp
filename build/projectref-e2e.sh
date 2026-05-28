@@ -81,10 +81,19 @@ fi
 # Now make a public signature change — add a new public method.
 TS_BEFORE2=$(stat -f %m "$APP_DLL" 2>/dev/null || stat -c %Y "$APP_DLL")
 sleep 1
-cat >> "$SAMPLE/Lib/Greeter.gs" <<'EOF'
+cat > "$SAMPLE/Lib/Greeter.gs" <<'EOF'
+package ProjectRefLib
 
-func Farewell() string {
-    return "Goodbye!"
+import System
+
+type Greeter class(Name string) {
+    func Greet() string {
+        return "Hello, " + Name + "!"
+    }
+
+    func Farewell() string {
+        return "Goodbye!"
+    }
 }
 EOF
 dotnet build "$SAMPLE/App/App.gsproj" --nologo -v:q
@@ -102,5 +111,6 @@ git checkout -- "$SAMPLE/Lib/Greeter.gs" 2>/dev/null || true
 if [[ "$REFASM_GATE_WORKS" == "true" ]]; then
     echo "PASS: cross-project references and refasm incremental rebuild verified."
 else
-    echo "PASS: cross-project references verified (refasm gating needs MVID fix — tracked separately)."
+    echo "FAIL: refasm incremental rebuild gating is not working."
+    exit 1
 fi

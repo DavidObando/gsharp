@@ -1064,19 +1064,39 @@ internal sealed class ReflectionMetadataEmitter
         // 9. Serialize PE deterministically: a SHA-256 of the serialized PE
         // content produces the BlobContentId, which patches both the PE
         // TimeDateStamp and the reserved MVID guid in the metadata heap.
+        // For reference assemblies we use MvidPEBuilder which adds a .mvid
+        // PE section so MSBuild's CopyRefAssembly can efficiently extract
+        // the module version identifier without loading full metadata.
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
                 : Characteristics.ExecutableImage);
-        var peBuilder = new ManagedPEBuilder(
-            header: peHeaderBuilder,
-            metadataRootBuilder: new MetadataRootBuilder(this.metadata),
-            ilStream: this.ilStream,
-            entryPoint: this.metadataOnly ? default : entryHandle,
-            debugDirectoryBuilder: debugDirectory,
-            deterministicIdProvider: ComputeDeterministicContentId);
         var peBlob = new BlobBuilder();
-        var contentId = peBuilder.Serialize(peBlob);
+        BlobContentId contentId;
+        if (this.metadataOnly)
+        {
+            var mvidBuilder = new MvidPEBuilder(
+                header: peHeaderBuilder,
+                metadataRootBuilder: new MetadataRootBuilder(this.metadata),
+                ilStream: this.ilStream,
+                entryPoint: default,
+                debugDirectoryBuilder: debugDirectory,
+                deterministicIdProvider: ComputeDeterministicContentId);
+            contentId = mvidBuilder.Serialize(peBlob, out var mvidSectionFixup);
+            new BlobWriter(mvidSectionFixup).WriteGuid(contentId.Guid);
+        }
+        else
+        {
+            var peBuilder = new ManagedPEBuilder(
+                header: peHeaderBuilder,
+                metadataRootBuilder: new MetadataRootBuilder(this.metadata),
+                ilStream: this.ilStream,
+                entryPoint: entryHandle,
+                debugDirectoryBuilder: debugDirectory,
+                deterministicIdProvider: ComputeDeterministicContentId);
+            contentId = peBuilder.Serialize(peBlob);
+        }
+
         mvidFixup.CreateWriter().WriteGuid(contentId.Guid);
         peBlob.WriteContentTo(peStream);
 

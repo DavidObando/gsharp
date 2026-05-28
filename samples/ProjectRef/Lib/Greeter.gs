@@ -7,8 +7,3 @@ type Greeter class(Name string) {
         return "Hello, " + Name + "!"
     }
 }
-// body-only change
-
-func Farewell() string {
-    return "Goodbye!"
-}

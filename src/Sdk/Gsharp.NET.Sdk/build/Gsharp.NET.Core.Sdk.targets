@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <Target Name="CoreCompile"
-          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePath)"
+          Inputs="$(MSBuildAllProjects);@(Compile);@(ReferencePathWithRefAssemblies)"
           Outputs="@(IntermediateAssembly)"
           DependsOnTargets="$(CoreCompileDependsOn)">
 
