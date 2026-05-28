@@ -2311,6 +2311,11 @@ public sealed class Binder
             return ClassifyImportedBoolCallNarrowing(importedCall, negate);
         }
 
+        if (inner is BoundImportedInstanceCallExpression importedInstanceCall && importedInstanceCall.Type == TypeSymbol.Bool)
+        {
+            return ClassifyImportedMethodBoolCallNarrowing(importedInstanceCall.Method.GetParameters(), importedInstanceCall.Arguments, negate);
+        }
+
         if (inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool)
         {
             return ClassifyUserBoolCallNarrowing(userCall, negate);
@@ -2320,11 +2325,16 @@ public sealed class Binder
     }
 
     private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
+        => ClassifyImportedMethodBoolCallNarrowing(call.Function.Method.GetParameters(), call.Arguments, negate);
+
+    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedMethodBoolCallNarrowing(
+        ParameterInfo[] parameters,
+        ImmutableArray<BoundExpression> arguments,
+        bool negate)
     {
-        var parameters = call.Function.Method.GetParameters();
         Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
         Dictionary<VariableSymbol, TypeSymbol> elseFrame = null;
-        var count = Math.Min(parameters.Length, call.Arguments.Length);
+        var count = Math.Min(parameters.Length, arguments.Length);
         for (var i = 0; i < count; i++)
         {
             var parameter = parameters[i];
@@ -2335,7 +2345,7 @@ public sealed class Binder
             // (&var) when the CLR parameter is declared `out T`.
             if (ClrNullability.TryGetMaybeNullWhen(parameter, out var maybeNullWhenReturnValue))
             {
-                var rawArg = call.Arguments[i];
+                var rawArg = arguments[i];
                 var widenArg = rawArg is BoundAddressOfExpression addrOf ? addrOf.Operand : rawArg;
                 if (widenArg is BoundVariableExpression widenVarExpr
                     && widenVarExpr.Variable.Type is not NullableTypeSymbol
@@ -2352,7 +2362,7 @@ public sealed class Binder
             }
 
             if (!ClrNullability.TryGetNotNullWhen(parameter, out var returnValue)
-                || call.Arguments[i] is not BoundVariableExpression variableExpression
+                || arguments[i] is not BoundVariableExpression variableExpression
                 || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
             {
                 continue;
