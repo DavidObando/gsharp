@@ -50,6 +50,7 @@ internal sealed class ReflectionMetadataEmitter
     private readonly string assemblyNameOverride;
     private readonly MetadataBuilder metadata = new MetadataBuilder();
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
+    private AssemblyReferenceHandle systemRuntimeAssemblyRef;
     private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
     private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>();
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
@@ -603,9 +604,37 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var s in nonSmStructs)
         {
-            var methodListRow = structFirstMethodRows.TryGetValue(s, out var firstStructMethodRow)
-                ? firstStructMethodRow
-                : firstPackageCtorRow;
+            // Issue #242: the ECMA-335 methodList column must be monotonically
+            // non-decreasing across TypeDef rows. Structs without methods must
+            // use the NEXT available method row (i.e., the first method row of
+            // the next struct that HAS methods, or firstPackageCtorRow). We
+            // compute this by scanning forward.
+            int methodListRow;
+            if (structFirstMethodRows.TryGetValue(s, out var firstStructMethodRow))
+            {
+                methodListRow = firstStructMethodRow;
+            }
+            else
+            {
+                // Find the next struct (in emission order) that has methods.
+                methodListRow = firstPackageCtorRow;
+                bool foundSelf = false;
+                foreach (var s2 in nonSmStructs)
+                {
+                    if (ReferenceEquals(s2, s))
+                    {
+                        foundSelf = true;
+                        continue;
+                    }
+
+                    if (foundSelf && structFirstMethodRows.TryGetValue(s2, out var nextMethodRow))
+                    {
+                        methodListRow = nextMethodRow;
+                        break;
+                    }
+                }
+            }
+
             this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
         }
 
@@ -5799,6 +5828,74 @@ internal sealed class ReflectionMetadataEmitter
         return handle;
     }
 
+    /// <summary>
+    /// Issue #242: Returns an AssemblyReferenceHandle for <c>System.Runtime</c>,
+    /// the public facade assembly that external consumers (C#/F# projects)
+    /// reference. Used as the resolution scope for base-type TypeRefs
+    /// (System.Object, System.ValueType, System.Enum) so that compiled
+    /// libraries are consumable without requiring a direct reference to
+    /// <c>System.Private.CoreLib</c>.
+    /// </summary>
+    private AssemblyReferenceHandle GetSystemRuntimeAssemblyReference()
+    {
+        if (!this.systemRuntimeAssemblyRef.IsNil)
+        {
+            return this.systemRuntimeAssemblyRef;
+        }
+
+        AssemblyName sysRuntimeName;
+        try
+        {
+            sysRuntimeName = Assembly.Load("System.Runtime").GetName();
+        }
+        catch
+        {
+            // Fallback: construct the identity using the well-known .NET
+            // public key token (b03f5f7f11d50a3a) and the host CoreLib version.
+            sysRuntimeName = new AssemblyName("System.Runtime")
+            {
+                Version = typeof(object).Assembly.GetName().Version ?? new Version(0, 0, 0, 0),
+            };
+            sysRuntimeName.SetPublicKeyToken(new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a });
+        }
+
+        var publicKeyToken = sysRuntimeName.GetPublicKeyToken();
+        var publicKeyOrTokenBlob = publicKeyToken is { Length: > 0 }
+            ? this.metadata.GetOrAddBlob(publicKeyToken)
+            : default(BlobHandle);
+        this.systemRuntimeAssemblyRef = this.metadata.AddAssemblyReference(
+            name: this.metadata.GetOrAddString(sysRuntimeName.Name ?? "System.Runtime"),
+            version: sysRuntimeName.Version ?? new Version(0, 0, 0, 0),
+            culture: default(StringHandle),
+            publicKeyOrToken: publicKeyOrTokenBlob,
+            flags: default(AssemblyFlags),
+            hashValue: default(BlobHandle));
+        return this.systemRuntimeAssemblyRef;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="type"/> is a core base type from
+    /// <c>System.Private.CoreLib</c> that is publicly exposed through
+    /// <c>System.Runtime</c>. These types are used as base types in TypeDef
+    /// rows and must reference the public facade so external consumers can
+    /// resolve them.
+    /// </summary>
+    private static bool IsCoreLibBaseType(Type type)
+    {
+        if (!string.Equals(type.Assembly.GetName().Name, "System.Private.CoreLib", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var fullName = type.FullName;
+        return fullName == "System.Object"
+            || fullName == "System.ValueType"
+            || fullName == "System.Enum"
+            || fullName == "System.Attribute"
+            || fullName == "System.MulticastDelegate"
+            || fullName == "System.Delegate";
+    }
+
     private TypeReferenceHandle GetTypeReference(Type type)
     {
         if (this.typeRefs.TryGetValue(type, out var existing))
@@ -5816,6 +5913,17 @@ internal sealed class ReflectionMetadataEmitter
         {
             resolutionScope = this.GetTypeReference(declaring);
             @namespace = default;
+        }
+        else if (IsCoreLibBaseType(type))
+        {
+            // Issue #242: base types (Object, ValueType, Enum, Attribute)
+            // must reference System.Runtime — the public facade — so that
+            // consuming C#/F# projects can resolve them. Other types in
+            // System.Private.CoreLib (e.g. Dictionary<,>) keep pointing at
+            // CoreLib because the runtime resolves them directly and they
+            // may not have type-forwarders in System.Runtime.
+            resolutionScope = this.GetSystemRuntimeAssemblyReference();
+            @namespace = this.metadata.GetOrAddString(type.Namespace ?? string.Empty);
         }
         else
         {
