@@ -345,4 +345,185 @@ internal static class PortablePdbEmitterTestHelpers
     // Kept in sync via the unit test in PortablePdbEmitTests — if the
     // emitter ever reissues the GUID this constant must move with it.
     public static readonly Guid GSharpLanguageGuid = new Guid("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
+
+    // Mirror of PortablePdbEmitter's CustomDebugInformation kind GUIDs;
+    // used by Phase 6 acceptance tests to look up specific CDI rows.
+    public static readonly Guid EmbeddedSourceKind = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
+    public static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
+    public static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
+}
+
+public class PortablePdbPhase6Tests
+{
+    private const string SimpleProgram = @"package main
+
+func main() {
+    let x = 1
+}
+";
+
+    [Fact]
+    public void EmbeddedSource_IsAbsent_When_EmbedAllSources_Is_False()
+    {
+        var (_, pdb) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        Assert.Empty(FindCdi(pdb, PortablePdbEmitterTestHelpers.EmbeddedSourceKind));
+    }
+
+    [Fact]
+    public void EmbeddedSource_IsPresent_When_EmbedAllSources_Is_True()
+    {
+        var (_, pdb) = EmitWith(new DebugInformationOptions
+        {
+            Format = DebugInformationFormat.Portable,
+            EmbedAllSources = true,
+        });
+
+        var rows = FindCdi(pdb, PortablePdbEmitterTestHelpers.EmbeddedSourceKind);
+        Assert.NotEmpty(rows);
+
+        // Decode the first embedded-source blob: int32 formatMarker, then bytes.
+        var blob = pdb.GetBlobBytes(rows[0].Value);
+        Assert.True(blob.Length > 4);
+        var formatMarker = blob[0] | (blob[1] << 8) | (blob[2] << 16) | (blob[3] << 24);
+        Assert.Equal(0, formatMarker); // Phase 6: uncompressed
+        var sourceBytes = new byte[blob.Length - 4];
+        System.Buffer.BlockCopy(blob, 4, sourceBytes, 0, sourceBytes.Length);
+        var sourceText = System.Text.Encoding.UTF8.GetString(sourceBytes);
+        Assert.Contains("func main()", sourceText);
+    }
+
+    [Fact]
+    public void EmbeddedSource_Parent_Is_A_Document_Row()
+    {
+        var (_, pdb) = EmitWith(new DebugInformationOptions
+        {
+            Format = DebugInformationFormat.Portable,
+            EmbedAllSources = true,
+        });
+
+        var rows = FindCdi(pdb, PortablePdbEmitterTestHelpers.EmbeddedSourceKind);
+        Assert.NotEmpty(rows);
+        foreach (var (parent, _) in rows)
+        {
+            Assert.Equal(HandleKind.Document, parent.Kind);
+        }
+    }
+
+    [Fact]
+    public void SourceLink_BlobMatches_File_Contents()
+    {
+        var sourceLinkPath = Path.Combine(Path.GetTempPath(), $"sl-{Guid.NewGuid():N}.json");
+        var json = @"{ ""documents"": { ""*"": ""https://example.com/raw/*"" } }";
+        File.WriteAllText(sourceLinkPath, json);
+
+        try
+        {
+            var (_, pdb) = EmitWith(new DebugInformationOptions
+            {
+                Format = DebugInformationFormat.Portable,
+                SourceLinkFilePath = sourceLinkPath,
+            });
+
+            var rows = FindCdi(pdb, PortablePdbEmitterTestHelpers.SourceLinkKind);
+            Assert.Single(rows);
+            var blob = pdb.GetBlobBytes(rows[0].Value);
+            Assert.Equal(File.ReadAllBytes(sourceLinkPath), blob);
+
+            // SourceLink CDI must be parented on the Module row.
+            Assert.Equal(HandleKind.ModuleDefinition, rows[0].Parent.Kind);
+        }
+        finally
+        {
+            File.Delete(sourceLinkPath);
+        }
+    }
+
+    [Fact]
+    public void SourceLink_IsAbsent_When_No_File_Configured()
+    {
+        var (_, pdb) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        Assert.Empty(FindCdi(pdb, PortablePdbEmitterTestHelpers.SourceLinkKind));
+    }
+
+    [Fact]
+    public void CompilationOptions_Always_Emitted_With_Compiler_And_Language_Identifiers()
+    {
+        var (_, pdb) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        var rows = FindCdi(pdb, PortablePdbEmitterTestHelpers.CompilationOptionsKind);
+        Assert.Single(rows);
+
+        var blob = pdb.GetBlobBytes(rows[0].Value);
+        var options = DecodeCompilationOptions(blob);
+
+        Assert.Equal("gsc", options["compiler-name"]);
+        Assert.Equal("GSharp", options["language"]);
+        Assert.Equal("1.0", options["language-version"]);
+        Assert.True(options.ContainsKey("compiler-version"));
+        Assert.False(string.IsNullOrWhiteSpace(options["compiler-version"]));
+
+        // CompilationOptions CDI must be parented on the Module row.
+        Assert.Equal(HandleKind.ModuleDefinition, rows[0].Parent.Kind);
+    }
+
+    private static (MemoryStream Pe, MetadataReader Pdb) EmitWith(DebugInformationOptions options)
+    {
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = options,
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        return (peStream, provider.GetMetadataReader());
+    }
+
+    private static System.Collections.Generic.List<(EntityHandle Parent, BlobHandle Value)> FindCdi(
+        MetadataReader reader, Guid kind)
+    {
+        var matches = new System.Collections.Generic.List<(EntityHandle, BlobHandle)>();
+        foreach (var handle in reader.CustomDebugInformation)
+        {
+            var cdi = reader.GetCustomDebugInformation(handle);
+            if (reader.GetGuid(cdi.Kind) == kind)
+            {
+                matches.Add((cdi.Parent, cdi.Value));
+            }
+        }
+
+        return matches;
+    }
+
+    private static System.Collections.Generic.Dictionary<string, string> DecodeCompilationOptions(byte[] blob)
+    {
+        // Format: (utf8 name \0 utf8 value \0)*
+        var dict = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);
+        var i = 0;
+        while (i < blob.Length)
+        {
+            var nameStart = i;
+            while (i < blob.Length && blob[i] != 0)
+            {
+                i++;
+            }
+
+            var name = System.Text.Encoding.UTF8.GetString(blob, nameStart, i - nameStart);
+            i++; // skip null
+            var valueStart = i;
+            while (i < blob.Length && blob[i] != 0)
+            {
+                i++;
+            }
+
+            var value = System.Text.Encoding.UTF8.GetString(blob, valueStart, i - valueStart);
+            i++; // skip null
+            dict[name] = value;
+        }
+
+        return dict;
+    }
 }

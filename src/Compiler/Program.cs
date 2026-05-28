@@ -84,6 +84,7 @@ public class Program
                 PdbFilePath = parsed.PdbPath,
                 SourceLinkFilePath = parsed.SourceLinkPath,
                 Deterministic = parsed.Deterministic,
+                EmbedAllSources = parsed.EmbedAllSources,
             },
         };
 
@@ -457,6 +458,20 @@ public class Program
                         result.Deterministic = false;
                         break;
 
+                    case "embed":
+                        // /embed[+/-] embeds all primary sources in the PDB.
+                        // Bare /embed defaults to on, matching csc semantics.
+                        result.EmbedAllSources = ParseBoolFlag(value, defaultIfEmpty: true);
+                        break;
+
+                    case "embed+":
+                        result.EmbedAllSources = true;
+                        break;
+
+                    case "embed-":
+                        result.EmbedAllSources = false;
+                        break;
+
                     case "?":
                     case "help":
                         result.ShowHelp = true;
@@ -659,6 +674,9 @@ public class Program
 
         /// <summary>Gets or sets a value indicating whether the emit should be deterministic (from /deterministic, /deterministic+/-).</summary>
         public bool Deterministic { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether all primary source files are embedded in the Portable PDB (from /embed, /embed+/-).</summary>
+        public bool EmbedAllSources { get; set; }
     }
 
     private sealed class CommandLineException : Exception

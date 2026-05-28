@@ -59,18 +59,60 @@ row used by the IL itself.
 
 
 
-The Portable PDB writer is staged. Phases 4–5 (shipped) emit `Document`,
-`MethodDebugInformation`, `LocalScope`, `LocalVariable`, and a single root
-`ImportScope` row per assembly. The following are planned for subsequent
+The Portable PDB writer is staged. Phases 4–6 (shipped) emit `Document`,
+`MethodDebugInformation`, `LocalScope`, `LocalVariable`, a single root
+`ImportScope`, plus `CustomDebugInformation` rows for `EmbeddedSource` (when
+`/embed` is on), `SourceLink` (when `/sourcelink:<file>` is supplied), and
+`CompilationOptions` (always). The following are planned for subsequent
 phases and tracked separately:
 
 * `LocalConstant` rows for `const` bindings — Phase 5.1 (deferred until the
-  binder surfaces `BoundLocalConstant` with a compile-time value).
-* Per-file `ImportScope` chains populated from `import` statements — Phase 5.2.
-* `EmbeddedSource`, `SourceLink`, `CompilationOptions`,
-  `CompilationMetadataReferences` — Phase 6.
+  binder surfaces `BoundLocalConstant` with a compile-time value, see #216).
+* Per-file `ImportScope` chains populated from `import` statements — Phase 5.2
+  (#217).
+* `CompilationMetadataReferences` rows — deferred from Phase 6 pending
+  reference-resolver plumbing (filed as a follow-up issue).
 * PE `DebugDirectory` entries (`CodeView`, `PdbChecksum`, `Reproducible`,
   `EmbeddedPortablePdb`) — Phase 7.
+
+## Custom debug information (Phase 6)
+
+GSharp emits the following `CustomDebugInformation` kinds:
+
+| Kind | Kind GUID | Parent | When emitted |
+| --- | --- | --- | --- |
+| `EmbeddedSource` | `0E8A571B-6926-466E-B4AD-8AB04611F5FE` | `Document` row | `/embed[+/-]` / `EmbedAllSources=true` |
+| `SourceLink` | `CC110556-A091-4D38-9FEC-25AB9A351A6A` | `Module` row | `/sourcelink:<file>` supplied and file exists |
+| `CompilationOptions` | `B5FEEC05-8CD0-4A83-96DA-466284BB4BD8` | `Module` row | Always (cheap; ~80 bytes) |
+
+### `EmbeddedSource` blob layout
+
+```
+formatMarker : int32 (little-endian)
+bytes        : remainder of blob
+```
+
+`formatMarker == 0` ⇒ the bytes are the raw UTF-8 source. `formatMarker > 0`
+⇒ the bytes are `Deflate`-compressed and `formatMarker` is the uncompressed
+size. Phase 6 always writes uncompressed (`formatMarker = 0`); deflate
+compression is a future size optimisation that does not require a reader
+change.
+
+### `SourceLink` blob layout
+
+The raw bytes of the Source-Link JSON file as passed to `/sourcelink:<file>`,
+unmodified. The PDB spec does not transform or re-encode the payload.
+
+### `CompilationOptions` blob layout
+
+A sequence of `(utf8 name \0 utf8 value \0)` pairs. The Phase 6 set is:
+
+| Name | Value |
+| --- | --- |
+| `compiler-name` | `gsc` |
+| `compiler-version` | `Assembly.GetExecutingAssembly().GetName().Version` of `GSharp.Core` |
+| `language` | `GSharp` |
+| `language-version` | `1.0` (placeholder until a language-version concept lands) |
 
 ## Compiler flags
 
@@ -83,7 +125,8 @@ The `gsc` compiler accepts the standard Roslyn-style debug flags:
 | `/debug:portable` (alias `/debug:pdbonly`, `/debug:full`) | Emit a sidecar `*.pdb` next to the PE. |
 | `/debug:embedded` | Embed the Portable PDB inside the PE's debug directory. |
 | `/pdb:<path>` | Override the sidecar PDB output path. |
-| `/sourcelink:<file>` | Embed the supplied Source-Link JSON as `CustomDebugInformation` (Phase 6). |
+| `/sourcelink:<file>` | Embed the supplied Source-Link JSON as `CustomDebugInformation`. |
+| `/embed[+/-]` | Embed every primary source file as an `EmbeddedSource` row (recommended with `/debug:embedded`). |
 | `/deterministic[+/-]` | Emit a content-hash-based Mvid / PdbId. |
 
 The SDK forwards `<DebugType>` and `<PdbFile>` through `BuildTask` so MSBuild-driven builds behave identically to direct `gsc` invocations.
