@@ -127,4 +127,47 @@ public class SdkLayoutTests
         Assert.Contains("Microsoft.Build.Framework", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.Build.Utilities.Core", text, System.StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Core_Targets_Forwards_Phase6_And_Phase7_BuildTask_Attributes()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+        var buildTask = doc.Descendants(MsbuildNs + "Target")
+            .First(t => (string)t.Attribute("Name") == "CoreCompile")
+            .Element(MsbuildNs + "BuildTask");
+
+        var attrs = buildTask!.Attributes().ToDictionary(a => a.Name.LocalName, a => a.Value);
+
+        // Phase 8 wiring: the four debug-information-shaped MSBuild properties
+        // must all reach the task, else consumer projects can't control
+        // SourceLink / embed / determinism without command-line workarounds.
+        Assert.Equal("$(DebugType)", attrs["DebugType"]);
+        Assert.Equal("@(_DebugSymbolsIntermediatePath)", attrs["PdbFile"]);
+        Assert.Equal("$(SourceLink)", attrs["SourceLink"]);
+        Assert.Equal("$(EmbedAllSources)", attrs["EmbedAllSources"]);
+        Assert.Equal("$(Deterministic)", attrs["Deterministic"]);
+    }
+
+    [Fact]
+    public void Core_Targets_Adds_Sidecar_Pdb_To_FileWrites()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+
+        var fileWrites = doc.Descendants(MsbuildNs + "FileWrites")
+            .Where(fw =>
+                ((string)fw.Attribute("Include") ?? string.Empty)
+                    .Contains("_DebugSymbolsIntermediatePath", System.StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Single(fileWrites);
+
+        // The PDB FileWrites entry must be gated so Clean / incremental skips
+        // it when no sidecar is produced (DebugType=embedded/none/empty).
+        var condition = (string)fileWrites[0].Attribute("Condition");
+        Assert.NotNull(condition);
+        Assert.Contains("'$(DebugType)' != 'embedded'", condition, System.StringComparison.Ordinal);
+        Assert.Contains("'$(DebugType)' != 'none'", condition, System.StringComparison.Ordinal);
+    }
 }

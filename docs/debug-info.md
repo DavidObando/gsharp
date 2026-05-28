@@ -143,3 +143,25 @@ The `gsc` compiler accepts the standard Roslyn-style debug flags:
 | `/deterministic[+/-]` | Emit a content-hash-based Mvid / PdbId. |
 
 The SDK forwards `<DebugType>` and `<PdbFile>` through `BuildTask` so MSBuild-driven builds behave identically to direct `gsc` invocations.
+
+## SDK / MSBuild properties
+
+`Gsharp.NET.Sdk` exposes the standard .NET debug properties and threads them
+through `BuildTask` into the matching `gsc` flag. The property names match
+the C# / F# SDKs, so an enterprise consumer can apply the same `Directory.Build.props`
+to a mixed-language solution and have GSharp projects honour the same
+conventions.
+
+| Property | Default | Forwarded as | Effect |
+| --- | --- | --- | --- |
+| `<DebugType>` | `portable` in `Debug`, `none` in `Release` | `/debug:<value>` | Selects no PDB / sidecar Portable PDB / embedded Portable PDB. |
+| `<DebugSymbols>` | derived from `<DebugType>` | (gates whether the build writes a sidecar PDB) | When `true` and `<DebugType>` is `portable`/`pdbonly`/`full`, the SDK adds `obj/.../<Asm>.pdb` to `@(FileWrites)` and the standard `CopyFilesToOutputDirectory` target copies it next to the produced `*.dll`. |
+| `<PdbFile>` | `obj/.../<AssemblyName>.pdb` | `/pdb:<path>` | Override the sidecar output path. |
+| `<EmbedAllSources>` | `false` | `/embed+` | Embed every primary source file in the PDB as `EmbeddedSource` rows. Recommended when `<DebugType>embedded</DebugType>` is on so debugging the assembly never depends on the local source tree. |
+| `<SourceLink>` | (none) | `/sourcelink:<file>` | Embed the supplied Source-Link JSON as a `CustomDebugInformation` row. |
+| `<Deterministic>` | `true` for the official build, `false` otherwise | `/deterministic+/-` | Switch the Mvid / PdbId to a content hash and emit the `Reproducible` debug-directory entry. |
+
+`Gsharp.NET.Sdk` does *not* invent any of these property names — they are the
+same surface every modern .NET SDK consumes, so existing CI snippets that set
+`<DebugType>embedded</DebugType>`, `<EmbedAllSources>true</EmbedAllSources>`, or
+`<Deterministic>true</Deterministic>` "just work" against a GSharp project.

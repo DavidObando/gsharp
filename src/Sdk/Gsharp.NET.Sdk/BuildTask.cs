@@ -57,6 +57,23 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the PDB output path.</summary>
     public string PdbFile { get; set; }
 
+    /// <summary>Gets or sets the path to a Source Link JSON file (forwarded to <c>gsc /sourcelink:</c>).</summary>
+    public string SourceLink { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value (parsed as a bool) controlling whether all primary
+    /// source files are embedded in the Portable PDB (forwarded as
+    /// <c>gsc /embed</c>). Maps to MSBuild's <c>EmbedAllSources</c> property.
+    /// </summary>
+    public string EmbedAllSources { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value (parsed as a bool) controlling deterministic emit
+    /// (forwarded as <c>gsc /deterministic</c>). Maps to MSBuild's
+    /// <c>Deterministic</c> property.
+    /// </summary>
+    public string Deterministic { get; set; }
+
     /// <summary>Gets or sets the assembly version stamped on the output.</summary>
     public string Version { get; set; }
 
@@ -121,6 +138,21 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (!string.IsNullOrEmpty(this.PdbFile))
         {
             args.Add($"/pdb:{this.PdbFile}");
+        }
+
+        if (!string.IsNullOrEmpty(this.SourceLink))
+        {
+            args.Add($"/sourcelink:{this.SourceLink}");
+        }
+
+        if (ParseBool(this.EmbedAllSources))
+        {
+            args.Add("/embed+");
+        }
+
+        if (ParseBool(this.Deterministic))
+        {
+            args.Add("/deterministic+");
         }
 
         if (!string.IsNullOrEmpty(this.RefAssembly))
@@ -188,4 +220,12 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         return proc.ExitCode == 0 && !this.Log.HasLoggedErrors;
     }
+
+    /// <summary>
+    /// Parses an MSBuild bool-style property value. Accepts the canonical
+    /// <c>"true"</c> / <c>"false"</c> spellings (case-insensitive) and treats
+    /// empty / null / unrecognized values as <see langword="false"/>.
+    /// </summary>
+    private static bool ParseBool(string value) =>
+        !string.IsNullOrEmpty(value) && bool.TryParse(value, out var b) && b;
 }
