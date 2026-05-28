@@ -340,6 +340,179 @@ func main() {
     }
 }
 
+/// <summary>
+/// Phase 6 (issue #216) acceptance tests for <c>LocalConstant</c> PDB rows.
+/// A <c>const</c>-declared binding with a literal initializer must produce a
+/// <c>LocalConstant</c> row in the Portable PDB and must NOT occupy an IL slot.
+/// </summary>
+public class PortablePdbLocalConstantTests
+{
+    private const string ConstFloatProgram = @"package main
+
+func main() {
+    const PI = 3.14
+    let x = PI + 1.0
+}
+";
+
+    private const string MultipleConstsProgram = @"package main
+
+func main() {
+    const A = 1
+    const B = true
+    const C = ""hello""
+    let x = A
+}
+";
+
+    [Fact]
+    public void Const_Float_Produces_LocalConstant_Row()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ConstFloatProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        Assert.True(reader.LocalConstants.Count >= 1, $"expected ≥1 LocalConstant row, got {reader.LocalConstants.Count}");
+
+        // Find the PI constant row.
+        string piName = null;
+        byte[] piBlob = null;
+        foreach (var handle in reader.LocalConstants)
+        {
+            var lc = reader.GetLocalConstant(handle);
+            var name = reader.GetString(lc.Name);
+            if (name == "PI")
+            {
+                piName = name;
+                piBlob = reader.GetBlobBytes(lc.Signature);
+                break;
+            }
+        }
+
+        Assert.NotNull(piName);
+        Assert.NotNull(piBlob);
+
+        // Blob[0] must be ELEMENT_TYPE_R8 (0x0D), followed by 8 bytes of the value.
+        Assert.True(piBlob.Length >= 9, $"expected ≥9 blob bytes for R8 constant, got {piBlob.Length}");
+        Assert.Equal(0x0D, piBlob[0]);
+        var encodedValue = BitConverter.ToDouble(piBlob, 1);
+        Assert.Equal(3.14, encodedValue, precision: 10);
+    }
+
+    [Fact]
+    public void Const_Does_Not_Allocate_IL_Slot()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ConstFloatProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var pdbReader = pdbProvider.GetMetadataReader();
+
+        // PI must not appear in LocalVariables (it has no IL slot).
+        foreach (var handle in pdbReader.LocalVariables)
+        {
+            var lv = pdbReader.GetLocalVariable(handle);
+            Assert.NotEqual("PI", pdbReader.GetString(lv.Name));
+        }
+    }
+
+    [Fact]
+    public void LocalScope_ConstantList_Anchors_Constant_Range()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ConstFloatProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        // There must be a LocalScope whose constantList points at a valid constant row.
+        bool found = false;
+        foreach (var handle in reader.LocalScopes)
+        {
+            var scope = reader.GetLocalScope(handle);
+            var constantHandle = scope.GetLocalConstants();
+            if (!constantHandle.GetEnumerator().MoveNext())
+            {
+                continue;
+            }
+
+            // Scope has at least one constant — verify the PI row is reachable.
+            foreach (var ch in scope.GetLocalConstants())
+            {
+                var lc = reader.GetLocalConstant(ch);
+                var name = reader.GetString(lc.Name);
+                if (name == "PI")
+                {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found)
+            {
+                break;
+            }
+        }
+
+        Assert.True(found, "expected a LocalScope whose constantList contains the PI LocalConstant row");
+    }
+
+    [Fact]
+    public void Multiple_Const_Types_All_Produce_Rows()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(MultipleConstsProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        var names = new System.Collections.Generic.HashSet<string>();
+        foreach (var handle in reader.LocalConstants)
+        {
+            var lc = reader.GetLocalConstant(handle);
+            names.Add(reader.GetString(lc.Name));
+        }
+
+        Assert.Contains("A", names);
+        Assert.Contains("B", names);
+        Assert.Contains("C", names);
+    }
+}
+
 internal static class PortablePdbEmitterTestHelpers
 {
     // Mirror of PortablePdbEmitter.GSharpLanguageGuid for cross-assembly assertion.

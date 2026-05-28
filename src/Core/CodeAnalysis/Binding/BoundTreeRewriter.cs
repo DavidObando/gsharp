@@ -122,7 +122,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundVariableDeclaration(null, node.Variable, initializer);
+        return new BoundVariableDeclaration(null, node.Variable, initializer, node.ConstantValue);
     }
 
     /// <summary>

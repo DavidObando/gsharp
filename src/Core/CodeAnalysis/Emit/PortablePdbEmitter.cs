@@ -130,6 +130,7 @@ internal sealed class PortablePdbEmitter
         MethodDefinitionHandle methodHandle,
         IReadOnlyList<SequencePoint> sequencePoints,
         IReadOnlyList<LocalInfo> locals,
+        IReadOnlyList<LocalConstantInfo> constants,
         int ilCodeSize,
         StandaloneSignatureHandle localSignatureToken)
     {
@@ -152,10 +153,11 @@ internal sealed class PortablePdbEmitter
         }
 
         var hasLocals = locals != null && locals.Count > 0;
+        var hasConstants = constants != null && constants.Count > 0;
 
         // Nothing for a debugger to anchor — skip the row entirely so Serialize
         // falls through to writing an empty MethodDebugInformation slot.
-        if (!hasUsableDocument && !hasLocals)
+        if (!hasUsableDocument && !hasLocals && !hasConstants)
         {
             return;
         }
@@ -164,6 +166,7 @@ internal sealed class PortablePdbEmitter
         this.recordedMethods[row] = new RecordedMethod(
             sequencePoints ?? System.Array.Empty<SequencePoint>(),
             locals ?? System.Array.Empty<LocalInfo>(),
+            constants ?? System.Array.Empty<LocalConstantInfo>(),
             ilCodeSize,
             localSignatureToken);
     }
@@ -210,15 +213,23 @@ internal sealed class PortablePdbEmitter
             parentScope: default,
             imports: this.pdbMetadata.GetOrAddBlob(EmptyBlob));
 
-        // Step 3 — Phase 5: LocalVariable + LocalScope rows. The reader walks
-        // LocalScope sorted by method, then by startOffset. Within a method,
-        // each scope's variable list is implied by the *next* scope's variable
-        // handle, so we MUST add LocalVariable rows in the same order we add
-        // LocalScope rows. Since Phase 5 only emits a single scope per method
-        // covering the full method body, the ordering is trivially correct.
+        // Step 3 — Phase 5+6: LocalVariable + LocalConstant + LocalScope rows.
+        // The reader walks LocalScope sorted by method, then by startOffset.
+        // Within a method, variable/constant lists are implied by the *next*
+        // scope's handles, so we MUST add rows in the same order as scopes.
+        // We maintain a running nextConstantRid so that empty-constant methods
+        // still produce a correct constantList anchor.
+        int nextConstantRid = 1;
         for (var rid = 1; rid <= methodDefRowCount; rid++)
         {
-            if (!this.recordedMethods.TryGetValue(rid, out var rec) || rec.Locals.Count == 0)
+            if (!this.recordedMethods.TryGetValue(rid, out var rec))
+            {
+                continue;
+            }
+
+            var hasLocals = rec.Locals.Count > 0;
+            var hasConstants = rec.Constants.Count > 0;
+            if (!hasLocals && !hasConstants)
             {
                 continue;
             }
@@ -242,11 +253,27 @@ internal sealed class PortablePdbEmitter
                 }
             }
 
+            // Add LocalConstant rows for this method. Track the first RID so
+            // AddLocalScope gets a correct constantList anchor.
+            var firstConstantRid = nextConstantRid;
+            for (var i = 0; i < rec.Constants.Count; i++)
+            {
+                var c = rec.Constants[i];
+                var sigBlob = EncodeLocalConstantSignature(c.Value);
+                if (!sigBlob.IsNil)
+                {
+                    this.pdbMetadata.AddLocalConstant(
+                        name: this.pdbMetadata.GetOrAddString(c.Name),
+                        signature: sigBlob);
+                    nextConstantRid++;
+                }
+            }
+
             this.pdbMetadata.AddLocalScope(
                 method: MetadataTokens.MethodDefinitionHandle(rid),
                 importScope: rootImportScope,
                 variableList: firstLocal,
-                constantList: MetadataTokens.LocalConstantHandle(1),
+                constantList: MetadataTokens.LocalConstantHandle(firstConstantRid),
                 startOffset: 0,
                 length: rec.IlCodeSize);
         }
@@ -399,16 +426,95 @@ internal sealed class PortablePdbEmitter
         return default;
     }
 
+    /// <summary>
+    /// Encodes a LocalConstant blob per Portable PDB spec §II.23.2.
+    /// Returns a <see cref="BlobHandle"/> for the encoded signature, or
+    /// <see langword="default"/> when the value type is unsupported.
+    /// </summary>
+    private BlobHandle EncodeLocalConstantSignature(object value)
+    {
+        var blob = new BlobBuilder();
+        switch (value)
+        {
+            case bool b:
+                blob.WriteByte(0x02); // ELEMENT_TYPE_BOOLEAN
+                blob.WriteByte(b ? (byte)1 : (byte)0);
+                break;
+            case char ch:
+                blob.WriteByte(0x03); // ELEMENT_TYPE_CHAR
+                blob.WriteInt16((short)ch);
+                break;
+            case sbyte sb:
+                blob.WriteByte(0x04); // ELEMENT_TYPE_I1
+                blob.WriteSByte(sb);
+                break;
+            case byte by:
+                blob.WriteByte(0x05); // ELEMENT_TYPE_U1
+                blob.WriteByte(by);
+                break;
+            case short s:
+                blob.WriteByte(0x06); // ELEMENT_TYPE_I2
+                blob.WriteInt16(s);
+                break;
+            case ushort us:
+                blob.WriteByte(0x07); // ELEMENT_TYPE_U2
+                blob.WriteUInt16(us);
+                break;
+            case int i:
+                blob.WriteByte(0x08); // ELEMENT_TYPE_I4
+                blob.WriteInt32(i);
+                break;
+            case uint ui:
+                blob.WriteByte(0x09); // ELEMENT_TYPE_U4
+                blob.WriteUInt32(ui);
+                break;
+            case long l:
+                blob.WriteByte(0x0A); // ELEMENT_TYPE_I8
+                blob.WriteInt64(l);
+                break;
+            case ulong ul:
+                blob.WriteByte(0x0B); // ELEMENT_TYPE_U8
+                blob.WriteUInt64(ul);
+                break;
+            case float f:
+                blob.WriteByte(0x0C); // ELEMENT_TYPE_R4
+                blob.WriteUInt32(BitConverter.SingleToUInt32Bits(f));
+                break;
+            case double d:
+                blob.WriteByte(0x0D); // ELEMENT_TYPE_R8
+                blob.WriteUInt64(BitConverter.DoubleToUInt64Bits(d));
+                break;
+            case string str:
+                blob.WriteByte(0x0E); // ELEMENT_TYPE_STRING
+                if (str is null)
+                {
+                    blob.WriteByte(0xFF);
+                }
+                else
+                {
+                    blob.WriteBytes(Encoding.Unicode.GetBytes(str));
+                }
+
+                break;
+            default:
+                return default;
+        }
+
+        return this.pdbMetadata.GetOrAddBlob(blob);
+    }
+
     private sealed class RecordedMethod
     {
         public RecordedMethod(
             IReadOnlyList<SequencePoint> points,
             IReadOnlyList<LocalInfo> locals,
+            IReadOnlyList<LocalConstantInfo> constants,
             int ilCodeSize,
             StandaloneSignatureHandle localSignatureToken)
         {
             this.Points = points;
             this.Locals = locals;
+            this.Constants = constants;
             this.IlCodeSize = ilCodeSize;
             this.LocalSignatureToken = localSignatureToken;
         }
@@ -416,6 +522,8 @@ internal sealed class PortablePdbEmitter
         public IReadOnlyList<SequencePoint> Points { get; }
 
         public IReadOnlyList<LocalInfo> Locals { get; }
+
+        public IReadOnlyList<LocalConstantInfo> Constants { get; }
 
         public int IlCodeSize { get; }
 
@@ -443,6 +551,25 @@ internal readonly struct LocalInfo
     public string Name { get; }
 
     public bool IsCompilerGenerated { get; }
+}
+
+/// <summary>
+/// A compile-time constant binding handed to
+/// <see cref="PortablePdbEmitter.RecordMethod"/>. The emitter encodes
+/// <see cref="Value"/> into a <c>LocalConstant</c> signature blob per
+/// Portable PDB spec §II.23.2.
+/// </summary>
+internal readonly struct LocalConstantInfo
+{
+    public LocalConstantInfo(string name, object value)
+    {
+        this.Name = name ?? string.Empty;
+        this.Value = value;
+    }
+
+    public string Name { get; }
+
+    public object Value { get; }
 }
 
 /// <summary>
