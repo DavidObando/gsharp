@@ -302,6 +302,9 @@ __pycache__/
 # tools/**
 # !tools/packages.config
 
+# Local tools downloaded by smoke-test scripts (e.g., build/debugger-e2e.sh).
+.tools/
+
 # Tabs Studio
 *.tss
 
