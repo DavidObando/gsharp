@@ -1493,7 +1493,7 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
     {
         var receiver = RewriteExpression(node.Receiver);
-        return receiver == node.Receiver ? node : new BoundFieldAccessExpression(null, receiver, node.StructType, node.Field);
+        return receiver == node.Receiver ? node : new BoundFieldAccessExpression(null, receiver, node.StructType, node.Field, node.NarrowedType);
     }
 
     /// <summary>Rewrites a field assignment.</summary>
