@@ -13,6 +13,20 @@
          SDK's reference-assembly pipeline so consumers get refint/ and ref/
          outputs alongside the runtime assembly. -->
     <ProduceReferenceAssembly Condition=" '$(ProduceReferenceAssembly)' == '' ">true</ProduceReferenceAssembly>
+
+    <!-- Phase 7.7b: enable XML documentation file generation for library
+         projects so consumers get IntelliSense / XML doc hover. -->
+    <GenerateDocumentationFile Condition=" '$(GenerateDocumentationFile)' == '' and '$(OutputType)' != 'Exe' ">true</GenerateDocumentationFile>
+
+    <!-- Phase 7.7b: ensure dotnet pack produces a .snupkg symbol package
+         carrying the Portable PDB alongside the main .nupkg. -->
+    <IncludeSymbols Condition=" '$(IncludeSymbols)' == '' ">true</IncludeSymbols>
+    <SymbolPackageFormat Condition=" '$(SymbolPackageFormat)' == '' ">snupkg</SymbolPackageFormat>
+
+    <!-- Phase 7.7b: suppress NU5131 — our Pack target populates ref/<tfm>/
+         via TfmSpecificPackageFile which NuGet's nuspec validation doesn't
+         cross-check with the References element. The layout is correct. -->
+    <NoWarn>$(NoWarn);NU5131</NoWarn>
   </PropertyGroup>
 
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />

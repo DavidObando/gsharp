@@ -4,6 +4,11 @@
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>GsharpLibrary</RootNamespace>
+
+    <!-- NuGet package metadata (customize before publishing). -->
+    <PackageId>GsharpLibrary</PackageId>
+    <Authors>GSharp Authors</Authors>
+    <Description>A GSharp class library consumable from C#, F#, and other .NET languages.</Description>
   </PropertyGroup>
 
 </Project>

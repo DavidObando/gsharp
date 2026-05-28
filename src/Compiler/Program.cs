@@ -160,7 +160,7 @@ public class Program
         using (var refStream = string.IsNullOrEmpty(refOutputPath) ? null : File.Create(refOutputPath))
         using (var pdbStream = pdbOutputPath is null ? null : File.Create(pdbOutputPath))
         {
-            result = compilation.Emit(peStream, pdbStream, refStream, args.AssemblyName);
+            result = compilation.Emit(peStream, pdbStream, refStream, args.AssemblyName, args.Version);
         }
 
         // Apply /nowarn, /warnaserror filtering.
@@ -328,6 +328,10 @@ public class Program
 
                     case "assemblyname":
                         result.AssemblyName = value;
+                        break;
+
+                    case "version":
+                        result.Version = value;
                         break;
 
                     case "target":
@@ -677,6 +681,9 @@ public class Program
 
         /// <summary>Gets or sets a value indicating whether all primary source files are embedded in the Portable PDB (from /embed, /embed+/-).</summary>
         public bool EmbedAllSources { get; set; }
+
+        /// <summary>Gets or sets the informational version string stamped on the output assembly (from /version:).</summary>
+        public string Version { get; set; }
     }
 
     private sealed class CommandLineException : Exception
