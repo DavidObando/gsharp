@@ -26,17 +26,23 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// the <see cref="ReflectionMetadataEmitter"/> never instantiates one.
 /// </summary>
 /// <remarks>
-/// Phase 4 covers the <c>Document</c> table and one
-/// <c>MethodDebugInformation</c> row per <c>MethodDef</c>. Phase 5 layers in
+/// Phases 4–5 cover <c>Document</c>, <c>MethodDebugInformation</c>,
 /// <c>LocalScope</c>, <c>LocalVariable</c>, and a single root
-/// <c>ImportScope</c> so debuggers can resolve user-visible local names. Custom
-/// debug information and PE-side <c>DebugDirectory</c> entries are deferred to
-/// Phases 6 and 7.
+/// <c>ImportScope</c>. Phase 6 adds <c>CustomDebugInformation</c> blobs:
+/// <c>EmbeddedSource</c> (per document), <c>SourceLink</c> (one per module),
+/// and <c>CompilationOptions</c> (one per module). PE-side
+/// <c>DebugDirectory</c> entries land in Phase 7.
 /// </remarks>
 internal sealed class PortablePdbEmitter
 {
     // ECMA-335 / Portable PDB hash algorithm GUIDs (spec § "Document").
     private static readonly Guid HashAlgorithmSha256 = new Guid("8829D00F-11B8-4213-878B-770E8597AC16");
+
+    // Portable PDB CustomDebugInformation kind GUIDs
+    // (spec § "CustomDebugInformation").
+    private static readonly Guid EmbeddedSourceKind = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
+    private static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
+    private static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
 
     /// <summary>
     /// Stable GSharp language GUID. Once a tool keys off this value (debugger,
@@ -49,6 +55,12 @@ internal sealed class PortablePdbEmitter
     private readonly MetadataBuilder pdbMetadata = new MetadataBuilder();
     private readonly Dictionary<SyntaxTree, DocumentHandle> documentsByTree = new Dictionary<SyntaxTree, DocumentHandle>();
     private readonly Dictionary<int, RecordedMethod> recordedMethods = new Dictionary<int, RecordedMethod>();
+    private readonly DebugInformationOptions options;
+
+    public PortablePdbEmitter(DebugInformationOptions options)
+    {
+        this.options = options ?? new DebugInformationOptions();
+    }
 
     /// <summary>
     /// Returns the <see cref="DocumentHandle"/> for <paramref name="tree"/>,
@@ -84,6 +96,26 @@ internal sealed class PortablePdbEmitter
             language: this.pdbMetadata.GetOrAddGuid(GSharpLanguageGuid));
 
         this.documentsByTree[tree] = handle;
+
+        // Phase 6: embed the source file as a CustomDebugInformation row
+        // anchored on this Document. Format per spec § "EmbeddedSource":
+        //   4-byte little-endian int formatMarker, then bytes.
+        // formatMarker == 0  → raw, no compression.
+        // formatMarker  > 0  → uncompressed size of deflate-compressed payload.
+        // Phase 6 always emits uncompressed; deflate compression is a
+        // size-only optimisation we can layer in later without breaking
+        // readers.
+        if (this.options.EmbedAllSources && sourceBytes.Length > 0)
+        {
+            var embedBlob = new BlobBuilder();
+            embedBlob.WriteInt32(0);
+            embedBlob.WriteBytes(sourceBytes);
+            this.pdbMetadata.AddCustomDebugInformation(
+                parent: handle,
+                kind: this.pdbMetadata.GetOrAddGuid(EmbeddedSourceKind),
+                value: this.pdbMetadata.GetOrAddBlob(embedBlob));
+        }
+
         return handle;
     }
 
@@ -217,6 +249,40 @@ internal sealed class PortablePdbEmitter
                 length: rec.IlCodeSize);
         }
 
+        // Step 4 — Phase 6: module-level CustomDebugInformation rows. These
+        // are written *before* the PortablePdbBuilder consumes the metadata
+        // builder. Parent is the singleton Module row (RID 1); this is the
+        // anchor that debuggers and symbol servers query against the module
+        // identity rather than any particular method.
+        var moduleHandle = MetadataTokens.EntityHandle(TableIndex.Module, 1);
+
+        if (!string.IsNullOrEmpty(this.options.SourceLinkFilePath) &&
+            File.Exists(this.options.SourceLinkFilePath))
+        {
+            // SourceLink blob is the raw bytes of the JSON file as-is; the
+            // PDB spec does not transform it.
+            var sourceLinkBytes = File.ReadAllBytes(this.options.SourceLinkFilePath);
+            this.pdbMetadata.AddCustomDebugInformation(
+                parent: moduleHandle,
+                kind: this.pdbMetadata.GetOrAddGuid(SourceLinkKind),
+                value: this.pdbMetadata.GetOrAddBlob(sourceLinkBytes));
+        }
+
+        // CompilationOptions: name/value UTF-8 pairs, each terminated by a
+        // null byte. Always emit so that downstream tooling can identify how
+        // a binary was produced; the set is intentionally minimal in Phase 6
+        // and may grow as more compiler knobs become observable.
+        var optionsBlob = new BlobBuilder();
+        var compilerVersion = typeof(PortablePdbEmitter).Assembly.GetName().Version?.ToString() ?? "0.0.0.0";
+        WriteCompilationOption(optionsBlob, "compiler-name", "gsc");
+        WriteCompilationOption(optionsBlob, "compiler-version", compilerVersion);
+        WriteCompilationOption(optionsBlob, "language", "GSharp");
+        WriteCompilationOption(optionsBlob, "language-version", "1.0");
+        this.pdbMetadata.AddCustomDebugInformation(
+            parent: moduleHandle,
+            kind: this.pdbMetadata.GetOrAddGuid(CompilationOptionsKind),
+            value: this.pdbMetadata.GetOrAddBlob(optionsBlob));
+
         var pdbBuilder = new PortablePdbBuilder(
             tablesAndHeaps: this.pdbMetadata,
             typeSystemRowCounts: peRowCounts,
@@ -229,6 +295,18 @@ internal sealed class PortablePdbEmitter
     }
 
     private static readonly byte[] EmptyBlob = System.Array.Empty<byte>();
+
+    /// <summary>
+    /// Writes a single <c>CompilationOptions</c> key/value pair using the
+    /// spec's null-terminated UTF-8 layout: <c>name \0 value \0</c>.
+    /// </summary>
+    private static void WriteCompilationOption(BlobBuilder builder, string name, string value)
+    {
+        builder.WriteUTF8(name);
+        builder.WriteByte(0);
+        builder.WriteUTF8(value ?? string.Empty);
+        builder.WriteByte(0);
+    }
 
     /// <summary>
     /// Encodes a method's sequence-point blob per Portable PDB spec § "Sequence

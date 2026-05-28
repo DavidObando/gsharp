@@ -267,7 +267,7 @@ internal sealed class ReflectionMetadataEmitter
         // bit-for-bit identical.
         if (this.debugInformation.Format == DebugInformationFormat.Portable && this.pdbStream != null)
         {
-            this.pdb = new PortablePdbEmitter();
+            this.pdb = new PortablePdbEmitter(this.debugInformation);
         }
 
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref

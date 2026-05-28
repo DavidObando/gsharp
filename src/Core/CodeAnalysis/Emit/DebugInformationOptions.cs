@@ -63,4 +63,16 @@ public sealed class DebugInformationOptions
     /// and adds a <c>Reproducible</c> debug-directory entry to the PE.
     /// </summary>
     public bool Deterministic { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether all primary source files
+    /// referenced by the compilation are embedded inside the Portable PDB
+    /// as <c>EmbeddedSource</c> <c>CustomDebugInformation</c> blobs. Defaults
+    /// to <see langword="false"/>. Enabling this lets debuggers reconstruct
+    /// source even when the original files have moved on disk, at the cost of
+    /// a larger PDB. The Portable PDB spec recommends pairing this with
+    /// <see cref="DebugInformationFormat.Embedded"/> for fully self-contained
+    /// binaries.
+    /// </summary>
+    public bool EmbedAllSources { get; set; }
 }
