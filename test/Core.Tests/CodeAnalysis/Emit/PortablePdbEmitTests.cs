@@ -194,10 +194,155 @@ func main() {
     }
 }
 
+public class PortablePdbPhase5Tests
+{
+    private const string ThreeLocalsProgram = @"package main
+
+func main() {
+    let x = 1
+    let y = 2
+    let z = x + y
+}
+";
+
+    [Fact]
+    public void Method_With_UserLocals_Emits_LocalScope_And_LocalVariable_Rows()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ThreeLocalsProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        Assert.True(reader.LocalScopes.Count >= 1, "expected at least one LocalScope row");
+        Assert.True(reader.LocalVariables.Count >= 3, $"expected ≥3 LocalVariable rows for x/y/z, got {reader.LocalVariables.Count}");
+
+        var localNames = new System.Collections.Generic.HashSet<string>();
+        foreach (var lvh in reader.LocalVariables)
+        {
+            var lv = reader.GetLocalVariable(lvh);
+            localNames.Add(reader.GetString(lv.Name));
+        }
+
+        Assert.Contains("x", localNames);
+        Assert.Contains("y", localNames);
+        Assert.Contains("z", localNames);
+    }
+
+    [Fact]
+    public void LocalScope_Length_Equals_Method_Body_Size()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ThreeLocalsProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        using var pe = new System.Reflection.PortableExecutable.PEReader(peStream);
+        var peReader = pe.GetMetadataReader();
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var pdbReader = provider.GetMetadataReader();
+
+        foreach (var lsh in pdbReader.LocalScopes)
+        {
+            var scope = pdbReader.GetLocalScope(lsh);
+            Assert.Equal(0, scope.StartOffset);
+
+            var method = peReader.GetMethodDefinition(scope.Method);
+            var body = pe.GetMethodBody(method.RelativeVirtualAddress);
+            Assert.Equal(body.GetILBytes().Length, scope.Length);
+        }
+    }
+
+    [Fact]
+    public void Every_LocalScope_References_A_Root_ImportScope()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ThreeLocalsProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        Assert.True(reader.ImportScopes.Count >= 1, "expected a root ImportScope row");
+
+        foreach (var lsh in reader.LocalScopes)
+        {
+            var scope = reader.GetLocalScope(lsh);
+            Assert.False(scope.ImportScope.IsNil, "every LocalScope must reference an ImportScope");
+        }
+    }
+
+    [Fact]
+    public void SequencePoints_Header_References_Method_LocalSignature()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ThreeLocalsProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        using var pe = new System.Reflection.PortableExecutable.PEReader(peStream);
+        var peReader = pe.GetMetadataReader();
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var pdbReader = provider.GetMetadataReader();
+
+        // Find a method with locals and verify the PDB sequence-point header
+        // identifies the same StandaloneSignature row that the PE method body
+        // points at via localVariablesSignature.
+        var verified = false;
+        foreach (var mdih in pdbReader.MethodDebugInformation)
+        {
+            var mdi = pdbReader.GetMethodDebugInformation(mdih);
+            if (mdi.LocalSignature.IsNil)
+            {
+                continue;
+            }
+
+            var methodHandle = MetadataTokens.MethodDefinitionHandle(MetadataTokens.GetRowNumber(mdih));
+            var method = peReader.GetMethodDefinition(methodHandle);
+            var body = pe.GetMethodBody(method.RelativeVirtualAddress);
+            Assert.Equal(MetadataTokens.GetRowNumber(body.LocalSignature), MetadataTokens.GetRowNumber(mdi.LocalSignature));
+            verified = true;
+        }
+
+        Assert.True(verified, "expected at least one method with a non-nil LocalSignature in the PDB header");
+    }
+}
+
 internal static class PortablePdbEmitterTestHelpers
 {
     // Mirror of PortablePdbEmitter.GSharpLanguageGuid for cross-assembly assertion.
-    // Kept in sync via the unit test below in PortablePdbEmitTests — if the
+    // Kept in sync via the unit test in PortablePdbEmitTests — if the
     // emitter ever reissues the GUID this constant must move with it.
     public static readonly Guid GSharpLanguageGuid = new Guid("4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00");
 }

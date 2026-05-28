@@ -26,10 +26,12 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// the <see cref="ReflectionMetadataEmitter"/> never instantiates one.
 /// </summary>
 /// <remarks>
-/// Phase 4 of the ADR-0027 §7.7a Portable PDB plan. This phase covers the
-/// <c>Document</c> table and one <c>MethodDebugInformation</c> row per
-/// <c>MethodDef</c>. Local-scope rows, custom debug information, and PE-side
-/// <c>DebugDirectory</c> entries are deferred to Phases 5, 6, and 7.
+/// Phase 4 covers the <c>Document</c> table and one
+/// <c>MethodDebugInformation</c> row per <c>MethodDef</c>. Phase 5 layers in
+/// <c>LocalScope</c>, <c>LocalVariable</c>, and a single root
+/// <c>ImportScope</c> so debuggers can resolve user-visible local names. Custom
+/// debug information and PE-side <c>DebugDirectory</c> entries are deferred to
+/// Phases 6 and 7.
 /// </remarks>
 internal sealed class PortablePdbEmitter
 {
@@ -92,35 +94,46 @@ internal sealed class PortablePdbEmitter
     /// <paramref name="methodHandle"/> is what later pairs it with its
     /// <c>MethodDebugInformation</c> row in <see cref="Serialize"/>.
     /// </summary>
-    public void RecordMethod(MethodDefinitionHandle methodHandle, IReadOnlyList<SequencePoint> sequencePoints)
+    public void RecordMethod(
+        MethodDefinitionHandle methodHandle,
+        IReadOnlyList<SequencePoint> sequencePoints,
+        IReadOnlyList<LocalInfo> locals,
+        int ilCodeSize,
+        StandaloneSignatureHandle localSignatureToken)
     {
-        if (methodHandle.IsNil || sequencePoints is null || sequencePoints.Count == 0)
+        if (methodHandle.IsNil)
         {
             return;
         }
 
-        // If every captured point is hidden / document-less, there's nothing
-        // for a debugger to do with this row — fall through to the default
-        // empty MethodDebugInformation row written by Serialize. Phase 5 will
-        // revisit this once local-scope rows give debuggers a reason to anchor
-        // hidden points (e.g. for stepping out of synthesized prologue code).
         var hasUsableDocument = false;
-        foreach (var p in sequencePoints)
+        if (sequencePoints != null)
         {
-            if (!p.Document.IsNil)
+            foreach (var p in sequencePoints)
             {
-                hasUsableDocument = true;
-                break;
+                if (!p.Document.IsNil)
+                {
+                    hasUsableDocument = true;
+                    break;
+                }
             }
         }
 
-        if (!hasUsableDocument)
+        var hasLocals = locals != null && locals.Count > 0;
+
+        // Nothing for a debugger to anchor — skip the row entirely so Serialize
+        // falls through to writing an empty MethodDebugInformation slot.
+        if (!hasUsableDocument && !hasLocals)
         {
             return;
         }
 
         var row = MetadataTokens.GetRowNumber(methodHandle);
-        this.recordedMethods[row] = new RecordedMethod(sequencePoints);
+        this.recordedMethods[row] = new RecordedMethod(
+            sequencePoints ?? System.Array.Empty<SequencePoint>(),
+            locals ?? System.Array.Empty<LocalInfo>(),
+            ilCodeSize,
+            localSignatureToken);
     }
 
     /// <summary>
@@ -137,13 +150,15 @@ internal sealed class PortablePdbEmitter
     {
         var methodDefRowCount = peRowCounts[(int)TableIndex.MethodDef];
 
+        // Step 1 — write MethodDebugInformation rows in MethodDef order (Phase 4
+        // contract: one row per MethodDef, lockstep).
         for (var rid = 1; rid <= methodDefRowCount; rid++)
         {
             if (this.recordedMethods.TryGetValue(rid, out var rec) && rec.Points.Count > 0)
             {
                 var primaryDoc = FindPrimaryDocument(rec.Points);
                 var blobBuilder = new BlobBuilder();
-                EncodeSequencePoints(blobBuilder, rec.Points, primaryDoc);
+                EncodeSequencePoints(blobBuilder, rec.Points, primaryDoc, rec.LocalSignatureToken);
                 var blobHandle = this.pdbMetadata.GetOrAddBlob(blobBuilder);
                 this.pdbMetadata.AddMethodDebugInformation(primaryDoc, blobHandle);
             }
@@ -151,6 +166,55 @@ internal sealed class PortablePdbEmitter
             {
                 this.pdbMetadata.AddMethodDebugInformation(default, default);
             }
+        }
+
+        // Step 2 — Phase 5: root ImportScope (currently always empty; per-file
+        // import information lands once the binder exposes it on the symbol
+        // model). Every LocalScope must reference an ImportScope, so we always
+        // need at least the root row.
+        var rootImportScope = this.pdbMetadata.AddImportScope(
+            parentScope: default,
+            imports: this.pdbMetadata.GetOrAddBlob(EmptyBlob));
+
+        // Step 3 — Phase 5: LocalVariable + LocalScope rows. The reader walks
+        // LocalScope sorted by method, then by startOffset. Within a method,
+        // each scope's variable list is implied by the *next* scope's variable
+        // handle, so we MUST add LocalVariable rows in the same order we add
+        // LocalScope rows. Since Phase 5 only emits a single scope per method
+        // covering the full method body, the ordering is trivially correct.
+        for (var rid = 1; rid <= methodDefRowCount; rid++)
+        {
+            if (!this.recordedMethods.TryGetValue(rid, out var rec) || rec.Locals.Count == 0)
+            {
+                continue;
+            }
+
+            // Add LocalVariable rows for this method. The handle returned by
+            // the *first* AddLocalVariable call becomes the scope's variable
+            // list anchor.
+            LocalVariableHandle firstLocal = default;
+            for (var i = 0; i < rec.Locals.Count; i++)
+            {
+                var l = rec.Locals[i];
+                var handle = this.pdbMetadata.AddLocalVariable(
+                    attributes: l.IsCompilerGenerated
+                        ? LocalVariableAttributes.DebuggerHidden
+                        : LocalVariableAttributes.None,
+                    index: l.SlotIndex,
+                    name: this.pdbMetadata.GetOrAddString(l.Name));
+                if (i == 0)
+                {
+                    firstLocal = handle;
+                }
+            }
+
+            this.pdbMetadata.AddLocalScope(
+                method: MetadataTokens.MethodDefinitionHandle(rid),
+                importScope: rootImportScope,
+                variableList: firstLocal,
+                constantList: MetadataTokens.LocalConstantHandle(1),
+                startOffset: 0,
+                length: rec.IlCodeSize);
         }
 
         var pdbBuilder = new PortablePdbBuilder(
@@ -164,6 +228,8 @@ internal sealed class PortablePdbEmitter
         pdbBlob.WriteContentTo(pdbStream);
     }
 
+    private static readonly byte[] EmptyBlob = System.Array.Empty<byte>();
+
     /// <summary>
     /// Encodes a method's sequence-point blob per Portable PDB spec § "Sequence
     /// points blob". The header writes a zero <c>LocalSignatureToken</c> in
@@ -175,10 +241,14 @@ internal sealed class PortablePdbEmitter
     private static void EncodeSequencePoints(
         BlobBuilder blob,
         IReadOnlyList<SequencePoint> points,
-        DocumentHandle primaryDocument)
+        DocumentHandle primaryDocument,
+        StandaloneSignatureHandle localSignatureToken)
     {
-        // LocalSignatureToken — 0 means "no locals signature recorded".
-        blob.WriteCompressedInteger(0);
+        // LocalSignatureToken — full 32-bit metadata token (0 when the method
+        // has no locals). Phase 5 wires the real value through so the
+        // debugger's locals window can deserialise slot types.
+        var tokenValue = localSignatureToken.IsNil ? 0 : MetadataTokens.GetToken(localSignatureToken);
+        blob.WriteCompressedInteger(tokenValue);
 
         // InitialDocument is omitted because every visible point shares the
         // method's primary document (asserted by the caller). Records follow.
@@ -251,13 +321,48 @@ internal sealed class PortablePdbEmitter
 
     private sealed class RecordedMethod
     {
-        public RecordedMethod(IReadOnlyList<SequencePoint> points)
+        public RecordedMethod(
+            IReadOnlyList<SequencePoint> points,
+            IReadOnlyList<LocalInfo> locals,
+            int ilCodeSize,
+            StandaloneSignatureHandle localSignatureToken)
         {
             this.Points = points;
+            this.Locals = locals;
+            this.IlCodeSize = ilCodeSize;
+            this.LocalSignatureToken = localSignatureToken;
         }
 
         public IReadOnlyList<SequencePoint> Points { get; }
+
+        public IReadOnlyList<LocalInfo> Locals { get; }
+
+        public int IlCodeSize { get; }
+
+        public StandaloneSignatureHandle LocalSignatureToken { get; }
     }
+}
+
+/// <summary>
+/// One local-slot descriptor handed to <see cref="PortablePdbEmitter.RecordMethod"/>.
+/// Compiler-generated locals (synthesized by lowering) flow through with
+/// <see cref="IsCompilerGenerated"/> set so debuggers can hide them from the
+/// locals window.
+/// </summary>
+internal readonly struct LocalInfo
+{
+    public LocalInfo(int slotIndex, string name, bool isCompilerGenerated)
+    {
+        this.SlotIndex = slotIndex;
+        this.Name = name ?? string.Empty;
+        this.IsCompilerGenerated = isCompilerGenerated;
+    }
+
+    public int SlotIndex { get; }
+
+    public string Name { get; }
+
+    public bool IsCompilerGenerated { get; }
 }
 
 /// <summary>

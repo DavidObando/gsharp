@@ -37,13 +37,40 @@ GSharp anchors sequence points at the *first IL offset emitted for each `BoundSt
 
 This is the same visible/hidden contract Roslyn-emitted assemblies follow, so all standard .NET debuggers (Visual Studio, `vsdbg`, `netcoredbg`, `dotnet-dump`, JetBrains Rider, etc.) work without further configuration.
 
-## Custom debug information
+## Local-scope semantics (Phase 5)
 
-The Portable PDB writer is staged. Phase 4 (this milestone) emits only `Document` and `MethodDebugInformation` rows. The following are planned for subsequent phases and tracked separately:
+GSharp's lowering pipeline flattens all nested `BoundBlockStatement`s into a
+single, top-level block before IL emit, so the compiler currently emits one
+`LocalScope` per method covering the entire body (`StartOffset = 0`,
+`Length = method.GetILBytes().Length`). Every user-declared local is recorded
+as a `LocalVariable` row anchored at its IL slot and tagged with its source
+name; compiler-synthesized locals (names starting with `<`, `$`, or containing
+`$`) are emitted with `LocalVariableAttributes.DebuggerHidden` so debuggers
+keep them out of the locals window.
 
-* `LocalScope`, `LocalVariable`, `LocalConstant`, `ImportScope` — Phase 5.
-* `EmbeddedSource`, `SourceLink`, `CompilationOptions`, `CompilationMetadataReferences` — Phase 6.
-* PE `DebugDirectory` entries (`CodeView`, `PdbChecksum`, `Reproducible`, `EmbeddedPortablePdb`) — Phase 7.
+A single root `ImportScope` row is emitted per assembly and referenced by
+every `LocalScope`. Per-file import chains land in a later phase once the
+binder exposes the resolved `import` set on the symbol model.
+
+The `MethodDebugInformation` sequence-point header now carries the real
+`LocalSignatureToken` for each method body, so debuggers can decode the
+on-stack values at every sequence point against the same `StandAloneSig`
+row used by the IL itself.
+
+
+
+The Portable PDB writer is staged. Phases 4–5 (shipped) emit `Document`,
+`MethodDebugInformation`, `LocalScope`, `LocalVariable`, and a single root
+`ImportScope` row per assembly. The following are planned for subsequent
+phases and tracked separately:
+
+* `LocalConstant` rows for `const` bindings — Phase 5.1 (deferred until the
+  binder surfaces `BoundLocalConstant` with a compile-time value).
+* Per-file `ImportScope` chains populated from `import` statements — Phase 5.2.
+* `EmbeddedSource`, `SourceLink`, `CompilationOptions`,
+  `CompilationMetadataReferences` — Phase 6.
+* PE `DebugDirectory` entries (`CodeView`, `PdbChecksum`, `Reproducible`,
+  `EmbeddedPortablePdb`) — Phase 7.
 
 ## Compiler flags
 
