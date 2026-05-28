@@ -172,10 +172,12 @@ internal sealed class PortablePdbEmitter
     /// Walks every MethodDef row in token order and emits a
     /// <c>MethodDebugInformation</c> row for each — rich for methods that
     /// recorded sequence points, empty otherwise. Then assembles the Portable
-    /// PDB blob and writes it to <paramref name="pdbStream"/>.
+    /// PDB blob and returns it together with the <see cref="BlobContentId"/>
+    /// computed by <paramref name="idProvider"/>. The caller is responsible
+    /// for writing the blob to a sidecar stream and/or embedding it in the PE
+    /// debug directory.
     /// </summary>
-    public void Serialize(
-        Stream pdbStream,
+    public (BlobBuilder Blob, BlobContentId ContentId) Serialize(
         ImmutableArray<int> peRowCounts,
         MethodDefinitionHandle entryPoint,
         Func<IEnumerable<Blob>, BlobContentId> idProvider)
@@ -290,8 +292,8 @@ internal sealed class PortablePdbEmitter
             idProvider: idProvider);
 
         var pdbBlob = new BlobBuilder();
-        pdbBuilder.Serialize(pdbBlob);
-        pdbBlob.WriteContentTo(pdbStream);
+        var contentId = pdbBuilder.Serialize(pdbBlob);
+        return (pdbBlob, contentId);
     }
 
     private static readonly byte[] EmptyBlob = System.Array.Empty<byte>();

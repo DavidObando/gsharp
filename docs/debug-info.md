@@ -59,21 +59,18 @@ row used by the IL itself.
 
 
 
-The Portable PDB writer is staged. Phases 4–6 (shipped) emit `Document`,
+The Portable PDB writer is staged. Phases 4–7 (shipped) emit `Document`,
 `MethodDebugInformation`, `LocalScope`, `LocalVariable`, a single root
-`ImportScope`, plus `CustomDebugInformation` rows for `EmbeddedSource` (when
-`/embed` is on), `SourceLink` (when `/sourcelink:<file>` is supplied), and
-`CompilationOptions` (always). The following are planned for subsequent
-phases and tracked separately:
+`ImportScope`, `CustomDebugInformation` rows for `EmbeddedSource` /
+`SourceLink` / `CompilationOptions`, and PE-side `DebugDirectory` entries
+(`CodeView`, `PdbChecksum`, `Reproducible`, `EmbeddedPortablePdb`). The
+following are planned for subsequent phases and tracked separately:
 
 * `LocalConstant` rows for `const` bindings — Phase 5.1 (deferred until the
   binder surfaces `BoundLocalConstant` with a compile-time value, see #216).
 * Per-file `ImportScope` chains populated from `import` statements — Phase 5.2
   (#217).
-* `CompilationMetadataReferences` rows — deferred from Phase 6 pending
-  reference-resolver plumbing (filed as a follow-up issue).
-* PE `DebugDirectory` entries (`CodeView`, `PdbChecksum`, `Reproducible`,
-  `EmbeddedPortablePdb`) — Phase 7.
+* `CompilationMetadataReferences` rows — deferred from Phase 6 (#219).
 
 ## Custom debug information (Phase 6)
 
@@ -113,6 +110,22 @@ A sequence of `(utf8 name \0 utf8 value \0)` pairs. The Phase 6 set is:
 | `compiler-version` | `Assembly.GetExecutingAssembly().GetName().Version` of `GSharp.Core` |
 | `language` | `GSharp` |
 | `language-version` | `1.0` (placeholder until a language-version concept lands) |
+
+## PE-side debug directory (Phase 7)
+
+When `/debug` is on, the emitter populates the PE's `IMAGE_DIRECTORY_ENTRY_DEBUG`
+table via `DebugDirectoryBuilder`:
+
+| Entry | When | Payload |
+| --- | --- | --- |
+| `CodeView` | Always (sidecar + embedded) | PDB content id (GUID + age = 1) and the PDB file name. For sidecar emit this is the value of `/pdb:<path>` if supplied, else `<AssemblyName>.pdb`. For embedded emit it is also the conventional bare name (debuggers ignore the path field for embedded PDBs). |
+| `PdbChecksum` | Always | Algorithm `SHA256` plus the 32-byte SHA-256 digest of the serialized Portable PDB blob — same bytes a sidecar `.pdb` would contain. Symbol servers verify PE↔PDB pairing by this checksum. |
+| `Reproducible` | When `/deterministic` is set | Empty payload; marker bit. |
+| `EmbeddedPortablePdb` | When `/debug:embedded` | Deflate-compressed copy of the Portable PDB blob inlined into the PE. No sidecar is written even if a stream is supplied. |
+
+The PDB content id is shared between the in-PE `CodeView.Guid` and the
+Portable PDB metadata header's `Id` field, so a debugger that locates a
+candidate sidecar can verify the pairing without reading the full PE.
 
 ## Compiler flags
 

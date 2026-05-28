@@ -41,6 +41,10 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </remarks>
 internal sealed class ReflectionMetadataEmitter
 {
+    // Portable PDB metadata format version expected by all current readers
+    // (System.Reflection.Metadata, dotnet-symbol, debuggers). 0x0100 = v1.0.
+    private const ushort PortablePdbVersion = 0x0100;
+
     private readonly BoundProgram program;
     private readonly ReferenceResolver references;
     private readonly string assemblyNameOverride;
@@ -262,10 +266,15 @@ internal sealed class ReflectionMetadataEmitter
     {
         // Phase 4 (ADR-0027 §7.7a): instantiate the Portable PDB collaborator
         // before any method body is emitted, but only when the caller asked
-        // for portable PDBs and supplied a destination stream. Leaving `this.pdb`
-        // null in every other configuration is what keeps the legacy emit path
-        // bit-for-bit identical.
-        if (this.debugInformation.Format == DebugInformationFormat.Portable && this.pdbStream != null)
+        // for portable PDBs or for embedded PDBs (Phase 7). Sidecar emission
+        // additionally requires a destination stream; embedded emission does
+        // not because the blob is written into the PE itself. Leaving
+        // `this.pdb` null in every other configuration is what keeps the
+        // legacy emit path bit-for-bit identical.
+        var format = this.debugInformation.Format;
+        var needsPdb = (format == DebugInformationFormat.Portable && this.pdbStream != null)
+            || format == DebugInformationFormat.Embedded;
+        if (needsPdb)
         {
             this.pdb = new PortablePdbEmitter(this.debugInformation);
         }
@@ -961,7 +970,71 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitReferenceAssemblyAttribute(assemblyHandle);
         }
 
-        // 7. Serialize PE deterministically: a SHA-256 of the serialized PE
+        // 7. Build the Portable PDB blob FIRST so we can wire its content id
+        // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
+        // the blob itself into the PE's DebugDirectory. PortablePdbEmitter
+        // does not touch any stream here; we own sidecar / embedded routing.
+        BlobBuilder pdbBlob = null;
+        BlobContentId pdbContentId = default;
+        byte[] pdbChecksum = null;
+        var pdbEnabled = this.pdb != null;
+        if (pdbEnabled)
+        {
+            var peRowCounts = this.metadata.GetRowCounts();
+            (pdbBlob, pdbContentId) = this.pdb.Serialize(
+                peRowCounts,
+                this.metadataOnly ? default : entryHandle,
+                ComputeDeterministicContentId);
+            pdbChecksum = ComputePdbChecksum(pdbBlob);
+        }
+
+        // 8. Construct a DebugDirectoryBuilder when PDB emit is on, so the PE
+        // image gains a real CodeView entry (sidecar discovery), PdbChecksum
+        // entry (PE ↔ PDB pairing), Reproducible entry (deterministic emit),
+        // and — when embedded — an EmbeddedPortablePdb entry containing the
+        // full PDB blob inline. Pass null to ManagedPEBuilder when PDB is off
+        // so the legacy emit path stays bit-for-bit identical.
+        DebugDirectoryBuilder debugDirectory = null;
+        var isEmbedded = this.debugInformation.Format == DebugInformationFormat.Embedded;
+        if (pdbEnabled)
+        {
+            debugDirectory = new DebugDirectoryBuilder();
+
+            // CodeView: identifies the PDB the runtime/debugger should fetch.
+            // For embedded format the path is conventionally just the bare
+            // pdb file name (no directory) because the consumer reads it out
+            // of the PE itself; for sidecar it can be a full path supplied
+            // via /pdb:<path>, else the bare ".pdb" suffix of the PE name.
+            var codeViewPath = !string.IsNullOrEmpty(this.debugInformation.PdbFilePath)
+                ? this.debugInformation.PdbFilePath
+                : (this.assemblyNameOverride ?? this.program.PackageName ?? "module") + ".pdb";
+            debugDirectory.AddCodeViewEntry(
+                pdbPath: codeViewPath,
+                pdbContentId: pdbContentId,
+                portablePdbVersion: PortablePdbVersion);
+
+            // PdbChecksum: always emitted; lets symbol servers verify PE↔PDB
+            // by content hash without trusting the file path.
+            debugDirectory.AddPdbChecksumEntry(
+                algorithmName: "SHA256",
+                checksum: ImmutableArray.Create(pdbChecksum));
+
+            // Reproducible: opt-in marker that this build is byte-deterministic.
+            if (this.debugInformation.Deterministic)
+            {
+                debugDirectory.AddReproducibleEntry();
+            }
+
+            // EmbeddedPortablePdb: only when /debug:embedded was requested.
+            // The blob is compressed inside the PE; readers transparently
+            // inflate via System.Reflection.PortableExecutable.PEReader.
+            if (isEmbedded)
+            {
+                debugDirectory.AddEmbeddedPortablePdbEntry(pdbBlob, PortablePdbVersion);
+            }
+        }
+
+        // 9. Serialize PE deterministically: a SHA-256 of the serialized PE
         // content produces the BlobContentId, which patches both the PE
         // TimeDateStamp and the reserved MVID guid in the metadata heap.
         var peHeaderBuilder = new PEHeaderBuilder(
@@ -973,25 +1046,39 @@ internal sealed class ReflectionMetadataEmitter
             metadataRootBuilder: new MetadataRootBuilder(this.metadata),
             ilStream: this.ilStream,
             entryPoint: this.metadataOnly ? default : entryHandle,
+            debugDirectoryBuilder: debugDirectory,
             deterministicIdProvider: ComputeDeterministicContentId);
         var peBlob = new BlobBuilder();
         var contentId = peBuilder.Serialize(peBlob);
         mvidFixup.CreateWriter().WriteGuid(contentId.Guid);
         peBlob.WriteContentTo(peStream);
 
-        // Phase 4 (ADR-0027 §7.7a) PDB sidecar. Serialized after the PE so the
-        // MethodDef table row count and entry-point handle are stable. We emit
-        // exactly one MethodDebugInformation row per MethodDef (empty when no
-        // sequence points were captured), as required by the Portable PDB spec.
-        if (this.pdb != null)
+        // 10. Phase 4–7 PDB sidecar routing. Embedded format suppresses the
+        // sidecar — the blob already lives in the PE. Portable format writes
+        // to the supplied stream when one was provided (callers that want
+        // only an embedded PDB pass `pdbStream: null`).
+        if (pdbEnabled && !isEmbedded && this.pdbStream != null)
         {
-            var peRowCounts = this.metadata.GetRowCounts();
-            this.pdb.Serialize(
-                this.pdbStream,
-                peRowCounts,
-                this.metadataOnly ? default : entryHandle,
-                ComputeDeterministicContentId);
+            pdbBlob.WriteContentTo(this.pdbStream);
         }
+    }
+
+    /// <summary>
+    /// Computes the SHA-256 checksum of the serialized Portable PDB content,
+    /// matching the algorithm name written into the <c>PdbChecksum</c> debug
+    /// directory entry. Returning a fresh byte array keeps callers from
+    /// having to thread <see cref="IncrementalHash"/> through the call site.
+    /// </summary>
+    private static byte[] ComputePdbChecksum(BlobBuilder pdbBlob)
+    {
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var blob in pdbBlob.GetBlobs())
+        {
+            var bytes = blob.GetBytes();
+            sha.AppendData(bytes.Array, bytes.Offset, bytes.Count);
+        }
+
+        return sha.GetHashAndReset();
     }
 
     /// <summary>
