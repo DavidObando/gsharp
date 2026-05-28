@@ -881,3 +881,199 @@ func main() {
         return peReader.ReadDebugDirectory();
     }
 }
+
+/// <summary>
+/// Issue #217: per-file <c>ImportScope</c> chain tests. Verifies that explicit
+/// namespace imports in a GSharp source file are encoded into <c>ImportScope</c>
+/// blobs that debuggers can use to resolve unqualified type names.
+/// </summary>
+public class PortablePdbPhase217Tests
+{
+    private const string ProgramWithImports = @"package main
+
+import System.Collections.Generic
+
+func main() {
+    let x = 1
+    let y = 2
+    let z = x + y
+}
+";
+
+    private const string ProgramWithAliasImport = @"package main
+
+import gen = System.Collections.Generic
+
+func main() {
+    let x = 1
+}
+";
+
+    private const string ProgramWithNoExplicitImports = @"package main
+
+func main() {
+    let x = 1
+}
+";
+
+    [Fact]
+    public void ImportScope_Blob_Contains_Namespace_For_Explicit_Import()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ProgramWithImports, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        // Expect at least two ImportScope rows: the root (empty) + one per-file scope.
+        Assert.True(reader.ImportScopes.Count >= 2, $"expected ≥2 ImportScope rows, got {reader.ImportScopes.Count}");
+
+        // At least one non-root scope must decode to a namespace import for System.Collections.Generic.
+        var foundNamespace = false;
+        foreach (var handle in reader.ImportScopes)
+        {
+            var scope = reader.GetImportScope(handle);
+            foreach (var import in scope.GetImports())
+            {
+                if (import.Kind == ImportDefinitionKind.ImportNamespace)
+                {
+                    var ns = Encoding.UTF8.GetString(reader.GetBlobBytes(import.TargetNamespace));
+                    if (ns == "System.Collections.Generic")
+                    {
+                        foundNamespace = true;
+                        break;
+                    }
+                }
+            }
+
+            if (foundNamespace)
+            {
+                break;
+            }
+        }
+
+        Assert.True(foundNamespace, "expected an ImportScope row whose blob contains a namespace import for System.Collections.Generic");
+    }
+
+    [Fact]
+    public void ImportScope_Blob_Contains_Alias_And_Namespace_For_Alias_Import()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ProgramWithAliasImport, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        Assert.True(reader.ImportScopes.Count >= 2, $"expected ≥2 ImportScope rows, got {reader.ImportScopes.Count}");
+
+        var foundAlias = false;
+        foreach (var handle in reader.ImportScopes)
+        {
+            var scope = reader.GetImportScope(handle);
+            foreach (var import in scope.GetImports())
+            {
+                if (import.Kind == ImportDefinitionKind.AliasNamespace)
+                {
+                    var alias = Encoding.UTF8.GetString(reader.GetBlobBytes((BlobHandle)import.Alias));
+                    var ns = Encoding.UTF8.GetString(reader.GetBlobBytes(import.TargetNamespace));
+                    if (alias == "gen" && ns == "System.Collections.Generic")
+                    {
+                        foundAlias = true;
+                        break;
+                    }
+                }
+            }
+
+            if (foundAlias)
+            {
+                break;
+            }
+        }
+
+        Assert.True(foundAlias, "expected an ImportScope row whose blob contains AliasNamespace(gen → System.Collections.Generic)");
+    }
+
+    [Fact]
+    public void Every_LocalScope_References_The_Per_Tree_ImportScope()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ProgramWithImports, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        // Find the per-file scope (a scope whose parent is not nil).
+        ImportScopeHandle perFileScope = default;
+        foreach (var handle in reader.ImportScopes)
+        {
+            var scope = reader.GetImportScope(handle);
+            if (!scope.Parent.IsNil)
+            {
+                perFileScope = handle;
+                break;
+            }
+        }
+
+        Assert.False(perFileScope.IsNil, "expected at least one per-file ImportScope (with a non-nil parent)");
+
+        // Every LocalScope that references an ImportScope should reference
+        // the per-file scope, not the root.
+        foreach (var lsh in reader.LocalScopes)
+        {
+            var ls = reader.GetLocalScope(lsh);
+            Assert.False(ls.ImportScope.IsNil, "every LocalScope must reference an ImportScope");
+            Assert.Equal(perFileScope, ls.ImportScope);
+        }
+    }
+
+    [Fact]
+    public void Program_With_No_Explicit_Imports_Still_Produces_Root_ImportScope_Only()
+    {
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(ProgramWithNoExplicitImports, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        // Without explicit imports there is only the single root scope.
+        Assert.Equal(1, (int)reader.ImportScopes.Count);
+
+        foreach (var lsh in reader.LocalScopes)
+        {
+            var ls = reader.GetLocalScope(lsh);
+            Assert.False(ls.ImportScope.IsNil, "every LocalScope must reference an ImportScope");
+        }
+    }
+}

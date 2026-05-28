@@ -15,6 +15,7 @@ using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Security.Cryptography;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -56,10 +57,27 @@ internal sealed class PortablePdbEmitter
     private readonly Dictionary<SyntaxTree, DocumentHandle> documentsByTree = new Dictionary<SyntaxTree, DocumentHandle>();
     private readonly Dictionary<int, RecordedMethod> recordedMethods = new Dictionary<int, RecordedMethod>();
     private readonly DebugInformationOptions options;
+    private IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> importsPerTree;
 
     public PortablePdbEmitter(DebugInformationOptions options)
     {
         this.options = options ?? new DebugInformationOptions();
+    }
+
+    /// <summary>
+    /// Supplies the per-file explicit imports that will be encoded into
+    /// <c>ImportScope</c> blobs during <see cref="Serialize"/>. Call before
+    /// <see cref="Serialize"/>; may be called at most once. Keys are the
+    /// <see cref="SyntaxTree"/> instances from which each import originates;
+    /// only trees with at least one explicit (non-implicit) import need an
+    /// entry. Implicit compiler-synthesized imports (e.g. the implicit
+    /// <c>import System</c>) should be excluded from the lists — they carry
+    /// a <see langword="null"/> <see cref="ImportSymbol.Declaration"/> and
+    /// therefore have no source-tree anchor.
+    /// </summary>
+    public void SetImportsPerTree(IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> imports)
+    {
+        this.importsPerTree = imports;
     }
 
     /// <summary>
@@ -126,13 +144,25 @@ internal sealed class PortablePdbEmitter
     /// <paramref name="methodHandle"/> is what later pairs it with its
     /// <c>MethodDebugInformation</c> row in <see cref="Serialize"/>.
     /// </summary>
+    /// <param name="methodHandle">The MethodDef handle for this method.</param>
+    /// <param name="sequencePoints">Sequence points collected during IL emit.</param>
+    /// <param name="locals">Local-variable descriptors for the method.</param>
+    /// <param name="constants">Compile-time constant descriptors for the method.</param>
+    /// <param name="ilCodeSize">IL body size in bytes (used as <c>LocalScope.Length</c>).</param>
+    /// <param name="localSignatureToken">The <c>StandaloneSignature</c> token for the locals blob.</param>
+    /// <param name="syntaxTree">
+    /// The <see cref="SyntaxTree"/> that declared this method, or <see langword="null"/>
+    /// for fully synthesized methods (e.g. async kickoff stubs). The tree is used to
+    /// select the per-file <c>ImportScope</c> when writing <c>LocalScope</c> rows.
+    /// </param>
     public void RecordMethod(
         MethodDefinitionHandle methodHandle,
         IReadOnlyList<SequencePoint> sequencePoints,
         IReadOnlyList<LocalInfo> locals,
         IReadOnlyList<LocalConstantInfo> constants,
         int ilCodeSize,
-        StandaloneSignatureHandle localSignatureToken)
+        StandaloneSignatureHandle localSignatureToken,
+        SyntaxTree syntaxTree = null)
     {
         if (methodHandle.IsNil)
         {
@@ -168,7 +198,8 @@ internal sealed class PortablePdbEmitter
             locals ?? System.Array.Empty<LocalInfo>(),
             constants ?? System.Array.Empty<LocalConstantInfo>(),
             ilCodeSize,
-            localSignatureToken);
+            localSignatureToken,
+            syntaxTree);
     }
 
     /// <summary>
@@ -205,13 +236,38 @@ internal sealed class PortablePdbEmitter
             }
         }
 
-        // Step 2 — Phase 5: root ImportScope (currently always empty; per-file
-        // import information lands once the binder exposes it on the symbol
-        // model). Every LocalScope must reference an ImportScope, so we always
-        // need at least the root row.
+        // Step 2 — Phase 5+: root ImportScope. Every LocalScope must reference
+        // an ImportScope; the root (with no parent and an empty imports blob) is
+        // the fallback for methods with no source-tree anchor. Per-file scopes
+        // are parented here and carry the explicit namespace imports from each
+        // syntax tree (issue #217).
         var rootImportScope = this.pdbMetadata.AddImportScope(
             parentScope: default,
             imports: this.pdbMetadata.GetOrAddBlob(EmptyBlob));
+
+        // Build per-tree ImportScope rows from the explicit imports provided by
+        // SetImportsPerTree. Each tree whose imports list is non-empty gets its
+        // own row parented at rootImportScope; trees without explicit imports
+        // (or not passed at all) fall back to rootImportScope.
+        var importScopeByTree = new Dictionary<SyntaxTree, ImportScopeHandle>();
+        if (this.importsPerTree != null)
+        {
+            foreach (var kv in this.importsPerTree)
+            {
+                var tree = kv.Key;
+                var imports = kv.Value;
+                if (tree is null || imports.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                var importsBlob = BuildImportsBlob(imports);
+                var treeScope = this.pdbMetadata.AddImportScope(
+                    parentScope: rootImportScope,
+                    imports: importsBlob);
+                importScopeByTree[tree] = treeScope;
+            }
+        }
 
         // Step 3 — Phase 5+6: LocalVariable + LocalConstant + LocalScope rows.
         // The reader walks LocalScope sorted by method, then by startOffset.
@@ -269,9 +325,17 @@ internal sealed class PortablePdbEmitter
                 }
             }
 
+            // Use the per-tree ImportScope when one was built for this method's
+            // source file; fall back to the root scope for synthesized methods.
+            var importScope = rootImportScope;
+            if (rec.SyntaxTree != null && importScopeByTree.TryGetValue(rec.SyntaxTree, out var treeImportScope))
+            {
+                importScope = treeImportScope;
+            }
+
             this.pdbMetadata.AddLocalScope(
                 method: MetadataTokens.MethodDefinitionHandle(rid),
-                importScope: rootImportScope,
+                importScope: importScope,
                 variableList: firstLocal,
                 constantList: MetadataTokens.LocalConstantHandle(firstConstantRid),
                 startOffset: 0,
@@ -324,6 +388,52 @@ internal sealed class PortablePdbEmitter
     }
 
     private static readonly byte[] EmptyBlob = System.Array.Empty<byte>();
+
+    /// <summary>
+    /// Encodes an imports blob for an <c>ImportScope</c> row per the Portable PDB
+    /// spec § "ImportScope". Each import becomes one record in the blob:
+    /// <list type="bullet">
+    ///   <item>Non-alias imports → kind 1 (<c>ImportNamespace</c>): a compressed
+    ///   blob-heap offset of the UTF-8 namespace string.</item>
+    ///   <item>Alias imports → kind 7 (<c>AliasNamespace</c>): compressed blob-heap
+    ///   offset of the alias, then the namespace.</item>
+    /// </list>
+    /// Implicit (compiler-synthesized) imports are silently skipped because they
+    /// have no user-visible declaration.
+    /// </summary>
+    private BlobHandle BuildImportsBlob(ImmutableArray<ImportSymbol> imports)
+    {
+        var blob = new BlobBuilder();
+        foreach (var import in imports)
+        {
+            if (import.IsImplicit)
+            {
+                continue;
+            }
+
+            var nsBytes = Encoding.UTF8.GetBytes(import.Target);
+            var nsHandle = this.pdbMetadata.GetOrAddBlob(nsBytes);
+            var nsOffset = MetadataTokens.GetHeapOffset(nsHandle);
+
+            if (import.IsAlias)
+            {
+                // Kind 7 = AliasNamespace
+                blob.WriteCompressedInteger(7);
+                var aliasBytes = Encoding.UTF8.GetBytes(import.Name);
+                var aliasHandle = this.pdbMetadata.GetOrAddBlob(aliasBytes);
+                blob.WriteCompressedInteger(MetadataTokens.GetHeapOffset(aliasHandle));
+                blob.WriteCompressedInteger(nsOffset);
+            }
+            else
+            {
+                // Kind 1 = ImportNamespace
+                blob.WriteCompressedInteger(1);
+                blob.WriteCompressedInteger(nsOffset);
+            }
+        }
+
+        return this.pdbMetadata.GetOrAddBlob(blob);
+    }
 
     /// <summary>
     /// Writes a single <c>CompilationOptions</c> key/value pair using the
@@ -510,13 +620,15 @@ internal sealed class PortablePdbEmitter
             IReadOnlyList<LocalInfo> locals,
             IReadOnlyList<LocalConstantInfo> constants,
             int ilCodeSize,
-            StandaloneSignatureHandle localSignatureToken)
+            StandaloneSignatureHandle localSignatureToken,
+            SyntaxTree syntaxTree)
         {
             this.Points = points;
             this.Locals = locals;
             this.Constants = constants;
             this.IlCodeSize = ilCodeSize;
             this.LocalSignatureToken = localSignatureToken;
+            this.SyntaxTree = syntaxTree;
         }
 
         public IReadOnlyList<SequencePoint> Points { get; }
@@ -528,6 +640,14 @@ internal sealed class PortablePdbEmitter
         public int IlCodeSize { get; }
 
         public StandaloneSignatureHandle LocalSignatureToken { get; }
+
+        /// <summary>
+        /// Gets the <see cref="Syntax.SyntaxTree"/> that contains this method's
+        /// declaration, or <see langword="null"/> for synthesized methods.
+        /// Used by <see cref="Serialize"/> to pick the per-file
+        /// <c>ImportScope</c> for each <c>LocalScope</c> row.
+        /// </summary>
+        public SyntaxTree SyntaxTree { get; }
     }
 }
 
