@@ -171,9 +171,8 @@ if IsMissing(v) {
     [Fact]
     public void If_UserDefinedMaybeNullWhen_DoesNotNarrow()
     {
-        // [MaybeNullWhen] only weakens postconditions; it cannot prove an
-        // argument is non-null, so the then-arm body should still see the
-        // parameter as nullable and accessing .Length must error.
+        // [MaybeNullWhen(false)] on a nullable string? arg cannot prove non-nullness
+        // in the then-arm, so accessing .Length must still error there.
         var result = Evaluate(@"
 import System.Diagnostics.CodeAnalysis
 
@@ -183,6 +182,92 @@ func Probe(@MaybeNullWhen(false) s string?) bool {
 
 let v string? = ""hello""
 if Probe(v) {
+    var len = v.Length
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void If_UserDefinedMaybeNullWhenFalse_OnNonNullArg_WidensElseArm()
+    {
+        // [MaybeNullWhen(false)] on a non-nullable string arg must widen the
+        // caller's variable to string? in the else arm (where the call returned false).
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func TryGet(@MaybeNullWhen(false) s string) bool {
+    return s.Length > 0
+}
+
+let v = ""hello""
+if TryGet(v) {
+} else {
+    var len = v.Length
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void If_UserDefinedMaybeNullWhenFalse_OnNonNullArg_DoesNotWidenThenArm()
+    {
+        // [MaybeNullWhen(false)] fires on false, so the then-arm (true return)
+        // must leave the variable as non-nullable — .Length access must succeed.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func TryGet(@MaybeNullWhen(false) s string) bool {
+    return s.Length > 0
+}
+
+let v = ""hello""
+if TryGet(v) {
+    var len = v.Length
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void If_UserDefinedMaybeNullWhenTrue_OnNonNullArg_WidensThenArm()
+    {
+        // [MaybeNullWhen(true)] fires on true, so the then-arm must see the
+        // variable widened to string? — .Length access must fail.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func IsEmpty(@MaybeNullWhen(true) s string) bool {
+    return false
+}
+
+let v = ""hello""
+if IsEmpty(v) {
+    var len = v.Length
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void If_NegatedUserDefinedMaybeNullWhenFalse_OnNonNullArg_WidensThenArm()
+    {
+        // Negating the call flips the arm: !TryGet(v) is true exactly when
+        // TryGet returned false, so the then-arm now sees the [MaybeNullWhen(false)]
+        // widening and .Length must fail.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+func TryGet(@MaybeNullWhen(false) s string) bool {
+    return s.Length > 0
+}
+
+let v = ""hello""
+if !TryGet(v) {
     var len = v.Length
 }
 ");

@@ -2328,10 +2328,26 @@ public sealed class Binder
         for (var i = 0; i < count; i++)
         {
             var parameter = parameters[i];
-            if (ClrNullability.TryGetMaybeNullWhen(parameter, out _))
+
+            // [MaybeNullWhen(rv)] on a non-nullable argument widens the caller's
+            // variable to its nullable counterpart on the arm where the call returns
+            // rv. The argument may be a plain variable or an address-of expression
+            // (&var) when the CLR parameter is declared `out T`.
+            if (ClrNullability.TryGetMaybeNullWhen(parameter, out var maybeNullWhenReturnValue))
             {
-                // [MaybeNullWhen] only weakens postconditions; it cannot prove
-                // an argument is non-null, so it is intentionally not narrowed.
+                var rawArg = call.Arguments[i];
+                var widenArg = rawArg is BoundAddressOfExpression addrOf ? addrOf.Operand : rawArg;
+                if (widenArg is BoundVariableExpression widenVarExpr
+                    && widenVarExpr.Variable.Type is not NullableTypeSymbol
+                    && widenVarExpr.Variable.Type != TypeSymbol.Null)
+                {
+                    var widenThen = maybeNullWhenReturnValue != negate;
+                    var widenFrame = widenThen
+                        ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
+                        : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                    widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type);
+                }
+
                 continue;
             }
 
@@ -2369,39 +2385,48 @@ public sealed class Binder
                 continue;
             }
 
-            var hasMaybeNullWhen = false;
-            bool? notNullWhenReturnValue = null;
+            var notNullWhenReturnValue = (bool?)null;
+            var maybeNullWhenReturnValue = (bool?)null;
             foreach (var attribute in attributes)
             {
                 if (KnownAttributes.TryGetNotNullWhenReturnValue(attribute, out var rv))
                 {
                     notNullWhenReturnValue = rv;
                 }
-                else if (KnownAttributes.IsMaybeNullWhen(attribute))
+                else if (KnownAttributes.TryGetMaybeNullWhenReturnValue(attribute, out var mrv))
                 {
-                    hasMaybeNullWhen = true;
+                    maybeNullWhenReturnValue = mrv;
                 }
             }
 
-            // [MaybeNullWhen] alone only weakens postconditions; it cannot
-            // prove non-nullness on its own, so a parameter carrying only
-            // [MaybeNullWhen] is intentionally not narrowed (matches the
-            // imported-metadata path above).
-            if (notNullWhenReturnValue is not bool returnValue)
+            var argExpr = call.Arguments[i];
+
+            // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
+            // non-nullable type on the arm where the call returns rv.
+            if (notNullWhenReturnValue is bool returnValue
+                && argExpr is BoundVariableExpression narrowVarExpr
+                && narrowVarExpr.Variable.Type is NullableTypeSymbol nullable)
             {
-                _ = hasMaybeNullWhen;
-                continue;
+                var narrowThen = returnValue != negate;
+                var frame = narrowThen
+                    ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
+                    : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                frame[narrowVarExpr.Variable] = nullable.UnderlyingType;
             }
 
-            if (call.Arguments[i] is not BoundVariableExpression variableExpression
-                || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
+            // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
+            // counterpart on the arm where the call returns rv.
+            if (maybeNullWhenReturnValue is bool widenReturnValue
+                && argExpr is BoundVariableExpression widenVarExpr
+                && widenVarExpr.Variable.Type is not NullableTypeSymbol
+                && widenVarExpr.Variable.Type != TypeSymbol.Null)
             {
-                continue;
+                var widenThen = widenReturnValue != negate;
+                var widenFrame = widenThen
+                    ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>())
+                    : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+                widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type);
             }
-
-            var narrowThen = returnValue != negate;
-            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
-            frame[variableExpression.Variable] = nullable.UnderlyingType;
         }
 
         return (thenFrame, elseFrame);
