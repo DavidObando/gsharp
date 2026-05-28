@@ -96,6 +96,31 @@ takesInt(1) func() int32 { return 0 }
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void TrailingLambda_AsyncSoleArgument_BindsWithoutDiagnostics()
+    {
+        // Verify the parser attaches `async func(...)` as a trailing lambda
+        // (previously it misread `async` as an unexpected keyword and dropped
+        // the literal from the argument list entirely).
+        var result = Evaluate(@"
+async func computeAsync() int32 { return 42 }
+func runIt(f async func() int32) { f() }
+runIt() async func() int32 { return await computeAsync() }
+");
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void TrailingLambda_AsyncWithPrecedingArgs_BindsWithoutDiagnostics()
+    {
+        var result = Evaluate(@"
+async func double(x int32) int32 { return x * 2 }
+func combine(seed int32, f async func(int32) int32) { f(seed) }
+combine(10) async func(x int32) int32 { return await double(x) }
+");
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

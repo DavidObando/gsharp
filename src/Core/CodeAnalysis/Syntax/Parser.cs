@@ -3195,11 +3195,15 @@ public class Parser
     private SeparatedSyntaxList<ExpressionSyntax> MaybeAppendTrailingLambda(
         SeparatedSyntaxList<ExpressionSyntax> arguments)
     {
-        // Only `func(...) {...}` (a function LITERAL) attaches as a trailing
-        // lambda; `func Name(...)` (a function DECLARATION) must stay as the
-        // following statement-level declaration.
-        if (Current.Kind != SyntaxKind.FuncKeyword
-            || Peek(1).Kind != SyntaxKind.OpenParenthesisToken)
+        // Only `func(...) {...}` or `async func(...) {...}` (function LITERALS)
+        // attach as a trailing lambda; `func Name(...)` (a function DECLARATION)
+        // must stay as the following statement-level declaration.
+        var isSyncLiteral = Current.Kind == SyntaxKind.FuncKeyword
+                            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken;
+        var isAsyncLiteral = Current.Kind == SyntaxKind.AsyncKeyword
+                             && Peek(1).Kind == SyntaxKind.FuncKeyword
+                             && Peek(2).Kind == SyntaxKind.OpenParenthesisToken;
+        if (!isSyncLiteral && !isAsyncLiteral)
         {
             return arguments;
         }
