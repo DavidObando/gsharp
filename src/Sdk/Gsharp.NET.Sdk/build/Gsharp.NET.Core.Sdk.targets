@@ -4,6 +4,11 @@
 
   <PropertyGroup>
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+
+    <!-- Phase 7.7b: hook into the NuGet Pack infrastructure so dotnet pack
+         includes the reference assembly under ref/<tfm>/. The runtime assembly
+         under lib/<tfm>/ is handled by the standard Microsoft.NET.Sdk pack. -->
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
   <!-- Locate and add mscorlib unless NoStdLib. Mirrors peachpie's Core.Sdk.targets. -->
@@ -62,6 +67,16 @@
                               '$(DebugType)' != ''                       and
                               '$(DebugType)' != 'none'                   and
                               '$(DebugType)' != 'embedded' " />
+    </ItemGroup>
+  </Target>
+
+  <!-- Phase 7.7b: feed the reference assembly into NuGet pack under ref/<tfm>/.
+       This target is referenced from TargetsForTfmSpecificContentInPackage. -->
+  <Target Name="_GsharpGetRefAssemblyForPack"
+          Condition=" '$(ProduceReferenceAssembly)' == 'true' ">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(ProjectDir)obj/$(Configuration)/$(TargetFramework)/ref/$(TargetName)$(TargetExt)"
+                              PackagePath="ref/$(TargetFramework)/" />
     </ItemGroup>
   </Target>
 

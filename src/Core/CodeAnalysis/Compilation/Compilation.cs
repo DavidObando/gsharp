@@ -297,8 +297,9 @@ public class Compilation
     /// <param name="pdbStream">Destination stream for the Portable PDB sidecar. Only consumed when <see cref="DebugInformation"/>'s <see cref="DebugInformationOptions.Format"/> is <see cref="DebugInformationFormat.Portable"/>. May be <c>null</c> in all other cases.</param>
     /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
     /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
+    /// <param name="assemblyVersion">Optional informational version string stamped as <c>AssemblyInformationalVersionAttribute</c>.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, string assemblyName = null)
+    public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, string assemblyName = null, string assemblyVersion = null)
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
@@ -329,7 +330,7 @@ public class Compilation
         {
             if (peStream is not null)
             {
-                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: pdbStream);
+                EmitAssembly(program, peStream, References, assemblyName, assemblyVersion, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: pdbStream);
             }
 
             if (refStream is not null)
@@ -337,7 +338,7 @@ public class Compilation
                 // Reference assemblies never carry debug info — pass an explicit
                 // None override so we don't accidentally write a CodeView entry
                 // pointing at a sidecar that doesn't describe this PE.
-                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: null, pdbStream: null);
+                EmitAssembly(program, refStream, References, assemblyName, assemblyVersion, metadataOnly: true, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: null, pdbStream: null);
             }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
@@ -409,9 +410,9 @@ public class Compilation
         };
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion);
     }
 
     /// <summary>

@@ -155,6 +155,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             args.Add("/deterministic+");
         }
 
+        if (!string.IsNullOrEmpty(this.Version))
+        {
+            args.Add($"/version:{this.Version}");
+        }
+
         if (!string.IsNullOrEmpty(this.RefAssembly))
         {
             args.Add($"/refout:{this.RefAssembly}");

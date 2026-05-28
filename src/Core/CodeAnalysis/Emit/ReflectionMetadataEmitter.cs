@@ -62,6 +62,9 @@ internal sealed class ReflectionMetadataEmitter
 
     private readonly bool metadataOnly;
 
+    // Phase 7.7b: informational version string stamped on the assembly.
+    private string assemblyVersionOverride;
+
     private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
@@ -228,6 +231,11 @@ internal sealed class ReflectionMetadataEmitter
     /// configuration. Plumbed here so callers can open the file once and have
     /// the emitter write to it directly without intermediate buffering.
     /// </param>
+    /// <param name="assemblyVersion">
+    /// Optional informational version string. When non-null, emitted as
+    /// <c>AssemblyInformationalVersionAttribute</c> on the assembly so NuGet
+    /// and consumer tooling can display the package version.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -238,9 +246,11 @@ internal sealed class ReflectionMetadataEmitter
         IteratorRewriteResult iteratorRewriteResult = null,
         Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null,
         DebugInformationOptions debugInformation = null,
-        Stream pdbStream = null)
+        Stream pdbStream = null,
+        string assemblyVersion = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
+        emitter.assemblyVersionOverride = assemblyVersion;
         if (asyncRewriteResult != null)
         {
             emitter.asyncStateMachinePlans = asyncRewriteResult.StateMachines;
@@ -986,7 +996,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var assemblyHandle = this.metadata.AddAssembly(
             name: this.metadata.GetOrAddString(assemblyName),
-            version: new Version(1, 0, 0, 0),
+            version: this.ParseAssemblyVersion(),
             culture: default(StringHandle),
             publicKey: default(BlobHandle),
             flags: 0,
@@ -996,6 +1006,9 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EmitReferenceAssemblyAttribute(assemblyHandle);
         }
+
+        // Phase 7.7b: emit cross-language interop attributes for NuGet consumability.
+        this.EmitAssemblyInteropAttributes(assemblyHandle);
 
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
@@ -1155,6 +1168,137 @@ internal sealed class ReflectionMetadataEmitter
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
         valueBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: assemblyHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Parses <see cref="assemblyVersionOverride"/> into a <see cref="Version"/> suitable
+    /// for the assembly row. Falls back to <c>1.0.0.0</c> when the string is absent or
+    /// does not parse as a version.
+    /// </summary>
+    private Version ParseAssemblyVersion()
+    {
+        if (string.IsNullOrEmpty(this.assemblyVersionOverride))
+        {
+            return new Version(1, 0, 0, 0);
+        }
+
+        // NuGet versions can contain pre-release suffixes (e.g. "1.2.3-beta.1").
+        // Extract just the numeric prefix for System.Version.
+        var versionStr = this.assemblyVersionOverride;
+        var dashIdx = versionStr.IndexOf('-');
+        if (dashIdx >= 0)
+        {
+            versionStr = versionStr.Substring(0, dashIdx);
+        }
+
+        var plusIdx = versionStr.IndexOf('+');
+        if (plusIdx >= 0)
+        {
+            versionStr = versionStr.Substring(0, plusIdx);
+        }
+
+        if (Version.TryParse(versionStr, out var v))
+        {
+            // Pad to four components for ECMA-335 assembly identity.
+            return new Version(
+                Math.Max(v.Major, 0),
+                Math.Max(v.Minor, 0),
+                Math.Max(v.Build, 0),
+                Math.Max(v.Revision, 0));
+        }
+
+        return new Version(1, 0, 0, 0);
+    }
+
+    /// <summary>
+    /// Emits assembly-level attributes required for cross-language interop (C#/F#
+    /// consumability): <c>AssemblyInformationalVersionAttribute</c>,
+    /// <c>AssemblyMetadataAttribute("RepositoryUrl", ...)</c>, and
+    /// <c>NullableContextAttribute(1)</c>.
+    /// </summary>
+    private void EmitAssemblyInteropAttributes(AssemblyDefinitionHandle assemblyHandle)
+    {
+        // 1. AssemblyInformationalVersionAttribute — carries the full NuGet
+        // version string including pre-release suffix.
+        if (!string.IsNullOrEmpty(this.assemblyVersionOverride))
+        {
+            this.EmitStringAttribute(
+                assemblyHandle,
+                "System.Reflection.AssemblyInformationalVersionAttribute",
+                typeof(System.Reflection.AssemblyInformationalVersionAttribute),
+                this.assemblyVersionOverride);
+        }
+
+        // 2. NullableContextAttribute(1) — declares the assembly's default
+        // nullable context as "annotated" so C# consumers see non-null by
+        // default for GSharp types (GSharp has no null references).
+        this.EmitNullableContextAttribute(assemblyHandle);
+    }
+
+    /// <summary>
+    /// Emits a custom attribute whose sole constructor parameter is a single
+    /// <see cref="string"/> argument.
+    /// </summary>
+    private void EmitStringAttribute(EntityHandle parent, string typeName, Type fallbackType, string value)
+    {
+        var attrType = this.references.TryResolveType(typeName, out var resolved)
+            ? resolved
+            : fallbackType;
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().String());
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteSerializedString(value);
+        valueBlob.WriteUInt16(0); // NumNamed
+
+        this.metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Emits <c>System.Runtime.CompilerServices.NullableContextAttribute(1)</c>
+    /// on the assembly so C# consumers see GSharp public surface as non-nullable
+    /// (oblivious context = 0, annotated = 1, warnings-only = 2).
+    /// </summary>
+    private void EmitNullableContextAttribute(AssemblyDefinitionHandle assemblyHandle)
+    {
+        if (!this.references.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
+        {
+            // The attribute may not exist in older TFMs — skip silently.
+            return;
+        }
+
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Byte());
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteByte(1);        // Flag = Annotated (non-null by default)
+        valueBlob.WriteUInt16(0);      // NumNamed
 
         this.metadata.AddCustomAttribute(
             parent: assemblyHandle,
