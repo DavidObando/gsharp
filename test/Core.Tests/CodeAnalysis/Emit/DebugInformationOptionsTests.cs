@@ -129,7 +129,7 @@ public class DebugInformationOptionsTests
         using var peStream = new MemoryStream();
         using var pdbStream = new MemoryStream();
 
-        var result = compilation.Emit(peStream, pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
 
         Assert.True(result.Success);
         Assert.True(peStream.Length > 0, "PE stream should have content");

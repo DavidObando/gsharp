@@ -45,7 +45,7 @@ func main() {
         using var pdbStream = new MemoryStream();
 
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")));
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
 
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         Assert.Equal(0, pdbStream.Length);
@@ -61,7 +61,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
 
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         Assert.True(pdbStream.Length > 0);
@@ -85,7 +85,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success);
 
         pdbStream.Position = 0;
@@ -122,7 +122,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success);
 
         // Read MethodDef count from the PE side.
@@ -151,7 +151,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success);
 
         pdbStream.Position = 0;
@@ -216,7 +216,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -248,7 +248,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         peStream.Position = 0;
@@ -280,7 +280,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -306,7 +306,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         peStream.Position = 0;
@@ -375,7 +375,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -419,7 +419,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -444,7 +444,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -493,7 +493,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -648,7 +648,7 @@ func main() {
         {
             DebugInformation = options,
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -801,7 +801,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.None },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: null, refStream: null);
+        var result = compilation.Emit(peStream, null, null);
         Assert.True(result.Success);
 
         using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
@@ -824,7 +824,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Embedded },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         // Embedded format must not produce sidecar bytes even if the caller
@@ -846,7 +846,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Embedded },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: null, refStream: null);
+        var result = compilation.Emit(peStream, null, null);
         Assert.True(result.Success);
 
         using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
@@ -870,7 +870,7 @@ func main() {
         {
             DebugInformation = options,
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         return (peStream, pdbStream.ToArray());
     }
@@ -926,7 +926,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -973,7 +973,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -1019,7 +1019,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -1060,7 +1060,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
@@ -1170,7 +1170,7 @@ func main() {
         {
             DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
         };
-        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        var result = compilation.Emit(peStream, pdbStream, null);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
 
         pdbStream.Position = 0;
