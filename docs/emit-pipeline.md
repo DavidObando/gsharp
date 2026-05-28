@@ -80,6 +80,56 @@ The typedef ordering within the module is:
 - [ADR-0023](adr/0023-async-state-machine.md) — async state-machine strategy and implementation summary.
 - [ADR-0040](adr/0040-sequence-type-and-yield.md) — `sequence[T]` type alias and `yield` statement.
 
+## Portable PDB / debug-info pipeline
+
+When `/debug` is on, `ReflectionMetadataEmitter` collaborates with a sibling
+`PortablePdbEmitter` (`src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs`) to
+produce standards-conformant [Portable PDB](https://github.com/dotnet/runtime/blob/main/docs/design/specs/PortablePdb-Metadata.md)
+symbols alongside the PE. Both emitters share the same `MetadataBuilder`
+contract, so the PE and PDB tables stay token-synchronised without an
+intermediate model.
+
+```
+BoundProgram (lowered) ─► ReflectionMetadataEmitter ─┐
+                                                     ├─► PE stream
+                                                     │   + DebugDirectory
+                                                     ▼   (CodeView + PdbChecksum + Reproducible + EmbeddedPortablePdb)
+                          PortablePdbEmitter ──► PDB stream (sidecar or embedded)
+```
+
+The PDB writer is invoked by `Compilation.EmitAssembly` whenever
+`DebugInformation.Format` is `Portable` or `Embedded`:
+
+1. **Document table** — `PortablePdbEmitter.GetOrAddDocument(SyntaxTree)`
+   deduplicates `Document` rows by normalised path and stamps each one with
+   GSharp's language GUID (`4F4D7B6A-0E33-4C2E-A3D7-2E5F8B7F9C00`) and a
+   SHA-256 of the source bytes.
+2. **MethodDebugInformation** — `RecordMethod` captures per-method sequence
+   points, the local-variable list (with compiler-generated locals tagged
+   `DebuggerHidden`), the IL byte-size, and the `StandAloneSignature` token
+   for the local signature.
+3. **LocalScope / LocalVariable / ImportScope** — emitted from the per-method
+   data captured above. Today the lowering flattens nested blocks, so each
+   method gets a single root `LocalScope` covering its full IL length;
+   per-`import` scopes follow once the binder exposes the resolved import
+   set on the symbol model.
+4. **CustomDebugInformation** — `EmbeddedSource`, `SourceLink`, and
+   `CompilationOptions` rows are emitted according to the `/embed`,
+   `/sourcelink:` and (always-on) compilation-options policies documented in
+   [`debug-info.md`](debug-info.md).
+5. **Serialize** — `PortablePdbEmitter.Serialize` returns the assembled PDB
+   blob and its `BlobContentId`. `ReflectionMetadataEmitter` wires that
+   `ContentId` into the PE's `IMAGE_DIRECTORY_ENTRY_DEBUG` via
+   `DebugDirectoryBuilder` so the in-PE `CodeView.Guid` matches the PDB
+   metadata header's `Id` field.
+
+The full surface — language GUID, `CustomDebugInformation` kinds, sequence-
+point semantics, PE debug-directory entries, compiler flags, and SDK
+property mapping — is the subject of [`docs/debug-info.md`](debug-info.md).
+The end-to-end policy decisions (embed-by-default, SHA-256, deterministic
+content id) are recorded in
+[ADR-0048](adr/0048-portable-pdb-emit.md).
+
 ## Entry-point synthesis
 
 GSharp supports C# 9-style top-level statements. The binder lowers a file's top-level statements into a single hidden `MethodSymbol` (logically `<TopLevel>$.<Main>$(string[] args)`). The emitter marks that method as the assembly entry point. An explicit `func Main()` is supported and takes precedence; mixing both in the same compilation is an error. See [`Gsharp-design-v0.1.md`](../design/Gsharp-design-v0.1.md) for the language-level contract.
@@ -110,6 +160,7 @@ The in-process `Evaluator` remains the canonical reference for language semantic
 | Path | What lives there |
 | --- | --- |
 | `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` | PE emitter. |
+| `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` | Portable PDB emitter (Document, MethodDebugInformation, LocalScope, CustomDebugInformation). |
 | `src/Core/CodeAnalysis/Symbols/ReferenceResolver.cs` | Reference-assembly loading + core-type lookup. |
 | `src/Core/CodeAnalysis/Symbols/ClrTypeUtilities.cs` | Cross-context `Type` comparison helpers. |
 | `src/Core/CodeAnalysis/Compilation/Compilation.cs` | Threads the resolver from `Compilation` through to the emitter. |

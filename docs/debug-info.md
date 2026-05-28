@@ -59,18 +59,20 @@ row used by the IL itself.
 
 
 
-The Portable PDB writer is staged. Phases 4–7 (shipped) emit `Document`,
-`MethodDebugInformation`, `LocalScope`, `LocalVariable`, a single root
-`ImportScope`, `CustomDebugInformation` rows for `EmbeddedSource` /
+The Portable PDB writer is shipped. The current implementation emits
+`Document`, `MethodDebugInformation`, `LocalScope`, `LocalVariable`, a single
+root `ImportScope`, `CustomDebugInformation` rows for `EmbeddedSource` /
 `SourceLink` / `CompilationOptions`, and PE-side `DebugDirectory` entries
 (`CodeView`, `PdbChecksum`, `Reproducible`, `EmbeddedPortablePdb`). The
-following are planned for subsequent phases and tracked separately:
+policy decisions behind those choices are recorded in
+[ADR-0048](adr/0048-portable-pdb-emit.md); the pipeline diagram and
+component list live in [`emit-pipeline.md`](emit-pipeline.md). The
+following extensions are tracked separately:
 
-* `LocalConstant` rows for `const` bindings — Phase 5.1 (deferred until the
-  binder surfaces `BoundLocalConstant` with a compile-time value, see #216).
-* Per-file `ImportScope` chains populated from `import` statements — Phase 5.2
-  (#217).
-* `CompilationMetadataReferences` rows — deferred from Phase 6 (#219).
+* `LocalConstant` rows for `const` bindings — deferred until the binder
+  surfaces `BoundLocalConstant` with a compile-time value (#216).
+* Per-file `ImportScope` chains populated from `import` statements (#217).
+* `CompilationMetadataReferences` rows (#219).
 
 ## Custom debug information (Phase 6)
 

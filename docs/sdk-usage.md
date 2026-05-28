@@ -81,3 +81,14 @@ Once a public feed is available, delete the project's `NuGet.config` (or remove 
 | [`build/sdk-e2e.sh`](../build/sdk-e2e.sh) | End-to-end pack → build → run for the SDK. |
 | [`build/templates-e2e.sh`](../build/templates-e2e.sh) | End-to-end install → scaffold → build → run for the templates package. |
 | [`build/multitarget-e2e.sh`](../build/multitarget-e2e.sh) | Cross-TFM build + run sweep. |
+
+## See also
+
+* [`debug-info.md`](debug-info.md) — Portable PDB / debug-info contract,
+  `gsc` compiler flags (`/debug:*`, `/pdb:`, `/sourcelink:`, `/embed`,
+  `/deterministic`), and the matching `<DebugType>` / `<DebugSymbols>` /
+  `<PdbFile>` / `<EmbedAllSources>` / `<SourceLink>` / `<Deterministic>`
+  SDK properties.
+* [`emit-pipeline.md`](emit-pipeline.md) — the underlying emit pipeline,
+  including how `ReflectionMetadataEmitter` and `PortablePdbEmitter`
+  collaborate.
