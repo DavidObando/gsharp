@@ -10,13 +10,14 @@ using System.Reflection;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// Phase 3.C.5 / ADR-0001: helpers for reading C# nullable-reference-types
+/// Phase 3.C.5 / ADR-0001 / issue #209: helpers for reading C# nullable-reference-types
 /// metadata (<c>[NullableAttribute]</c> / <c>[NullableContextAttribute]</c>)
 /// from members loaded through a <see cref="MetadataLoadContext"/>.
 ///
-/// We only inspect the top-level nullability byte (index 0 of the
-/// <c>NullableAttribute</c> byte-array, or the scalar argument when present).
-/// Generic-type-argument nullability is not yet surfaced.
+/// Both top-level and inner-position (generic type argument) nullability are
+/// surfaced. Inner positions are carried via <see cref="NullabilityAnnotatedTypeSymbol"/>
+/// so that code paths such as <c>for range</c> iteration and CLR indexer access
+/// can recover the element-type nullability at bind time.
 /// </summary>
 public static class ClrNullability
 {
@@ -30,7 +31,9 @@ public static class ClrNullability
     /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a method's return
     /// type, wrapping it in <see cref="NullableTypeSymbol"/> when the
-    /// underlying CLR type is a reference type annotated as nullable.
+    /// underlying CLR type is a reference type annotated as nullable, and
+    /// in <see cref="NullabilityAnnotatedTypeSymbol"/> when the type has
+    /// generic arguments with inner-position nullability (issue #209).
     /// Value-type nullability (<c>Nullable&lt;T&gt;</c>) is handled inside
     /// <see cref="TypeSymbol.FromClrType(Type)"/>.
     /// </summary>
@@ -39,19 +42,20 @@ public static class ClrNullability
     public static TypeSymbol GetReturnTypeSymbol(MethodInfo method)
     {
         var baseSymbol = TypeSymbol.FromClrType(method.ReturnType);
-        return ApplyReferenceNullability(baseSymbol, method.ReturnType, method.ReturnParameter, method);
+        return ApplyReferenceNullabilityFull(baseSymbol, method.ReturnType, method.ReturnParameter, method);
     }
 
     /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a parameter, with
-    /// reference-type nullability applied.
+    /// reference-type nullability applied (both top-level and inner generic
+    /// argument positions — issue #209).
     /// </summary>
     /// <param name="parameter">The parameter to inspect.</param>
     /// <returns>The mapped type symbol.</returns>
     public static TypeSymbol GetParameterTypeSymbol(ParameterInfo parameter)
     {
         var baseSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
-        return ApplyReferenceNullability(baseSymbol, parameter.ParameterType, parameter, parameter.Member);
+        return ApplyReferenceNullabilityFull(baseSymbol, parameter.ParameterType, parameter, parameter.Member);
     }
 
     internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)
@@ -153,61 +157,53 @@ public static class ClrNullability
         return false;
     }
 
-    private static TypeSymbol ApplyReferenceNullability(TypeSymbol baseSymbol, Type clrType, ICustomAttributeProvider declaration, MemberInfo enclosingMember)
-    {
-        if (baseSymbol is NullableTypeSymbol)
-        {
-            return baseSymbol;
-        }
-
-        if (clrType == null || clrType.IsValueType)
-        {
-            return baseSymbol;
-        }
-
-        if (!TryGetTopLevelNullableFlag(declaration, enclosingMember, out var flag))
-        {
-            return baseSymbol;
-        }
-
-        // 2 == annotated (i.e. T?). 1 == not-annotated. 0 == oblivious.
-        return flag == 2 ? (TypeSymbol)NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
-    }
-
-    private static bool TryGetTopLevelNullableFlag(ICustomAttributeProvider declaration, MemberInfo enclosingMember, out byte flag)
+    /// <summary>
+    /// Reads the full <c>[NullableAttribute]</c> byte array for a declaration,
+    /// falling back to a single-element array derived from the surrounding
+    /// <c>[NullableContextAttribute]</c> when no explicit <c>[Nullable]</c> is
+    /// present. Returns an empty array when no annotation is found at all.
+    /// </summary>
+    /// <param name="declaration">The attribute provider to inspect (parameter, return parameter, etc.).</param>
+    /// <param name="enclosingMember">The enclosing member used to walk up to <c>[NullableContext]</c>.</param>
+    /// <returns>The full byte array, or an empty array when no annotation is available.</returns>
+    internal static ImmutableArray<byte> ReadNullableFlags(ICustomAttributeProvider declaration, MemberInfo enclosingMember)
     {
         var attrs = SafeGetCustomAttributesData(declaration);
         if (attrs != null)
         {
             foreach (var ad in attrs)
             {
-                if (ad.AttributeType?.FullName != NullableAttributeFullName)
-                {
-                    continue;
-                }
-
-                if (ad.ConstructorArguments.Count != 1)
+                if (ad.AttributeType?.FullName != NullableAttributeFullName || ad.ConstructorArguments.Count != 1)
                 {
                     continue;
                 }
 
                 var arg = ad.ConstructorArguments[0];
+
+                // Single-byte scalar form: [Nullable(1)] or [Nullable(2)]
                 if (arg.Value is byte b)
                 {
-                    flag = b;
-                    return true;
+                    return ImmutableArray.Create(b);
                 }
 
-                if (arg.Value is System.Collections.ObjectModel.ReadOnlyCollection<CustomAttributeTypedArgument> arr && arr.Count > 0 && arr[0].Value is byte first)
+                // Array form: [Nullable(new byte[] { 1, 1, 2 })]
+                if (arg.Value is System.Collections.ObjectModel.ReadOnlyCollection<CustomAttributeTypedArgument> arr)
                 {
-                    flag = first;
-                    return true;
+                    var builder = ImmutableArray.CreateBuilder<byte>(arr.Count);
+                    foreach (var elem in arr)
+                    {
+                        if (elem.Value is byte eb)
+                        {
+                            builder.Add(eb);
+                        }
+                    }
+
+                    return builder.Count > 0 ? builder.ToImmutable() : ImmutableArray<byte>.Empty;
                 }
             }
         }
 
-        // Fall back to the surrounding NullableContextAttribute on the
-        // method, the declaring type, and then any enclosing types.
+        // Fall back to the surrounding NullableContextAttribute.
         for (var member = enclosingMember; member != null; member = member.DeclaringType)
         {
             var contextAttrs = SafeGetCustomAttributesData(member);
@@ -222,14 +218,119 @@ public static class ClrNullability
                     && ad.ConstructorArguments.Count == 1
                     && ad.ConstructorArguments[0].Value is byte ctxByte)
                 {
-                    flag = ctxByte;
-                    return true;
+                    return ImmutableArray.Create(ctxByte);
                 }
             }
         }
 
-        flag = 0;
-        return false;
+        return ImmutableArray<byte>.Empty;
+    }
+
+    /// <summary>
+    /// Counts the number of bytes the C# compiler emits for <paramref name="type"/>
+    /// in a <c>[NullableAttribute]</c> byte array. The count equals the number of
+    /// reference-type positions in a DFS pre-order traversal of the type tree.
+    /// Value types themselves contribute 0 bytes; their reference-type generic
+    /// arguments still contribute.
+    /// </summary>
+    /// <param name="type">The CLR type to measure.</param>
+    /// <returns>The number of nullability bytes this type occupies.</returns>
+    internal static int CountNullabilityBytes(Type type)
+    {
+        if (type == null)
+        {
+            return 0;
+        }
+
+        int count = type.IsValueType ? 0 : 1;
+
+        if (type.IsGenericType && !type.IsGenericTypeDefinition)
+        {
+            foreach (var arg in type.GetGenericArguments())
+            {
+                count += CountNullabilityBytes(arg);
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Constructs a <see cref="TypeSymbol"/> for <paramref name="clrType"/> by
+    /// reading the nullability byte at <paramref name="offset"/> within
+    /// <paramref name="flags"/>, and (for generic types with further inner bytes)
+    /// wrapping the result in a <see cref="NullabilityAnnotatedTypeSymbol"/>.
+    /// </summary>
+    /// <param name="clrType">The CLR type to map.</param>
+    /// <param name="flags">The full nullable-flags byte array.</param>
+    /// <param name="offset">The index within <paramref name="flags"/> where this type's byte lives.</param>
+    /// <returns>The appropriately-nullified <see cref="TypeSymbol"/>.</returns>
+    internal static TypeSymbol SymbolFromFlagsOffset(Type clrType, ImmutableArray<byte> flags, int offset)
+    {
+        var baseSymbol = TypeSymbol.FromClrType(clrType);
+
+        if (clrType.IsValueType)
+        {
+            // Value types carry no reference-nullability byte for themselves.
+            // But a generic value type (e.g., ValueTuple<string, …>) may still
+            // have inner reference-type arguments.
+            if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition && flags.Length > offset)
+            {
+                return new NullabilityAnnotatedTypeSymbol(baseSymbol, flags.Skip(offset).ToImmutableArray());
+            }
+
+            return baseSymbol;
+        }
+
+        byte flag = offset < flags.Length ? flags[offset] : (byte)0;
+        bool isNullable = flag == 2;
+        TypeSymbol result = isNullable ? NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
+
+        // Propagate inner flags when the type is a closed generic.
+        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition && flags.Length > offset + 1)
+        {
+            // Slice from `offset` so that NullabilityAnnotatedTypeSymbol.NullableFlags[0]
+            // is the byte for this type itself, matching the layout convention.
+            var slicedFlags = flags.Skip(offset).ToImmutableArray();
+            var annotationBase = isNullable ? baseSymbol : result;
+            var annotated = new NullabilityAnnotatedTypeSymbol(annotationBase, slicedFlags);
+            result = isNullable ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
+        }
+
+        return result;
+    }
+
+    private static TypeSymbol ApplyReferenceNullabilityFull(TypeSymbol baseSymbol, Type clrType, ICustomAttributeProvider declaration, MemberInfo enclosingMember)
+    {
+        if (baseSymbol is NullableTypeSymbol)
+        {
+            // Already a value-type Nullable<T> — no further annotation needed.
+            return baseSymbol;
+        }
+
+        if (clrType == null || clrType.IsValueType)
+        {
+            return baseSymbol;
+        }
+
+        var flags = ReadNullableFlags(declaration, enclosingMember);
+
+        // Determine the top-level flag (byte 0 of the array, or the context fallback).
+        byte topFlag = flags.Length > 0 ? flags[0] : (byte)0;
+
+        // Wrap top-level nullability.
+        TypeSymbol result = topFlag == 2 ? (TypeSymbol)NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
+
+        // If there are inner-position bytes, wrap with NullabilityAnnotatedTypeSymbol so
+        // that callers (for-range, CLR indexers …) can recover element-type nullability.
+        if (flags.Length > 1 && clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        {
+            var annotationBase = topFlag == 2 ? baseSymbol : result;
+            var annotated = new NullabilityAnnotatedTypeSymbol(annotationBase, flags);
+            result = topFlag == 2 ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
+        }
+
+        return result;
     }
 
     private static bool TryGetBoolAttributeValue(ParameterInfo parameter, string attributeFullName, out bool value)
@@ -253,7 +354,6 @@ public static class ClrNullability
         return false;
     }
 
-    // Helper: add a single string or expand a params-array argument into the builder.
     private static void CollectStringOrArray(
         CustomAttributeTypedArgument arg,
         ref ImmutableArray<string>.Builder builder)
