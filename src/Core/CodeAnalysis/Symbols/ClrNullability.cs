@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 
@@ -23,6 +24,8 @@ public static class ClrNullability
     private const string NullableContextAttributeFullName = "System.Runtime.CompilerServices.NullableContextAttribute";
     private const string NotNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.NotNullWhenAttribute";
     private const string MaybeNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute";
+    private const string MemberNotNullAttributeFullName = "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute";
+    private const string MemberNotNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute";
 
     /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a method's return
@@ -59,6 +62,95 @@ public static class ClrNullability
     internal static bool TryGetMaybeNullWhen(ParameterInfo parameter, out bool returnValue)
     {
         return TryGetBoolAttributeValue(parameter, MaybeNullWhenAttributeFullName, out returnValue);
+    }
+
+    /// <summary>
+    /// Collects all member names from every <c>[MemberNotNull]</c> attribute
+    /// on <paramref name="method"/>. Issue #208: used to apply unconditional
+    /// field post-condition narrowing at call sites.
+    /// </summary>
+    /// <param name="method">The method to inspect.</param>
+    /// <param name="members">Receives the collected member names.</param>
+    /// <returns><c>true</c> when at least one name was collected.</returns>
+    internal static bool TryGetMemberNotNullMembers(MethodInfo method, out ImmutableArray<string> members)
+    {
+        members = ImmutableArray<string>.Empty;
+        var attrs = SafeGetCustomAttributesData(method);
+        if (attrs == null)
+        {
+            return false;
+        }
+
+        ImmutableArray<string>.Builder builder = null;
+        foreach (var ad in attrs)
+        {
+            if (ad.AttributeType?.FullName != MemberNotNullAttributeFullName || ad.ConstructorArguments.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var arg in ad.ConstructorArguments)
+            {
+                CollectStringOrArray(arg, ref builder);
+            }
+        }
+
+        if (builder == null)
+        {
+            return false;
+        }
+
+        members = builder.ToImmutable();
+        return true;
+    }
+
+    /// <summary>
+    /// Extracts the <c>returnValue</c> boolean and field names from a
+    /// <c>[MemberNotNullWhen]</c> attribute on <paramref name="method"/>.
+    /// Issue #208: used to apply conditional field post-condition narrowing.
+    /// Returns the first valid occurrence found.
+    /// </summary>
+    /// <param name="method">The method to inspect.</param>
+    /// <param name="returnValue">Receives the <c>returnValue</c> argument.</param>
+    /// <param name="members">Receives the member names.</param>
+    /// <returns><c>true</c> when a valid <c>[MemberNotNullWhen]</c> was found.</returns>
+    internal static bool TryGetMemberNotNullWhenData(MethodInfo method, out bool returnValue, out ImmutableArray<string> members)
+    {
+        returnValue = false;
+        members = ImmutableArray<string>.Empty;
+        var attrs = SafeGetCustomAttributesData(method);
+        if (attrs == null)
+        {
+            return false;
+        }
+
+        foreach (var ad in attrs)
+        {
+            if (ad.AttributeType?.FullName != MemberNotNullWhenAttributeFullName || ad.ConstructorArguments.Count < 2)
+            {
+                continue;
+            }
+
+            if (ad.ConstructorArguments[0].Value is not bool rv)
+            {
+                continue;
+            }
+
+            ImmutableArray<string>.Builder builder = null;
+            for (var i = 1; i < ad.ConstructorArguments.Count; i++)
+            {
+                CollectStringOrArray(ad.ConstructorArguments[i], ref builder);
+            }
+
+            if (builder != null && builder.Count > 0)
+            {
+                returnValue = rv;
+                members = builder.ToImmutable();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static TypeSymbol ApplyReferenceNullability(TypeSymbol baseSymbol, Type clrType, ICustomAttributeProvider declaration, MemberInfo enclosingMember)
@@ -159,6 +251,27 @@ public static class ClrNullability
 
         value = false;
         return false;
+    }
+
+    // Helper: add a single string or expand a params-array argument into the builder.
+    private static void CollectStringOrArray(
+        CustomAttributeTypedArgument arg,
+        ref ImmutableArray<string>.Builder builder)
+    {
+        if (arg.Value is string s && !string.IsNullOrEmpty(s))
+        {
+            (builder ??= ImmutableArray.CreateBuilder<string>()).Add(s);
+        }
+        else if (arg.Value is System.Collections.ObjectModel.ReadOnlyCollection<CustomAttributeTypedArgument> arr)
+        {
+            foreach (var elem in arr)
+            {
+                if (elem.Value is string es && !string.IsNullOrEmpty(es))
+                {
+                    (builder ??= ImmutableArray.CreateBuilder<string>()).Add(es);
+                }
+            }
+        }
     }
 
     private static System.Collections.Generic.IList<CustomAttributeData> SafeGetCustomAttributesData(ICustomAttributeProvider provider)

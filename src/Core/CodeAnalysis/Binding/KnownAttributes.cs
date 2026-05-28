@@ -200,6 +200,93 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// Collects all member names from every <c>[MemberNotNull("_f1", "_f2", …)]</c>
+    /// attribute in <paramref name="attributes"/>. Issue #208: the post-call
+    /// postcondition lists which fields are non-null after the annotated method
+    /// returns. Multiple attributes and multiple string arguments per attribute
+    /// are both supported.
+    /// </summary>
+    /// <param name="attributes">The attribute list on a function symbol.</param>
+    /// <param name="members">Receives the collected member names.</param>
+    /// <returns><c>true</c> when at least one name was collected.</returns>
+    public static bool TryGetMemberNotNullMembers(ImmutableArray<BoundAttribute> attributes, out ImmutableArray<string> members)
+    {
+        members = ImmutableArray<string>.Empty;
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        ImmutableArray<string>.Builder builder = null;
+        foreach (var attr in attributes)
+        {
+            if (!IsMemberNotNull(attr) || attr.PositionalArguments.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var arg in attr.PositionalArguments)
+            {
+                if (arg.Value is string s && !string.IsNullOrEmpty(s))
+                {
+                    (builder ??= ImmutableArray.CreateBuilder<string>()).Add(s);
+                }
+            }
+        }
+
+        if (builder == null)
+        {
+            return false;
+        }
+
+        members = builder.ToImmutable();
+        return true;
+    }
+
+    /// <summary>
+    /// Extracts the <c>returnValue</c> boolean and field names from a single
+    /// <c>[MemberNotNullWhen(returnValue, "_f1", "_f2", …)]</c> attribute.
+    /// Issue #208: on the arm where the call returns <paramref name="returnValue"/>
+    /// the named fields are guaranteed non-null.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <param name="returnValue">Receives the <c>returnValue</c> argument.</param>
+    /// <param name="members">Receives the member names.</param>
+    /// <returns><c>true</c> when <paramref name="attribute"/> is a valid
+    /// <c>[MemberNotNullWhen]</c> with at least one string member.</returns>
+    public static bool TryGetMemberNotNullWhenData(BoundAttribute attribute, out bool returnValue, out ImmutableArray<string> members)
+    {
+        returnValue = false;
+        members = ImmutableArray<string>.Empty;
+
+        if (!IsMemberNotNullWhen(attribute)
+            || attribute.PositionalArguments.IsDefaultOrEmpty
+            || attribute.PositionalArguments.Length < 2
+            || attribute.PositionalArguments[0].Value is not bool rv)
+        {
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<string>();
+        for (var i = 1; i < attribute.PositionalArguments.Length; i++)
+        {
+            if (attribute.PositionalArguments[i].Value is string s && !string.IsNullOrEmpty(s))
+            {
+                builder.Add(s);
+            }
+        }
+
+        if (builder.Count == 0)
+        {
+            return false;
+        }
+
+        returnValue = rv;
+        members = builder.ToImmutable();
+        return true;
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="clrType"/> is
     /// <see cref="System.Runtime.CompilerServices.EnumeratorCancellationAttribute"/>.
     /// Recognition is type-identity based (ADR-0047 §6 / ADR-0040): the

@@ -356,6 +356,230 @@ if !dict.TryGetValue(""key"", &value) {
         Assert.Empty(result.Diagnostics);
     }
 
+    // Issue #208 — [MemberNotNull] / [MemberNotNullWhen] field postconditions
+
+    [Fact]
+    public void MemberNotNull_AfterHelperCall_FieldNarrowedToNonNullable()
+    {
+        // EnsureInit() carries [MemberNotNull("_name")]. After the call, bare
+        // name access _name.Length must succeed without a nil-guard.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    func EnsureInit() {
+        _name = ""default""
+    }
+
+    @MemberNotNull(""_name"")
+    func EnsureInitAnnotated() {
+        _name = ""default""
+    }
+
+    func Run() int {
+        this.EnsureInitAnnotated()
+        return _name.Length
+    }
+}
+
+var b = Box{}
+b.Run()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void MemberNotNull_WithoutHelperCall_FieldRemainsNullable()
+    {
+        // Without calling the [MemberNotNull] helper, _name stays nullable and
+        // .Length access must be rejected.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    @MemberNotNull(""_name"")
+    func EnsureInit() {
+        _name = ""hello""
+    }
+
+    func Run() int {
+        return _name.Length
+    }
+}
+
+var b = Box{}
+b.Run()
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MemberNotNull_AfterHelperCall_FieldInvalidatedBySubsequentAssignment()
+    {
+        // After the [MemberNotNull] helper call, assigning nil to _name must
+        // invalidate the narrowing so a subsequent .Length access is rejected.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    @MemberNotNull(""_name"")
+    func EnsureInit() {
+        _name = ""hello""
+    }
+
+    func Run() int {
+        this.EnsureInit()
+        _name = nil
+        return _name.Length
+    }
+}
+
+var b = Box{}
+b.Run()
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MemberNotNullWhen_ThenArm_FieldNarrowedOnMatchingReturn()
+    {
+        // TryGet() returns true when _name is non-null per [MemberNotNullWhen(true,"_name")].
+        // The then-arm must see _name narrowed and .Length must succeed.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    @MemberNotNullWhen(true, ""_name"")
+    func TryGet() bool {
+        return _name != nil
+    }
+
+    func Run() int {
+        if this.TryGet() {
+            return _name.Length
+        }
+        return 0
+    }
+}
+
+var b = Box{}
+b._name = ""hello""
+b.Run()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void MemberNotNullWhen_ElseArm_FieldRemainsNullableOnNonMatchingReturn()
+    {
+        // In the else-arm TryGet() returned false, so _name is still nullable
+        // and .Length must be rejected.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    @MemberNotNullWhen(true, ""_name"")
+    func TryGet() bool {
+        return _name != nil
+    }
+
+    func Run() int {
+        if this.TryGet() {
+        } else {
+            return _name.Length
+        }
+        return 0
+    }
+}
+
+var b = Box{}
+b.Run()
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot find member Length.", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MemberNotNullWhen_NegatedCall_ElseArmNarrowed()
+    {
+        // !TryGet() is true when TryGet() returned false — so the then-arm is
+        // the failure arm. The else-arm sees the true-return and _name is narrowed.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Box class {
+    _name string?
+
+    @MemberNotNullWhen(true, ""_name"")
+    func TryGet() bool {
+        return _name != nil
+    }
+
+    func Run() int {
+        if !this.TryGet() {
+        } else {
+            return _name.Length
+        }
+        return 0
+    }
+}
+
+var b = Box{}
+b._name = ""world""
+b.Run()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void MemberNotNull_MultipleFields_BothNarrowed()
+    {
+        // [MemberNotNull("_a", "_b")] should narrow both fields after the call.
+        var result = Evaluate(@"
+import System.Diagnostics.CodeAnalysis
+
+type Pair class {
+    _a string?
+    _b string?
+
+    @MemberNotNull(""_a"", ""_b"")
+    func Init() {
+        _a = ""hello""
+        _b = ""world""
+    }
+
+    func Run() int {
+        this.Init()
+        return _a.Length + _b.Length
+    }
+}
+
+var p = Pair{}
+p.Run()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

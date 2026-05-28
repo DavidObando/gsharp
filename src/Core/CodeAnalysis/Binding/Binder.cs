@@ -945,6 +945,18 @@ public sealed class Binder
                     isOpen: methodSyntax.IsOpen,
                     isOverride: methodSyntax.IsOverride);
                 methodSymbol.OverriddenMethod = overriddenMethod;
+
+                if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    var methodAttributes = BindAttributes(
+                        methodSyntax.Annotations,
+                        AttributeTargetKind.Method,
+                        FunctionDeclarationAllowedTargets,
+                        "a method declaration",
+                        System.AttributeTargets.Method);
+                    methodSymbol.SetAttributes(methodAttributes);
+                }
+
                 methodsBuilder.Add(methodSymbol);
             }
 
@@ -1645,58 +1657,154 @@ public sealed class Binder
 
     private void BindBlockStatements(ImmutableArray<StatementSyntax> statementSyntaxes, int startIndex, ImmutableArray<BoundStatement>.Builder statements)
     {
-        for (var i = startIndex; i < statementSyntaxes.Length; i++)
+        // Issue #208: push a persistent narrowing frame for this statement list.
+        // After each call statement whose method carries [MemberNotNull], the
+        // named fields are added to this frame and remain narrowed for all
+        // subsequent statements in the block (until assignment invalidates them).
+        var memberNotNullFrame = new Dictionary<VariableSymbol, TypeSymbol>();
+        narrowedVariables.Add(memberNotNullFrame);
+        try
         {
-            var statementSyntax = statementSyntaxes[i];
-
-            if (statementSyntax is DeferStatementSyntax deferSyntax)
+            for (var i = startIndex; i < statementSyntaxes.Length; i++)
             {
-                var defer = BindDeferStatementInBlock(deferSyntax);
-                statements.AddRange(defer.PrefixStatements);
-                if (defer.Cleanup == null)
+                var statementSyntax = statementSyntaxes[i];
+
+                if (statementSyntax is DeferStatementSyntax deferSyntax)
                 {
-                    statements.Add(defer.ErrorStatement);
+                    var defer = BindDeferStatementInBlock(deferSyntax);
+                    statements.AddRange(defer.PrefixStatements);
+                    if (defer.Cleanup == null)
+                    {
+                        statements.Add(defer.ErrorStatement);
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                        continue;
+                    }
+
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
-                    continue;
+                    var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup));
+                    return;
                 }
 
-                InvalidateNarrowingsForAssignedVariables(statementSyntax);
-                var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
-                statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup));
-                return;
-            }
-
-            if (statementSyntax is UsingStatementSyntax usingSyntax)
-            {
-                var usingLowering = BindUsingStatementInBlock(usingSyntax);
-                if (usingLowering.Declaration != null)
+                if (statementSyntax is UsingStatementSyntax usingSyntax)
                 {
-                    statements.Add(usingLowering.Declaration);
-                }
+                    var usingLowering = BindUsingStatementInBlock(usingSyntax);
+                    if (usingLowering.Declaration != null)
+                    {
+                        statements.Add(usingLowering.Declaration);
+                    }
 
-                if (usingLowering.Cleanup == null)
-                {
-                    statements.Add(usingLowering.ErrorStatement);
+                    if (usingLowering.Cleanup == null)
+                    {
+                        statements.Add(usingLowering.ErrorStatement);
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                        continue;
+                    }
+
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
-                    continue;
+                    var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
+                    return;
                 }
 
+                var statement = BindStatement(statementSyntax);
+                statements.Add(statement);
+
+                // Issue #208: after binding a call statement, apply any
+                // [MemberNotNull] post-condition narrowings to the persistent frame.
+                ApplyMemberNotNullNarrowings(statement, memberNotNullFrame);
+
+                // Phase 3.C.4: mutation invalidates the narrowing. After binding
+                // a statement that writes to a narrowed variable, drop its
+                // narrowing from the current frame so subsequent reads in this
+                // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax);
-                var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
-                statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
-                return;
             }
+        }
+        finally
+        {
+            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+        }
+    }
 
-            var statement = BindStatement(statementSyntax);
-            statements.Add(statement);
+    /// <summary>
+    /// If <paramref name="statement"/> is a call expression statement whose
+    /// called function carries <c>[MemberNotNull("_f", …)]</c>, narrows each
+    /// named field (via its <see cref="ImplicitFieldVariableSymbol"/>) to its
+    /// underlying non-nullable type in <paramref name="frame"/>.
+    /// </summary>
+    private void ApplyMemberNotNullNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        BoundExpression callExpr = null;
+        if (statement is BoundExpressionStatement exprStmt)
+        {
+            callExpr = exprStmt.Expression;
+        }
 
-            // Phase 3.C.4: mutation invalidates the narrowing. After binding
-            // a statement that writes to a narrowed variable, drop its
-            // narrowing from the current frame so subsequent reads in this
-            // block see the variable at its declared (nullable) type again.
-            InvalidateNarrowingsForAssignedVariables(statementSyntax);
+        if (callExpr == null)
+        {
+            return;
+        }
+
+        ImmutableArray<string> memberNames;
+        switch (callExpr)
+        {
+            case BoundCallExpression userCall:
+                if (!KnownAttributes.TryGetMemberNotNullMembers(userCall.Function.Attributes, out memberNames))
+                {
+                    return;
+                }
+
+                break;
+
+            case BoundImportedCallExpression importedCall:
+                if (!ClrNullability.TryGetMemberNotNullMembers(importedCall.Function.Method, out memberNames))
+                {
+                    return;
+                }
+
+                break;
+
+            case BoundImportedInstanceCallExpression instanceCall:
+                if (!ClrNullability.TryGetMemberNotNullMembers(instanceCall.Method, out memberNames))
+                {
+                    return;
+                }
+
+                break;
+
+            case BoundUserInstanceCallExpression userInstanceCall:
+                if (!KnownAttributes.TryGetMemberNotNullMembers(userInstanceCall.Method.Attributes, out memberNames))
+                {
+                    return;
+                }
+
+                break;
+
+            default:
+                return;
+        }
+
+        foreach (var name in memberNames)
+        {
+            NarrowFieldIfNullable(name, frame);
+        }
+    }
+
+    /// <summary>
+    /// Looks up <paramref name="fieldName"/> in the current scope. If it
+    /// resolves to an <see cref="ImplicitFieldVariableSymbol"/> whose declared
+    /// type is nullable, adds a narrowing entry to <paramref name="frame"/>
+    /// that maps the symbol to its underlying non-nullable type.
+    /// </summary>
+    private void NarrowFieldIfNullable(string fieldName, Dictionary<VariableSymbol, TypeSymbol> frame)
+    {
+        if (scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar
+            && fieldVar.Type is NullableTypeSymbol nullable)
+        {
+            frame[fieldVar] = nullable.UnderlyingType;
         }
     }
 
@@ -1714,12 +1822,6 @@ public sealed class Binder
             return;
         }
 
-        var top = narrowedVariables[narrowedVariables.Count - 1];
-        if (top.Count == 0)
-        {
-            return;
-        }
-
         var assignedNames = new HashSet<string>();
         CollectAssignedNames(statementSyntax, assignedNames);
         if (assignedNames.Count == 0)
@@ -1728,15 +1830,21 @@ public sealed class Binder
         }
 
         // Resolve each name through the current scope and drop any matching
-        // narrowing. We don't need to be conservative about scope shadowing:
-        // the narrowed variable lives in an outer scope, so an inner
-        // shadowing declaration with the same name will resolve to a
+        // narrowing from ALL active frames. We don't need to be conservative
+        // about scope shadowing: the narrowed variable lives in an outer scope,
+        // so an inner shadowing declaration with the same name will resolve to a
         // different symbol, and the narrowing will simply not be triggered.
+        // Issue #208: iterate ALL frames (not just the top) because the
+        // memberNotNullFrame sits above the if-condition frames; dropping from
+        // only the top would miss narrowings added by if-condition analysis.
         foreach (var name in assignedNames)
         {
-            if (scope.TryLookupSymbol(name) is VariableSymbol v && top.ContainsKey(v))
+            if (scope.TryLookupSymbol(name) is VariableSymbol v)
             {
-                top.Remove(v);
+                for (var i = narrowedVariables.Count - 1; i >= 0; i--)
+                {
+                    narrowedVariables[i].Remove(v);
+                }
             }
         }
     }
@@ -2308,20 +2416,81 @@ public sealed class Binder
 
         if (inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool)
         {
-            return ClassifyImportedBoolCallNarrowing(importedCall, negate);
+            var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate);
+            MergeClrMemberNotNullWhenNarrowings(importedCall.Function.Method, negate, ref thenFrame, ref elseFrame);
+            return (thenFrame, elseFrame);
         }
 
         if (inner is BoundImportedInstanceCallExpression importedInstanceCall && importedInstanceCall.Type == TypeSymbol.Bool)
         {
-            return ClassifyImportedMethodBoolCallNarrowing(importedInstanceCall.Method.GetParameters(), importedInstanceCall.Arguments, negate);
+            var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(importedInstanceCall.Method.GetParameters(), importedInstanceCall.Arguments, negate);
+            MergeClrMemberNotNullWhenNarrowings(importedInstanceCall.Method, negate, ref thenFrame, ref elseFrame);
+            return (thenFrame, elseFrame);
         }
 
         if (inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool)
         {
-            return ClassifyUserBoolCallNarrowing(userCall, negate);
+            var (thenFrame, elseFrame) = ClassifyUserBoolCallNarrowing(userCall, negate);
+            MergeUserMemberNotNullWhenNarrowings(userCall.Function.Attributes, negate, ref thenFrame, ref elseFrame);
+            return (thenFrame, elseFrame);
+        }
+
+        if (inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool)
+        {
+            var (thenFrame, elseFrame) = (default(Dictionary<VariableSymbol, TypeSymbol>), default(Dictionary<VariableSymbol, TypeSymbol>));
+            MergeUserMemberNotNullWhenNarrowings(userInstanceCall.Method.Attributes, negate, ref thenFrame, ref elseFrame);
+            return (thenFrame, elseFrame);
         }
 
         return (null, null);
+    }
+
+    // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
+    private void MergeClrMemberNotNullWhenNarrowings(
+        System.Reflection.MethodInfo method,
+        bool negate,
+        ref Dictionary<VariableSymbol, TypeSymbol> thenFrame,
+        ref Dictionary<VariableSymbol, TypeSymbol> elseFrame)
+    {
+        if (!ClrNullability.TryGetMemberNotNullWhenData(method, out var returnValue, out var members))
+        {
+            return;
+        }
+
+        var narrowThen = returnValue != negate;
+        var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+        foreach (var name in members)
+        {
+            NarrowFieldIfNullable(name, frame);
+        }
+    }
+
+    // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
+    private void MergeUserMemberNotNullWhenNarrowings(
+        ImmutableArray<BoundAttribute> attributes,
+        bool negate,
+        ref Dictionary<VariableSymbol, TypeSymbol> thenFrame,
+        ref Dictionary<VariableSymbol, TypeSymbol> elseFrame)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (!KnownAttributes.TryGetMemberNotNullWhenData(attr, out var returnValue, out var members))
+            {
+                continue;
+            }
+
+            var narrowThen = returnValue != negate;
+            var frame = narrowThen ? (thenFrame ??= new Dictionary<VariableSymbol, TypeSymbol>()) : (elseFrame ??= new Dictionary<VariableSymbol, TypeSymbol>());
+            foreach (var name in members)
+            {
+                NarrowFieldIfNullable(name, frame);
+            }
+        }
     }
 
     private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
@@ -4105,11 +4274,17 @@ public sealed class Binder
                 syntax.IdentifierToken.Location,
                 implicitField.Field,
                 $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
+
+            // Issue #208: apply any [MemberNotNull] post-call narrowing so that
+            // `field.Member` accesses after a [MemberNotNull] helper call are
+            // accepted without a nil-guard.
+            var narrowedFieldType = TryGetNarrowedType(implicitField);
             return new BoundFieldAccessExpression(
                 null,
                 new BoundVariableExpression(null, implicitField.Receiver),
                 implicitField.StructType,
-                implicitField.Field);
+                implicitField.Field,
+                narrowedFieldType);
         }
 
         return new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
@@ -6000,11 +6175,16 @@ public sealed class Binder
                         leftName.IdentifierToken.Location,
                         implicitField.Field,
                         $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
+
+                    // Issue #208: apply any [MemberNotNull] narrowing so that
+                    // chained access like `_name.Length` after a [MemberNotNull]
+                    // call is accepted without a nil-guard.
                     receiver = new BoundFieldAccessExpression(
                         null,
                         new BoundVariableExpression(null, implicitField.Receiver),
                         implicitField.StructType,
-                        implicitField.Field);
+                        implicitField.Field,
+                        TryGetNarrowedType(implicitField));
                 }
                 else
                 {
