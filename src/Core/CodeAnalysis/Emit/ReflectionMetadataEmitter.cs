@@ -1285,6 +1285,102 @@ internal sealed class ReflectionMetadataEmitter
     /// <see cref="EmitStructTypeDef"/> but uses <c>NestedPrivate</c> visibility
     /// and an empty namespace (nested types have no namespace in metadata).
     /// </summary>
+    /// <summary>
+    /// Converts the per-method <c>constValues</c> dictionary into a list of
+    /// <see cref="LocalConstantInfo"/> descriptors for the Portable PDB
+    /// <c>LocalConstant</c> table. Each entry corresponds to one compile-time
+    /// <c>const</c> binding that occupied no IL slot.
+    /// </summary>
+    private static IReadOnlyList<LocalConstantInfo> CollectLocalConstantInfo(Dictionary<VariableSymbol, object> constValues)
+    {
+        if (constValues == null || constValues.Count == 0)
+        {
+            return System.Array.Empty<LocalConstantInfo>();
+        }
+
+        var result = new List<LocalConstantInfo>(constValues.Count);
+        foreach (var kvp in constValues)
+        {
+            result.Add(new LocalConstantInfo(kvp.Key.Name ?? string.Empty, kvp.Value));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Pre-scans <paramref name="body"/> and populates
+    /// <paramref name="constValues"/> with every <c>const</c>-declared local
+    /// that has a compile-time <see cref="BoundVariableDeclaration.ConstantValue"/>.
+    /// Called once before <see cref="CollectLocalsAndLabels"/> so that
+    /// <see cref="BodyEmitter"/> can inline those values instead of loading
+    /// from a slot.
+    /// </summary>
+    private static void CollectConstValues(BoundStatement body, Dictionary<VariableSymbol, object> constValues)
+    {
+        WalkStmtsForConsts(body, constValues);
+    }
+
+    private static void WalkStmtsForConsts(BoundStatement stmt, Dictionary<VariableSymbol, object> result)
+    {
+        switch (stmt)
+        {
+            case BoundVariableDeclaration vd when vd.ConstantValue != null:
+                result[vd.Variable] = vd.ConstantValue;
+                break;
+            case BoundBlockStatement block:
+                foreach (var s in block.Statements)
+                {
+                    WalkStmtsForConsts(s, result);
+                }
+
+                break;
+            case BoundIfStatement ifs:
+                WalkStmtsForConsts(ifs.ThenStatement, result);
+                if (ifs.ElseStatement != null)
+                {
+                    WalkStmtsForConsts(ifs.ElseStatement, result);
+                }
+
+                break;
+            case BoundTryStatement t:
+                WalkStmtsForConsts(t.TryBlock, result);
+                foreach (var clause in t.CatchClauses)
+                {
+                    WalkStmtsForConsts(clause.Body, result);
+                }
+
+                if (t.FinallyBlock != null)
+                {
+                    WalkStmtsForConsts(t.FinallyBlock, result);
+                }
+
+                break;
+            case BoundPatternSwitchStatement ps:
+                foreach (var arm in ps.Arms)
+                {
+                    if (arm.Body != null)
+                    {
+                        WalkStmtsForConsts(arm.Body, result);
+                    }
+                }
+
+                break;
+            case BoundScopeStatement sc:
+                WalkStmtsForConsts(sc.Body, result);
+                break;
+            case BoundSelectStatement sel:
+                foreach (var arm in sel.Cases)
+                {
+                    if (arm.Body != null)
+                    {
+                        WalkStmtsForConsts(arm.Body, result);
+                    }
+                }
+
+                break;
+        }
+    }
+
     private void EmitNestedStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
         if (!structSym.TypeArguments.IsDefaultOrEmpty)
@@ -2453,6 +2549,7 @@ internal sealed class ReflectionMetadataEmitter
         int bodyOffset = -1;
         IReadOnlyList<SequencePoint> capturedSequencePoints = null;
         IReadOnlyList<LocalInfo> capturedLocals = null;
+        IReadOnlyList<LocalConstantInfo> capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
         if (!this.metadataOnly)
@@ -2477,6 +2574,11 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+
+            // Issue #216: collect compile-time const bindings before slot allocation.
+            var constValues = new Dictionary<VariableSymbol, object>();
+            CollectConstValues(body, constValues);
+
             CollectLocalsAndLabels(
                 body,
                 null,
@@ -2532,6 +2634,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 goEnclosingScopes,
+                constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
                 asyncPlan: plan);
@@ -2540,6 +2643,7 @@ internal sealed class ReflectionMetadataEmitter
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
             capturedLocals = CollectLocalInfo(locals);
+            capturedConstants = CollectLocalConstantInfo(constValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
         }
@@ -2562,7 +2666,7 @@ internal sealed class ReflectionMetadataEmitter
         // method post-lowering; sequence points and locals captured here surface
         // in debugger stack traces, locals window, and `step` commands across
         // `await` points.
-        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedCodeSize, capturedLocalsSignature);
+        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature);
     }
 
     /// <summary>
@@ -2948,6 +3052,7 @@ internal sealed class ReflectionMetadataEmitter
         int bodyOffset = -1;
         IReadOnlyList<SequencePoint> capturedSequencePoints = null;
         IReadOnlyList<LocalInfo> capturedLocals = null;
+        IReadOnlyList<LocalConstantInfo> capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
         if (!this.metadataOnly)
@@ -2975,6 +3080,11 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+
+            // Issue #216: collect compile-time const bindings before slot allocation.
+            var constValues = new Dictionary<VariableSymbol, object>();
+            CollectConstValues(body, constValues);
+
             CollectLocalsAndLabels(
                 body,
                 function,
@@ -3054,6 +3164,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 goEnclosingScopes,
+                constValues: constValues,
                 asyncIteratorEmitCtx: aiEmitCtx);
             emitter.EmitBlock(body);
 
@@ -3066,6 +3177,7 @@ internal sealed class ReflectionMetadataEmitter
             bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
             capturedLocals = CollectLocalInfo(locals);
+            capturedConstants = CollectLocalConstantInfo(constValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
             } // end else (non-async path)
@@ -3193,7 +3305,7 @@ internal sealed class ReflectionMetadataEmitter
         // async-kickoff path (the kickoff stub is fully synthesised — visible
         // PDB rows for the user's async body land via EmitStateMachineMoveNext
         // below).
-        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedCodeSize, capturedLocalsSignature);
+        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature);
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
@@ -3407,7 +3519,8 @@ internal sealed class ReflectionMetadataEmitter
                         {
                             foreach (var inner in armBlock.Statements)
                             {
-                                if (inner is BoundVariableDeclaration decl && !locals.ContainsKey(decl.Variable))
+                                // Issue #216: const decls have no IL slot.
+                                if (inner is BoundVariableDeclaration decl && decl.ConstantValue == null && !locals.ContainsKey(decl.Variable))
                                 {
                                     locals[decl.Variable] = localTypes.Count;
                                     localTypes.Add(decl.Variable.Type);
@@ -3458,7 +3571,8 @@ internal sealed class ReflectionMetadataEmitter
                 WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
                 break;
             case BoundVariableDeclaration vd:
-                if (!locals.ContainsKey(vd.Variable))
+                // Issue #216: compile-time const bindings are inlined — no IL slot.
+                if (vd.ConstantValue == null && !locals.ContainsKey(vd.Variable))
                 {
                     locals[vd.Variable] = localTypes.Count;
                     localTypes.Add(vd.Variable.Type);
@@ -4949,6 +5063,13 @@ internal sealed class ReflectionMetadataEmitter
                         // FieldDef stores into <Program>'s static field via
                         // stsfld; do not also allocate a local slot for it.
                         if (decl.Variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+                        {
+                            break;
+                        }
+
+                        // Issue #216: compile-time const bindings are inlined at
+                        // every read site — no IL slot is needed.
+                        if (decl.ConstantValue != null)
                         {
                             break;
                         }
@@ -6530,7 +6651,7 @@ internal sealed class ReflectionMetadataEmitter
             this.declared.Add(node.Variable);
             return initializer == node.Initializer
                 ? node
-                : new BoundVariableDeclaration(null, node.Variable, initializer);
+                : new BoundVariableDeclaration(null, node.Variable, initializer, node.ConstantValue);
         }
 
         private void CaptureIfFree(VariableSymbol variable)
@@ -6643,6 +6764,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
         private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
         private readonly AsyncIteratorEmitContext asyncIteratorEmitCtx;
+        private readonly Dictionary<VariableSymbol, object> constValues;
 
         // Stack of currently-active protected regions; each entry holds the set of
         // bound labels defined lexically within that region (including nested
@@ -6678,7 +6800,8 @@ internal sealed class ReflectionMetadataEmitter
             ParameterSymbol structThisParameter = null,
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
             Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
-            AsyncIteratorEmitContext asyncIteratorEmitCtx = null)
+            AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
+            Dictionary<VariableSymbol, object> constValues = null)
         {
             this.outer = outer;
             this.il = il;
@@ -6700,6 +6823,7 @@ internal sealed class ReflectionMetadataEmitter
             this.asyncFieldMap = asyncFieldMap;
             this.asyncPlan = asyncPlan;
             this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
+            this.constValues = constValues;
         }
 
         public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
@@ -6747,6 +6871,11 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.OpCode(ILOpCode.Ret);
                     break;
                 case BoundVariableDeclaration decl:
+                    if (decl.ConstantValue != null)
+                    {
+                        break; // value inlined at read sites; initializer is a side-effect-free literal
+                    }
+
                     this.EmitExpression(decl.Initializer);
                     this.EmitStoreVariable(decl.Variable);
                     break;
@@ -7721,6 +7850,13 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLoadVariable(VariableSymbol variable)
         {
+            // Issue #216: const bindings have no IL slot — inline the literal value.
+            if (this.constValues != null && this.constValues.TryGetValue(variable, out var cv))
+            {
+                this.EmitLiteral(new BoundLiteralExpression(null, cv, variable.Type));
+                return;
+            }
+
             if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
             {
                 this.il.LoadArgument(argIndex);

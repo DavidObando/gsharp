@@ -1794,7 +1794,17 @@ public sealed class Binder
             variable.SetAttributes(boundAttrs);
         }
 
-        return new BoundVariableDeclaration(syntax, variable, convertedInitializer);
+        // Issue #216: a `const` declaration whose converted initializer is a
+        // literal expression carries a compile-time ConstantValue. The emitter
+        // uses this to skip IL slot allocation and emit a LocalConstant PDB row.
+        object constValue = null;
+        if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
+            && convertedInitializer is BoundLiteralExpression litExpr)
+        {
+            constValue = litExpr.Value;
+        }
+
+        return new BoundVariableDeclaration(syntax, variable, convertedInitializer, constValue);
     }
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
