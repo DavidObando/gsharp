@@ -58,7 +58,7 @@ Console.WriteLine(""ok"")
         using var pe2 = new MemoryStream();
         var tree2 = SyntaxTree.Parse(SourceText.From(Source));
         var comp2 = new Compilation(tree2);
-        var result2 = comp2.Emit(pe2, refStream: null, assemblyName: null);
+        var result2 = comp2.Emit(pe2, pdbStream: null, refStream: null, assemblyName: null);
         Assert.True(result2.Success, "Emit(pe, ref, name) failed: " + string.Join("; ", result2.Diagnostics.Select(d => d.Message)));
 
         // Both assemblies should have the same method definitions
@@ -90,7 +90,7 @@ Console.WriteLine(""hi"")
         using var refStream = new MemoryStream();
         var tree = SyntaxTree.Parse(SourceText.From(Source));
         var comp = new Compilation(tree);
-        var result = comp.Emit(peStream, refStream, assemblyName: "RefParity");
+        var result = comp.Emit(peStream, pdbStream: null, refStream, assemblyName: "RefParity");
 
         Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(d => d.Message)));
 

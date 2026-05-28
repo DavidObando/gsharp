@@ -284,7 +284,7 @@ public class Compilation
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream) => Emit(peStream, refStream: null, assemblyName: null);
+    public EmitResult Emit(Stream peStream) => Emit(peStream, pdbStream: null, refStream: null, assemblyName: null);
 
     /// <summary>
     /// Compiles the current syntax tree and writes the resulting assembly to
@@ -358,56 +358,9 @@ public class Compilation
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes. May be <c>null</c> when only a reference assembly is desired.</param>
     /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
-    /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream, Stream refStream, string assemblyName = null)
-    {
-        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
-        var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
-        if (syntaxDiagnostics.Any(d => d.IsError))
-        {
-            return new EmitResult(success: false, syntaxDiagnostics);
-        }
-
-        var program = Binder.BindProgram(GlobalScope);
-        if (program.Diagnostics.Any(d => d.IsError))
-        {
-            return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
-        }
-
-        var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
-        if (lowerDiagnostics.Any(d => d.IsError))
-        {
-            return new EmitResult(success: false, lowerDiagnostics);
-        }
-
-        var allWarnings = syntaxDiagnostics
-            .Concat(program.Diagnostics)
-            .Concat(lowerDiagnostics)
-            .Where(d => !d.IsError)
-            .ToImmutableArray();
-
-        try
-        {
-            if (peStream is not null)
-            {
-                EmitAssembly(program, peStream, References, assemblyName, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: null);
-            }
-
-            if (refStream is not null)
-            {
-                EmitAssembly(program, refStream, References, assemblyName, metadataOnly: true, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: null, pdbStream: null);
-            }
-        }
-        catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
-        {
-            var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
-            var diagnostic = new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
-            return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
-        }
-
-        return new EmitResult(success: true, diagnostics: allWarnings);
-    }
+    public EmitResult Emit(Stream peStream, Stream refStream) =>
+        Emit(peStream, pdbStream: null, refStream, assemblyName: null);
 
     /// <summary>
     /// The canonical async/iterator lowering pipeline. Runs all rewriter
