@@ -34,7 +34,7 @@ public class LambdaEmitTests
             package P
             import System
 
-            var inc = func(x int) int { return x + 1 }
+            var inc = func(x int32) int32 { return x + 1 }
             Console.WriteLine(inc(10))
             """;
 
@@ -64,7 +64,7 @@ public class LambdaEmitTests
             package P
             import System
 
-            var add = func(a int, b int) int { return a + b }
+            var add = func(a int32, b int32) int32 { return a + b }
             Console.WriteLine(add(3, 4))
             """;
 
@@ -79,9 +79,9 @@ public class LambdaEmitTests
             package P
             import System
 
-            func apply(f func(int) int, x int) int { return f(x) }
+            func apply(f func(int32) int32, x int32) int32 { return f(x) }
 
-            var dbl = func(x int) int { return x * 2 }
+            var dbl = func(x int32) int32 { return x * 2 }
             Console.WriteLine(apply(dbl, 21))
             """;
 
@@ -99,8 +99,8 @@ public class LambdaEmitTests
             package P
             import System
 
-            func makeAdder(n int) func(int) int {
-              return func(x int) int { return x + n }
+            func makeAdder(n int32) func(int32) int32 {
+              return func(x int32) int32 { return x + n }
             }
 
             var addN = makeAdder(5)

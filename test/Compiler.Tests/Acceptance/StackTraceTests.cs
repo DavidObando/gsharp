@@ -63,7 +63,7 @@ public class StackTraceTests
                 "",                              // 2
                 "import System",                 // 3
                 "",                              // 4
-                "func Inner(seed int) {",        // 5
+                "func Inner(seed int32) {",        // 5
                 "    var acc = 0",               // 6
                 "    for i := 0; i < seed; i++ {",  // 7
                 "        acc = acc + i",         // 8
@@ -113,7 +113,7 @@ public class StackTraceTests
                 "import System",                 // 3
                 "",                              // 4
                 "public func RunForIn() {",      // 5
-                "    var items = []int{1, 2, 3}",// 6
+                "    var items = []int32{1, 2, 3}",// 6
                 "    for v in items {",          // 7
                 "        throw Exception(\"for-in boom: \" + v.ToString())",  // 8
                 "    }",                         // 9

@@ -19,28 +19,28 @@ namespace GSharp.Compiler.Tests.Emit;
 public class PrimitiveOperatorEmitTests
 {
     [Theory]
-    [InlineData("long", "100L + 50L", "150")]
-    [InlineData("long", "100L - 50L", "50")]
-    [InlineData("long", "100L * 50L", "5000")]
-    [InlineData("long", "100L / 50L", "2")]
-    [InlineData("long", "100L % 30L", "10")]
-    [InlineData("long", "100L < 50L", "False")]
-    [InlineData("long", "100L >= 100L", "True")]
-    [InlineData("long", "100L == 100L", "True")]
-    [InlineData("long", "100L & 6L", "4")]
-    [InlineData("long", "100L | 6L", "102")]
-    [InlineData("long", "100L ^ 6L", "98")]
-    [InlineData("long", "1L << 10", "1024")]
-    [InlineData("long", "1024L >> 2", "256")]
+    [InlineData("int64", "100L + 50L", "150")]
+    [InlineData("int64", "100L - 50L", "50")]
+    [InlineData("int64", "100L * 50L", "5000")]
+    [InlineData("int64", "100L / 50L", "2")]
+    [InlineData("int64", "100L % 30L", "10")]
+    [InlineData("int64", "100L < 50L", "False")]
+    [InlineData("int64", "100L >= 100L", "True")]
+    [InlineData("int64", "100L == 100L", "True")]
+    [InlineData("int64", "100L & 6L", "4")]
+    [InlineData("int64", "100L | 6L", "102")]
+    [InlineData("int64", "100L ^ 6L", "98")]
+    [InlineData("int64", "1L << 10", "1024")]
+    [InlineData("int64", "1024L >> 2", "256")]
     public void Long_Operators_ProduceExpectedValue(string _, string expr, string expected)
     {
         Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
     }
 
     [Theory]
-    [InlineData("ulong", "9000000000UL + 1000000000UL", "10000000000")]
-    [InlineData("ulong", "9000000000UL / 3UL", "3000000000")]
-    [InlineData("ulong", "9000000000UL > 1UL", "True")]
+    [InlineData("uint64", "9000000000UL + 1000000000UL", "10000000000")]
+    [InlineData("uint64", "9000000000UL / 3UL", "3000000000")]
+    [InlineData("uint64", "9000000000UL > 1UL", "True")]
     public void ULong_Operators_UseUnsignedOpcodes(string _, string expr, string expected)
     {
         Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
@@ -135,8 +135,8 @@ public class PrimitiveOperatorEmitTests
             package P
             import System
 
-            let x = byte(1)
-            let y = byte(254)
+            let x = uint8(1)
+            let y = uint8(254)
             Console.WriteLine(^x == y)
             """;
         Assert.Equal("True\n", CompileAndRun(src));

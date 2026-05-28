@@ -27,7 +27,7 @@ public class GenericBclConsumptionTests
         var source = @"
 import System.Collections.Generic
 
-func consume(xs List[int]) int {
+func consume(xs List[int32]) int32 {
     return 0
 }
 ";
@@ -41,7 +41,7 @@ func consume(xs List[int]) int {
         var source = @"
 import System.Collections.Generic
 
-func consume(d Dictionary[string, int]) int {
+func consume(d Dictionary[string, int32]) int32 {
     return 0
 }
 ";
@@ -55,7 +55,7 @@ func consume(d Dictionary[string, int]) int {
         var source = @"
 import System.Collections.Generic
 
-func consume(xs List[int, string]) int {
+func consume(xs List[int32, string]) int32 {
     return 0
 }
 ";

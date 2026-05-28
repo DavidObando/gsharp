@@ -29,7 +29,7 @@ public sealed class BoundCapExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.CapExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => TypeSymbol.Int;
+    public override TypeSymbol Type => TypeSymbol.Int32;
 
     /// <summary>Gets the operand expression.</summary>
     public BoundExpression Operand { get; }

@@ -31,7 +31,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func numbers() sequence[int] {
+async func numbers() sequence[int32] {
     yield 1
     yield 2
     yield 3
@@ -49,7 +49,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func numbers() sequence[int] {
+async func numbers() sequence[int32] {
     yield 10
     await Task.Yield()
     yield 20
@@ -69,7 +69,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func gen() sequence[int] {
+async func gen() sequence[int32] {
     yield 1
 }
 ";
@@ -78,7 +78,7 @@ async func gen() sequence[int] {
         {
             var result = InvokeFunction(asm, "gen", null);
             Assert.IsAssignableFrom<IAsyncEnumerable<int>>(result);
-            Assert.False(result is IEnumerable<int>, "async-sequence return must not also be IEnumerable<int>");
+            Assert.False(result is IEnumerable<int>, "async-sequence return must not also be IEnumerable<int32>");
         }
         finally
         {
@@ -93,7 +93,7 @@ async func gen() sequence[int] {
 import System
 import System.Collections.Generic
 
-func numbers() sequence[int] {
+func numbers() sequence[int32] {
     yield 1
     yield 2
 }
@@ -103,7 +103,7 @@ func numbers() sequence[int] {
         {
             var result = InvokeFunction(asm, "numbers", null);
             Assert.IsAssignableFrom<IEnumerable<int>>(result);
-            Assert.False(result is IAsyncEnumerable<int>, "sync-sequence return must not be IAsyncEnumerable<int>");
+            Assert.False(result is IAsyncEnumerable<int>, "sync-sequence return must not be IAsyncEnumerable<int32>");
         }
         finally
         {
@@ -122,7 +122,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func echo(items sequence[int]) sequence[int] {
+async func echo(items sequence[int32]) sequence[int32] {
     for x in items {
         yield x
     }
@@ -153,11 +153,11 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func viaAlias() sequence[int] {
+async func viaAlias() sequence[int32] {
     yield 1
 }
 
-func viaExplicit() IAsyncEnumerable[int] {
+func viaExplicit() IAsyncEnumerable[int32] {
     yield 2
 }
 ";

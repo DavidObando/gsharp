@@ -32,14 +32,14 @@ The following type names are predeclared in the universe scope and resolved by `
 | Name       | CLR type            | Notes                                                              |
 | ---------- | ------------------- | ------------------------------------------------------------------ |
 | `bool`     | `System.Boolean`    | `true` / `false` literals.                                         |
-| `sbyte`    | `System.SByte`      | 8-bit signed integer.                                              |
-| `byte`     | `System.Byte`       | 8-bit unsigned integer.                                            |
-| `short`    | `System.Int16`      | 16-bit signed integer.                                             |
-| `ushort`   | `System.UInt16`     | 16-bit unsigned integer.                                           |
-| `int`      | `System.Int32`      | Default integer literal type.                                      |
-| `uint`     | `System.UInt32`     | Reached via the `U` literal suffix.                                |
-| `long`     | `System.Int64`      | Reached via the `L` literal suffix.                                |
-| `ulong`    | `System.UInt64`     | Reached via the `UL` / `LU` literal suffix.                        |
+| `int8`    | `System.SByte`      | 8-bit signed integer.                                              |
+| `uint8`     | `System.Byte`       | 8-bit unsigned integer.                                            |
+| `int16`    | `System.Int16`      | 16-bit signed integer.                                             |
+| `uint16`   | `System.UInt16`     | 16-bit unsigned integer.                                           |
+| `int32`      | `System.Int32`      | Default integer literal type.                                      |
+| `uint32`     | `System.UInt32`     | Reached via the `U` literal suffix.                                |
+| `int64`     | `System.Int64`      | Reached via the `L` literal suffix.                                |
+| `uint64`    | `System.UInt64`     | Reached via the `UL` / `LU` literal suffix.                        |
 | `nint`     | `System.IntPtr`     | Native-sized signed integer.                                       |
 | `nuint`    | `System.UIntPtr`    | Native-sized unsigned integer.                                     |
 | `float32`  | `System.Single`     | 32-bit binary floating point. `F` literal suffix.                  |
@@ -77,16 +77,16 @@ A case-insensitive type-pin suffix may follow the digit body. The suffix is cons
 
 | Suffix     | Type      | Legal on |
 | ---------- | --------- | -------- |
-| `L` / `l`  | `long`    | integer bodies (decimal, hex, octal, binary) |
-| `U` / `u`  | `uint`    | integer bodies |
-| `UL` / `LU` (any casing) | `ulong` | integer bodies |
+| `L` / `l`  | `int64`    | integer bodies (decimal, hex, octal, binary) |
+| `U` / `u`  | `uint32`    | integer bodies |
+| `UL` / `LU` (any casing) | `uint64` | integer bodies |
 | `F` / `f`  | `float32` | decimal integer or floating-point bodies |
 | `D` / `d`  | `float64` | decimal integer or floating-point bodies |
 | `M` / `m`  | `decimal` | decimal integer or floating-point bodies |
 
 `F`, `D`, and `M` are **not** legal on hex/octal/binary integer bodies because `F` and `D` are themselves hex digits — `0xFFf` is the hex number ending in three `F` digits, not a float-suffixed value.
 
-A decimal literal with no suffix and no fractional/exponent part has type `int`; if its value exceeds `Int32.MaxValue` the binder reports a diagnostic, so an explicit `L` suffix is required to write a 64-bit literal.
+A decimal literal with no suffix and no fractional/exponent part has type `int32`; if its value exceeds `Int32.MaxValue` the binder reports a diagnostic, so an explicit `L` suffix is required to write a 64-bit literal.
 
 ## Character literals
 

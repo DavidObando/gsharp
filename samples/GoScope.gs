@@ -8,12 +8,12 @@ package GSharp.Samples.GoScope
 
 import System
 
-func send(value int, ch chan int) int {
+func send(value int32, ch chan int32) int32 {
     ch <- value
     return 0
 }
 
-let ch = make(chan int, 3)
+let ch = make(chan int32, 3)
 scope {
     go send(1, ch)
     go send(2, ch)

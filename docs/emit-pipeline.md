@@ -106,7 +106,7 @@ The PDB writer is invoked by `Compilation.EmitAssembly` whenever
    SHA-256 of the source bytes.
 2. **MethodDebugInformation** — `RecordMethod` captures per-method sequence
    points, the local-variable list (with compiler-generated locals tagged
-   `DebuggerHidden`), the IL byte-size, and the `StandAloneSignature` token
+   `DebuggerHidden`), the IL uint8-size, and the `StandAloneSignature` token
    for the local signature.
 3. **LocalScope / LocalVariable / ImportScope** — emitted from the per-method
    data captured above. Today the lowering flattens nested blocks, so each

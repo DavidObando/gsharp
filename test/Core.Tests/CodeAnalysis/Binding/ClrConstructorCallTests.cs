@@ -38,7 +38,7 @@ var sb = StringBuilder()
         var source = @"
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -50,7 +50,7 @@ var lst = List[int]()
         var source = @"
 import System.Collections.Generic
 
-var d = Dictionary[string, int]()
+var d = Dictionary[string, int32]()
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);

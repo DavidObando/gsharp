@@ -6,7 +6,7 @@ package GSharp.Example.Slices
 
 import System
 
-var nums = []int{10, 20, 30}
+var nums = []int32{10, 20, 30}
 Console.WriteLine(len(nums))
 Console.WriteLine(cap(nums))
 Console.WriteLine(nums[0])

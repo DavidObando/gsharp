@@ -1439,14 +1439,14 @@ public sealed class Binder
         switch (name)
         {
             case "bool":
-            case "byte":
-            case "sbyte":
-            case "short":
-            case "ushort":
-            case "int":
-            case "uint":
-            case "long":
-            case "ulong":
+            case "uint8":
+            case "int8":
+            case "int16":
+            case "uint16":
+            case "int32":
+            case "uint32":
+            case "int64":
+            case "uint64":
             case "nint":
             case "nuint":
             case "float32":
@@ -3008,7 +3008,7 @@ public sealed class Binder
         if (op == null)
         {
             Diagnostics.ReportRelationalPatternOperatorUndefined(syntax.OperatorToken.Location, syntax.OperatorToken.Kind, discriminantType);
-            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int);
+            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
         }
 
         return new BoundRelationalPattern(syntax, discriminantType, op, value);
@@ -3279,7 +3279,7 @@ public sealed class Binder
         BoundExpression capacity = null;
         if (syntax.Capacity != null)
         {
-            capacity = BindConversion(syntax.Capacity, TypeSymbol.Int);
+            capacity = BindConversion(syntax.Capacity, TypeSymbol.Int32);
         }
 
         return new BoundMakeChannelExpression(null, chan, capacity);
@@ -3697,12 +3697,12 @@ public sealed class Binder
 
     private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
     {
-        var lowerBound = BindExpression(syntax.LowerBound, TypeSymbol.Int);
-        var upperBound = BindExpression(syntax.UpperBound, TypeSymbol.Int);
+        var lowerBound = BindExpression(syntax.LowerBound, TypeSymbol.Int32);
+        var upperBound = BindExpression(syntax.UpperBound, TypeSymbol.Int32);
 
         scope = new BoundScope(scope);
 
-        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int);
+        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int32);
         var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
@@ -3723,12 +3723,12 @@ public sealed class Binder
         {
             case ArrayTypeSymbol arr:
                 iterationKind = ForRangeKind.Indexed;
-                keyType = TypeSymbol.Int;
+                keyType = TypeSymbol.Int32;
                 valueType = arr.ElementType;
                 break;
             case SliceTypeSymbol slice:
                 iterationKind = ForRangeKind.Indexed;
-                keyType = TypeSymbol.Int;
+                keyType = TypeSymbol.Int32;
                 valueType = slice.ElementType;
                 break;
 
@@ -3745,13 +3745,13 @@ public sealed class Binder
                 else if (TryGetClrEnumerableElementType(annotated.ClrType, out var aElemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
-                    keyType = TypeSymbol.Int;
+                    keyType = TypeSymbol.Int32;
                     valueType = annotated.GetTypeArgumentSymbolForClrType(aElemType);
                 }
                 else if (TryGetClrPatternEnumerableElementType(annotated.ClrType, out var aPatternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
-                    keyType = TypeSymbol.Int;
+                    keyType = TypeSymbol.Int32;
                     valueType = TypeSymbol.FromClrType(aPatternElemType);
                 }
                 else
@@ -3771,13 +3771,13 @@ public sealed class Binder
                 else if (TryGetClrEnumerableElementType(imp.ClrType, out var elemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
-                    keyType = TypeSymbol.Int;
+                    keyType = TypeSymbol.Int32;
                     valueType = TypeSymbol.FromClrType(elemType);
                 }
                 else if (TryGetClrPatternEnumerableElementType(imp.ClrType, out var patternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
-                    keyType = TypeSymbol.Int;
+                    keyType = TypeSymbol.Int32;
                     valueType = TypeSymbol.FromClrType(patternElemType);
                 }
                 else
@@ -3789,13 +3789,13 @@ public sealed class Binder
                 break;
             case StructSymbol userType when TryGetUserPatternEnumerableElementType(userType, out var userElemType):
                 iterationKind = ForRangeKind.PatternEnumerator;
-                keyType = TypeSymbol.Int;
+                keyType = TypeSymbol.Int32;
                 valueType = userElemType;
                 break;
             case SequenceTypeSymbol seq:
                 // ADR-0040: sequence[T] is IEnumerable[T] — iterate via Enumerable strategy.
                 iterationKind = ForRangeKind.Enumerable;
-                keyType = TypeSymbol.Int;
+                keyType = TypeSymbol.Int32;
                 valueType = seq.ElementType;
                 break;
             default:
@@ -5879,7 +5879,7 @@ public sealed class Binder
 
     private static bool IsComparable(TypeSymbol type)
     {
-        if (type == TypeSymbol.Int || type == TypeSymbol.String || type == TypeSymbol.Bool)
+        if (type == TypeSymbol.Int32 || type == TypeSymbol.String || type == TypeSymbol.Bool)
         {
             return true;
         }
@@ -6779,7 +6779,7 @@ public sealed class Binder
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
-            var index = BindConversion(syntax.Index, TypeSymbol.Int);
+            var index = BindConversion(syntax.Index, TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, element);
         }
 
@@ -6820,7 +6820,7 @@ public sealed class Binder
         var element = GetIndexElementType(variable.Type);
         if (element != null)
         {
-            var index = BindConversion(syntax.Index, TypeSymbol.Int);
+            var index = BindConversion(syntax.Index, TypeSymbol.Int32);
             var value = BindConversion(syntax.Value, element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
@@ -7034,22 +7034,22 @@ public sealed class Binder
         {
             case "bool":
                 return TypeSymbol.Bool;
-            case "byte":
-                return TypeSymbol.Byte;
-            case "sbyte":
-                return TypeSymbol.SByte;
-            case "short":
-                return TypeSymbol.Short;
-            case "ushort":
-                return TypeSymbol.UShort;
-            case "int":
-                return TypeSymbol.Int;
-            case "uint":
-                return TypeSymbol.UInt;
-            case "long":
-                return TypeSymbol.Long;
-            case "ulong":
-                return TypeSymbol.ULong;
+            case "uint8":
+                return TypeSymbol.UInt8;
+            case "int8":
+                return TypeSymbol.Int8;
+            case "int16":
+                return TypeSymbol.Int16;
+            case "uint16":
+                return TypeSymbol.UInt16;
+            case "int32":
+                return TypeSymbol.Int32;
+            case "uint32":
+                return TypeSymbol.UInt32;
+            case "int64":
+                return TypeSymbol.Int64;
+            case "uint64":
+                return TypeSymbol.UInt64;
             case "nint":
                 return TypeSymbol.NInt;
             case "nuint":

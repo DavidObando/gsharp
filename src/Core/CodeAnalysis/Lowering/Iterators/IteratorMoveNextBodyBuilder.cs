@@ -65,7 +65,7 @@ public static class IteratorMoveNextBodyBuilder
             new BoundBinaryExpression(
                 null,
                 FieldRead(stateField),
-                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
@@ -77,7 +77,7 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundBinaryExpression(
                     null,
                     FieldRead(stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                     new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }
@@ -134,7 +134,7 @@ public static class IteratorMoveNextBodyBuilder
             new BoundBinaryExpression(
                 null,
                 new BoundVariableExpression(null, stateLocal),
-                BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
@@ -146,7 +146,7 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, stateLocal),
-                    BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                    BoundBinaryOperator.Bind(Syntax.SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                     new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }

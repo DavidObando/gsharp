@@ -26,7 +26,7 @@ public class IteratorRewriterTests
     public void Rewrite_SingleYield_CreatesIteratorPlan()
     {
         // Arrange: function with one yield
-        var elementType = TypeSymbol.Int;
+        var elementType = TypeSymbol.Int32;
         var seqType = SequenceTypeSymbol.Get(elementType);
         var function = new FunctionSymbol("gen", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
         var yieldStmt = new BoundYieldStatement(null, new BoundLiteralExpression(null, 42));
@@ -48,7 +48,7 @@ public class IteratorRewriterTests
     public void Rewrite_MultipleYields_AllocateDistinctStates()
     {
         // Arrange: function with three yields
-        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int);
+        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
         var function = new FunctionSymbol("multi", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
         var yield1 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
         var yield2 = new BoundYieldStatement(null, new BoundLiteralExpression(null, 2));
@@ -71,7 +71,7 @@ public class IteratorRewriterTests
     public void Rewrite_NoYield_ProducesNoPlan()
     {
         // Arrange: non-iterator function
-        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int);
+        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
         var function = new FunctionSymbol("plain", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
         var body = Block(new BoundExpressionStatement(null, new BoundLiteralExpression(null, 1)));
         var program = MakeProgram(function, body);
@@ -87,9 +87,9 @@ public class IteratorRewriterTests
     public void Rewrite_HoistsAllLocals()
     {
         // Arrange: function with a local and a yield
-        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int);
+        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
         var function = new FunctionSymbol("withLocal", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
-        var localVar = new LocalVariableSymbol("temp", false, TypeSymbol.Int);
+        var localVar = new LocalVariableSymbol("temp", false, TypeSymbol.Int32);
         var body = Block(
             new BoundVariableDeclaration(null, localVar, new BoundLiteralExpression(null, 10)),
             new BoundYieldStatement(null, new BoundVariableExpression(null, localVar)));

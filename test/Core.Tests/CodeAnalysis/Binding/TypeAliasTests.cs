@@ -20,19 +20,19 @@ public class TypeAliasTests
     [Fact]
     public void TypeAlias_To_Int_Binds_VariableDeclaration()
     {
-        Assert.Empty(Bind("type UserId = int\nfunc F() {\n let id UserId = 7\n }\n"));
+        Assert.Empty(Bind("type UserId = int32\nfunc F() {\n let id UserId = 7\n }\n"));
     }
 
     [Fact]
     public void TypeAlias_Allows_Chained_Aliases()
     {
-        Assert.Empty(Bind("type A = int\ntype B = A\nfunc F() {\n let x B = 1\n }\n"));
+        Assert.Empty(Bind("type A = int32\ntype B = A\nfunc F() {\n let x B = 1\n }\n"));
     }
 
     [Fact]
     public void TypeAlias_AssignmentTypeIncompatible_Reports_Error()
     {
-        var diagnostics = Bind("type UserId = int\nfunc F() {\n let id UserId = \"x\"\n }\n");
+        var diagnostics = Bind("type UserId = int32\nfunc F() {\n let id UserId = \"x\"\n }\n");
         Assert.NotEmpty(diagnostics);
     }
 
@@ -46,20 +46,20 @@ public class TypeAliasTests
     [Fact]
     public void TypeAlias_Cannot_Shadow_Primitive()
     {
-        var diagnostics = Bind("type int = string\n");
+        var diagnostics = Bind("type int32 = string\n");
         Assert.Contains(
             diagnostics,
             d => d.Message.Contains("already declared", System.StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]
-    [InlineData("byte")]
-    [InlineData("sbyte")]
-    [InlineData("short")]
-    [InlineData("ushort")]
-    [InlineData("uint")]
-    [InlineData("long")]
-    [InlineData("ulong")]
+    [InlineData("uint8")]
+    [InlineData("int8")]
+    [InlineData("int16")]
+    [InlineData("uint16")]
+    [InlineData("uint32")]
+    [InlineData("int64")]
+    [InlineData("uint64")]
     [InlineData("nint")]
     [InlineData("nuint")]
     [InlineData("float32")]
@@ -79,13 +79,13 @@ public class TypeAliasTests
     }
 
     [Theory]
-    [InlineData("byte")]
-    [InlineData("sbyte")]
-    [InlineData("short")]
-    [InlineData("ushort")]
-    [InlineData("uint")]
-    [InlineData("long")]
-    [InlineData("ulong")]
+    [InlineData("uint8")]
+    [InlineData("int8")]
+    [InlineData("int16")]
+    [InlineData("uint16")]
+    [InlineData("uint32")]
+    [InlineData("int64")]
+    [InlineData("uint64")]
     [InlineData("nint")]
     [InlineData("nuint")]
     [InlineData("float32")]
@@ -105,7 +105,7 @@ public class TypeAliasTests
     [Fact]
     public void TypeAlias_Duplicate_Reports_Error()
     {
-        var diagnostics = Bind("type A = int\ntype A = string\n");
+        var diagnostics = Bind("type A = int32\ntype A = string\n");
         Assert.Contains(
             diagnostics,
             d => d.Message.Contains("already declared", System.StringComparison.OrdinalIgnoreCase));

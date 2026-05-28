@@ -22,7 +22,7 @@ public class AsyncAwaitTests
     public void AsyncFunction_DeclaresAndBinds()
     {
         var source = @"
-async func answer() int {
+async func answer() int32 {
     return 42
 }
 ";
@@ -34,11 +34,11 @@ async func answer() int {
     public void Await_AsyncUserFunction_UnwrapsResultType()
     {
         var source = @"
-async func answer() int {
+async func answer() int32 {
     return 42
 }
 
-async func main() int {
+async func main() int32 {
     let v = await answer()
     return v
 }
@@ -51,11 +51,11 @@ async func main() int {
     public void Await_OutsideAsync_Diagnoses()
     {
         var source = @"
-async func answer() int {
+async func answer() int32 {
     return 42
 }
 
-func main() int {
+func main() int32 {
     let v = await answer()
     return v
 }
@@ -68,7 +68,7 @@ func main() int {
     public void Await_NonTask_Diagnoses()
     {
         var source = @"
-async func main() int {
+async func main() int32 {
     let v = await 42
     return v
 }
@@ -83,7 +83,7 @@ async func main() int {
         // The call expression in an expression-statement is allowed even though
         // we cannot await it here. We just verify it binds cleanly.
         var source = @"
-async func tick() int {
+async func tick() int32 {
     return 1
 }
 

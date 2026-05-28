@@ -16,7 +16,7 @@ public class AsyncBoundTreeQueriesTests
     public void HasAwait_OnExpressionStatementWithAwait_ReturnsTrue()
     {
         var literal = new BoundLiteralExpression(null, 0);
-        var await = new BoundAwaitExpression(null, literal, TypeSymbol.Int);
+        var await = new BoundAwaitExpression(null, literal, TypeSymbol.Int32);
         var stmt = new BoundExpressionStatement(null, await);
         Assert.True(AsyncBoundTreeQueries.HasAwait(stmt));
     }
@@ -31,7 +31,7 @@ public class AsyncBoundTreeQueriesTests
     [Fact]
     public void HasAwait_OnNestedBlockWithAwait_ReturnsTrue()
     {
-        var inner = new BoundExpressionStatement(null, new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int));
+        var inner = new BoundExpressionStatement(null, new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int32));
         var outer = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(inner));
         Assert.True(AsyncBoundTreeQueries.HasAwait(outer));
     }

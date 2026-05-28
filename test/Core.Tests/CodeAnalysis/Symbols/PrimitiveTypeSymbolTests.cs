@@ -22,14 +22,14 @@ public class PrimitiveTypeSymbolTests
     public static TheoryData<TypeSymbol, Type, string> PrimitiveTypeData => new()
     {
         { TypeSymbol.Bool, typeof(bool), "bool" },
-        { TypeSymbol.Byte, typeof(byte), "byte" },
-        { TypeSymbol.SByte, typeof(sbyte), "sbyte" },
-        { TypeSymbol.Short, typeof(short), "short" },
-        { TypeSymbol.UShort, typeof(ushort), "ushort" },
-        { TypeSymbol.Int, typeof(int), "int" },
-        { TypeSymbol.UInt, typeof(uint), "uint" },
-        { TypeSymbol.Long, typeof(long), "long" },
-        { TypeSymbol.ULong, typeof(ulong), "ulong" },
+        { TypeSymbol.UInt8, typeof(byte), "uint8" },
+        { TypeSymbol.Int8, typeof(sbyte), "int8" },
+        { TypeSymbol.Int16, typeof(short), "int16" },
+        { TypeSymbol.UInt16, typeof(ushort), "uint16" },
+        { TypeSymbol.Int32, typeof(int), "int32" },
+        { TypeSymbol.UInt32, typeof(uint), "uint32" },
+        { TypeSymbol.Int64, typeof(long), "int64" },
+        { TypeSymbol.UInt64, typeof(ulong), "uint64" },
         { TypeSymbol.NInt, typeof(nint), "nint" },
         { TypeSymbol.NUInt, typeof(nuint), "nuint" },
         { TypeSymbol.Float32, typeof(float), "float32" },
@@ -61,13 +61,13 @@ public class PrimitiveTypeSymbolTests
     public void FromClrType_NullableValueTypes_LiftThroughEachPrimitive()
     {
         // Nullable<T> lifting (ADR-0001) still wraps each new value-type primitive.
-        AssertNullableLifts(typeof(byte?), TypeSymbol.Byte);
-        AssertNullableLifts(typeof(sbyte?), TypeSymbol.SByte);
-        AssertNullableLifts(typeof(short?), TypeSymbol.Short);
-        AssertNullableLifts(typeof(ushort?), TypeSymbol.UShort);
-        AssertNullableLifts(typeof(uint?), TypeSymbol.UInt);
-        AssertNullableLifts(typeof(long?), TypeSymbol.Long);
-        AssertNullableLifts(typeof(ulong?), TypeSymbol.ULong);
+        AssertNullableLifts(typeof(byte?), TypeSymbol.UInt8);
+        AssertNullableLifts(typeof(sbyte?), TypeSymbol.Int8);
+        AssertNullableLifts(typeof(short?), TypeSymbol.Int16);
+        AssertNullableLifts(typeof(ushort?), TypeSymbol.UInt16);
+        AssertNullableLifts(typeof(uint?), TypeSymbol.UInt32);
+        AssertNullableLifts(typeof(long?), TypeSymbol.Int64);
+        AssertNullableLifts(typeof(ulong?), TypeSymbol.UInt64);
         AssertNullableLifts(typeof(nint?), TypeSymbol.NInt);
         AssertNullableLifts(typeof(nuint?), TypeSymbol.NUInt);
         AssertNullableLifts(typeof(float?), TypeSymbol.Float32);

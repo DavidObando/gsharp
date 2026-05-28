@@ -12,7 +12,7 @@ public class DocumentSyncHandlerTests
     [Fact]
     public void ComputeDiagnostics_IncludesBindingDiagnosticsWhenRequested()
     {
-        const string source = "func F() int {\n}\n";
+        const string source = "func F() int32 {\n}\n";
 
         var fastDiagnostics = DocumentSyncHandler.ComputeDiagnostics(source, skipBinding: true).Diagnostics;
         var fullDiagnostics = DocumentSyncHandler.ComputeDiagnostics(source, skipBinding: false).Diagnostics;

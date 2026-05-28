@@ -34,11 +34,11 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func doAsync() int {
+async func doAsync() int32 {
     return 42
 }
 
-func syncIter() sequence[int] {
+func syncIter() sequence[int32] {
     yield 1
     yield 2
 }

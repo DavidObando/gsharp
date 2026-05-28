@@ -29,7 +29,7 @@ package IterTest
 import System
 import System.Collections.Generic
 
-func numbers() sequence[int] {
+func numbers() sequence[int32] {
     yield 1
     yield 2
     yield 3
@@ -50,7 +50,7 @@ package IterTest
 import System
 import System.Collections.Generic
 
-func numbers() sequence[int] {
+func numbers() sequence[int32] {
     yield 1
     yield 2
     yield 3
@@ -74,7 +74,7 @@ package IterTest
 import System
 import System.Collections.Generic
 
-func numbers() IEnumerable[int] {
+func numbers() IEnumerable[int32] {
     yield 1
     yield 2
     yield 3
@@ -98,7 +98,7 @@ package IterTest
 import System
 import System.Collections.Generic
 
-func fib(max int) sequence[int] {
+func fib(max int32) sequence[int32] {
     a, b := 0, 1
     for a <= max {
         yield a
@@ -123,7 +123,7 @@ package IterTest
 import System
 import System.Collections.Generic
 
-func evens(max int) sequence[int] {
+func evens(max int32) sequence[int32] {
     i := 0
     for i <= max {
         if i % 2 == 0 {

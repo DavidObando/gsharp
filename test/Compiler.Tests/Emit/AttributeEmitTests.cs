@@ -69,8 +69,8 @@ public class AttributeEmitTests
 
             @Obsolete("legacy")
             type Point data struct {
-                X int
-                Y int
+                X int32
+                Y int32
             }
             """;
 
@@ -110,9 +110,9 @@ public class AttributeEmitTests
             import System
             import System.Diagnostics
 
-            @DebuggerTypeProxy(typeof(int))
+            @DebuggerTypeProxy(typeof(int32))
             type Box data struct {
-                Value int
+                Value int32
             }
             """;
 
@@ -148,7 +148,7 @@ public class AttributeEmitTests
 
             @DebuggerDisplay("{Value}", Target = typeof(string))
             type Holder data struct {
-                Value int
+                Value int32
             }
             """;
 
@@ -182,7 +182,7 @@ public class AttributeEmitTests
 
             @DefaultValue(42)
             type Counter data struct {
-                Value int
+                Value int32
             }
             """;
 
@@ -207,7 +207,7 @@ public class AttributeEmitTests
 
             @DefaultValue("hello")
             type Greeter data struct {
-                Value int
+                Value int32
             }
             """;
 
@@ -233,8 +233,8 @@ public class AttributeEmitTests
 
             @TupleElementNames([]string{"first", "second"})
             type Pair data struct {
-                A int
-                B int
+                A int32
+                B int32
             }
             """;
 
@@ -260,9 +260,9 @@ public class AttributeEmitTests
             import System
             import System.ComponentModel
 
-            @DefaultValue(typeof(int))
+            @DefaultValue(typeof(int32))
             type Holder data struct {
-                Value int
+                Value int32
             }
             """;
 
@@ -329,7 +329,7 @@ public class AttributeEmitTests
             import System.ComponentModel
 
             @return:Description("old return")
-            func Foo() int {
+            func Foo() int32 {
                 return 0
             }
             """;
@@ -363,8 +363,8 @@ public class AttributeEmitTests
 
             type Point data struct {
                 @Obsolete("use NewX")
-                X int
-                Y int
+                X int32
+                Y int32
             }
             """;
 
@@ -396,7 +396,7 @@ public class AttributeEmitTests
 
             type Box class {
                 @Obsolete("retired")
-                Value int
+                Value int32
             }
             """;
 

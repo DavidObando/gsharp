@@ -8,8 +8,8 @@ package GSharp.Example.Records
 import System
 
 type Point record {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 3, Y: 4}

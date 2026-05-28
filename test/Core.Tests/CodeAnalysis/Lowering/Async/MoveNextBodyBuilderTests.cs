@@ -29,8 +29,8 @@ public class MoveNextBodyBuilderTests
     [Fact]
     public void Build_AwaitStates_CreatesResumeLabelsOrderedByState()
     {
-        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int);
-        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int);
+        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int32);
+        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int32);
         var body = Block(
             new BoundExpressionStatement(null, secondAwait),
             new BoundExpressionStatement(null, firstAwait));

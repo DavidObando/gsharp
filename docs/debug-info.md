@@ -121,7 +121,7 @@ table via `DebugDirectoryBuilder`:
 | Entry | When | Payload |
 | --- | --- | --- |
 | `CodeView` | Always (sidecar + embedded) | PDB content id (GUID + age = 1) and the PDB file name. For sidecar emit this is the value of `/pdb:<path>` if supplied, else `<AssemblyName>.pdb`. For embedded emit it is also the conventional bare name (debuggers ignore the path field for embedded PDBs). |
-| `PdbChecksum` | Always | Algorithm `SHA256` plus the 32-byte SHA-256 digest of the serialized Portable PDB blob — same bytes a sidecar `.pdb` would contain. Symbol servers verify PE↔PDB pairing by this checksum. |
+| `PdbChecksum` | Always | Algorithm `SHA256` plus the 32-uint8 SHA-256 digest of the serialized Portable PDB blob — same bytes a sidecar `.pdb` would contain. Symbol servers verify PE↔PDB pairing by this checksum. |
 | `Reproducible` | When `/deterministic` is set | Empty payload; marker bit. |
 | `EmbeddedPortablePdb` | When `/debug:embedded` | Deflate-compressed copy of the Portable PDB blob inlined into the PE. No sidecar is written even if a stream is supplied. |
 

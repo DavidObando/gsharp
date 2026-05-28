@@ -33,7 +33,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[string]int{"a": 1, "b": 2}
+            var m = map[string]int32{"a": 1, "b": 2}
             Console.WriteLine(m["a"])
             Console.WriteLine(m["b"])
             """;
@@ -49,7 +49,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[string]int{"a": 1}
+            var m = map[string]int32{"a": 1}
             Console.WriteLine(m["missing"])
             """;
 
@@ -64,7 +64,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[string]int{}
+            var m = map[string]int32{}
             m["a"] = 1
             m["b"] = 2
             m["a"] = 99
@@ -83,7 +83,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[string]int{"a": 1, "b": 2, "c": 3}
+            var m = map[string]int32{"a": 1, "b": 2, "c": 3}
             Console.WriteLine(len(m))
             """;
 
@@ -98,7 +98,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[string]int{"a": 1, "b": 2}
+            var m = map[string]int32{"a": 1, "b": 2}
             delete(m, "a")
             Console.WriteLine(len(m))
             Console.WriteLine(m["a"])
@@ -116,7 +116,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[int]string{}
+            var m = map[int32]string{}
             Console.WriteLine(len(m))
             """;
 
@@ -131,7 +131,7 @@ public class MapEmitTests
             package P
             import System
 
-            var m = map[int]string{1: "one", 2: "two"}
+            var m = map[int32]string{1: "one", 2: "two"}
             Console.WriteLine(m[1])
             Console.WriteLine(m[2])
             Console.WriteLine(m[42])

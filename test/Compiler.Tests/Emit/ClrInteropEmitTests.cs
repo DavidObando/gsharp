@@ -45,7 +45,7 @@ public class ClrInteropEmitTests
             import System
             import System.Collections.Generic
 
-            var d = Dictionary[string, int]()
+            var d = Dictionary[string, int32]()
             d["alpha"] = 1
             d["beta"] = 2
             Console.WriteLine(d.Count)
@@ -65,7 +65,7 @@ public class ClrInteropEmitTests
             import System
             import System.Collections.Generic
 
-            var xs = List[int]()
+            var xs = List[int32]()
             xs.Add(10)
             xs.Add(20)
             xs.Add(30)

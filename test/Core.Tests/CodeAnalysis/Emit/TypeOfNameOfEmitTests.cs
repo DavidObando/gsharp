@@ -28,7 +28,7 @@ public class TypeOfNameOfEmitTests
         var output = CompileAndRun(@"
 package TypeOfIntTest
 import System
-var t = typeof(int)
+var t = typeof(int32)
 Console.WriteLine(t.FullName)
 ", nameof(TypeOf_Int_Emits_SystemInt32));
         Assert.Contains("System.Int32", output);
@@ -52,7 +52,7 @@ Console.WriteLine(t.FullName)
         var output = CompileAndRun(@"
 package TypeOfNullableTest
 import System
-var t = typeof(int?)
+var t = typeof(int32?)
 Console.WriteLine(t.FullName)
 ", nameof(TypeOf_NullableInt_Emits_SystemNullable));
         Assert.Contains("System.Nullable", output);
@@ -65,7 +65,7 @@ Console.WriteLine(t.FullName)
         var output = CompileAndRun(@"
 package TypeOfSliceTest
 import System
-var t = typeof([]int)
+var t = typeof([]int32)
 Console.WriteLine(t.FullName)
 ", nameof(TypeOf_SliceOfInt_Emits_IntArray));
         Assert.Contains("System.Int32[]", output);

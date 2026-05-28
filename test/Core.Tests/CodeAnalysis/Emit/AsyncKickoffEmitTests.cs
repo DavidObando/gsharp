@@ -65,7 +65,7 @@ Console.WriteLine(t.IsCompletedSuccessfully)
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     return 42
 }
 
@@ -104,7 +104,7 @@ Console.WriteLine(""fired"")
 import System
 import System.Threading.Tasks
 
-async func addLater(a int, b int) int {
+async func addLater(a int32, b int32) int32 {
     return a + b
 }
 
@@ -186,7 +186,7 @@ import System.Threading.Tasks
 async func first() {
 }
 
-async func second() int {
+async func second() int32 {
     return 1
 }
 

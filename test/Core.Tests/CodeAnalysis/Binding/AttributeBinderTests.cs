@@ -60,7 +60,7 @@ public class AttributeBinderTests
     public void Reports_When_Type_Is_Not_An_Attribute()
     {
         // `int` resolves but is not a System.Attribute subclass — must report GS0200.
-        var globalScope = BindSource("@int\nfunc Helper() {\n}\n");
+        var globalScope = BindSource("@int32\nfunc Helper() {\n}\n");
 
         Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0200");
     }
@@ -79,7 +79,7 @@ public class AttributeBinderTests
     {
         // `[Description]` carries `[AttributeUsage(All)]`, which includes
         // ReturnValue (issue #177).
-        var globalScope = BindSource("import System.ComponentModel\n@return:Description(\"x\")\nfunc Helper() int {\nreturn 0\n}\n");
+        var globalScope = BindSource("import System.ComponentModel\n@return:Description(\"x\")\nfunc Helper() int32 {\nreturn 0\n}\n");
 
         Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
         var helper = globalScope.Functions.Single(f => f.Name == "Helper");
@@ -103,8 +103,8 @@ public class AttributeBinderTests
         var source = @"
 @Obsolete
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 ";
         var globalScope = BindSource(source);
@@ -120,7 +120,7 @@ type Point struct {
         var source = @"
 @method:Obsolete
 type Point struct {
-    X int
+    X int32
 }
 ";
         var globalScope = BindSource(source);
@@ -317,7 +317,7 @@ type Point struct {
         // #175: extend GS0204 to primary-constructor calls on classes.
         var source = """
             @Obsolete("retired")
-            type Old class (value int) {
+            type Old class (value int32) {
             }
 
             func Main() {
@@ -339,8 +339,8 @@ type Point struct {
         var source = """
             @Obsolete
             type Point data struct {
-                X int
-                Y int
+                X int32
+                Y int32
             }
 
             func Main() {
@@ -365,7 +365,7 @@ type Point struct {
         var source = """
             @Obsolete("legacy")
             type Old data struct {
-                Value int
+                Value int32
             }
 
             func Consume(o Old) {
@@ -418,7 +418,7 @@ type Point struct {
         // attribute list, so the #175 GS0204 use-site warning cannot
         // fire on the parameter).
         var source = """
-            func Foo(@Obsolete("dead") x int) int {
+            func Foo(@Obsolete("dead") x int32) int32 {
                 return x + 1
             }
             """;
@@ -435,7 +435,7 @@ type Point struct {
     {
         var source = """
             @Obsolete("gone", true)
-            type Old class (value int) {
+            type Old class (value int32) {
             }
 
             func Main() {
@@ -650,8 +650,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("retired")
-                X int
-                Y int
+                X int32
+                Y int32
             }
             """;
 
@@ -676,8 +676,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("use NewX")
-                X int
-                Y int
+                X int32
+                Y int32
             }
 
             func Main() {
@@ -701,7 +701,7 @@ type Point struct {
         var source = """
             type Point struct {
                 @Obsolete("use NewX")
-                X int
+                X int32
             }
 
             func Main() {
@@ -724,8 +724,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("gone", true)
-                X int
-                Y int
+                X int32
+                Y int32
             }
 
             func Main() {
@@ -746,8 +746,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @method:Obsolete
-                X int
-                Y int
+                X int32
+                Y int32
             }
             """;
 
@@ -763,9 +763,9 @@ type Point struct {
         var source = """
             type Box class {
                 @Obsolete("use NewValue")
-                Value int
+                Value int32
 
-                public func Get() int {
+                public func Get() int32 {
                     return Value
                 }
             }
@@ -786,7 +786,7 @@ type Point struct {
             import System.Runtime.CompilerServices
             import System.Threading
 
-            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int] {
+            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int32] {
                 yield 1
             }
             """;
@@ -812,7 +812,7 @@ type Point struct {
             import System.Collections.Generic
             import System.Runtime.CompilerServices
 
-            func numbers(@EnumeratorCancellation n int) IAsyncEnumerable[int] {
+            func numbers(@EnumeratorCancellation n int32) IAsyncEnumerable[int32] {
                 yield n
             }
             """;
@@ -850,7 +850,7 @@ type Point struct {
             import System.Runtime.CompilerServices
             import System.Threading
 
-            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerator[int] {
+            func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerator[int32] {
                 yield 1
             }
             """;
@@ -885,7 +885,7 @@ type Point struct {
             import System
 
             @return:Obsolete("x")
-            func Foo() int {
+            func Foo() int32 {
                 return 0
             }
             """;
@@ -945,7 +945,7 @@ type Point struct {
 
             type Box class {
                 @MethodOnly
-                Value int
+                Value int32
             }
             """;
 
@@ -986,7 +986,7 @@ type Point struct {
             import System.Diagnostics
 
             @Conditional("DEBUG")
-            func DebugLog() int {
+            func DebugLog() int32 {
                 return 1
             }
             """;

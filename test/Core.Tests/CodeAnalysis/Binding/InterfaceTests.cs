@@ -26,7 +26,7 @@ public class InterfaceTests
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 ";
         var result = Evaluate(source);
@@ -38,7 +38,7 @@ type IShape interface {
     {
         var source = @"
 type IBad interface {
-    func Area() int { return 0 }
+    func Area() int32 { return 0 }
 }
 ";
         var result = Evaluate(source);
@@ -50,11 +50,11 @@ type IBad interface {
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
-type Square class(Side int) : IShape {
-    func Area() int { return Side * Side }
+type Square class(Side int32) : IShape {
+    func Area() int32 { return Side * Side }
 }
 
 var s = Square(4)
@@ -70,10 +70,10 @@ s.Area()
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
-type Square class(Side int) : IShape {
+type Square class(Side int32) : IShape {
 }
 ";
         var result = Evaluate(source);
@@ -85,15 +85,15 @@ type Square class(Side int) : IShape {
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
 type INamed interface {
     func Name() string
 }
 
-type Square class(Side int) : IShape, INamed {
-    func Area() int { return Side * Side }
+type Square class(Side int32) : IShape, INamed {
+    func Area() int32 { return Side * Side }
     func Name() string { return ""square"" }
 }
 
@@ -110,15 +110,15 @@ s.Area()
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
-type Box open class(W int) : IShape {
-    open func Area() int { return W }
+type Box open class(W int32) : IShape {
+    open func Area() int32 { return W }
 }
 
-type BigBox class(W int) : Box {
-    override func Area() int { return W * 10 }
+type BigBox class(W int32) : Box {
+    override func Area() int32 { return W * 10 }
 }
 
 var b = BigBox(5)
@@ -155,7 +155,7 @@ s.Ok()
     {
         var source = @"
 type IBad sealed interface {
-    func F() int { return 0 }
+    func F() int32 { return 0 }
 }
 ";
         var result = Evaluate(source);

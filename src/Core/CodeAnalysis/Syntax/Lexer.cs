@@ -1090,7 +1090,7 @@ public sealed class Lexer
         if (!sawAnyDigit || last == '_')
         {
             var loc = new TextLocation(this.text, new TextSpan(numberStart, length));
-            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int);
+            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int32);
             this.value = 0;
             kind = suffixKind;
             return;
@@ -1122,20 +1122,20 @@ public sealed class Lexer
         {
             if (c1 == 'U' || c1 == 'u')
             {
-                return (TypeSymbol.ULong, 2);
+                return (TypeSymbol.UInt64, 2);
             }
 
-            return (TypeSymbol.Long, 1);
+            return (TypeSymbol.Int64, 1);
         }
 
         if (c0 == 'U' || c0 == 'u')
         {
             if (c1 == 'L' || c1 == 'l')
             {
-                return (TypeSymbol.ULong, 2);
+                return (TypeSymbol.UInt64, 2);
             }
 
-            return (TypeSymbol.UInt, 1);
+            return (TypeSymbol.UInt32, 1);
         }
 
         if (allowFloatSuffixes)
@@ -1181,34 +1181,34 @@ public sealed class Lexer
         catch (System.Exception)
         {
             var loc = new TextLocation(this.text, new TextSpan(spanStart, spanLength));
-            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int);
-            return suffixType == TypeSymbol.Long ? (object)0L
-                : suffixType == TypeSymbol.ULong ? (object)0UL
-                : suffixType == TypeSymbol.UInt ? (object)0U
+            Diagnostics.ReportInvalidNumber(loc, fullText, suffixType ?? TypeSymbol.Int32);
+            return suffixType == TypeSymbol.Int64 ? (object)0L
+                : suffixType == TypeSymbol.UInt64 ? (object)0UL
+                : suffixType == TypeSymbol.UInt32 ? (object)0U
                 : (object)0;
         }
 
-        if (suffixType == TypeSymbol.Long)
+        if (suffixType == TypeSymbol.Int64)
         {
             if (parsed > long.MaxValue)
             {
-                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Long);
+                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int64);
                 return 0L;
             }
 
             return (long)parsed;
         }
 
-        if (suffixType == TypeSymbol.ULong)
+        if (suffixType == TypeSymbol.UInt64)
         {
             return parsed;
         }
 
-        if (suffixType == TypeSymbol.UInt)
+        if (suffixType == TypeSymbol.UInt32)
         {
             if (parsed > uint.MaxValue)
             {
-                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.UInt);
+                ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.UInt32);
                 return 0U;
             }
 
@@ -1230,7 +1230,7 @@ public sealed class Lexer
             return (int)(uint)parsed;
         }
 
-        ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int);
+        ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int32);
         return 0;
     }
 

@@ -96,7 +96,7 @@ public static class MoveNextBodyRewriter
                 this.awaitResumeMap[rp.AwaitExpression] = rp;
             }
 
-            this.cachedStateLocal = new LocalVariableSymbol("<>cachedState", isReadOnly: false, TypeSymbol.Int);
+            this.cachedStateLocal = new LocalVariableSymbol("<>cachedState", isReadOnly: false, TypeSymbol.Int32);
             allLocals.Add(cachedStateLocal);
 
             var builderInfo = plan.StateMachine.BuilderInfo;
@@ -118,7 +118,7 @@ public static class MoveNextBodyRewriter
             // T retVal = default; (only for Task<T>)
             if (retValLocal != null)
             {
-                var defaultVal = retValLocal.Type == TypeSymbol.Int
+                var defaultVal = retValLocal.Type == TypeSymbol.Int32
                     ? (BoundExpression)new BoundLiteralExpression(null, 0)
                     : retValLocal.Type == TypeSymbol.Bool
                         ? new BoundLiteralExpression(null, false)
@@ -203,7 +203,7 @@ public static class MoveNextBodyRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, cachedStateLocal),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                     Literal(rp.State));
                 statements.Add(new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true));
             }
@@ -486,7 +486,7 @@ public static class MoveNextBodyRewriter
                         var cond = new BoundBinaryExpression(
                             null,
                             new BoundVariableExpression(null, ctx.cachedStateLocal),
-                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                             Literal(entry.State));
                         newTryBodyStmts.Add(new BoundConditionalGotoStatement(null, entry.Target, cond, jumpIfTrue: true));
                     }

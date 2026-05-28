@@ -31,7 +31,7 @@ public class AsyncFunctionTypeClauseTests
 import System
 import System.Threading.Tasks
 
-func runEach(cb async func(int) int) {
+func runEach(cb async func(int32) int32) {
     Console.Out.WriteLine(""ok"")
 }
 ";
@@ -65,7 +65,7 @@ func runEach(cb async func(int) int) {
 import System
 import System.Threading.Tasks
 
-func runVoid(cb async func(int)) {
+func runVoid(cb async func(int32)) {
     Console.Out.WriteLine(""ok"")
 }
 ";
@@ -93,10 +93,10 @@ func runVoid(cb async func(int)) {
 import System
 import System.Threading.Tasks
 
-func viaModifier(cb async func(int) int) {
+func viaModifier(cb async func(int32) int32) {
 }
 
-func viaTaskWrap(cb func(int) Task[int]) {
+func viaTaskWrap(cb func(int32) Task[int32]) {
 }
 ";
         var (asm, ctx) = CompileToAssembly(Source, nameof(AsyncFunctionTypeClause_AndExplicitTaskWrap_AreSameType));
@@ -124,8 +124,8 @@ func viaTaskWrap(cb func(int) Task[int]) {
 import System
 import System.Threading.Tasks
 
-func factory() async func(int) int {
-    return async func(x int) int { return x + 1 }
+func factory() async func(int32) int32 {
+    return async func(x int32) int32 { return x + 1 }
 }
 ";
         var (asm, ctx) = CompileToAssembly(Source, nameof(AsyncFunctionTypeClause_InReturnSlot_OfOuterFunction));
@@ -156,10 +156,10 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func acceptImplicit(cb async func() sequence[int]) {
+func acceptImplicit(cb async func() sequence[int32]) {
 }
 
-func acceptExplicit(cb async func() async sequence[int]) {
+func acceptExplicit(cb async func() async sequence[int32]) {
 }
 ";
         var (asm, ctx) = CompileToAssembly(Source, nameof(AsyncFunctionTypeClause_AsyncSequenceReturn_KeepsIAsyncEnumerableUnwrapped));
@@ -193,7 +193,7 @@ func acceptExplicit(cb async func() async sequence[int]) {
 import System
 import System.Threading.Tasks
 
-func bad(cb async func(int) Task[int]) {
+func bad(cb async func(int32) Task[int32]) {
 }
 ";
         var tree = SyntaxTree.Parse(SourceText.From(Source));
@@ -213,7 +213,7 @@ func bad(cb async func(int) Task[int]) {
         const string Source = @"package AsyncBadPrefix
 import System
 
-func bad(s async int) {
+func bad(s async int32) {
 }
 ";
         var tree = SyntaxTree.Parse(SourceText.From(Source));

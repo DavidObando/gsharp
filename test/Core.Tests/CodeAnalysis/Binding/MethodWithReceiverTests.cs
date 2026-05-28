@@ -23,11 +23,11 @@ public class MethodWithReceiverTests
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
-func (p Point) Distance() int {
+func (p Point) Distance() int32 {
     return p.X * p.X + p.Y * p.Y
 }
 
@@ -44,11 +44,11 @@ p.Distance()
     {
         var source = @"
 type Point class {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
-func (p Point) Distance() int {
+func (p Point) Distance() int32 {
     return p.X * p.X + p.Y * p.Y
 }
 
@@ -65,12 +65,12 @@ p.Distance()
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
-func (p Point) Sum() int { return p.X + p.Y }
-func (p Point) DoubleSum() int { return p.Sum() * 2 }
+func (p Point) Sum() int32 { return p.X + p.Y }
+func (p Point) DoubleSum() int32 { return p.Sum() * 2 }
 
 var p = Point{X: 5, Y: 7}
 p.DoubleSum()
@@ -86,12 +86,12 @@ p.DoubleSum()
         var definingTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
 public type Point struct {
-    X int
+    X int32
 }
 "));
         var extensionTree = SyntaxTree.Parse(SourceText.From(@"
 package Extensions
-func (p Point) Next() int { return p.X + 1 }
+func (p Point) Next() int32 { return p.X + 1 }
 "));
         var compilation = new Compilation(definingTree, extensionTree);
         var function = compilation.GlobalScope.Functions.Single(f => f.Name == "Next");
@@ -107,10 +107,10 @@ func (p Point) Next() int { return p.X + 1 }
     {
         var source = @"
 type Point class {
-    func Sum() int { return 1 }
+    func Sum() int32 { return 1 }
 }
 
-func (p Point) Sum() int { return 2 }
+func (p Point) Sum() int32 { return 2 }
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("'Sum' is already declared."));
@@ -121,10 +121,10 @@ func (p Point) Sum() int { return 2 }
     {
         var source = @"
 type I interface {
-    func F() int
+    func F() int32
 }
 
-func (i I) G() int { return 1 }
+func (i I) G() int32 { return 1 }
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("must be a struct or class"));
@@ -134,8 +134,8 @@ func (i I) G() int { return 1 }
     public void MethodReceiver_OnAlias_Diagnoses()
     {
         var source = @"
-type Count = int
-func (c Count) G() int { return c + 1 }
+type Count = int32
+func (c Count) G() int32 { return c + 1 }
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("must be a struct or class"));
@@ -146,10 +146,10 @@ func (c Count) G() int { return c + 1 }
     {
         var source = @"
 type Counter struct {
-    Value int
+    Value int32
 }
 
-func (c Counter) Inc() int {
+func (c Counter) Inc() int32 {
     return Value + 1
 }
 

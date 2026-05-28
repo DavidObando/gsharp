@@ -26,14 +26,14 @@ public class ClrNullabilityTests
     {
         var sym = TypeSymbol.FromClrType(typeof(int?));
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
-        Assert.Same(TypeSymbol.Int, nullable.UnderlyingType);
+        Assert.Same(TypeSymbol.Int32, nullable.UnderlyingType);
     }
 
     [Fact]
     public void NonNullableValueType_StaysFlat()
     {
         var sym = TypeSymbol.FromClrType(typeof(int));
-        Assert.Same(TypeSymbol.Int, sym);
+        Assert.Same(TypeSymbol.Int32, sym);
         Assert.IsNotType<NullableTypeSymbol>(sym);
     }
 

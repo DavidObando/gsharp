@@ -23,7 +23,7 @@ public class TypeOfNameOfTests
     public void TypeOf_Int_Resolves_To_SystemInt32()
     {
         var (eval, vars) = EvaluateWithVariables(@"
-var t = typeof(int)
+var t = typeof(int32)
 ");
         Assert.Empty(eval.Diagnostics);
         Assert.Equal(typeof(int), vars["t"]);
@@ -42,7 +42,7 @@ var t = typeof(string)
     [Fact]
     public void TypeOf_Result_Type_Is_SystemType()
     {
-        var tree = SyntaxTree.Parse(SourceText.From("var t = typeof(int)\n"));
+        var tree = SyntaxTree.Parse(SourceText.From("var t = typeof(int32)\n"));
         var compilation = new Compilation(tree);
         Assert.Empty(compilation.GlobalScope.Diagnostics);
 
@@ -54,7 +54,7 @@ var t = typeof(string)
     public void TypeOf_Slice_Of_Int_Resolves_To_Int_Array()
     {
         var (eval, vars) = EvaluateWithVariables(@"
-var t = typeof([]int)
+var t = typeof([]int32)
 ");
         Assert.Empty(eval.Diagnostics);
         Assert.Equal(typeof(int[]), vars["t"]);
@@ -64,7 +64,7 @@ var t = typeof([]int)
     public void TypeOf_Nullable_Int_Resolves_To_Nullable_Int32()
     {
         var (eval, vars) = EvaluateWithVariables(@"
-var t = typeof(int?)
+var t = typeof(int32?)
 ");
         Assert.Empty(eval.Diagnostics);
         Assert.Equal(typeof(int?), vars["t"]);

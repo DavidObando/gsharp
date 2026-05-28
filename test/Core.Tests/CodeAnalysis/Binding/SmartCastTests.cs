@@ -24,8 +24,8 @@ public class SmartCastTests
     {
         // Without narrowing, `var y int = x` would diagnose because x is int?.
         var source = @"
-var x int? = 5
-var y int = 0
+var x int32? = 5
+var y int32 = 0
 if x != nil {
     y = x
 }
@@ -41,8 +41,8 @@ y
     {
         // Narrowing must not happen in the wrong arm.
         var source = @"
-var x int? = 5
-var y int = 0
+var x int32? = 5
+var y int32 = 0
 if x == nil {
     y = x
 }
@@ -56,8 +56,8 @@ y
     public void NilLiteralOnLeft_AlsoNarrows()
     {
         var source = @"
-var x int? = 7
-var y int = 0
+var x int32? = 7
+var y int32 = 0
 if nil != x {
     y = x
 }
@@ -73,11 +73,11 @@ y
     {
         // Outside the guarded block, x is still nullable.
         var source = @"
-var x int? = 1
+var x int32? = 1
 if x != nil {
-    var t int = x
+    var t int32 = x
 }
-var z int = x
+var z int32 = x
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
@@ -90,10 +90,10 @@ var z int = x
         // dropped so the next read sees the declared nullable type and the
         // unsafe `var t int = x` is rejected.
         var source = @"
-var x int? = 5
+var x int32? = 5
 if x != nil {
     x = nil
-    var t int = x
+    var t int32 = x
 }
 ";
         var result = Evaluate(source);
@@ -106,8 +106,8 @@ if x != nil {
         // The narrowing should still be in effect for statements that
         // precede the invalidating assignment.
         var source = @"
-var x int? = 5
-var y int = 0
+var x int32? = 5
+var y int32 = 0
 if x != nil {
     y = x
     x = nil

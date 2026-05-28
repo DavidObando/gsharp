@@ -13,7 +13,7 @@ public class ReferencesHandlerTests
     [Fact]
     public void ComputeReferences_ReturnsAllSingleDocumentOccurrences()
     {
-        const string source = "func F(x int) int {\nlet y = x\nreturn x + y\n}\n";
+        const string source = "func F(x int32) int32 {\nlet y = x\nreturn x + y\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var uri = DocumentUri.From("file:///refs.gs");
 
@@ -26,7 +26,7 @@ public class ReferencesHandlerTests
     [Fact]
     public void ComputeReferences_CanExcludeDeclaration()
     {
-        const string source = "func F(x int) int {\nlet y = x\nreturn x + y\n}\n";
+        const string source = "func F(x int32) int32 {\nlet y = x\nreturn x + y\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var tokens = ReferencesComputer.ComputeReferenceTokens(content, LanguageServerTestHelpers.PositionOf(source, "x"), includeDeclaration: false);

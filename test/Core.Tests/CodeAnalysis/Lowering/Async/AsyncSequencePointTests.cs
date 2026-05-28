@@ -39,7 +39,7 @@ public class AsyncSequencePointTests
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     let a = await Task.FromResult(10)
     let b = await Task.FromResult(32)
     return a + b
@@ -81,7 +81,7 @@ async func compute() int {
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var x = 10
     await Task.Yield()
     x = x + 20
@@ -109,7 +109,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func numbers() IAsyncEnumerable[int] {
+func numbers() IAsyncEnumerable[int32] {
     yield 1
     await Task.Yield()
     yield 2
@@ -131,7 +131,7 @@ import System
 import System.Threading.Tasks
 
 func run() {
-    var fn = async func() int {
+    var fn = async func() int32 {
         let x = await Task.FromResult(7)
         await Task.Yield()
         return x * 6
@@ -160,7 +160,7 @@ run()
 import System
 import System.Threading.Tasks
 
-async func work() int {
+async func work() int32 {
     let x = await Task.FromResult(7)
     return x
 }

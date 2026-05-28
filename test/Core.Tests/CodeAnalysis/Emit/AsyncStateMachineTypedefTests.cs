@@ -31,7 +31,7 @@ public class AsyncStateMachineTypedefTests
 import System
 import System.Threading.Tasks
 
-async func doWork() int {
+async func doWork() int32 {
     return 7
 }
 
@@ -84,7 +84,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-var f = async func() int {
+var f = async func() int32 {
     await Task.CompletedTask
     return 99
 }
@@ -133,7 +133,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func numbers() IAsyncEnumerable[int] {
+func numbers() IAsyncEnumerable[int32] {
     yield 1
     yield 2
 }
@@ -233,7 +233,7 @@ import System
 import System.Threading.Tasks
 
 var x = 42
-var f = async func() int {
+var f = async func() int32 {
     await Task.CompletedTask
     return x
 }
@@ -279,7 +279,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Collections.Generic
 
-func items() IEnumerable[int] {
+func items() IEnumerable[int32] {
     yield 1
     yield 2
     yield 3
@@ -319,7 +319,7 @@ func items() IEnumerable[int] {
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     await Task.CompletedTask
     return 100 + 23
 }

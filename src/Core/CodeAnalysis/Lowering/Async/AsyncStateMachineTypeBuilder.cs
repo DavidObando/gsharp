@@ -108,7 +108,7 @@ public static class AsyncStateMachineTypeBuilder
         var typeName = GeneratedNames.StateMachineTypeName(kickoff.Name, ordinal);
         var sm = new SynthesizedStateMachineType(typeName, containerKind, kickoff, builderInfo);
 
-        var stateField = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int, Accessibility.Public);
+        var stateField = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int32, Accessibility.Public);
         sm.AddField(stateField);
         sm.StateField = stateField;
 

@@ -26,7 +26,7 @@ public class ForRangeEmitTests
             package P
             import System
 
-            var arr = [3]int{100, 200, 300}
+            var arr = [3]int32{100, 200, 300}
             for i, v := range arr {
               Console.WriteLine(i)
               Console.WriteLine(v)
@@ -45,7 +45,7 @@ public class ForRangeEmitTests
             import System
             import System.Collections.Generic
 
-            var xs = List[int]()
+            var xs = List[int32]()
             xs.Add(10)
             xs.Add(20)
             xs.Add(30)
@@ -66,7 +66,7 @@ public class ForRangeEmitTests
             import System
             import System.Collections.Generic
 
-            var xs = List[int]()
+            var xs = List[int32]()
             xs.Add(10)
             xs.Add(20)
             for i, v := range xs {
@@ -87,7 +87,7 @@ public class ForRangeEmitTests
             import System
             import System.Collections.Generic
 
-            var d = Dictionary[string, int]()
+            var d = Dictionary[string, int32]()
             d["a"] = 1
             d["b"] = 2
             for k, v := range d {

@@ -19,7 +19,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Async;
 public class SpillSequenceSpillerTests
 {
     private static readonly BoundBinaryOperator AddOp =
-        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int);
+        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32);
 
     private static readonly BoundBinaryOperator LogicalAndOp =
         BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool);
@@ -31,12 +31,12 @@ public class SpillSequenceSpillerTests
     public void Pure_BinaryExpression_With_AwaitOnRight_SpillsLeft()
     {
         // Arrange: left is a call (not pure), right is await
-        var leftCall = MakeCall("sideEffect", TypeSymbol.Int);
-        var rightAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var leftCall = MakeCall("sideEffect", TypeSymbol.Int32);
+        var rightAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var binary = new BoundBinaryExpression(null, leftCall, AddOp, rightAwait);
         var decl = new BoundVariableDeclaration(
             null,
-            new LocalVariableSymbol("x", false, TypeSymbol.Int),
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32),
             binary);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
 
@@ -61,11 +61,11 @@ public class SpillSequenceSpillerTests
     {
         // Arrange: left is a literal (pure constant), right is await
         var left = new BoundLiteralExpression(null, 10);
-        var rightAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var rightAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var binary = new BoundBinaryExpression(null, left, AddOp, rightAwait);
         var decl = new BoundVariableDeclaration(
             null,
-            new LocalVariableSymbol("x", false, TypeSymbol.Int),
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32),
             binary);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
 
@@ -152,15 +152,15 @@ public class SpillSequenceSpillerTests
     public void Method_Call_With_Await_As_Second_Argument_SpillsFirstArg()
     {
         // Arrange: f(sideEffect(), await task)
-        var arg0 = MakeCall("sideEffect", TypeSymbol.Int);
-        var arg1 = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var arg0 = MakeCall("sideEffect", TypeSymbol.Int32);
+        var arg1 = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var call = new BoundCallExpression(
             null,
-            MakeFunction("f", TypeSymbol.Int, TypeSymbol.Int, TypeSymbol.Int),
+            MakeFunction("f", TypeSymbol.Int32, TypeSymbol.Int32, TypeSymbol.Int32),
             ImmutableArray.Create<BoundExpression>(arg0, arg1));
         var decl = new BoundVariableDeclaration(
             null,
-            new LocalVariableSymbol("r", false, TypeSymbol.Int), call);
+            new LocalVariableSymbol("r", false, TypeSymbol.Int32), call);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
 
         // Act
@@ -180,7 +180,7 @@ public class SpillSequenceSpillerTests
     {
         // Arrange: receiver.Method(await task)
         var receiver = MakeCall("getObj", TypeSymbol.String);
-        var arg = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var arg = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var method = typeof(string).GetMethod("Substring", new[] { typeof(int) });
         var call = new BoundImportedInstanceCallExpression(
             null,
@@ -216,12 +216,12 @@ public class SpillSequenceSpillerTests
     public void Nested_Await_In_Binary_BothSidesAwait_BothSpilled()
     {
         // Arrange: (await t1) + (await t2)
-        var awaitLeft = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
-        var awaitRight = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitLeft = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var awaitRight = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var binary = new BoundBinaryExpression(null, awaitLeft, AddOp, awaitRight);
         var decl = new BoundVariableDeclaration(
             null,
-            new LocalVariableSymbol("x", false, TypeSymbol.Int), binary);
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32), binary);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
 
         // Act
@@ -246,7 +246,7 @@ public class SpillSequenceSpillerTests
     public void Await_AlreadyAt_TopLevel_NotSpilled()
     {
         // Arrange: await task (expression statement)
-        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var stmt = new BoundExpressionStatement(null, awaitExpr);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(stmt));
 
@@ -264,7 +264,7 @@ public class SpillSequenceSpillerTests
         var literal = new BoundLiteralExpression(null, 42);
         var decl = new BoundVariableDeclaration(
             null,
-            new LocalVariableSymbol("x", false, TypeSymbol.Int), literal);
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32), literal);
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
 
         // Act

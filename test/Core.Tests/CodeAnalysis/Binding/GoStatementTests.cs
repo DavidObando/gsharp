@@ -21,7 +21,7 @@ public class GoStatementTests
     public void Go_OnUserFunctionCall_Binds()
     {
         var source = @"
-func work() int {
+func work() int32 {
     return 1
 }
 
@@ -35,7 +35,7 @@ go work()
     public void Go_OnAsyncFunctionCall_Binds()
     {
         var source = @"
-async func work() int {
+async func work() int32 {
     return 1
 }
 

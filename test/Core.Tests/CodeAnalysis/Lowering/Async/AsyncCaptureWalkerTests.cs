@@ -26,7 +26,7 @@ public class AsyncCaptureWalkerTests
     [Fact]
     public void Analyze_DeclaredLocal_IsHoisted()
     {
-        var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
+        var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundVariableDeclaration(null, local, new BoundLiteralExpression(null, 0))));
@@ -40,7 +40,7 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_ReferencedLocal_IsHoisted()
     {
-        var local = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int);
+        var local = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int32);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundVariableExpression(null, local))));
@@ -54,7 +54,7 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_SameLocalReferencedTwice_AppearsOnce()
     {
-        var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
+        var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundVariableDeclaration(null, local, new BoundLiteralExpression(null, 1)),
@@ -69,9 +69,9 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_DeterministicOrder_FirstEncounterWins()
     {
-        var first = new LocalVariableSymbol("first", isReadOnly: false, TypeSymbol.Int);
-        var second = new LocalVariableSymbol("second", isReadOnly: false, TypeSymbol.Int);
-        var third = new LocalVariableSymbol("third", isReadOnly: false, TypeSymbol.Int);
+        var first = new LocalVariableSymbol("first", isReadOnly: false, TypeSymbol.Int32);
+        var second = new LocalVariableSymbol("second", isReadOnly: false, TypeSymbol.Int32);
+        var third = new LocalVariableSymbol("third", isReadOnly: false, TypeSymbol.Int32);
 
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
@@ -88,8 +88,8 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_SpillTemp_IsExcluded()
     {
-        var userLocal = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var spillTemp = new LocalVariableSymbol(GeneratedNames.SpillTempField(0), isReadOnly: false, TypeSymbol.Int);
+        var userLocal = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
+        var spillTemp = new LocalVariableSymbol(GeneratedNames.SpillTempField(0), isReadOnly: false, TypeSymbol.Int32);
 
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
@@ -105,7 +105,7 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_Parameters_AlwaysHoistedAsProvided()
     {
-        var p1 = new ParameterSymbol("a", TypeSymbol.Int);
+        var p1 = new ParameterSymbol("a", TypeSymbol.Int32);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
         var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
@@ -119,7 +119,7 @@ ImmutableArray.Create<BoundStatement>(
     [Fact]
     public void Analyze_ParameterReferencedInBody_NotDuplicatedIntoLocals()
     {
-        var p1 = new ParameterSymbol("a", TypeSymbol.Int);
+        var p1 = new ParameterSymbol("a", TypeSymbol.Int32);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundVariableExpression(null, p1))));

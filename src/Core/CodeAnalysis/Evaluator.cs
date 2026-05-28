@@ -989,7 +989,7 @@ public sealed class Evaluator
             return false;
         }
 
-        if (type == Symbols.TypeSymbol.Int)
+        if (type == Symbols.TypeSymbol.Int32)
         {
             return 0;
         }
@@ -1351,22 +1351,22 @@ public sealed class Evaluator
         // C# arithmetic on sub-int types promotes to int. To preserve the
         // operator's declared result type (e.g. byte + byte → byte) we
         // narrow back here. Other widths already match their CLR type.
-        if (resultType == TypeSymbol.SByte)
+        if (resultType == TypeSymbol.Int8)
         {
             return unchecked((sbyte)Convert.ToInt32(value));
         }
 
-        if (resultType == TypeSymbol.Byte)
+        if (resultType == TypeSymbol.UInt8)
         {
             return unchecked((byte)Convert.ToInt32(value));
         }
 
-        if (resultType == TypeSymbol.Short)
+        if (resultType == TypeSymbol.Int16)
         {
             return unchecked((short)Convert.ToInt32(value));
         }
 
-        if (resultType == TypeSymbol.UShort)
+        if (resultType == TypeSymbol.UInt16)
         {
             return unchecked((ushort)Convert.ToInt32(value));
         }

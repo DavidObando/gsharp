@@ -14,7 +14,7 @@ let numericLabel = switch number {
   default -> "zero"
 }
 
-let values = []int{1, 2, 3}
+let values = []int32{1, 2, 3}
 let listLabel = switch values {
   case [1, _, 3] -> "bookended"
   case _ -> "other"

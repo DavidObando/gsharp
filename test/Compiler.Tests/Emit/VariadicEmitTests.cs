@@ -29,7 +29,7 @@ public class VariadicEmitTests
             package P
             import System
 
-            func sum(nums ...int) int {
+            func sum(nums ...int32) int32 {
               var total = 0
               for v := range nums {
                 total = total + v
@@ -51,7 +51,7 @@ public class VariadicEmitTests
             package P
             import System
 
-            func sum(nums ...int) int {
+            func sum(nums ...int32) int32 {
               var total = 0
               for v := range nums {
                 total = total + v
@@ -74,7 +74,7 @@ public class VariadicEmitTests
             package P
             import System
 
-            func sumWithBase(base int, extras ...int) int {
+            func sumWithBase(base int32, extras ...int32) int32 {
               var total = base
               for v := range extras {
                 total = total + v

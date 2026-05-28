@@ -9,10 +9,10 @@ package GSharp.Samples.SwitchExpression
 import System
 
 type Shape open class { Name string }
-type Circle class : Shape { Radius int }
-type Square class : Shape { Side int }
+type Circle class : Shape { Radius int32 }
+type Square class : Shape { Side int32 }
 
-let nums = []int{-3, 0, 1, 5, 101}
+let nums = []int32{-3, 0, 1, 5, 101}
 for n in nums {
   let label = switch n {
     case 0 -> "zero"
@@ -34,14 +34,14 @@ func areaTag(s Shape) string {
 Console.WriteLine(areaTag(Circle{Name: "c", Radius: 1}))
 Console.WriteLine(areaTag(Square{Name: "s", Side: 2}))
 
-let xs = []int{1, 2, 3}
+let xs = []int32{1, 2, 3}
 let listLabel = switch xs {
   case [1, _, 3] -> "bookended"
   case _ -> "other"
 }
 Console.WriteLine(listLabel)
 
-type Pair data struct { A int B int }
+type Pair data struct { A int32 B int32 }
 let p = Pair{A: 7, B: 7}
 let pairLabel = switch p {
   case { A: 0, B: 0 } -> "origin"

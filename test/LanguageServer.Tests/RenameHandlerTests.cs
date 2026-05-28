@@ -13,7 +13,7 @@ public class RenameHandlerTests
     [Fact]
     public void ComputeRename_ReturnsWorkspaceEditForAllOccurrences()
     {
-        const string source = "func F(x int) int {\nlet y = x\nreturn x + y\n}\n";
+        const string source = "func F(x int32) int32 {\nlet y = x\nreturn x + y\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var uri = DocumentUri.From("file:///rename.gs");
 

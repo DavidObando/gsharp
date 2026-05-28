@@ -14,12 +14,12 @@ public sealed class BoundBinaryOperator
 {
     private static readonly TypeSymbol[] SignedIntegralTypes =
     {
-        TypeSymbol.SByte, TypeSymbol.Short, TypeSymbol.Int, TypeSymbol.Long, TypeSymbol.NInt,
+        TypeSymbol.Int8, TypeSymbol.Int16, TypeSymbol.Int32, TypeSymbol.Int64, TypeSymbol.NInt,
     };
 
     private static readonly TypeSymbol[] UnsignedIntegralTypes =
     {
-        TypeSymbol.Byte, TypeSymbol.UShort, TypeSymbol.UInt, TypeSymbol.ULong, TypeSymbol.NUInt,
+        TypeSymbol.UInt8, TypeSymbol.UInt16, TypeSymbol.UInt32, TypeSymbol.UInt64, TypeSymbol.NUInt,
     };
 
     private static readonly TypeSymbol[] FloatingPointTypes =
@@ -236,8 +236,8 @@ public sealed class BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, t));
-        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, t, TypeSymbol.Int, t));
-        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, t, TypeSymbol.Int, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, t, TypeSymbol.Int32, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, t, TypeSymbol.Int32, t));
     }
 
     private static void AddComparisonOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)

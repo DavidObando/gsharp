@@ -22,7 +22,7 @@ public class ForInStatementTests
     public void ForIn_OverArray_YieldsValuesInSourceOrder()
     {
         var source = @"
-var arr = [3]int{1, 2, 3}
+var arr = [3]int32{1, 2, 3}
 var folded = 0
 for v in arr {
     folded = (folded * 10) + v
@@ -56,7 +56,7 @@ s
         var source = @"
 import System.Collections.Generic
 
-var dict = Dictionary[string, int]()
+var dict = Dictionary[string, int32]()
 dict[""a""] = 1
 dict[""bb""] = 2
 var total = 0
@@ -78,7 +78,7 @@ for k, v in dict {
         var source = @"
 import System.Collections.Generic
 
-var list = List[int]()
+var list = List[int32]()
 list.Add(4)
 list.Add(5)
 list.Add(6)
@@ -114,7 +114,7 @@ sum
     public void ForIn_OverUserPatternEnumerable_UsesGetEnumeratorPattern()
     {
         var source = @"
-type NumberEnumerator class(Index int, Current int) {
+type NumberEnumerator class(Index int32, Current int32) {
     func MoveNext() bool {
         Index = Index + 1
         if Index <= 3 {
@@ -164,7 +164,7 @@ total
     public void LegacyForRange_StillBinds()
     {
         var source = @"
-var xs = []int{1, 2, 3}
+var xs = []int32{1, 2, 3}
 var sum = 0
 for v := range xs {
     sum = sum + v

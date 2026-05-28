@@ -7,8 +7,8 @@ package GSharp.Example.Struct
 import System
 
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 3, Y: 4}

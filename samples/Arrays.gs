@@ -6,7 +6,7 @@ package GSharp.Example.Arrays
 
 import System
 
-var nums = [3]int{10, 20, 30}
+var nums = [3]int32{10, 20, 30}
 Console.WriteLine(nums[0])
 Console.WriteLine(nums[1])
 Console.WriteLine(nums[2])

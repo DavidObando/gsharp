@@ -32,7 +32,7 @@ public class AsyncInterpVsEmitParityTests
 import System
 import System.Threading.Tasks
 
-async func compute(n int) int {
+async func compute(n int32) int32 {
     await Task.FromResult(0)
     return n * 3
 }
@@ -76,7 +76,7 @@ run().Wait()
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var s = 0
     try {
         await Task.Delay(1)
@@ -106,7 +106,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var s = 0
     try {
         await Task.Delay(1)
@@ -141,7 +141,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var count = 0
     try {
         await Task.Delay(1)
@@ -168,7 +168,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func safe() int {
+async func safe() int32 {
     var result = 0
     try {
         await Task.Delay(1)
@@ -194,7 +194,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func withFinally() int {
+async func withFinally() int32 {
     var x = 0
     try {
         await Task.Delay(1)
@@ -220,7 +220,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func accum() int {
+async func accum() int32 {
     var sum = 0
     await Task.Delay(1)
     sum = sum + 10
@@ -244,7 +244,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Collections.Generic
 
-func nums() IEnumerable[int] {
+func nums() IEnumerable[int32] {
     yield 1
     yield 2
     yield 3
@@ -266,7 +266,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func gen() IAsyncEnumerable[int] {
+func gen() IAsyncEnumerable[int32] {
     yield 10
     await Task.Delay(1)
     yield 20
@@ -299,7 +299,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func gen() IAsyncEnumerable[int] {
+func gen() IAsyncEnumerable[int32] {
     yield 10
     await Task.Delay(1)
     yield 20

@@ -38,7 +38,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func describe(stream async sequence[int]) {
+func describe(stream async sequence[int32]) {
     Console.Out.WriteLine(""ok"")
 }
 ";
@@ -68,12 +68,12 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func source() sequence[int] {
+async func source() sequence[int32] {
     yield 1
 }
 
-async func consume() int {
-    let stream async sequence[int] = source()
+async func consume() int32 {
+    let stream async sequence[int32] = source()
     await Task.Yield()
     return 0
 }
@@ -88,7 +88,7 @@ async func consume() int {
                 .Any(f => f.FieldType == typeof(IAsyncEnumerable<int>));
             Assert.True(
                 hasField,
-                "Expected at least one emitted field of type IAsyncEnumerable<int> from the hoisted local.");
+                "Expected at least one emitted field of type IAsyncEnumerable<int32> from the hoisted local.");
         }
         finally
         {
@@ -106,10 +106,10 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func viaModifier(s async sequence[int]) {
+func viaModifier(s async sequence[int32]) {
 }
 
-func viaBcl(s IAsyncEnumerable[int]) {
+func viaBcl(s IAsyncEnumerable[int32]) {
 }
 ";
         var (asm, ctx) = CompileToAssembly(Source, nameof(AsyncSequenceTypeClause_AndExplicitIAsyncEnumerable_AreSameClrType));
@@ -134,7 +134,7 @@ func viaBcl(s IAsyncEnumerable[int]) {
         const string Source = @"package AsyncSeqInvalid
 import System
 
-func bad(s async int) {
+func bad(s async int32) {
 }
 ";
         var tree = SyntaxTree.Parse(SourceText.From(Source));
@@ -159,11 +159,11 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-async func implicitSwap() sequence[int] {
+async func implicitSwap() sequence[int32] {
     yield 1
 }
 
-async func explicitModifier() async sequence[int] {
+async func explicitModifier() async sequence[int32] {
     yield 2
 }
 ";

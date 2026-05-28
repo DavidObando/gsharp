@@ -52,7 +52,7 @@ public class AsyncEmitPrecheckTests
         var source =
             "package main\n" +
             "async func a() {}\n" +
-            "async func b() int { return 1 }\n" +
+            "async func b() int32 { return 1 }\n" +
             "func c() {}\n";
         var program = Bind(source);
 

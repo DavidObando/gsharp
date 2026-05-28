@@ -16,7 +16,7 @@ public class BoundDefaultExpressionTests
     [Fact]
     public void BoundDefaultExpression_Has_Expected_Kind_And_Type()
     {
-        var type = TypeSymbol.Int;
+        var type = TypeSymbol.Int32;
         var expr = new BoundDefaultExpression(null, type);
 
         Assert.Equal(BoundNodeKind.DefaultExpression, expr.Kind);

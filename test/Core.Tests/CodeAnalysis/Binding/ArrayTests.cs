@@ -24,7 +24,7 @@ public class ArrayTests
     [Fact]
     public void ArrayLiteral_BindsAndEvaluates()
     {
-        var result = Evaluate("var xs = [3]int{10, 20, 30}\nlet y = xs[1]\ny");
+        var result = Evaluate("var xs = [3]int32{10, 20, 30}\nlet y = xs[1]\ny");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(20, result.Value);
     }
@@ -32,14 +32,14 @@ public class ArrayTests
     [Fact]
     public void ArrayLiteral_LengthMismatch_Diagnosed()
     {
-        var diagnostics = Bind("var xs = [3]int{1, 2}\n");
+        var diagnostics = Bind("var xs = [3]int32{1, 2}\n");
         Assert.Contains(diagnostics, d => d.Message.Contains("3 initialisers"));
     }
 
     [Fact]
     public void TypedArrayDeclaration_Works()
     {
-        var result = Evaluate("var xs [3]int = [3]int{1, 2, 3}\nxs[0] + xs[2]");
+        var result = Evaluate("var xs [3]int32 = [3]int32{1, 2, 3}\nxs[0] + xs[2]");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(4, result.Value);
     }
@@ -47,7 +47,7 @@ public class ArrayTests
     [Fact]
     public void IndexAssignment_UpdatesElement()
     {
-        var result = Evaluate("var xs = [3]int{1, 2, 3}\nxs[1] = 99\nxs[1]");
+        var result = Evaluate("var xs = [3]int32{1, 2, 3}\nxs[1] = 99\nxs[1]");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(99, result.Value);
     }

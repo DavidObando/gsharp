@@ -60,14 +60,14 @@ public sealed class BoundLiteralExpression : BoundExpression
         switch (value)
         {
             case bool _: return TypeSymbol.Bool;
-            case sbyte _: return TypeSymbol.SByte;
-            case byte _: return TypeSymbol.Byte;
-            case short _: return TypeSymbol.Short;
-            case ushort _: return TypeSymbol.UShort;
-            case int _: return TypeSymbol.Int;
-            case uint _: return TypeSymbol.UInt;
-            case long _: return TypeSymbol.Long;
-            case ulong _: return TypeSymbol.ULong;
+            case sbyte _: return TypeSymbol.Int8;
+            case byte _: return TypeSymbol.UInt8;
+            case short _: return TypeSymbol.Int16;
+            case ushort _: return TypeSymbol.UInt16;
+            case int _: return TypeSymbol.Int32;
+            case uint _: return TypeSymbol.UInt32;
+            case long _: return TypeSymbol.Int64;
+            case ulong _: return TypeSymbol.UInt64;
             case nint _: return TypeSymbol.NInt;
             case nuint _: return TypeSymbol.NUInt;
             case float _: return TypeSymbol.Float32;

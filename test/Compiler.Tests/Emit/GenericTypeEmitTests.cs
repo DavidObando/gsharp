@@ -33,7 +33,7 @@ public class GenericTypeEmitTests
                 Value T
             }
 
-            let b = Box[int]{Value: 42}
+            let b = Box[int32]{Value: 42}
             Console.WriteLine(b.Value)
             """;
 
@@ -70,7 +70,7 @@ public class GenericTypeEmitTests
             type Box[T any] class(Value T) {
             }
 
-            let b = Box[int](7)
+            let b = Box[int32](7)
             Console.WriteLine(b.Value)
             """;
 
@@ -108,7 +108,7 @@ public class GenericTypeEmitTests
                 Second B
             }
 
-            let p = Pair[int, string]{First: 3, Second: "x"}
+            let p = Pair[int32, string]{First: 3, Second: "x"}
             Console.WriteLine(p.First)
             Console.WriteLine(p.Second)
             """;
@@ -130,7 +130,7 @@ public class GenericTypeEmitTests
                 Value T
             }
 
-            let b = Box[int]{Value: 20}
+            let b = Box[int32]{Value: 20}
             Console.WriteLine(b.Value + 22)
             """;
 

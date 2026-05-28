@@ -23,7 +23,7 @@ public class NullSafeOperatorTests
     public void Elvis_NullLeft_ReturnsRight()
     {
         var source = @"
-var x int? = nil
+var x int32? = nil
 x ?: 42
 ";
         var result = Evaluate(source);
@@ -35,7 +35,7 @@ x ?: 42
     public void Elvis_NonNullLeft_ReturnsLeft()
     {
         var source = @"
-var x int? = 7
+var x int32? = 7
 x ?: 42
 ";
         var result = Evaluate(source);
@@ -47,7 +47,7 @@ x ?: 42
     public void BangBang_NonNull_ReturnsUnderlying()
     {
         var source = @"
-var x int? = 9
+var x int32? = 9
 x!!
 ";
         var result = Evaluate(source);
@@ -59,7 +59,7 @@ x!!
     public void BangBang_Null_Throws()
     {
         var source = @"
-var x int? = nil
+var x int32? = nil
 x!!
 ";
         var result = Evaluate(source);

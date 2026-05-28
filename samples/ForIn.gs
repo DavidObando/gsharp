@@ -1,7 +1,7 @@
 import System
 import System.Collections.Generic
 
-type NumberEnumerator class(Index int, Current int) {
+type NumberEnumerator class(Index int32, Current int32) {
     func MoveNext() bool {
         Index = Index + 1
         if Index <= 3 {
@@ -19,12 +19,12 @@ type Numbers class {
     }
 }
 
-var nums = []int{1, 2, 3}
+var nums = []int32{1, 2, 3}
 for v in nums {
     Console.WriteLine(v)
 }
 
-var dict = Dictionary[string, int]()
+var dict = Dictionary[string, int32]()
 dict["one"] = 1
 dict["two"] = 2
 for k, v in dict {
@@ -32,7 +32,7 @@ for k, v in dict {
     Console.WriteLine(v)
 }
 
-var list = List[int]()
+var list = List[int32]()
 list.Add(4)
 list.Add(5)
 for v in list {

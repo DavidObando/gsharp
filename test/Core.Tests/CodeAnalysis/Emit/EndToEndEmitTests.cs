@@ -161,7 +161,7 @@ Console.WriteLine(x)
         // Exercises both BoundCallExpression emit AND issue #32 (digits in identifiers).
         const string Source = @"package UserFn
 import System
-func add(num1 int, num2 int) int {
+func add(num1 int32, num2 int32) int32 {
     return num1 + num2
 }
 Console.WriteLine(add(2, 3))
@@ -218,7 +218,7 @@ Console.WriteLine(""hi "" + name)
     {
         const string Source = @"package Recurse
 import System
-func factorial(n int) int {
+func factorial(n int32) int32 {
     if n <= 1 {
         return 1
     }
@@ -245,7 +245,7 @@ Console.WriteLine(factorial(5))
         Assert.Equal(firstBytes.Length, secondBytes.Length);
         Assert.True(
             firstBytes.AsSpan().SequenceEqual(secondBytes),
-            "two emits of the same source must produce byte-identical PEs (deterministic MVID + timestamp).");
+            "two emits of the same source must produce uint8-identical PEs (deterministic MVID + timestamp).");
     }
 
     [Fact]
@@ -282,7 +282,7 @@ Console.WriteLine(factorial(5))
     {
         const string Source = @"package RefAsm
 import System
-func add(a int, b int) int { return a + b }
+func add(a int32, b int32) int32 { return a + b }
 Console.WriteLine(add(2, 3))
 ";
         using var peStream = new MemoryStream();

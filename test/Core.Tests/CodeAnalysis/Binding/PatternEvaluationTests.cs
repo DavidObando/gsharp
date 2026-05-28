@@ -49,7 +49,7 @@ x
     public void SwitchExpression_PropertyPattern_Evaluates()
     {
         AssertEvaluates(@"
-type User class { Name string Age int }
+type User class { Name string Age int32 }
 let u = User{Name: ""x"", Age: 1}
 let x = switch u { case { Name: ""x"", Age: > 0 } -> ""hit"" default -> ""miss"" }
 x
@@ -70,7 +70,7 @@ x
     public void SwitchExpression_ListPattern_Evaluates()
     {
         AssertEvaluates(@"
-let a = []int{1, 2, 3}
+let a = []int32{1, 2, 3}
 let x = switch a { case [1, _, 3] -> ""hit"" default -> ""miss"" }
 x
 ", "hit");
