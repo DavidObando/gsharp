@@ -34,6 +34,9 @@
         Optimization="$(Optimize)"
         DebugType="$(DebugType)"
         PdbFile="@(_DebugSymbolsIntermediatePath)"
+        SourceLink="$(SourceLink)"
+        EmbedAllSources="$(EmbedAllSources)"
+        Deterministic="$(Deterministic)"
         Version="$(Version)"
         OutputType="$(OutputType)"
         RefAssembly="$(_GsharpRefAssemblyPath)"
@@ -47,6 +50,18 @@
     <ItemGroup>
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
       <FileWrites Include="$(_GsharpRefAssemblyPath)" Condition=" '$(_GsharpRefAssemblyPath)' != '' " />
+
+      <!-- Phase 8: declare the sidecar PDB to MSBuild so incremental build,
+           Clean, dotnet publish, and dotnet pack (when GeneratePackageOnBuild
+           or Symbols=true) all see the symbols alongside the runtime assembly.
+           Embedded PDBs land inside the PE so we deliberately skip the entry
+           for DebugType=embedded; DebugType=none / "" produces no file at
+           all and we likewise skip. -->
+      <FileWrites Include="@(_DebugSymbolsIntermediatePath)"
+                  Condition=" '@(_DebugSymbolsIntermediatePath)' != '' and
+                              '$(DebugType)' != ''                       and
+                              '$(DebugType)' != 'none'                   and
+                              '$(DebugType)' != 'embedded' " />
     </ItemGroup>
   </Target>
 
