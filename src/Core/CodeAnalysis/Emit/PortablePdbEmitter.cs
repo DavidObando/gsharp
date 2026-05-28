@@ -44,6 +44,7 @@ internal sealed class PortablePdbEmitter
     private static readonly Guid EmbeddedSourceKind = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
     private static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
     private static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
+    private static readonly Guid CompilationMetadataReferencesKind = new Guid("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
 
     /// <summary>
     /// Stable GSharp language GUID. Once a tool keys off this value (debugger,
@@ -58,6 +59,7 @@ internal sealed class PortablePdbEmitter
     private readonly Dictionary<int, RecordedMethod> recordedMethods = new Dictionary<int, RecordedMethod>();
     private readonly DebugInformationOptions options;
     private IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> importsPerTree;
+    private ImmutableArray<ReferenceInfo> referenceInfos;
 
     public PortablePdbEmitter(DebugInformationOptions options)
     {
@@ -78,6 +80,16 @@ internal sealed class PortablePdbEmitter
     public void SetImportsPerTree(IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> imports)
     {
         this.importsPerTree = imports;
+    }
+
+    /// <summary>
+    /// Supplies the per-reference metadata that will be encoded into the
+    /// <c>CompilationMetadataReferences</c> <c>CustomDebugInformation</c> blob
+    /// during <see cref="Serialize"/>. Call before <see cref="Serialize"/>.
+    /// </summary>
+    public void SetReferenceInfos(ImmutableArray<ReferenceInfo> infos)
+    {
+        this.referenceInfos = infos;
     }
 
     /// <summary>
@@ -375,6 +387,30 @@ internal sealed class PortablePdbEmitter
             parent: moduleHandle,
             kind: this.pdbMetadata.GetOrAddGuid(CompilationOptionsKind),
             value: this.pdbMetadata.GetOrAddBlob(optionsBlob));
+
+        // CompilationMetadataReferences: one record per file-backed reference.
+        // Blob layout per spec § "CompilationMetadataReferences":
+        //   (FileName \0  Aliases \0  Flags:byte  TimeStamp:uint32  FileSize:uint32  MVID:guid)*
+        if (!this.referenceInfos.IsDefaultOrEmpty)
+        {
+            var refsBlob = new BlobBuilder();
+            foreach (var info in this.referenceInfos)
+            {
+                refsBlob.WriteUTF8(info.FileName);
+                refsBlob.WriteByte(0);
+                refsBlob.WriteUTF8(info.Aliases ?? string.Empty);
+                refsBlob.WriteByte(0);
+                refsBlob.WriteByte(info.Flags);
+                refsBlob.WriteUInt32(info.TimeStamp);
+                refsBlob.WriteUInt32(info.FileSize);
+                refsBlob.WriteBytes(info.Mvid.ToByteArray());
+            }
+
+            this.pdbMetadata.AddCustomDebugInformation(
+                parent: moduleHandle,
+                kind: this.pdbMetadata.GetOrAddGuid(CompilationMetadataReferencesKind),
+                value: this.pdbMetadata.GetOrAddBlob(refsBlob));
+        }
 
         var pdbBuilder = new PortablePdbBuilder(
             tablesAndHeaps: this.pdbMetadata,

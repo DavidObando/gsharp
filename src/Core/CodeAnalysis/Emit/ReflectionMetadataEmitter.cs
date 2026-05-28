@@ -300,6 +300,10 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.pdb.SetImportsPerTree(importsGrouped);
+
+            // Wire per-reference metadata so the PDB emitter can produce the
+            // CompilationMetadataReferences CDI blob (issue #219).
+            this.pdb.SetReferenceInfos(this.references.GetReferenceInfos());
         }
 
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref
