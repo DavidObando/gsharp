@@ -34,8 +34,8 @@ public class ClosureEmitTests
             package P
             import System
 
-            func makeAdder(n int) func(int) int {
-              return func(x int) int { return x + n }
+            func makeAdder(n int32) func(int32) int32 {
+              return func(x int32) int32 { return x + n }
             }
 
             var addN = makeAdder(7)
@@ -53,8 +53,8 @@ public class ClosureEmitTests
             package P
             import System
 
-            func makeLinear(a int, b int) func(int) int {
-              return func(x int) int { return a * x + b }
+            func makeLinear(a int32, b int32) func(int32) int32 {
+              return func(x int32) int32 { return a * x + b }
             }
 
             var f = makeLinear(3, 4)
@@ -94,9 +94,9 @@ public class ClosureEmitTests
             package P
             import System
 
-            func makeCounter(start int) func(int) int {
+            func makeCounter(start int32) func(int32) int32 {
               var c = start
-              return func(x int) int {
+              return func(x int32) int32 {
                 c = c + 1
                 return x + c
               }
@@ -120,8 +120,8 @@ public class ClosureEmitTests
             package P
             import System
 
-            func makeAdder(n int) func(int) int {
-              return func(x int) int { return x + n }
+            func makeAdder(n int32) func(int32) int32 {
+              return func(x int32) int32 { return x + n }
             }
 
             var add5 = makeAdder(5)

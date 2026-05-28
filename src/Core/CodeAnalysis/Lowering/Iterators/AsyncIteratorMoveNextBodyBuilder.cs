@@ -177,7 +177,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         stateRead,
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                         Literal(state)),
                     jumpIfTrue: true));
             }
@@ -192,7 +192,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         ReadField(stateField),
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                         Literal(state)),
                     jumpIfTrue: true));
             }

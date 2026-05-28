@@ -3465,7 +3465,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Primitive value types (int, bool) are handled with ldc.i4.0 — no slot needed.
-            if (def.Type == TypeSymbol.Int || def.Type == TypeSymbol.Bool)
+            if (def.Type == TypeSymbol.Int32 || def.Type == TypeSymbol.Bool)
             {
                 continue;
             }
@@ -4161,9 +4161,9 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var plan in this.iteratorPlans)
         {
             var packageName = hostPackage?.Name ?? plan.Function.Package?.Name ?? string.Empty;
-            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int, Accessibility.Public);
+            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public);
             var currentField = new FieldSymbol("<>2__current", plan.ElementType, Accessibility.Public);
-            var initialThreadField = new FieldSymbol("<>l__initialThreadId", TypeSymbol.Int, Accessibility.Public);
+            var initialThreadField = new FieldSymbol("<>l__initialThreadId", TypeSymbol.Int32, Accessibility.Public);
             var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
             fields.Add(stateField);
             fields.Add(currentField);
@@ -4288,7 +4288,7 @@ internal sealed class ReflectionMetadataEmitter
             var elementType = plan.ElementType;
 
             // Fields
-            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int, Accessibility.Public);
+            var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public);
             var currentField = new FieldSymbol("<>2__current", elementType, Accessibility.Public);
             var promiseFieldType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>));
             var promiseField = new FieldSymbol("<>v__promiseOfValueOrEnd", promiseFieldType, Accessibility.Public);
@@ -4487,7 +4487,7 @@ internal sealed class ReflectionMetadataEmitter
             new BoundBinaryExpression(
                 null,
                 new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
-                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                 new BoundLiteralExpression(null, StateMachineStates.FinishedState)),
             jumpIfTrue: false));
         // Return a completed ValueTask<bool>(false)
@@ -4553,7 +4553,7 @@ internal sealed class ReflectionMetadataEmitter
         var finishedCheck = new BoundBinaryExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
-            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int, TypeSymbol.Int),
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
             new BoundLiteralExpression(null, StateMachineStates.FinishedState));
         var earlyReturn = new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
         stmts.Add(new BoundIfStatement(null, finishedCheck, earlyReturn, null));
@@ -5483,7 +5483,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private EntityHandle GetElementTypeToken(TypeSymbol element)
     {
-        if (element == TypeSymbol.Int)
+        if (element == TypeSymbol.Int32)
         {
             return this.GetTypeReference(this.coreInt32Type);
         }
@@ -6042,7 +6042,7 @@ internal sealed class ReflectionMetadataEmitter
                     $"Nullable value-type signatures for '{inner.Name}?' are not yet supported by the emitter.");
             }
 
-            if (inner == TypeSymbol.Int || inner == TypeSymbol.Bool || (inner?.ClrType != null && inner.ClrType.IsValueType))
+            if (inner == TypeSymbol.Int32 || inner == TypeSymbol.Bool || (inner?.ClrType != null && inner.ClrType.IsValueType))
             {
                 throw new NotSupportedException(
                     $"Nullable value-type signatures for '{inner?.Name}?' are not yet supported by the emitter.");
@@ -6056,7 +6056,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             encoder.Boolean();
         }
-        else if (type == TypeSymbol.Int)
+        else if (type == TypeSymbol.Int32)
         {
             encoder.Int32();
         }
@@ -6156,7 +6156,7 @@ internal sealed class ReflectionMetadataEmitter
     // CLR's value-type predicate over GSharp type symbols.
     private static bool IsValueTypeSymbol(TypeSymbol type)
     {
-        if (type == TypeSymbol.Int || type == TypeSymbol.Bool)
+        if (type == TypeSymbol.Int32 || type == TypeSymbol.Bool)
         {
             return true;
         }
@@ -7276,13 +7276,13 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Minimal numeric / to-string conversions sufficient for current language coverage.
-            if (to == TypeSymbol.Int && from == TypeSymbol.Bool)
+            if (to == TypeSymbol.Int32 && from == TypeSymbol.Bool)
             {
                 // bool already lives as i4 on the stack; no-op.
                 return;
             }
 
-            if (to == TypeSymbol.Bool && from == TypeSymbol.Int)
+            if (to == TypeSymbol.Bool && from == TypeSymbol.Int32)
             {
                 this.il.LoadConstantI4(0);
                 this.il.OpCode(ILOpCode.Ceq);
@@ -7591,19 +7591,19 @@ internal sealed class ReflectionMetadataEmitter
                 || u.Op.Kind == BoundUnaryOperatorKind.Negation)
             {
                 var t = u.Op.Type;
-                if (t == TypeSymbol.SByte)
+                if (t == TypeSymbol.Int8)
                 {
                     this.il.OpCode(ILOpCode.Conv_i1);
                 }
-                else if (t == TypeSymbol.Byte)
+                else if (t == TypeSymbol.UInt8)
                 {
                     this.il.OpCode(ILOpCode.Conv_u1);
                 }
-                else if (t == TypeSymbol.Short)
+                else if (t == TypeSymbol.Int16)
                 {
                     this.il.OpCode(ILOpCode.Conv_i2);
                 }
-                else if (t == TypeSymbol.UShort || t == TypeSymbol.Char)
+                else if (t == TypeSymbol.UInt16 || t == TypeSymbol.Char)
                 {
                     this.il.OpCode(ILOpCode.Conv_u2);
                 }
@@ -7812,19 +7812,19 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundBinaryOperatorKind.BitwiseOr:
                 case BoundBinaryOperatorKind.BitwiseXor:
                 case BoundBinaryOperatorKind.BitClear:
-                    if (resultType == TypeSymbol.SByte)
+                    if (resultType == TypeSymbol.Int8)
                     {
                         this.il.OpCode(ILOpCode.Conv_i1);
                     }
-                    else if (resultType == TypeSymbol.Byte)
+                    else if (resultType == TypeSymbol.UInt8)
                     {
                         this.il.OpCode(ILOpCode.Conv_u1);
                     }
-                    else if (resultType == TypeSymbol.Short)
+                    else if (resultType == TypeSymbol.Int16)
                     {
                         this.il.OpCode(ILOpCode.Conv_i2);
                     }
-                    else if (resultType == TypeSymbol.UShort || resultType == TypeSymbol.Char)
+                    else if (resultType == TypeSymbol.UInt16 || resultType == TypeSymbol.Char)
                     {
                         this.il.OpCode(ILOpCode.Conv_u2);
                     }
@@ -7835,10 +7835,10 @@ internal sealed class ReflectionMetadataEmitter
 
         private static bool IsUnsignedOrChar(TypeSymbol t)
         {
-            return t == TypeSymbol.Byte
-                || t == TypeSymbol.UShort
-                || t == TypeSymbol.UInt
-                || t == TypeSymbol.ULong
+            return t == TypeSymbol.UInt8
+                || t == TypeSymbol.UInt16
+                || t == TypeSymbol.UInt32
+                || t == TypeSymbol.UInt64
                 || t == TypeSymbol.NUInt
                 || t == TypeSymbol.Char;
         }
@@ -8098,7 +8098,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Primitive value types: push zero constant
-            if (type == TypeSymbol.Int || type == TypeSymbol.Bool)
+            if (type == TypeSymbol.Int32 || type == TypeSymbol.Bool)
             {
                 this.il.LoadConstantI4(0);
                 return;
@@ -8134,7 +8134,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLoadElement(TypeSymbol elementType)
         {
-            if (elementType == TypeSymbol.Int)
+            if (elementType == TypeSymbol.Int32)
             {
                 this.il.OpCode(ILOpCode.Ldelem_i4);
             }
@@ -8155,7 +8155,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitStoreElement(TypeSymbol elementType)
         {
-            if (elementType == TypeSymbol.Int)
+            if (elementType == TypeSymbol.Int32)
             {
                 this.il.OpCode(ILOpCode.Stelem_i4);
             }

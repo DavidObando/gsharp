@@ -15,15 +15,15 @@ public class ByRefTypeSymbolTests
     [Fact]
     public void Get_Returns_Same_Instance_For_Same_Pointee()
     {
-        var a = ByRefTypeSymbol.Get(TypeSymbol.Int);
-        var b = ByRefTypeSymbol.Get(TypeSymbol.Int);
+        var a = ByRefTypeSymbol.Get(TypeSymbol.Int32);
+        var b = ByRefTypeSymbol.Get(TypeSymbol.Int32);
         Assert.Same(a, b);
     }
 
     [Fact]
     public void Get_Returns_Different_Instance_For_Different_Pointee()
     {
-        var intRef = ByRefTypeSymbol.Get(TypeSymbol.Int);
+        var intRef = ByRefTypeSymbol.Get(TypeSymbol.Int32);
         var boolRef = ByRefTypeSymbol.Get(TypeSymbol.Bool);
         Assert.NotSame(intRef, boolRef);
     }
@@ -38,7 +38,7 @@ public class ByRefTypeSymbolTests
     [Fact]
     public void ClrType_Is_ByRef()
     {
-        var byRef = ByRefTypeSymbol.Get(TypeSymbol.Int);
+        var byRef = ByRefTypeSymbol.Get(TypeSymbol.Int32);
         Assert.NotNull(byRef.ClrType);
         Assert.True(byRef.ClrType.IsByRef);
         Assert.Equal(typeof(int), byRef.ClrType.GetElementType());
@@ -47,8 +47,8 @@ public class ByRefTypeSymbolTests
     [Fact]
     public void Name_Has_Star_Prefix()
     {
-        var byRef = ByRefTypeSymbol.Get(TypeSymbol.Int);
-        Assert.Equal("*int", byRef.Name);
+        var byRef = ByRefTypeSymbol.Get(TypeSymbol.Int32);
+        Assert.Equal("*int32", byRef.Name);
     }
 
     [Fact]

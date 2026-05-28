@@ -96,7 +96,7 @@ internal static class SemanticLookup
     {
         return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol
             && !ReferenceEquals(symbol, TypeSymbol.Bool)
-            && !ReferenceEquals(symbol, TypeSymbol.Int)
+            && !ReferenceEquals(symbol, TypeSymbol.Int32)
             && !ReferenceEquals(symbol, TypeSymbol.String)
             && !ReferenceEquals(symbol, TypeSymbol.Void)
             && !ReferenceEquals(symbol, TypeSymbol.Null);
@@ -414,7 +414,7 @@ internal static class SemanticLookup
             return text switch
             {
                 "bool" => TypeSymbol.Bool,
-                "int" => TypeSymbol.Int,
+                "int32" => TypeSymbol.Int32,
                 "string" => TypeSymbol.String,
                 "void" => TypeSymbol.Void,
                 _ => null,

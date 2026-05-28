@@ -26,8 +26,8 @@ public class ClassTests
     {
         var source = @"
 type Box class {
-    Width int
-    Height int
+    Width int32
+    Height int32
 }
 
 var b = Box{Width: 3, Height: 4}
@@ -43,7 +43,7 @@ b.Width + b.Height
     {
         var source = @"
 type Box class {
-    Width int
+    Width int32
 }
 
 var b = Box{Width: 1}
@@ -61,7 +61,7 @@ b.Width
     {
         var source = @"
 type Box class {
-    Width int
+    Width int32
 }
 
 var b = Box{Width: 5}
@@ -79,7 +79,7 @@ b.Width
         // Regression: 3.B.3's IsClass dispatch must not regress struct value-copy.
         var source = @"
 type Point struct {
-    X int
+    X int32
 }
 
 var p = Point{X: 1}
@@ -97,8 +97,8 @@ p.X
     {
         var source = @"
 type Box class {
-    Width int
-    Height int
+    Width int32
+    Height int32
 }
 
 var b = Box{}
@@ -116,7 +116,7 @@ b.Width + b.Height
         // `data` to `struct`); diagnose at parse time.
         var source = @"
 type Foo data class {
-    X int
+    X int32
 }
 0
 ";
@@ -131,7 +131,7 @@ type Foo data class {
         // public fields of the same name; the class is constructed positionally
         // via `Name(args)`.
         var source = @"
-type Point class(X int, Y int) {
+type Point class(X int32, Y int32) {
 }
 
 var p = Point(3, 4)
@@ -147,8 +147,8 @@ p.X + p.Y
     {
         // Body fields not listed in the primary ctor are zero-initialized.
         var source = @"
-type Counter class(initial int) {
-    Count int
+type Counter class(initial int32) {
+    Count int32
 }
 
 var c = Counter(10)
@@ -163,7 +163,7 @@ c.initial + c.Count
     public void PrimaryConstructor_WrongArgumentCount_Diagnoses()
     {
         var source = @"
-type Point class(X int, Y int) {
+type Point class(X int32, Y int32) {
 }
 
 var p = Point(3)
@@ -177,7 +177,7 @@ var p = Point(3)
     public void PrimaryConstructor_WrongArgumentType_Diagnoses()
     {
         var source = @"
-type Point class(X int, Y int) {
+type Point class(X int32, Y int32) {
 }
 
 var p = Point(3, true)
@@ -191,8 +191,8 @@ var p = Point(3, true)
     public void PrimaryConstructor_NameCollidesWithBodyField_Diagnoses()
     {
         var source = @"
-type Point class(X int, Y int) {
-    X int
+type Point class(X int32, Y int32) {
+    X int32
 }
 0
 ";
@@ -206,8 +206,8 @@ type Point class(X int, Y int) {
         // Phase 3.B.3 sub-step 2b: bare `X` / `Y` inside `Sum` resolve to
         // `this.X` / `this.Y`.
         var source = @"
-type Pt class(X int, Y int) {
-    func Sum() int {
+type Pt class(X int32, Y int32) {
+    func Sum() int32 {
         return X + Y
     }
 }
@@ -223,8 +223,8 @@ p.Sum()
     public void Method_MutatesReceiverViaImplicitFieldAssignment()
     {
         var source = @"
-type Pt class(X int, Y int) {
-    func Scale(f int) {
+type Pt class(X int32, Y int32) {
+    func Scale(f int32) {
         X = X * f
         Y = Y * f
     }
@@ -242,8 +242,8 @@ p.X + p.Y
     public void Method_TakesAndUsesArguments()
     {
         var source = @"
-type Vec class(X int) {
-    func Add(n int) int {
+type Vec class(X int32) {
+    func Add(n int32) int32 {
         return X + n
     }
 }
@@ -259,8 +259,8 @@ v.Add(7)
     public void Method_WrongArgCount_Diagnoses()
     {
         var source = @"
-type Pt class(X int) {
-    func Inc() int {
+type Pt class(X int32) {
+    func Inc() int32 {
         return X + 1
     }
 }
@@ -275,8 +275,8 @@ p.Inc(99)
     public void Method_NameCollidesWithField_Diagnoses()
     {
         var source = @"
-type Pt class(X int) {
-    func X() int {
+type Pt class(X int32) {
+    func X() int32 {
         return 0
     }
 }
@@ -292,9 +292,9 @@ type Pt class(X int) {
         // Methods are class-only in 3.B.3 sub-step 2b.
         var source = @"
 type Pt struct {
-    X int
+    X int32
 
-    func Sum() int {
+    func Sum() int32 {
         return X
     }
 }
@@ -310,8 +310,8 @@ type Pt struct {
     public void Inheritance_BaseMustBeOpen_Diagnoses()
     {
         var source = @"
-type A class { X int }
-type B class : A { Y int }
+type A class { X int32 }
+type B class : A { Y int32 }
 0
 ";
         var result = Evaluate(source);
@@ -322,8 +322,8 @@ type B class : A { Y int }
     public void Inheritance_OpenClass_Subclass_Works()
     {
         var source = @"
-type A open class { X int }
-type B class : A { Y int }
+type A open class { X int32 }
+type B class : A { Y int32 }
 var b = B{X: 1, Y: 2}
 b.X + b.Y
 ";
@@ -337,10 +337,10 @@ b.X + b.Y
     {
         var source = @"
 type A open class {
-    open func F() int { return 1 }
+    open func F() int32 { return 1 }
 }
 type B class : A {
-    override func F() int { return 2 }
+    override func F() int32 { return 2 }
 }
 var b = B{}
 b.F()
@@ -355,10 +355,10 @@ b.F()
     {
         var source = @"
 type A open class {
-    func F() int { return 1 }
+    func F() int32 { return 1 }
 }
 type B class : A {
-    override func F() int { return 2 }
+    override func F() int32 { return 2 }
 }
 0
 ";
@@ -371,10 +371,10 @@ type B class : A {
     {
         var source = @"
 type A open class {
-    open func F() int { return 1 }
+    open func F() int32 { return 1 }
 }
 type B class : A {
-    func F() int { return 2 }
+    func F() int32 { return 2 }
 }
 0
 ";
@@ -388,7 +388,7 @@ type B class : A {
         var source = @"
 type A open class {}
 type B class : A {
-    override func F() int { return 1 }
+    override func F() int32 { return 1 }
 }
 0
 ";
@@ -401,10 +401,10 @@ type B class : A {
     {
         var source = @"
 type A open class {
-    open func F() int { return 1 }
+    open func F() int32 { return 1 }
 }
 type B class : A {
-    override func F(x int) int { return x }
+    override func F(x int32) int32 { return x }
 }
 0
 ";
@@ -417,8 +417,8 @@ type B class : A {
     {
         var source = @"
 type A open class {
-    X int
-    func GetX() int { return X }
+    X int32
+    func GetX() int32 { return X }
 }
 type B class : A {}
 var b = B{X: 42}
@@ -434,7 +434,7 @@ b.GetX()
     {
         var source = @"
 type A open class {
-    func Hello() int { return 7 }
+    func Hello() int32 { return 7 }
 }
 type B class : A {}
 var b = B{}

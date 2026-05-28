@@ -780,7 +780,7 @@ public static class SpillSequenceSpiller
 
         private static BoundExpression GetDefaultValue(TypeSymbol type)
         {
-            if (type == TypeSymbol.Int)
+            if (type == TypeSymbol.Int32)
             {
                 return new BoundLiteralExpression(null, 0);
             }

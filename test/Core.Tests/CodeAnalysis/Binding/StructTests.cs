@@ -24,8 +24,8 @@ public class StructTests
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 3, Y: 4}
@@ -41,8 +41,8 @@ p.X + p.Y
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 5}
@@ -58,8 +58,8 @@ p.Y
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{}
@@ -75,8 +75,8 @@ p.X + p.Y
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 1, Y: 2}
@@ -93,8 +93,8 @@ p.X
     {
         var source = @"
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 1, Y: 2}
@@ -112,7 +112,7 @@ p.X
     {
         var source = @"
 type Point struct {
-    X int
+    X int32
 }
 
 var p = Point{X: 1}
@@ -127,8 +127,8 @@ p.Z
     {
         var source = @"
 type Point struct {
-    X int
-    X int
+    X int32
+    X int32
 }
 0
 ";
@@ -141,10 +141,10 @@ type Point struct {
     {
         var source = @"
 type Point struct {
-    X int
+    X int32
 }
 type Point struct {
-    Y int
+    Y int32
 }
 0
 ";

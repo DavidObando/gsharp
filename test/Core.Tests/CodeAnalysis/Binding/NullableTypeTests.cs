@@ -21,7 +21,7 @@ public class NullableTypeTests
     public void Nullable_Identity_RoundTrip()
     {
         var source = @"
-var x int? = 7
+var x int32? = 7
 x
 ";
         var result = Evaluate(source);
@@ -32,11 +32,11 @@ x
     [Fact]
     public void NullableTypeSymbol_Caches_Same_Underlying()
     {
-        var a = NullableTypeSymbol.Get(TypeSymbol.Int);
-        var b = NullableTypeSymbol.Get(TypeSymbol.Int);
+        var a = NullableTypeSymbol.Get(TypeSymbol.Int32);
+        var b = NullableTypeSymbol.Get(TypeSymbol.Int32);
         Assert.Same(a, b);
-        Assert.Same(TypeSymbol.Int, a.UnderlyingType);
-        Assert.Equal("int?", a.Name);
+        Assert.Same(TypeSymbol.Int32, a.UnderlyingType);
+        Assert.Equal("int32?", a.Name);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ x
         // The parser must accept `[3]int?` as a type clause (questioned element type).
         var source = @"
 type X struct {
-    Items [3]int?
+    Items [3]int32?
 }
 ";
         var result = Evaluate(source);
@@ -64,7 +64,7 @@ type X struct {
     public void Nil_AssignedToNullable_Binds()
     {
         var source = @"
-var x int? = nil
+var x int32? = nil
 x == nil
 ";
         var result = Evaluate(source);
@@ -75,7 +75,7 @@ x == nil
     public void Nil_AssignedToNonNullable_Diagnoses()
     {
         var source = @"
-var x int = nil
+var x int32 = nil
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);

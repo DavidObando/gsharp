@@ -17,7 +17,7 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void Construction_RecordsKickoffAndBuilder()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         fn.IsAsync = true;
         var builder = AsyncMethodBuilderInfo.Resolve(typeof(Task<int>), resolver: null);
         var sm = new SynthesizedStateMachineType("<foo>d__0", StateMachineContainerKind.Struct, fn, builder);
@@ -33,14 +33,14 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void AddField_PreservesInsertionOrder()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
             fn,
             AsyncMethodBuilderInfo.Resolve(typeof(Task<int>), resolver: null));
-        var state = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int, Accessibility.Public);
-        var builderField = new FieldSymbol(GeneratedNames.BuilderField, TypeSymbol.Int, Accessibility.Public);
+        var state = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int32, Accessibility.Public);
+        var builderField = new FieldSymbol(GeneratedNames.BuilderField, TypeSymbol.Int32, Accessibility.Public);
         sm.AddField(state);
         sm.AddField(builderField);
 
@@ -55,7 +55,7 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void FunctionSymbol_StateMachineType_BackLink()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
@@ -69,14 +69,14 @@ public class SynthesizedStateMachineTypeTests
     public void MaterializeAsStructSymbol_ProjectsFieldsAndMetadata()
     {
         var package = new PackageSymbol("main", declaration: null);
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: package);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32, package: package);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
             fn,
             AsyncMethodBuilderInfo.Resolve(typeof(Task<int>), resolver: null));
-        var state = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int, Accessibility.Public);
-        var builder = new FieldSymbol(GeneratedNames.BuilderField, TypeSymbol.Int, Accessibility.Public);
+        var state = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int32, Accessibility.Public);
+        var builder = new FieldSymbol(GeneratedNames.BuilderField, TypeSymbol.Int32, Accessibility.Public);
         sm.AddField(state);
         sm.AddField(builder);
 
@@ -94,7 +94,7 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void MaterializeAsStructSymbol_ReturnsStableProjection()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
@@ -110,7 +110,7 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void MaterializeAsStructSymbol_ClassContainerProjectsAsClass()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Class,
@@ -125,7 +125,7 @@ public class SynthesizedStateMachineTypeTests
     [Fact]
     public void AddField_AfterMaterialization_Throws()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
@@ -133,19 +133,19 @@ public class SynthesizedStateMachineTypeTests
             AsyncMethodBuilderInfo.Resolve(typeof(Task<int>), resolver: null));
         sm.MaterializeAsStructSymbol();
 
-        Assert.Throws<InvalidOperationException>(() => sm.AddField(new FieldSymbol("x", TypeSymbol.Int, Accessibility.Public)));
+        Assert.Throws<InvalidOperationException>(() => sm.AddField(new FieldSymbol("x", TypeSymbol.Int32, Accessibility.Public)));
     }
 
     [Fact]
     public void MaterializedStruct_CanBackExistingFieldAccessNode()
     {
-        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int);
+        var fn = new FunctionSymbol("foo", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32);
         var sm = new SynthesizedStateMachineType(
             "<foo>d__0",
             StateMachineContainerKind.Struct,
             fn,
             AsyncMethodBuilderInfo.Resolve(typeof(Task<int>), resolver: null));
-        var field = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int, Accessibility.Public);
+        var field = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int32, Accessibility.Public);
         sm.AddField(field);
         var projected = sm.MaterializeAsStructSymbol();
         var thisLocal = new LocalVariableSymbol("this", isReadOnly: false, projected);
@@ -154,6 +154,6 @@ public class SynthesizedStateMachineTypeTests
 
         Assert.Same(projected, access.StructType);
         Assert.Same(field, access.Field);
-        Assert.Equal(TypeSymbol.Int, access.Type);
+        Assert.Equal(TypeSymbol.Int32, access.Type);
     }
 }

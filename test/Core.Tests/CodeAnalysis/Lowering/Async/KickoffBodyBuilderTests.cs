@@ -46,7 +46,7 @@ public class KickoffBodyBuilderTests
     [Fact]
     public void Build_Parameters_PlansParameterFieldCopiesInDeclarationOrder()
     {
-        var first = new ParameterSymbol("first", TypeSymbol.Int);
+        var first = new ParameterSymbol("first", TypeSymbol.Int32);
         var second = new ParameterSymbol("second", TypeSymbol.String);
         var function = new FunctionSymbol("doIt", ImmutableArray.Create(first, second), TypeSymbol.Void, package: Package) { IsAsync = true };
         var fieldMap = CreateFieldMap(function, Block());
@@ -148,7 +148,7 @@ public class KickoffBodyBuilderTests
     [Fact]
     public void Operations_CarryOperationTargets()
     {
-        var parameter = new ParameterSymbol("value", TypeSymbol.Int);
+        var parameter = new ParameterSymbol("value", TypeSymbol.Int32);
         var function = new FunctionSymbol("doIt", ImmutableArray.Create(parameter), TypeSymbol.Void, package: Package) { IsAsync = true };
         var fieldMap = CreateFieldMap(function, Block());
 

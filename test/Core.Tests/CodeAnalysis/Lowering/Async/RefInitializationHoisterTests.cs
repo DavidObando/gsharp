@@ -20,8 +20,8 @@ public class RefInitializationHoisterTests
         // A body with no await: the hoister still eliminates ref locals
         // (conservative V1 approach for async bodies), but let's verify that
         // the non-ref parts are untouched.
-        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
+        var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.Int32);
 
         // var x = 42
         // var y = x + 1
@@ -32,7 +32,7 @@ ImmutableArray.Create<BoundStatement>(
 y, new BoundBinaryExpression(
                 null,
                 new BoundVariableExpression(null, x),
-                BoundBinaryOperator.Bind(Core.CodeAnalysis.Syntax.SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                BoundBinaryOperator.Bind(Core.CodeAnalysis.Syntax.SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
                 new BoundLiteralExpression(null, 1)))));
 
         var result = RefInitializationHoister.Rewrite(body);
@@ -48,8 +48,8 @@ y, new BoundBinaryExpression(
         // var slot = &x   (ref local: type *int, initializer is BoundAddressOfExpression)
         // ... (imagine await here) ...
         // *slot            (dereference → should become just `x`)
-        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
+        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
 
         var declX = new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 10));
         var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, new BoundVariableExpression(null, x)));
@@ -90,14 +90,14 @@ y, new BoundBinaryExpression(
         // var slot = &arr[i]  (ref local, initializer = BoundAddressOfExpression(BoundIndexExpression(arr, i)))
         // *slot               (should become arr[i])
         var arr = new LocalVariableSymbol("arr", isReadOnly: false, TypeSymbol.FromClrType(typeof(int[])));
-        var i = new LocalVariableSymbol("i", isReadOnly: false, TypeSymbol.Int);
-        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
+        var i = new LocalVariableSymbol("i", isReadOnly: false, TypeSymbol.Int32);
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
 
         var indexExpr = new BoundIndexExpression(
             null,
             new BoundVariableExpression(null, arr),
             new BoundVariableExpression(null, i),
-            TypeSymbol.Int);
+            TypeSymbol.Int32);
         var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, indexExpr));
 
         var deref = new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot));
@@ -127,10 +127,10 @@ y, new BoundBinaryExpression(
     {
         // var slot = &obj.field  (ref local)
         // *slot                  (should become obj.field)
-        var field = new FieldSymbol("value", TypeSymbol.Int, Accessibility.Public);
+        var field = new FieldSymbol("value", TypeSymbol.Int32, Accessibility.Public);
         var structType = new StructSymbol("MyStruct", ImmutableArray.Create(field), Accessibility.Public, null, "test");
         var obj = new LocalVariableSymbol("obj", isReadOnly: false, structType);
-        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
 
         var fieldAccess = new BoundFieldAccessExpression(
             null,
@@ -166,8 +166,8 @@ y, new BoundBinaryExpression(
     {
         // If a ref local is used without dereference (e.g., passed to a ref param),
         // it should be replaced with &operand.
-        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
-        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int));
+        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
 
         var declX = new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 10));
         var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, new BoundVariableExpression(null, x)));

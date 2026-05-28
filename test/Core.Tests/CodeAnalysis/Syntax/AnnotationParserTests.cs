@@ -156,7 +156,7 @@ func F() {
         const string source = @"
 package P
 
-func F(@NotNull x int) {
+func F(@NotNull x int32) {
 }
 ";
         var tree = SyntaxTree.Parse(source);
@@ -173,7 +173,7 @@ func F(@NotNull x int) {
         const string source = @"
 package P
 
-func F(@param:NotNull @Cool(""yes"") x int) {
+func F(@param:NotNull @Cool(""yes"") x int32) {
 }
 ";
         var tree = SyntaxTree.Parse(source);
@@ -399,8 +399,8 @@ package P
 
 type Point data struct {
     @Obsolete(""retired"")
-    X int
-    Y int
+    X int32
+    Y int32
 }
 ";
         var tree = SyntaxTree.Parse(source);
@@ -426,8 +426,8 @@ package P
 type Point struct {
     @Obsolete
     @Serializable
-    X int
-    Y int
+    X int32
+    Y int32
 }
 ";
         var tree = SyntaxTree.Parse(source);
@@ -452,8 +452,8 @@ package P
 
 type Box class {
     @Obsolete
-    public Value int
-    public Other int
+    public Value int32
+    public Other int32
 }
 ";
         var tree = SyntaxTree.Parse(source);

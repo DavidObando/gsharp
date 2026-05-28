@@ -23,8 +23,8 @@ public class UserOperatorTests
     {
         var source = @"
 type Vector2 struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 func (a Vector2) operator +(b Vector2) Vector2 {
@@ -46,8 +46,8 @@ var first = r.X
     {
         var source = @"
 type Vector2 struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 func (a Vector2) operator -() Vector2 {
@@ -70,8 +70,8 @@ var negX = r.X
         // user-defined op_Equality even when individual fields differ.
         var source = @"
 type Vector2 struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 func (a Vector2) operator ==(b Vector2) bool {

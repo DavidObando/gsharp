@@ -32,7 +32,7 @@ var words = [12]string{
     "the", "lazy", "dog", "the", "quick", "fox",
 }
 
-var counts = Dictionary[string, int]()
+var counts = Dictionary[string, int32]()
 
 for w := range words {
     if counts.ContainsKey(w) {

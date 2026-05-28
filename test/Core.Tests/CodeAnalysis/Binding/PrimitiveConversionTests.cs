@@ -21,44 +21,44 @@ public class PrimitiveConversionTests
     {
         var data = new TheoryData<TypeSymbol, TypeSymbol>
         {
-            { TypeSymbol.SByte, TypeSymbol.Short },
-            { TypeSymbol.SByte, TypeSymbol.Int },
-            { TypeSymbol.SByte, TypeSymbol.Long },
-            { TypeSymbol.SByte, TypeSymbol.Float32 },
-            { TypeSymbol.SByte, TypeSymbol.Float64 },
-            { TypeSymbol.SByte, TypeSymbol.Decimal },
-            { TypeSymbol.Byte, TypeSymbol.Short },
-            { TypeSymbol.Byte, TypeSymbol.UShort },
-            { TypeSymbol.Byte, TypeSymbol.Int },
-            { TypeSymbol.Byte, TypeSymbol.UInt },
-            { TypeSymbol.Byte, TypeSymbol.Long },
-            { TypeSymbol.Byte, TypeSymbol.ULong },
-            { TypeSymbol.Byte, TypeSymbol.Decimal },
-            { TypeSymbol.Short, TypeSymbol.Int },
-            { TypeSymbol.Short, TypeSymbol.Long },
-            { TypeSymbol.Short, TypeSymbol.Float32 },
-            { TypeSymbol.Short, TypeSymbol.Float64 },
-            { TypeSymbol.UShort, TypeSymbol.Int },
-            { TypeSymbol.UShort, TypeSymbol.UInt },
-            { TypeSymbol.UShort, TypeSymbol.Long },
-            { TypeSymbol.Int, TypeSymbol.Long },
-            { TypeSymbol.Int, TypeSymbol.Float32 },
-            { TypeSymbol.Int, TypeSymbol.Float64 },
-            { TypeSymbol.Int, TypeSymbol.Decimal },
-            { TypeSymbol.UInt, TypeSymbol.Long },
-            { TypeSymbol.UInt, TypeSymbol.ULong },
-            { TypeSymbol.UInt, TypeSymbol.Decimal },
-            { TypeSymbol.Long, TypeSymbol.Float64 },
-            { TypeSymbol.Long, TypeSymbol.Decimal },
-            { TypeSymbol.ULong, TypeSymbol.Decimal },
+            { TypeSymbol.Int8, TypeSymbol.Int16 },
+            { TypeSymbol.Int8, TypeSymbol.Int32 },
+            { TypeSymbol.Int8, TypeSymbol.Int64 },
+            { TypeSymbol.Int8, TypeSymbol.Float32 },
+            { TypeSymbol.Int8, TypeSymbol.Float64 },
+            { TypeSymbol.Int8, TypeSymbol.Decimal },
+            { TypeSymbol.UInt8, TypeSymbol.Int16 },
+            { TypeSymbol.UInt8, TypeSymbol.UInt16 },
+            { TypeSymbol.UInt8, TypeSymbol.Int32 },
+            { TypeSymbol.UInt8, TypeSymbol.UInt32 },
+            { TypeSymbol.UInt8, TypeSymbol.Int64 },
+            { TypeSymbol.UInt8, TypeSymbol.UInt64 },
+            { TypeSymbol.UInt8, TypeSymbol.Decimal },
+            { TypeSymbol.Int16, TypeSymbol.Int32 },
+            { TypeSymbol.Int16, TypeSymbol.Int64 },
+            { TypeSymbol.Int16, TypeSymbol.Float32 },
+            { TypeSymbol.Int16, TypeSymbol.Float64 },
+            { TypeSymbol.UInt16, TypeSymbol.Int32 },
+            { TypeSymbol.UInt16, TypeSymbol.UInt32 },
+            { TypeSymbol.UInt16, TypeSymbol.Int64 },
+            { TypeSymbol.Int32, TypeSymbol.Int64 },
+            { TypeSymbol.Int32, TypeSymbol.Float32 },
+            { TypeSymbol.Int32, TypeSymbol.Float64 },
+            { TypeSymbol.Int32, TypeSymbol.Decimal },
+            { TypeSymbol.UInt32, TypeSymbol.Int64 },
+            { TypeSymbol.UInt32, TypeSymbol.UInt64 },
+            { TypeSymbol.UInt32, TypeSymbol.Decimal },
+            { TypeSymbol.Int64, TypeSymbol.Float64 },
+            { TypeSymbol.Int64, TypeSymbol.Decimal },
+            { TypeSymbol.UInt64, TypeSymbol.Decimal },
             { TypeSymbol.Float32, TypeSymbol.Float64 },
-            { TypeSymbol.Char, TypeSymbol.UShort },
-            { TypeSymbol.Char, TypeSymbol.Int },
-            { TypeSymbol.Char, TypeSymbol.UInt },
+            { TypeSymbol.Char, TypeSymbol.UInt16 },
+            { TypeSymbol.Char, TypeSymbol.Int32 },
+            { TypeSymbol.Char, TypeSymbol.UInt32 },
             { TypeSymbol.Char, TypeSymbol.Float64 },
-            { TypeSymbol.NInt, TypeSymbol.Long },
+            { TypeSymbol.NInt, TypeSymbol.Int64 },
             { TypeSymbol.NInt, TypeSymbol.Float64 },
-            { TypeSymbol.NUInt, TypeSymbol.ULong },
+            { TypeSymbol.NUInt, TypeSymbol.UInt64 },
         };
         return data;
     }
@@ -67,21 +67,21 @@ public class PrimitiveConversionTests
     {
         var data = new TheoryData<TypeSymbol, TypeSymbol>
         {
-            { TypeSymbol.Int, TypeSymbol.Byte },
-            { TypeSymbol.Int, TypeSymbol.SByte },
-            { TypeSymbol.Int, TypeSymbol.Short },
-            { TypeSymbol.Int, TypeSymbol.UShort },
-            { TypeSymbol.Int, TypeSymbol.UInt },
-            { TypeSymbol.Int, TypeSymbol.Char },
-            { TypeSymbol.Long, TypeSymbol.Int },
-            { TypeSymbol.Long, TypeSymbol.UInt },
-            { TypeSymbol.ULong, TypeSymbol.Int },
-            { TypeSymbol.ULong, TypeSymbol.Long },
+            { TypeSymbol.Int32, TypeSymbol.UInt8 },
+            { TypeSymbol.Int32, TypeSymbol.Int8 },
+            { TypeSymbol.Int32, TypeSymbol.Int16 },
+            { TypeSymbol.Int32, TypeSymbol.UInt16 },
+            { TypeSymbol.Int32, TypeSymbol.UInt32 },
+            { TypeSymbol.Int32, TypeSymbol.Char },
+            { TypeSymbol.Int64, TypeSymbol.Int32 },
+            { TypeSymbol.Int64, TypeSymbol.UInt32 },
+            { TypeSymbol.UInt64, TypeSymbol.Int32 },
+            { TypeSymbol.UInt64, TypeSymbol.Int64 },
             { TypeSymbol.Float64, TypeSymbol.Float32 },
-            { TypeSymbol.Float64, TypeSymbol.Int },
-            { TypeSymbol.Float32, TypeSymbol.Int },
-            { TypeSymbol.Decimal, TypeSymbol.Int },
-            { TypeSymbol.Decimal, TypeSymbol.Long },
+            { TypeSymbol.Float64, TypeSymbol.Int32 },
+            { TypeSymbol.Float32, TypeSymbol.Int32 },
+            { TypeSymbol.Decimal, TypeSymbol.Int32 },
+            { TypeSymbol.Decimal, TypeSymbol.Int64 },
             { TypeSymbol.Decimal, TypeSymbol.Float32 },
             { TypeSymbol.Decimal, TypeSymbol.Float64 },
         };
@@ -123,7 +123,7 @@ public class PrimitiveConversionTests
     public void Int_To_UInt_IsExplicit()
     {
         // Same width but signed/unsigned: explicit per C# §6.2.1.
-        var conv = Conversion.Classify(TypeSymbol.Int, TypeSymbol.UInt);
+        var conv = Conversion.Classify(TypeSymbol.Int32, TypeSymbol.UInt32);
         Assert.True(conv.IsExplicit);
     }
 
@@ -134,14 +134,14 @@ public class PrimitiveConversionTests
         // either direction. (The IL-level bool↔int helpers in the emitter
         // are reachable only through unrelated paths such as the discarded
         // result of an equality test.)
-        var conv = Conversion.Classify(TypeSymbol.Bool, TypeSymbol.Int);
+        var conv = Conversion.Classify(TypeSymbol.Bool, TypeSymbol.Int32);
         Assert.False(conv.Exists);
     }
 
     [Fact]
     public void Int_To_Object_IsImplicit_Boxing()
     {
-        var conv = Conversion.Classify(TypeSymbol.Int, TypeSymbol.Object);
+        var conv = Conversion.Classify(TypeSymbol.Int32, TypeSymbol.Object);
         Assert.True(conv.IsImplicit, "value-type → object is implicit boxing per ADR-0045");
     }
 
@@ -155,7 +155,7 @@ public class PrimitiveConversionTests
     [Fact]
     public void Object_To_Int_IsExplicit_Unbox()
     {
-        var conv = Conversion.Classify(TypeSymbol.Object, TypeSymbol.Int);
+        var conv = Conversion.Classify(TypeSymbol.Object, TypeSymbol.Int32);
         Assert.True(conv.IsExplicit, "object → value-type is explicit unboxing per ADR-0045");
     }
 
@@ -168,8 +168,8 @@ public class PrimitiveConversionTests
 
     private static TypeSymbol LookupPrimitive(string name) => name switch
     {
-        "Int" => TypeSymbol.Int,
-        "Long" => TypeSymbol.Long,
+        "Int" => TypeSymbol.Int32,
+        "Long" => TypeSymbol.Int64,
         "Decimal" => TypeSymbol.Decimal,
         "Char" => TypeSymbol.Char,
         _ => throw new System.ArgumentException($"unknown primitive '{name}'"),

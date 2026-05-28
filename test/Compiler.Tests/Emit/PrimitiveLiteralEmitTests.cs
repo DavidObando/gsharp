@@ -110,7 +110,7 @@ public class PrimitiveLiteralEmitTests
             package P
             import System
 
-            let x long = 1
+            let x int64 = 1
             Console.WriteLine(x)
             """;
 
@@ -125,7 +125,7 @@ public class PrimitiveLiteralEmitTests
             import System
 
             let big = 4294967297L
-            let n = int(big)
+            let n = int32(big)
             Console.WriteLine(n)
             """;
 
@@ -140,7 +140,7 @@ public class PrimitiveLiteralEmitTests
             import System
 
             let f = 3.9
-            let n = int(f)
+            let n = int32(f)
             Console.WriteLine(n)
             """;
 

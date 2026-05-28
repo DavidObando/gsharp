@@ -22,7 +22,7 @@ public class LambdaTests
     public void FunctionLiteral_DirectInvocation_ReturnsResult()
     {
         var result = Evaluate(@"
-let add = func(a int, b int) int { return a + b }
+let add = func(a int32, b int32) int32 { return a + b }
 add(2, 3)
 ");
         Assert.Empty(result.Diagnostics);
@@ -33,7 +33,7 @@ add(2, 3)
     public void FunctionTypeClause_OnLocal_AcceptsMatchingLiteral()
     {
         var result = Evaluate(@"
-let add func(int, int) int = func(a int, b int) int { return a + b }
+let add func(int32, int32) int32 = func(a int32, b int32) int32 { return a + b }
 add(4, 5)
 ");
         Assert.Empty(result.Diagnostics);
@@ -45,7 +45,7 @@ add(4, 5)
     {
         var result = Evaluate(@"
 let n = 7
-let f = func() int { return n + 1 }
+let f = func() int32 { return n + 1 }
 f()
 ");
         Assert.Empty(result.Diagnostics);
@@ -59,9 +59,9 @@ f()
         // are intentionally not captured (read live at call time). Use a helper
         // function to exercise local-capture semantics.
         var result = Evaluate(@"
-func makeReader() func() int {
+func makeReader() func() int32 {
     var n = 1
-    let f = func() int { return n }
+    let f = func() int32 { return n }
     n = 99
     return f
 }
@@ -88,7 +88,7 @@ noop()
     public void IndirectCall_WrongArgCount_ReportsDiagnostic()
     {
         var result = Evaluate(@"
-let add = func(a int, b int) int { return a + b }
+let add = func(a int32, b int32) int32 { return a + b }
 add(1)
 ");
         Assert.NotEmpty(result.Diagnostics);

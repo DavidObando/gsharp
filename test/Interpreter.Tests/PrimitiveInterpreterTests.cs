@@ -33,8 +33,8 @@ public class PrimitiveInterpreterTests
     [InlineData("100L == 100L", "True")]
     [InlineData("-42L", "-42")]
     [InlineData("-3.14M", "-3.14")]
-    [InlineData("long(42)", "42")]
-    [InlineData("int(9999999999L)", "1410065407")]
+    [InlineData("int64(42)", "42")]
+    [InlineData("int32(9999999999L)", "1410065407")]
     public void Interpreter_PrimitiveArithmetic_MatchesEmitter(string expr, string expectedContains)
     {
         var output = RunSubmission(expr);

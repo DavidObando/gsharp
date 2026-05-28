@@ -28,7 +28,7 @@ public class AsyncSpillEmitTests
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     let result = (await Task.FromResult(40)) + 2
     return result
 }
@@ -48,7 +48,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     let result = (await Task.FromResult(10)) + (await Task.FromResult(32))
     return result
 }
@@ -110,7 +110,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     let result = (await Task.FromResult(20)) + (await Task.FromResult(22))
     return result
 }
@@ -132,7 +132,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     return await Task.FromResult(42)
 }
 
@@ -153,7 +153,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     await Task.Delay(1)
     return await Task.FromResult(42)
 }

@@ -9,10 +9,10 @@ package GSharp.Samples.PatternSwitch
 import System
 
 type Animal open class { Name string }
-type Dog class : Animal { Bark int }
-type Cat class : Animal { Purr int }
+type Dog class : Animal { Bark int32 }
+type Cat class : Animal { Purr int32 }
 
-func describe(n int) {
+func describe(n int32) {
   switch n {
     case 0 { Console.WriteLine("zero") }
     case < 0 { Console.WriteLine("negative") }
@@ -29,7 +29,7 @@ func name(a Animal) {
   }
 }
 
-func shape(xs []int) {
+func shape(xs []int32) {
   switch xs {
     case [1, _, 3] { Console.WriteLine("bookended-3") }
     case [_] { Console.WriteLine("singleton") }
@@ -37,7 +37,7 @@ func shape(xs []int) {
   }
 }
 
-type Point data struct { X int Y int }
+type Point data struct { X int32 Y int32 }
 
 func origin(p Point) {
   switch p {
@@ -53,9 +53,9 @@ describe(7)
 describe(250)
 name(Dog{Name: "rex", Bark: 9})
 name(Cat{Name: "ed", Purr: 4})
-shape([]int{1, 2, 3})
-shape([]int{42})
-shape([]int{9, 9})
+shape([]int32{1, 2, 3})
+shape([]int32{42})
+shape([]int32{9, 9})
 origin(Point{X: 0, Y: 0})
 origin(Point{X: 3, Y: 4})
 origin(Point{X: -1, Y: 1})

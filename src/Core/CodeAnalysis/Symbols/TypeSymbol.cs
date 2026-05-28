@@ -22,44 +22,44 @@ public class TypeSymbol : Symbol
     public static readonly TypeSymbol Bool = new TypeSymbol("bool", typeof(bool));
 
     /// <summary>
-    /// The `byte` symbol (8-bit unsigned integer, <c>System.Byte</c>). Added by ADR-0044.
+    /// The `uint8` symbol (8-bit unsigned integer, <c>System.Byte</c>). Renamed from `byte` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Byte = new TypeSymbol("byte", typeof(byte));
+    public static readonly TypeSymbol UInt8 = new TypeSymbol("uint8", typeof(byte));
 
     /// <summary>
-    /// The `sbyte` symbol (8-bit signed integer, <c>System.SByte</c>). Added by ADR-0044.
+    /// The `int8` symbol (8-bit signed integer, <c>System.SByte</c>). Renamed from `sbyte` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol SByte = new TypeSymbol("sbyte", typeof(sbyte));
+    public static readonly TypeSymbol Int8 = new TypeSymbol("int8", typeof(sbyte));
 
     /// <summary>
-    /// The `short` symbol (16-bit signed integer, <c>System.Int16</c>). Added by ADR-0044.
+    /// The `int16` symbol (16-bit signed integer, <c>System.Int16</c>). Renamed from `short` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Short = new TypeSymbol("short", typeof(short));
+    public static readonly TypeSymbol Int16 = new TypeSymbol("int16", typeof(short));
 
     /// <summary>
-    /// The `ushort` symbol (16-bit unsigned integer, <c>System.UInt16</c>). Added by ADR-0044.
+    /// The `uint16` symbol (16-bit unsigned integer, <c>System.UInt16</c>). Renamed from `ushort` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UShort = new TypeSymbol("ushort", typeof(ushort));
+    public static readonly TypeSymbol UInt16 = new TypeSymbol("uint16", typeof(ushort));
 
     /// <summary>
-    /// The `int` symbol.
+    /// The `int32` symbol (32-bit signed integer, <c>System.Int32</c>). Renamed from `int` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Int = new TypeSymbol("int", typeof(int));
+    public static readonly TypeSymbol Int32 = new TypeSymbol("int32", typeof(int));
 
     /// <summary>
-    /// The `uint` symbol (32-bit unsigned integer, <c>System.UInt32</c>). Added by ADR-0044.
+    /// The `uint32` symbol (32-bit unsigned integer, <c>System.UInt32</c>). Renamed from `uint` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol UInt = new TypeSymbol("uint", typeof(uint));
+    public static readonly TypeSymbol UInt32 = new TypeSymbol("uint32", typeof(uint));
 
     /// <summary>
-    /// The `long` symbol (64-bit signed integer, <c>System.Int64</c>). Added by ADR-0044.
+    /// The `int64` symbol (64-bit signed integer, <c>System.Int64</c>). Renamed from `long` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol Long = new TypeSymbol("long", typeof(long));
+    public static readonly TypeSymbol Int64 = new TypeSymbol("int64", typeof(long));
 
     /// <summary>
-    /// The `ulong` symbol (64-bit unsigned integer, <c>System.UInt64</c>). Added by ADR-0044.
+    /// The `uint64` symbol (64-bit unsigned integer, <c>System.UInt64</c>). Renamed from `ulong` by ADR-0049.
     /// </summary>
-    public static readonly TypeSymbol ULong = new TypeSymbol("ulong", typeof(ulong));
+    public static readonly TypeSymbol UInt64 = new TypeSymbol("uint64", typeof(ulong));
 
     /// <summary>
     /// The `nint` symbol (native-width signed integer, <c>System.IntPtr</c>). Added by ADR-0044.
@@ -163,21 +163,21 @@ public class TypeSymbol : Symbol
             case "System.Boolean":
                 return Bool;
             case "System.Byte":
-                return Byte;
+                return UInt8;
             case "System.SByte":
-                return SByte;
+                return Int8;
             case "System.Int16":
-                return Short;
+                return Int16;
             case "System.UInt16":
-                return UShort;
+                return UInt16;
             case "System.Int32":
-                return Int;
+                return Int32;
             case "System.UInt32":
-                return UInt;
+                return UInt32;
             case "System.Int64":
-                return Long;
+                return Int64;
             case "System.UInt64":
-                return ULong;
+                return UInt64;
             case "System.IntPtr":
                 return NInt;
             case "System.UIntPtr":

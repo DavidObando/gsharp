@@ -141,9 +141,9 @@ public sealed class Lowerer : BoundTreeRewriter
         //     break:
         // }
         var variableDeclaration = new BoundVariableDeclaration(null, node.Variable, node.LowerBound);
-        var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int);
+        var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int32);
         var upperBoundDeclaration = new BoundVariableDeclaration(null, upperBoundSymbol, node.UpperBound);
-        var stepBoundSymbol = new LocalVariableSymbol("step", isReadOnly: false, type: TypeSymbol.Int);
+        var stepBoundSymbol = new LocalVariableSymbol("step", isReadOnly: false, type: TypeSymbol.Int32);
         var stepBoundDeclaration = new BoundVariableDeclaration(
             null,
             variable: stepBoundSymbol,
@@ -154,7 +154,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var ifLowerIsGreaterThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
             right: upperBoundExpression);
         var stepBoundAssingment = new BoundExpressionStatement(
             null,
@@ -180,19 +180,19 @@ public sealed class Lowerer : BoundTreeRewriter
                 expression: new BoundBinaryExpression(
                     null,
                     left: variableExpression,
-                    op: BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                    op: BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
                     right: stepBoundExpression)));
         var startLabelStatement = new BoundLabelStatement(null, startLabel);
         var zeroLiteralExpression = new BoundLiteralExpression(null, 0);
         var stepGreaterThanZeroExpression = new BoundBinaryExpression(
             null,
             left: stepBoundExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
             right: zeroLiteralExpression);
         var lowerLessThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
             right: upperBoundExpression);
         var positiveStepAndLowerLessThanUpper = new BoundBinaryExpression(
             null,
@@ -202,12 +202,12 @@ public sealed class Lowerer : BoundTreeRewriter
         var stepLessThanZeroExpression = new BoundBinaryExpression(
             null,
             left: stepBoundExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
             right: zeroLiteralExpression);
         var lowerGreaterThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int, TypeSymbol.Int),
+            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
             right: upperBoundExpression);
         var negativeStepAndLowerGreaterThanUpper = new BoundBinaryExpression(
             null,
@@ -428,7 +428,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var collectionDecl = new BoundVariableDeclaration(null, collectionSymbol, node.Collection);
         var collectionExpr = new BoundVariableExpression(null, collectionSymbol);
 
-        var indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
+        var indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int32);
         var indexDecl = new BoundVariableDeclaration(null, indexSymbol, new BoundLiteralExpression(null, 0));
         var indexExpr = new BoundVariableExpression(null, indexSymbol);
 
@@ -456,13 +456,13 @@ public sealed class Lowerer : BoundTreeRewriter
                 new BoundBinaryExpression(
                     null,
                     indexExpr,
-                    BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                    BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
                     new BoundLiteralExpression(null, 1))));
 
         var hasMore = new BoundBinaryExpression(
             null,
             indexExpr,
-            BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int, TypeSymbol.Int),
+            BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
             new BoundLenExpression(null, collectionExpr));
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -520,7 +520,7 @@ public sealed class Lowerer : BoundTreeRewriter
         LocalVariableSymbol indexSymbol = null;
         if (!isDictionary && node.KeyVariable != null)
         {
-            indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int);
+            indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int32);
             statements.Add(new BoundVariableDeclaration(node.Syntax, indexSymbol, new BoundLiteralExpression(node.Syntax, 0)));
         }
 
@@ -575,7 +575,7 @@ public sealed class Lowerer : BoundTreeRewriter
                     new BoundBinaryExpression(
                         node.Syntax,
                         indexExpr,
-                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int, TypeSymbol.Int),
+                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
                         new BoundLiteralExpression(node.Syntax, 1)))));
         }
 

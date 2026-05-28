@@ -32,7 +32,7 @@ public class ScopeStatementTests
     public void Scope_WithGoStatements_Binds()
     {
         var source = @"
-func work() int { return 1 }
+func work() int32 { return 1 }
 
 scope {
     go work()
@@ -47,9 +47,9 @@ scope {
     public void Scope_WithSendInsideGo_Binds()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 
-func send() int {
+func send() int32 {
     ch <- 7
     return 0
 }
@@ -69,7 +69,7 @@ v
     public void Scope_NestedScopes_Bind()
     {
         var source = @"
-func work() int { return 1 }
+func work() int32 { return 1 }
 
 scope {
     scope {
@@ -113,7 +113,7 @@ scope {
         var source = @"
 import System
 
-func boom() int {
+func boom() int32 {
     let n = Int32.Parse(""bad"")
     return n
 }

@@ -7,11 +7,11 @@ package GSharp.Samples.MethodsWithReceivers
 import System
 
 type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
-func (p Point) Distance() int {
+func (p Point) Distance() int32 {
     return p.X * p.X + p.Y * p.Y
 }
 

@@ -19,12 +19,12 @@ package GSharp.Samples.AsyncTask
 import System
 import System.Threading.Tasks
 
-async func compute(n int) int {
+async func compute(n int32) int32 {
     await Task.Delay(5)
     return n * 2
 }
 
-async func runAll() int {
+async func runAll() int32 {
     let a = await compute(3)
     let b = await compute(4)
     Console.WriteLine("a = $a")

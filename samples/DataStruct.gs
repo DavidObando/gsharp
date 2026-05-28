@@ -11,8 +11,8 @@ package GSharp.Example.DataStruct
 import System
 
 type Point data struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 3, Y: 4}

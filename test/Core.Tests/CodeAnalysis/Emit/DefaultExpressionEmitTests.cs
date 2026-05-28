@@ -29,7 +29,7 @@ package DefaultIntTest
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     var a = await Task.FromResult(42)
     var b = await Task.FromResult(a + 1)
     return b
@@ -92,7 +92,7 @@ package DefaultStructTest
 import System
 import System.Threading.Tasks
 
-async func compute() int {
+async func compute() int32 {
     var x = await Task.FromResult(10)
     var y = await Task.FromResult(20)
     var z = await Task.FromResult(30)

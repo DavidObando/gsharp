@@ -552,10 +552,10 @@ public static class BoundNodePrinter
 
     private static bool IsRecognizedNumericLiteralType(TypeSymbol t)
     {
-        return t == TypeSymbol.SByte || t == TypeSymbol.Byte
-            || t == TypeSymbol.Short || t == TypeSymbol.UShort
-            || t == TypeSymbol.Int || t == TypeSymbol.UInt
-            || t == TypeSymbol.Long || t == TypeSymbol.ULong
+        return t == TypeSymbol.Int8 || t == TypeSymbol.UInt8
+            || t == TypeSymbol.Int16 || t == TypeSymbol.UInt16
+            || t == TypeSymbol.Int32 || t == TypeSymbol.UInt32
+            || t == TypeSymbol.Int64 || t == TypeSymbol.UInt64
             || t == TypeSymbol.NInt || t == TypeSymbol.NUInt
             || t == TypeSymbol.Float32 || t == TypeSymbol.Float64
             || t == TypeSymbol.Decimal;

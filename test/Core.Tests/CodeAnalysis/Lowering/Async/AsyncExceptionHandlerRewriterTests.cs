@@ -23,7 +23,7 @@ public class AsyncExceptionHandlerRewriterTests
     public void TryFinally_WithoutAwait_PassesThroughUnchanged()
     {
         // Arrange: try { x = 1 } finally { x = 2 } — no await anywhere
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
@@ -44,11 +44,11 @@ ImmutableArray.Create<BoundStatement>(
     public void TryFinally_WithAwaitInFinally_LiftsFinallyOutsideTry()
     {
         // Arrange: try { x = 1 } finally { await ... }
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
-        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var finallyBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitExpr)));
@@ -88,7 +88,7 @@ ImmutableArray.Create<BoundStatement>(
     public void TryCatch_WithoutAwait_PassesThroughUnchanged()
     {
         // Arrange: try { x = 1 } catch (e Exception) { x = 2 } — no await
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var e = new LocalVariableSymbol("e", false, ExceptionType);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
@@ -111,12 +111,12 @@ ImmutableArray.Create<BoundStatement>(
     public void TryCatch_WithAwaitInCatch_LiftsCatchBodyAfterTry_UsingPendingException()
     {
         // Arrange: try { x = 1 } catch (e Exception) { await ...; x = 2 }
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var e = new LocalVariableSymbol("e", false, ExceptionType);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
-        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var catchBody = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitExpr),
@@ -157,17 +157,17 @@ ImmutableArray.Create<BoundStatement>(
     public void TryCatchFinally_WithAwaitInBoth_LiftsBoth()
     {
         // Arrange: try { x = 1 } catch (e) { await a } finally { await b }
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var e = new LocalVariableSymbol("e", false, ExceptionType);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
-        var awaitA = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitA = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var catchBody = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitA)));
         var catchClause = new BoundCatchClause(ExceptionType, e, catchBody);
-        var awaitB = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitB = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var finallyBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitB)));
@@ -195,7 +195,7 @@ ImmutableArray.Create<BoundStatement>(
     public void NonAsync_Function_NotProcessed()
     {
         // A body with no await should pass through unchanged
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var stmt = new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 42)));
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(stmt));
 
@@ -211,7 +211,7 @@ ImmutableArray.Create<BoundStatement>(
         // After rewrite, the throw should reference the pendingException variable.
         var e = new LocalVariableSymbol("e", false, ExceptionType);
         var throwExpr = new BoundThrowStatement(null, new BoundVariableExpression(null, e));
-        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var catchBody = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitExpr),
@@ -244,11 +244,11 @@ ImmutableArray.Create<BoundStatement>(
         // For now, pending-branch dispatch is deferred. The rewriter should still
         // process the finally-with-await pattern; the return inside the try body
         // will pass through (it's handled by MoveNextBodyRewriter's exit label).
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var tryBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundReturnStatement(null, new BoundLiteralExpression(null, 42))));
-        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int);
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
         var finallyBlock = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, awaitExpr)));

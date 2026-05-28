@@ -55,7 +55,7 @@ public class VisibilityModifierTests
     [Fact]
     public void PublicTypeAlias_Binds()
     {
-        var (diagnostics, _) = BindWithScope("public type UserId = int\nfunc F() { var x UserId = 1 }\n");
+        var (diagnostics, _) = BindWithScope("public type UserId = int32\nfunc F() { var x UserId = 1 }\n");
         Assert.Empty(diagnostics);
     }
 

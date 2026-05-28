@@ -27,7 +27,7 @@ type Result[T any, E any] data struct {
     Ok T
     Err E
 }
-let r = Result[int, string]{Ok: 5, Err: ""oops""}
+let r = Result[int32, string]{Ok: 5, Err: ""oops""}
 r.Ok
 ";
         var result = Evaluate(source);
@@ -58,8 +58,8 @@ type Pair[A any, B any] data struct {
     First A
     Second B
 }
-let p1 = Pair[int, string]{First: 1, Second: ""x""}
-let p2 = Pair[int, string]{First: 1, Second: ""x""}
+let p1 = Pair[int32, string]{First: 1, Second: ""x""}
+let p2 = Pair[int32, string]{First: 1, Second: ""x""}
 p1 == p2
 ";
         var result = Evaluate(source);
@@ -75,7 +75,7 @@ type Result[T any, E any] data struct {
     Ok T
     Err E
 }
-let r = Result[int]{Ok: 5, Err: ""oops""}
+let r = Result[int32]{Ok: 5, Err: ""oops""}
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);

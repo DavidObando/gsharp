@@ -43,7 +43,7 @@ public class AsyncStateMachineTypeBuilderTests
     [Fact]
     public void Build_IntAsyncKickoff_BindsGenericTaskBuilder()
     {
-        var fn = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int) { IsAsync = true };
+        var fn = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32) { IsAsync = true };
         var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
 
         var sm = AsyncStateMachineTypeBuilder.Build(fn, body, Resolver);
@@ -67,13 +67,13 @@ public class AsyncStateMachineTypeBuilderTests
         Assert.Equal(GeneratedNames.BuilderField, sm.BuilderField.Name);
         Assert.Same(sm.StateField, sm.Fields[0]);
         Assert.Same(sm.BuilderField, sm.Fields[1]);
-        Assert.Equal(TypeSymbol.Int, sm.StateField.Type);
+        Assert.Equal(TypeSymbol.Int32, sm.StateField.Type);
     }
 
     [Fact]
     public void Build_AddsParameterProxies_AfterControlFields_InDeclarationOrder()
     {
-        var p1 = new ParameterSymbol("a", TypeSymbol.Int);
+        var p1 = new ParameterSymbol("a", TypeSymbol.Int32);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
         var fn = new FunctionSymbol("doIt", ImmutableArray.Create(p1, p2), TypeSymbol.Void) { IsAsync = true };
         var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
@@ -83,7 +83,7 @@ public class AsyncStateMachineTypeBuilderTests
         var fields = sm.Fields;
         Assert.Equal(4, fields.Length);
         Assert.Equal("a", fields[2].Name);
-        Assert.Equal(TypeSymbol.Int, fields[2].Type);
+        Assert.Equal(TypeSymbol.Int32, fields[2].Type);
         Assert.Equal("b", fields[3].Name);
         Assert.Equal(TypeSymbol.String, fields[3].Type);
     }
@@ -92,7 +92,7 @@ public class AsyncStateMachineTypeBuilderTests
     public void Build_AddsHoistedLocals_WithMangledNames_AfterParameters()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
         var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.String);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(

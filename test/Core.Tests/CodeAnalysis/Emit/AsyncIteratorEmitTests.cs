@@ -32,7 +32,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func numbers() IAsyncEnumerable[int] {
+func numbers() IAsyncEnumerable[int32] {
     yield 1
     yield 2
     yield 3
@@ -50,7 +50,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func numbers() IAsyncEnumerable[int] {
+func numbers() IAsyncEnumerable[int32] {
     yield 10
     await Task.Yield()
     yield 20
@@ -70,7 +70,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func empty() IAsyncEnumerable[int] {
+func empty() IAsyncEnumerable[int32] {
 }
 ";
         var items = CompileAndEnumerate<int>(Source, "empty", nameof(AsyncIterator_Empty_ProducesNoValues));
@@ -87,7 +87,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func myRange(start int, count int) IAsyncEnumerable[int] {
+func myRange(start int32, count int32) IAsyncEnumerable[int32] {
     var i = 0
     for i < count {
         yield start + i
@@ -107,7 +107,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func nums() IAsyncEnumerable[int] {
+func nums() IAsyncEnumerable[int32] {
     yield 1
     yield 2
 }
@@ -136,7 +136,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func GetItemsAsync() IAsyncEnumerable[int] {
+func GetItemsAsync() IAsyncEnumerable[int32] {
     yield 1
     await Task.Yield()
     yield 2
@@ -155,7 +155,7 @@ import System
 import System.Collections.Generic
 import System.Threading.Tasks
 
-func delayed() IAsyncEnumerable[int] {
+func delayed() IAsyncEnumerable[int32] {
     yield 100
     await Task.Delay(1)
     yield 200
@@ -182,7 +182,7 @@ import System.Runtime.CompilerServices
 import System.Threading
 import System.Threading.Tasks
 
-func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int] {
+func numbers(@EnumeratorCancellation ct CancellationToken) IAsyncEnumerable[int32] {
     yield 1
     await Task.Delay(1000, ct)
     yield 2

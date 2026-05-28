@@ -7,7 +7,7 @@ package GSharp.Example.Arithmetic
 
 import System
 
-func add(num1 int, num2 int) int {
+func add(num1 int32, num2 int32) int32 {
     return num1 + num2
 }
 

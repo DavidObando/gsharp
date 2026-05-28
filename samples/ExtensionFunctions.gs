@@ -10,7 +10,7 @@ package GSharp.Example.ExtensionFunctions
 
 import System
 
-func (value int) Abs() int {
+func (value int32) Abs() int32 {
     if value < 0 {
         return -value
     }
@@ -18,7 +18,7 @@ func (value int) Abs() int {
     return value
 }
 
-func (value int) Scale(factor int) int {
+func (value int32) Scale(factor int32) int32 {
     return value * factor
 }
 

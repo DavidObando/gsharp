@@ -26,8 +26,8 @@ public class TrailingLambdaTests
     public void TrailingLambda_SoleArgument_DesugarsToCallArg()
     {
         var result = Evaluate(@"
-func runIt(f func() int) int { return f() }
-runIt() func() int { return 42 }
+func runIt(f func() int32) int32 { return f() }
+runIt() func() int32 { return 42 }
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(42, result.Value);
@@ -37,8 +37,8 @@ runIt() func() int { return 42 }
     public void TrailingLambda_WithPrecedingArgs_AppendsAsLast()
     {
         var result = Evaluate(@"
-func combine(seed int, f func(int) int) int { return f(seed) }
-combine(10) func(x int) int { return x * 2 }
+func combine(seed int32, f func(int32) int32) int32 { return f(seed) }
+combine(10) func(x int32) int32 { return x * 2 }
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(20, result.Value);
@@ -61,8 +61,8 @@ sum
     public void TrailingLambda_MultipleParameters()
     {
         var result = Evaluate(@"
-func reduce2(a int, b int, op func(int, int) int) int { return op(a, b) }
-reduce2(3, 4) func(x int, y int) int { return x + y }
+func reduce2(a int32, b int32, op func(int32, int32) int32) int32 { return op(a, b) }
+reduce2(3, 4) func(x int32, y int32) int32 { return x + y }
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
@@ -76,7 +76,7 @@ reduce2(3, 4) func(x int, y int) int { return x + y }
         // lambda. The lookahead `Peek(1).Kind == OpenParen` guard distinguishes
         // `func(` (literal) from `func Name(` (declaration).
         var result = Evaluate(@"
-func Helper(x int) int { return x + 1 }
+func Helper(x int32) int32 { return x + 1 }
 Helper(41)
 ");
         Assert.Empty(result.Diagnostics);
@@ -90,8 +90,8 @@ Helper(41)
         // not a function type, the binder reports the usual argument-type
         // mismatch.
         var result = Evaluate(@"
-func takesInt(n int) int { return n }
-takesInt(1) func() int { return 0 }
+func takesInt(n int32) int32 { return n }
+takesInt(1) func() int32 { return 0 }
 ");
         Assert.NotEmpty(result.Diagnostics);
     }

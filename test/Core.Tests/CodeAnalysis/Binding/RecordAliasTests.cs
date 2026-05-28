@@ -23,15 +23,15 @@ public class RecordAliasTests
     {
         var record = BuildStruct(@"
 type Point record {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 0
 ");
         var dataStruct = BuildStruct(@"
 type Point data struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 0
 ");
@@ -48,8 +48,8 @@ type Point data struct {
     {
         var result = Evaluate(@"
 type Point record {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 Point{X: 1, Y: 2} == Point{X: 1, Y: 2}
 ");
@@ -66,7 +66,7 @@ type Pair[A any, B any] record {
     First A
     Second B
 }
-let p = Pair[int, string]{First: 1, Second: ""x""}
+let p = Pair[int32, string]{First: 1, Second: ""x""}
 p.Second
 ");
 
@@ -91,7 +91,7 @@ record
     {
         var result = Evaluate(@"
 type X struct {
-    record int
+    record int32
 }
 let x = X{record: 5}
 x.record
@@ -106,7 +106,7 @@ x.record
     {
         var result = Evaluate(@"
 type Foo open record {
-    Value int
+    Value int32
 }
 0
 ");
@@ -120,7 +120,7 @@ type Foo open record {
     {
         var result = Evaluate(@"
 type Foo data record {
-    Value int
+    Value int32
 }
 0
 ");
@@ -134,7 +134,7 @@ type Foo data record {
     {
         var result = Evaluate(@"
 type Foo sealed record {
-    Value int
+    Value int32
 }
 0
 ");
@@ -147,7 +147,7 @@ type Foo sealed record {
     public void RecordAlias_FunctionParameterTypeNameRecord_RemainsIdentifier()
     {
         var result = Evaluate(@"
-func Use(r record) int {
+func Use(r record) int32 {
     return 0
 }
 0

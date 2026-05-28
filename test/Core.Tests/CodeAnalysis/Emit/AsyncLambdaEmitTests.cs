@@ -30,7 +30,7 @@ public class AsyncLambdaEmitTests
 import System
 import System.Threading.Tasks
 
-var f = async func() int {
+var f = async func() int32 {
     var x = 10
     await Task.Yield()
     x = x + 32
@@ -53,7 +53,7 @@ import System
 import System.Threading.Tasks
 
 var x = 100
-var f = async func() int {
+var f = async func() int32 {
     await Task.Yield()
     return x
 }
@@ -77,7 +77,7 @@ import System
 import System.Threading.Tasks
 
 var n = 41
-var f = async func() int {
+var f = async func() int32 {
     await Task.Yield()
     return n + 1
 }
@@ -100,12 +100,12 @@ import System.Threading.Tasks
 var a = 10
 var b = 50
 
-var f1 = async func() int {
+var f1 = async func() int32 {
     await Task.Yield()
     return a + 3
 }
 
-var f2 = async func() int {
+var f2 = async func() int32 {
     await Task.Yield()
     return b + 7
 }

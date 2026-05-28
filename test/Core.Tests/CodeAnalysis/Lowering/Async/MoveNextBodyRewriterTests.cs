@@ -153,7 +153,7 @@ public class MoveNextBodyRewriterTests
     {
         // Arrange: x := await Task.FromResult(1)
         var awaitExpr = MakeTaskIntAwait();
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var function = new FunctionSymbol("initAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         var body = Block(new BoundVariableDeclaration(null, x, awaitExpr));
         var plan = BuildPlan(function, body);
@@ -175,7 +175,7 @@ public class MoveNextBodyRewriterTests
     {
         // Arrange: x = await Task.FromResult(1)
         var awaitExpr = MakeTaskIntAwait();
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var function = new FunctionSymbol("assignAwait", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         var body = Block(
             new BoundVariableDeclaration(null, x, new BoundLiteralExpression(null, 0)),
@@ -220,7 +220,7 @@ public class MoveNextBodyRewriterTests
     public void Build_ReturnInAsyncBody_LowersToGotoExprReturnLabel()
     {
         // Arrange: async function returning int with explicit return
-        var function = new FunctionSymbol("retVal", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
+        var function = new FunctionSymbol("retVal", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32, package: Package) { IsAsync = true };
         var body = Block(new BoundReturnStatement(null, new BoundLiteralExpression(null, 99)));
         var plan = BuildPlan(function, body);
 
@@ -243,7 +243,7 @@ public class MoveNextBodyRewriterTests
     {
         // Arrange: local that is live across await → should be hoisted
         var awaitExpr = MakeTaskAwait();
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var function = new FunctionSymbol("hoisted", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
         // x := 5; await ...; use x
         var body = Block(
@@ -311,7 +311,7 @@ public class MoveNextBodyRewriterTests
         return new BoundAwaitExpression(
             null,
             new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(Task<int>))),
-            TypeSymbol.Int);
+            TypeSymbol.Int32);
     }
 
     private static AsyncStateMachinePlan BuildPlan(FunctionSymbol function, BoundBlockStatement body)

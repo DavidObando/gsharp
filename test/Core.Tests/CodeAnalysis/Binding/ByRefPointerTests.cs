@@ -142,7 +142,7 @@ var c = a & b
         // Parser test: *int as a type annotation should parse without errors.
         var source = @"
 var x = 42
-var p *int = &x
+var p *int32 = &x
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         Assert.Empty(tree.Diagnostics);

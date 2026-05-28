@@ -23,7 +23,7 @@ public class ChannelTests
     public void MakeChannel_AndSendRecv_Roundtrip()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 ch <- 7
 let v = <-ch
 ";
@@ -45,7 +45,7 @@ let ch = make(chan string)
     public void Close_OnChannel_Binds()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 close(ch)
 ";
         var result = Evaluate(source);
@@ -56,7 +56,7 @@ close(ch)
     public void Receive_FromClosedChannel_ReturnsZero()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 close(ch)
 let v = <-ch
 ";

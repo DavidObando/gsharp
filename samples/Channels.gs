@@ -9,7 +9,7 @@ package GSharp.Samples.Channels
 
 import System
 
-let ch = make(chan int, 3)
+let ch = make(chan int32, 3)
 ch <- 1
 ch <- 2
 ch <- 3

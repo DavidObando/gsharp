@@ -22,7 +22,7 @@ public class SelectTests
     public void Select_ReceiveBind_Binds()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 ch <- 1
 select {
 case v := <-ch { let x = v }
@@ -36,7 +36,7 @@ case v := <-ch { let x = v }
     public void Select_ReceiveDiscard_Binds()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 ch <- 1
 select {
 case <-ch { let x = 0 }
@@ -50,7 +50,7 @@ case <-ch { let x = 0 }
     public void Select_Send_Binds()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 select {
 case ch <- 42 { let x = 0 }
 }
@@ -63,7 +63,7 @@ case ch <- 42 { let x = 0 }
     public void Select_DefaultTakenWhenNoArmReady()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 select {
 case <-ch { let a = 1 }
 default { let b = 2 }
@@ -77,7 +77,7 @@ default { let b = 2 }
     public void Select_DefaultNotTakenWhenArmReady()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 ch <- 7
 select {
 case v := <-ch { let x = v }
@@ -107,7 +107,7 @@ select { }
         // evaluator when the arm body's lowered if-statement (wrapped in
         // a BoundBlockStatement) was treated as an opaque statement.
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 ch <- 5
 select {
 case v := <-ch {
@@ -125,7 +125,7 @@ case v := <-ch {
     public void Select_DuplicateDefault_Diagnoses()
     {
         var source = @"
-let ch = make(chan int, 1)
+let ch = make(chan int32, 1)
 select {
 default { let a = 1 }
 default { let b = 2 }

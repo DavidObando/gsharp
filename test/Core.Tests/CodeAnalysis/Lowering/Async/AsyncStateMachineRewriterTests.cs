@@ -57,7 +57,7 @@ public class AsyncStateMachineRewriterTests
     [Fact]
     public void Rewrite_AsyncFunction_MaterializesFieldMap()
     {
-        var parameter = new ParameterSymbol("value", TypeSymbol.Int);
+        var parameter = new ParameterSymbol("value", TypeSymbol.Int32);
         var function = new FunctionSymbol("doIt", ImmutableArray.Create(parameter), TypeSymbol.Void, package: Package) { IsAsync = true };
         var body = Block(new BoundExpressionStatement(null, new BoundVariableExpression(null, parameter)));
         var program = Program(function, body);
@@ -68,16 +68,16 @@ public class AsyncStateMachineRewriterTests
         Assert.Equal(plan.StateMachine.Name, plan.FieldMap.StructType.Name);
         var parameterField = plan.FieldMap.GetParameterField(parameter);
         Assert.Equal("value", parameterField.Name);
-        Assert.Equal(TypeSymbol.Int, parameterField.Type);
-        Assert.Throws<System.InvalidOperationException>(() => plan.StateMachine.AddField(new FieldSymbol("late", TypeSymbol.Int, Accessibility.Public)));
+        Assert.Equal(TypeSymbol.Int32, parameterField.Type);
+        Assert.Throws<System.InvalidOperationException>(() => plan.StateMachine.AddField(new FieldSymbol("late", TypeSymbol.Int32, Accessibility.Public)));
     }
 
     [Fact]
     public void Rewrite_AllocatesAwaitResumeStatesInTraversalOrder()
     {
-        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int);
-        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int);
-        var function = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
+        var firstAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 1), TypeSymbol.Int32);
+        var secondAwait = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 2), TypeSymbol.Int32);
+        var function = new FunctionSymbol("compute", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32, package: Package) { IsAsync = true };
         var body = Block(
             new BoundExpressionStatement(null, firstAwait),
             new BoundExpressionStatement(null, secondAwait));
@@ -100,7 +100,7 @@ public class AsyncStateMachineRewriterTests
     public void Rewrite_UsesPerNameOrdinalsForStateMachineTypeNames()
     {
         var first = new FunctionSymbol("duplicate", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, package: Package) { IsAsync = true };
-        var second = new FunctionSymbol("duplicate", ImmutableArray.Create(new ParameterSymbol("x", TypeSymbol.Int)), TypeSymbol.Void, package: Package) { IsAsync = true };
+        var second = new FunctionSymbol("duplicate", ImmutableArray.Create(new ParameterSymbol("x", TypeSymbol.Int32)), TypeSymbol.Void, package: Package) { IsAsync = true };
         var program = Program(
             (first, Block()),
             (second, Block()));
@@ -137,7 +137,7 @@ public class AsyncStateMachineRewriterTests
         var awaitInExpr = new BoundAwaitExpression(
             null,
             new BoundLiteralExpression(null, null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<int>))),
-            TypeSymbol.Int);
+            TypeSymbol.Int32);
 
         // try { await ...; } catch(Exception e) { }
         var catchVar = new LocalVariableSymbol("e", false, TypeSymbol.FromClrType(typeof(System.Exception)));
@@ -147,12 +147,12 @@ public class AsyncStateMachineRewriterTests
         var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), finallyBlock: null);
 
         // x = await Task<int>
-        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
         var body = Block(
             tryStmt,
             new BoundVariableDeclaration(null, x, awaitInExpr));
 
-        var function = new FunctionSymbol("pipeline", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int, package: Package) { IsAsync = true };
+        var function = new FunctionSymbol("pipeline", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Int32, package: Package) { IsAsync = true };
         var program = Program(function, body);
 
         // Act

@@ -29,7 +29,7 @@ public class AsyncRefLocalEmitTests
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var x = 10
     var slot = &x
     let added = await Task.FromResult(32)
@@ -54,8 +54,8 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
-    var arr = [3]int{10, 20, 30}
+async func run() int32 {
+    var arr = [3]int32{10, 20, 30}
     var i = 1
     var slot = &arr[i]
     let delta = await Task.FromResult(22)
@@ -78,7 +78,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var x = 40
     var slot = &x
     var before = *slot

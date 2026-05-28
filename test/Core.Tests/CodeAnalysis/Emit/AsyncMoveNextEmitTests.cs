@@ -51,7 +51,7 @@ Console.WriteLine(""done"")
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     let x = await Task.FromResult(42)
     return x
 }
@@ -71,7 +71,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func doIt() int {
+async func doIt() int32 {
     let a = await Task.FromResult(10)
     let b = await Task.FromResult(32)
     return a + b

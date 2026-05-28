@@ -36,8 +36,8 @@ default { }
     public void SwitchStatement_NonNilConstantPattern_NarrowsNullableValueInArmBody()
     {
         var result = Evaluate(@"
-let n int? = 42
-var y int = 0
+let n int32? = 42
+var y int32 = 0
 switch n {
 case 42 { y = n }
 default { }
@@ -378,7 +378,7 @@ type Box class {
         _name = ""default""
     }
 
-    func Run() int {
+    func Run() int32 {
         this.EnsureInitAnnotated()
         return _name.Length
     }
@@ -408,7 +408,7 @@ type Box class {
         _name = ""hello""
     }
 
-    func Run() int {
+    func Run() int32 {
         return _name.Length
     }
 }
@@ -436,7 +436,7 @@ type Box class {
         _name = ""hello""
     }
 
-    func Run() int {
+    func Run() int32 {
         this.EnsureInit()
         _name = nil
         return _name.Length
@@ -466,7 +466,7 @@ type Box class {
         return _name != nil
     }
 
-    func Run() int {
+    func Run() int32 {
         if this.TryGet() {
             return _name.Length
         }
@@ -499,7 +499,7 @@ type Box class {
         return _name != nil
     }
 
-    func Run() int {
+    func Run() int32 {
         if this.TryGet() {
         } else {
             return _name.Length
@@ -531,7 +531,7 @@ type Box class {
         return _name != nil
     }
 
-    func Run() int {
+    func Run() int32 {
         if !this.TryGet() {
         } else {
             return _name.Length
@@ -566,7 +566,7 @@ type Pair class {
         _b = ""world""
     }
 
-    func Run() int {
+    func Run() int32 {
         this.Init()
         return _a.Length + _b.Length
     }

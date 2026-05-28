@@ -25,13 +25,13 @@ public class ExtensionFunctionTests
         var typeTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
 public type Point struct {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 "));
         var extensionTree = SyntaxTree.Parse(SourceText.From(@"
 package GeometryExtensions
-func (p Point) SumXY() int {
+func (p Point) SumXY() int32 {
     return p.X + p.Y
 }
 
@@ -65,7 +65,7 @@ greeting.Loud()
     public void Extension_WithExtraArgs_BindsCorrectly()
     {
         var source = @"
-func (a int) Plus(b int) int {
+func (a int32) Plus(b int32) int32 {
     return a + b
 }
 
@@ -83,8 +83,8 @@ x.Plus(5)
         var source = @"
 import System
 
-func (i int) Describe() string {
-    return ""int""
+func (i int32) Describe() string {
+    return ""int32""
 }
 
 func (s string) Describe() string {
@@ -96,15 +96,15 @@ i.Describe()
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        Assert.Equal("int", result.Value);
+        Assert.Equal("int32", result.Value);
     }
 
     [Fact]
     public void Extension_DuplicateOnSameReceiver_Diagnoses()
     {
         var source = @"
-func (i int) Foo() int { return 1 }
-func (i int) Foo() int { return 2 }
+func (i int32) Foo() int32 { return 1 }
+func (i int32) Foo() int32 { return 2 }
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
@@ -114,8 +114,8 @@ func (i int) Foo() int { return 2 }
     public void Extension_DoesNotCollide_With_FreeFunction_OfSameName()
     {
         var source = @"
-func Foo() int { return 99 }
-func (i int) Foo() int { return i + 1 }
+func Foo() int32 { return 99 }
+func (i int32) Foo() int32 { return i + 1 }
 
 var n = 4
 n.Foo()

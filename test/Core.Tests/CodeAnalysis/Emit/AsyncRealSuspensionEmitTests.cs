@@ -95,7 +95,7 @@ t.Wait()
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var x = 10
     await Task.Yield()
     x = x + 20
@@ -119,7 +119,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func getVal() int {
+async func getVal() int32 {
     let x = await ValueTask.FromResult(42)
     return x
 }
@@ -139,7 +139,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var sum = 0
     for i := 0; i < 3; i++ {
         await Task.Yield()

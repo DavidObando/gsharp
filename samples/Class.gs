@@ -9,8 +9,8 @@ package GSharp.Example.Class
 import System
 
 type Point class {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 var p = Point{X: 3, Y: 4}
@@ -27,7 +27,7 @@ Console.WriteLine(q.X)
 var origin = Point{}
 Console.WriteLine(origin.X + origin.Y)
 
-type Vec class(X int, Y int) {
+type Vec class(X int32, Y int32) {
 }
 
 var v = Vec(5, 7)
@@ -38,12 +38,12 @@ Console.WriteLine(v.X + v.Y)
 // Phase 3.B.3 (2b/3): methods inside the class body with implicit `this`.
 // Bare `X` inside `Sum`/`Scale` resolves to `this.X` (field access). The
 // method dispatch is virtual under the hood (callvirt) for null safety.
-type Pt class(X int, Y int) {
-    func Sum() int {
+type Pt class(X int32, Y int32) {
+    func Sum() int32 {
         return X + Y
     }
 
-    func Scale(factor int) {
+    func Scale(factor int32) {
         X = X * factor
         Y = Y * factor
     }
@@ -89,11 +89,11 @@ Console.WriteLine(unknown.Speak())
 // base class). Calls through an interface-typed receiver dispatch to the
 // runtime type's implementation.
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
-type Square class(Side int) : IShape {
-    func Area() int {
+type Square class(Side int32) : IShape {
+    func Area() int32 {
         return Side * Side
     }
 }

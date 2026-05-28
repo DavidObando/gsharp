@@ -36,8 +36,8 @@ public static class BuiltinFunctions
     /// </summary>
     public static readonly FunctionSymbol Rnd = new FunctionSymbol(
         name: "rnd",
-        parameters: ImmutableArray.Create(new ParameterSymbol("max", TypeSymbol.Int)),
-        type: TypeSymbol.Int);
+        parameters: ImmutableArray.Create(new ParameterSymbol("max", TypeSymbol.Int32)),
+        type: TypeSymbol.Int32);
 
     /// <summary>
     /// Returns the entire set of built-in functions.

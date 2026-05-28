@@ -24,7 +24,7 @@ public class ForRangeStatementTests
         var source = @"
 import System
 
-var arr = [3]int{10, 20, 30}
+var arr = [3]int32{10, 20, 30}
 for v := range arr {
     Console.WriteLine(v)
 }
@@ -39,7 +39,7 @@ for v := range arr {
         var source = @"
 import System
 
-var arr = [3]int{10, 20, 30}
+var arr = [3]int32{10, 20, 30}
 for i, v := range arr {
     Console.WriteLine(i)
     Console.WriteLine(v)
@@ -56,7 +56,7 @@ for i, v := range arr {
 import System
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 lst.Add(1)
 lst.Add(2)
 for v := range lst {
@@ -74,7 +74,7 @@ for v := range lst {
 import System
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 lst.Add(7)
 for i, v := range lst {
     Console.WriteLine(i)
@@ -92,7 +92,7 @@ for i, v := range lst {
 import System
 import System.Collections.Generic
 
-var d = Dictionary[string, int]()
+var d = Dictionary[string, int32]()
 d[""a""] = 1
 d[""b""] = 2
 for k, v := range d {
@@ -110,7 +110,7 @@ for k, v := range d {
         var source = @"
 import System
 
-var arr = [4]int{1, 2, 3, 4}
+var arr = [4]int32{1, 2, 3, 4}
 for i, v := range arr {
     if v == 2 {
         continue

@@ -61,7 +61,7 @@ First(10, ""ignored"")
     {
         var source = @"
 func Identity[T any](x T) T { return x }
-Identity[int, string](5)
+Identity[int32, string](5)
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
@@ -132,7 +132,7 @@ Eq(3, 3)
         // Slices are not comparable.
         var source = @"
 func Eq[T comparable](a T, b T) bool { return a == b }
-Eq[[]int]([]int{1}, []int{1})
+Eq[[]int32]([]int32{1}, []int32{1})
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
@@ -143,7 +143,7 @@ Eq[[]int]([]int{1}, []int{1})
     {
         var source = @"
 func Eq[T comparable](a T, b T) bool { return a == b }
-Eq([]int{1}, []int{2})
+Eq([]int32{1}, []int32{2})
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
@@ -154,14 +154,14 @@ Eq([]int{1}, []int{2})
     {
         var source = @"
 type IShape sealed interface {
-    func Area() int
+    func Area() int32
 }
 
 type Square class : IShape {
-    func Area() int { return 9 }
+    func Area() int32 { return 9 }
 }
 
-func AreaOf[T IShape](x T) int { return x.Area() }
+func AreaOf[T IShape](x T) int32 { return x.Area() }
 AreaOf(Square{})
 ";
         var result = Evaluate(source);
@@ -174,12 +174,12 @@ AreaOf(Square{})
     {
         var source = @"
 type IShape sealed interface {
-    func Area() int
+    func Area() int32
 }
 
 type NotAShape class {}
 
-func AreaOf[T IShape](x T) int { return x.Area() }
+func AreaOf[T IShape](x T) int32 { return x.Area() }
 AreaOf[NotAShape](NotAShape{})
 ";
         var result = Evaluate(source);
@@ -191,10 +191,10 @@ AreaOf[NotAShape](NotAShape{})
     {
         var source = @"
 type IShape interface {
-    func Area() int
+    func Area() int32
 }
 
-func AreaOf[T IShape](x T) int { return x.Area() }
+func AreaOf[T IShape](x T) int32 { return x.Area() }
 ";
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);

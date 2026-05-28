@@ -84,7 +84,7 @@ public sealed class BoundUnaryOperator
         };
 
         // ADR-0044: unary +, -, ~ on every signed integral primitive.
-        TypeSymbol[] signed = { TypeSymbol.SByte, TypeSymbol.Short, TypeSymbol.Int, TypeSymbol.Long, TypeSymbol.NInt };
+        TypeSymbol[] signed = { TypeSymbol.Int8, TypeSymbol.Int16, TypeSymbol.Int32, TypeSymbol.Int64, TypeSymbol.NInt };
         foreach (var t in signed)
         {
             list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
@@ -94,7 +94,7 @@ public sealed class BoundUnaryOperator
 
         // Unsigned integrals: unary + and ~ only (C# does not define unary
         // minus on unsigned types directly; users can cast first).
-        TypeSymbol[] unsigned = { TypeSymbol.Byte, TypeSymbol.UShort, TypeSymbol.UInt, TypeSymbol.ULong, TypeSymbol.NUInt };
+        TypeSymbol[] unsigned = { TypeSymbol.UInt8, TypeSymbol.UInt16, TypeSymbol.UInt32, TypeSymbol.UInt64, TypeSymbol.NUInt };
         foreach (var t in unsigned)
         {
             list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));

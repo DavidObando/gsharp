@@ -19,7 +19,7 @@ type Expr sealed interface {
 }
 
 type Lit class : Expr {
-    Value int
+    Value int32
 }
 
 type Add class : Expr {
@@ -32,7 +32,7 @@ type Mul class : Expr {
     Right Expr
 }
 
-func eval(e Expr) int {
+func eval(e Expr) int32 {
     return switch e {
         case l is Lit -> l.Value
         case a is Add -> eval(a.Left) + eval(a.Right)

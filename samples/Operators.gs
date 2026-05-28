@@ -7,8 +7,8 @@ package GSharp.Sample.Operators
 import System
 
 type Vector2 class {
-    X int
-    Y int
+    X int32
+    Y int32
 }
 
 func (a Vector2) operator +(b Vector2) Vector2 {

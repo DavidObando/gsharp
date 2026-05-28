@@ -27,7 +27,7 @@ public class AsyncExceptionEmitTests
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var result = 0
     try {
         result = 42
@@ -52,7 +52,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var result = 0
     try {
         result = 10
@@ -78,7 +78,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var result = 0
     try {
         var n = Int32.Parse(""bad"")
@@ -110,7 +110,7 @@ Console.WriteLine(t.Result)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var result = 0
     try {
         var n = Int32.Parse(""bad"")
@@ -140,7 +140,7 @@ Console.WriteLine(t.IsFaulted)
 import System
 import System.Threading.Tasks
 
-async func run() int {
+async func run() int32 {
     var result = 10
     try {
         result = result + 20

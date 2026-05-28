@@ -25,7 +25,7 @@ public class ClrMemberAccessTests
         var source = @"
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 lst.Add(1)
 lst.Add(2)
 var n = lst.Count
@@ -54,7 +54,7 @@ var n = sb.Length
         var source = @"
 import System.Collections.Generic
 
-var d = Dictionary[string, int]()
+var d = Dictionary[string, int32]()
 d[""k""] = 42
 var v = d[""k""]
 ";
@@ -68,7 +68,7 @@ var v = d[""k""]
         var source = @"
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 lst.Add(7)
 var first = lst[0]
 ";
@@ -82,7 +82,7 @@ var first = lst[0]
         var source = @"
 import System.Collections.Generic
 
-var d = Dictionary[string, int]()
+var d = Dictionary[string, int32]()
 var v = d[5]
 ";
         var result = Evaluate(source);
@@ -167,7 +167,7 @@ var c = sb.Capacity
         var source = @"
 import System.Collections.Generic
 
-var lst = List[int]()
+var lst = List[int32]()
 lst.Count = 5
 ";
         var result = Evaluate(source);

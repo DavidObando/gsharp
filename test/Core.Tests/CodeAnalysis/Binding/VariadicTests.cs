@@ -23,7 +23,7 @@ public class VariadicTests
     public void Variadic_PacksTrailingArgs_IntoSlice()
     {
         var result = Evaluate(@"
-func sum(nums ...int) int {
+func sum(nums ...int32) int32 {
     var total = 0
     for i := 0; i < len(nums); i++ {
         total = total + nums[i]
@@ -40,7 +40,7 @@ sum(1, 2, 3, 4)
     public void Variadic_AcceptsZeroTrailingArgs_EmptySlice()
     {
         var result = Evaluate(@"
-func count(xs ...int) int { return len(xs) }
+func count(xs ...int32) int32 { return len(xs) }
 count()
 ");
         Assert.Empty(result.Diagnostics);
@@ -79,7 +79,7 @@ joinWith()
     public void Variadic_WrongElementType_ReportsDiagnostic()
     {
         var result = Evaluate(@"
-func sum(nums ...int) int { return 0 }
+func sum(nums ...int32) int32 { return 0 }
 sum(1, ""x"", 3)
 ");
         Assert.NotEmpty(result.Diagnostics);
@@ -89,7 +89,7 @@ sum(1, ""x"", 3)
     public void Variadic_NotLastParameter_ReportsDiagnostic()
     {
         var result = Evaluate(@"
-func bad(xs ...int, n int) int { return n }
+func bad(xs ...int32, n int32) int32 { return n }
 bad(1, 2)
 ");
         Assert.NotEmpty(result.Diagnostics);
@@ -99,7 +99,7 @@ bad(1, 2)
     public void Variadic_OnLambda_ReportsNotSupported()
     {
         var result = Evaluate(@"
-let f = func(xs ...int) int { return 0 }
+let f = func(xs ...int32) int32 { return 0 }
 f()
 ");
         Assert.NotEmpty(result.Diagnostics);

@@ -146,7 +146,7 @@ public class GlobalVariableEmitTests
                 counter = counter + 1
             }
 
-            public func current() int {
+            public func current() int32 {
                 return counter
             }
             """;

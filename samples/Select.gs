@@ -8,13 +8,13 @@ package GSharp.Samples.Select
 import System
 import System.Threading
 
-func delayedSend(ch chan int) int {
+func delayedSend(ch chan int32) int32 {
     Thread.Sleep(10)
     ch <- 40
     return 0
 }
 
-let ready = make(chan int, 1)
+let ready = make(chan int32, 1)
 ready <- 7
 select {
 case v := <-ready {
@@ -22,7 +22,7 @@ case v := <-ready {
 }
 }
 
-let sendCh = make(chan int, 1)
+let sendCh = make(chan int32, 1)
 select {
 case sendCh <- 11 {
     Console.WriteLine("sent")
@@ -31,7 +31,7 @@ case sendCh <- 11 {
 let sentValue = <-sendCh
 Console.WriteLine(sentValue)
 
-let empty = make(chan int, 1)
+let empty = make(chan int32, 1)
 select {
 case v := <-empty {
     Console.WriteLine("unexpected: $v")
@@ -41,7 +41,7 @@ default {
 }
 }
 
-let blocking = make(chan int)
+let blocking = make(chan int32)
 scope {
     go delayedSend(blocking)
     select {

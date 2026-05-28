@@ -41,7 +41,7 @@ type Iter[T any] interface {
     func Next() T
 }
 
-func consume(it Iter[int]) int {
+func consume(it Iter[int32]) int32 {
     return it.Next()
 }
 ";
@@ -105,7 +105,7 @@ type Iter[T any] interface {
     func Next() T
 }
 
-func consume(it Iter[int, string]) int { return 0 }
+func consume(it Iter[int32, string]) int32 { return 0 }
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("requires") || d.Message.Contains("type argument"));

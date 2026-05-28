@@ -44,7 +44,7 @@ p.Item2
     public void TupleTypeClause_OnLocal_BindsAndEvaluates()
     {
         var result = Evaluate(@"
-let p (int, string) = (7, ""hi"")
+let p (int32, string) = (7, ""hi"")
 p.Item1
 ");
         Assert.Empty(result.Diagnostics);
@@ -55,7 +55,7 @@ p.Item1
     public void FunctionReturningTuple_AccessElement()
     {
         var result = Evaluate(@"
-func pair() (int, int) {
+func pair() (int32, int32) {
     return (3, 4)
 }
 let q = pair()
@@ -104,7 +104,7 @@ b
     public void MultiReturn_PackedIntoTuple_DeconstructAtCallSite()
     {
         var result = Evaluate(@"
-func divmod(a int, b int) (int, int) {
+func divmod(a int32, b int32) (int32, int32) {
     return a / b, a % b
 }
 let (q, r) = divmod(10, 3)
@@ -118,7 +118,7 @@ q
     public void MultiReturn_RemainderAccessible()
     {
         var result = Evaluate(@"
-func divmod(a int, b int) (int, int) {
+func divmod(a int32, b int32) (int32, int32) {
     return a / b, a % b
 }
 let (q, r) = divmod(10, 3)

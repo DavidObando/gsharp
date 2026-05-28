@@ -33,7 +33,7 @@ public class AsyncStateMachineFieldMapTests
     [Fact]
     public void Create_MapsParametersByCaptureOrder()
     {
-        var p1 = new ParameterSymbol("a", TypeSymbol.Int);
+        var p1 = new ParameterSymbol("a", TypeSymbol.Int32);
         var p2 = new ParameterSymbol("b", TypeSymbol.String);
         var fn = new FunctionSymbol("doIt", ImmutableArray.Create(p1, p2), TypeSymbol.Void) { IsAsync = true };
         var body = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
@@ -42,7 +42,7 @@ public class AsyncStateMachineFieldMapTests
         var map = AsyncStateMachineFieldMap.Create(sm, body);
 
         Assert.Equal("a", map.GetParameterField(p1).Name);
-        Assert.Equal(TypeSymbol.Int, map.GetParameterField(p1).Type);
+        Assert.Equal(TypeSymbol.Int32, map.GetParameterField(p1).Type);
         Assert.Equal("b", map.GetParameterField(p2).Name);
         Assert.Equal(TypeSymbol.String, map.GetParameterField(p2).Type);
     }
@@ -51,7 +51,7 @@ public class AsyncStateMachineFieldMapTests
     public void Create_MapsHoistedLocalsByCaptureOrder()
     {
         var fn = new FunctionSymbol("doIt", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void) { IsAsync = true };
-        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int);
+        var x = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
         var y = new LocalVariableSymbol("y", isReadOnly: false, TypeSymbol.String);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
@@ -62,7 +62,7 @@ ImmutableArray.Create<BoundStatement>(
         var map = AsyncStateMachineFieldMap.Create(sm, body);
 
         Assert.Equal("<x>5__1", map.GetLocalField(x).Name);
-        Assert.Equal(TypeSymbol.Int, map.GetLocalField(x).Type);
+        Assert.Equal(TypeSymbol.Int32, map.GetLocalField(x).Type);
         Assert.Equal("<y>5__2", map.GetLocalField(y).Name);
         Assert.Equal(TypeSymbol.String, map.GetLocalField(y).Type);
     }
@@ -80,7 +80,7 @@ ImmutableArray.Create<BoundStatement>(
 
         Assert.Same(map.StructType, access.StructType);
         Assert.Same(map.StateField, access.Field);
-        Assert.Equal(TypeSymbol.Int, access.Type);
+        Assert.Equal(TypeSymbol.Int32, access.Type);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ ImmutableArray.Create<BoundStatement>(
         Assert.Same(map.StructType, assignment.StructType);
         Assert.Same(map.StateField, assignment.Field);
         Assert.Same(value, assignment.Value);
-        Assert.Equal(TypeSymbol.Int, assignment.Type);
+        Assert.Equal(TypeSymbol.Int32, assignment.Type);
     }
 
     [Fact]
@@ -111,6 +111,6 @@ ImmutableArray.Create<BoundStatement>(
 
         AsyncStateMachineFieldMap.Create(sm, body);
 
-        Assert.Throws<System.InvalidOperationException>(() => sm.AddField(new FieldSymbol("late", TypeSymbol.Int, Accessibility.Public)));
+        Assert.Throws<System.InvalidOperationException>(() => sm.AddField(new FieldSymbol("late", TypeSymbol.Int32, Accessibility.Public)));
     }
 }

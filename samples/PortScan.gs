@@ -17,7 +17,7 @@ package GSharp.Samples.PortScan
 import System
 import System.Threading
 
-func scan(port int, results chan int) int {
+func scan(port int32, results chan int32) int32 {
     Thread.Sleep(5)
     if port % 2 == 0 {
         results <- port
@@ -27,7 +27,7 @@ func scan(port int, results chan int) int {
     return 0
 }
 
-let results = make(chan int, 4)
+let results = make(chan int32, 4)
 scope {
     go scan(80, results)
     go scan(81, results)
@@ -55,8 +55,8 @@ Console.WriteLine("open ports: $opened")
 // Timeout demo: a slow worker that never arrives, raced against a buffered
 // "timeout" channel pre-loaded with a sentinel. The select picks the ready
 // arm deterministically (source order, TryRead succeeds first).
-let slow = make(chan int, 1)
-let timeoutCh = make(chan int, 1)
+let slow = make(chan int32, 1)
+let timeoutCh = make(chan int32, 1)
 timeoutCh <- 1
 select {
 case v := <-slow {

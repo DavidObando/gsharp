@@ -162,7 +162,7 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
-        if (from == TypeSymbol.Bool || from == TypeSymbol.Int)
+        if (from == TypeSymbol.Bool || from == TypeSymbol.Int32)
         {
             if (to == TypeSymbol.String)
             {
@@ -172,7 +172,7 @@ public sealed class Conversion
 
         if (from == TypeSymbol.String)
         {
-            if (to == TypeSymbol.Bool || to == TypeSymbol.Int)
+            if (to == TypeSymbol.Bool || to == TypeSymbol.Int32)
             {
                 return Conversion.Explicit;
             }
