@@ -3731,6 +3731,36 @@ public sealed class Binder
                 keyType = TypeSymbol.Int;
                 valueType = slice.ElementType;
                 break;
+
+            // Issue #209: NullabilityAnnotatedTypeSymbol carries inner-position nullable
+            // flags; extract element/key/value types using those flags so that
+            // `for k, v := range dict` sees the proper nullable types.
+            case NullabilityAnnotatedTypeSymbol annotated when annotated.ClrType != null:
+                if (TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
+                {
+                    iterationKind = ForRangeKind.Dictionary;
+                    keyType = annotated.GetTypeArgumentSymbolForClrType(aDKey);
+                    valueType = annotated.GetTypeArgumentSymbolForClrType(aDVal);
+                }
+                else if (TryGetClrEnumerableElementType(annotated.ClrType, out var aElemType))
+                {
+                    iterationKind = ForRangeKind.Enumerable;
+                    keyType = TypeSymbol.Int;
+                    valueType = annotated.GetTypeArgumentSymbolForClrType(aElemType);
+                }
+                else if (TryGetClrPatternEnumerableElementType(annotated.ClrType, out var aPatternElemType))
+                {
+                    iterationKind = ForRangeKind.PatternEnumerator;
+                    keyType = TypeSymbol.Int;
+                    valueType = TypeSymbol.FromClrType(aPatternElemType);
+                }
+                else
+                {
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+                }
+
+                break;
             case ImportedTypeSymbol imp when imp.ClrType != null:
                 if (TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
                 {
@@ -6757,6 +6787,14 @@ public sealed class Binder
         // (e.g. `d["k"]` on Dictionary[string, int]). Pick a public
         // instance indexer (a `PropertyInfo` whose `GetIndexParameters()`
         // matches the single argument by assignability).
+        // Issue #209: when the target carries inner-position nullable flags,
+        // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
+        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx && TryResolveClrIndexer(clrAnnotIdx, new[] { syntax.Index }, out var idxPropAnnot, out var idxArgsAnnot))
+        {
+            var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
+            return new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot);
+        }
+
         if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
             return new BoundClrIndexExpression(null, target, idxProp, idxArgs, TypeSymbol.FromClrType(idxProp.PropertyType));
@@ -6798,6 +6836,20 @@ public sealed class Binder
 
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
+        // Issue #209: honour inner-position nullable flags when present.
+        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { syntax.Index }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
+        {
+            if (!idxPropAnnotWr.CanWrite)
+            {
+                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
+            var boundValueAnnotWr = BindConversion(syntax.Value, valueTypeAnnotWr);
+            return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
+        }
+
         if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
             if (!idxProp.CanWrite)
