@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -525,5 +526,185 @@ func main() {
         }
 
         return dict;
+    }
+}
+
+public class PortablePdbPhase7Tests
+{
+    private const string SimpleProgram = @"package main
+
+func main() {
+    let x = 1
+}
+";
+
+    [Fact]
+    public void Portable_Writes_CodeView_And_PdbChecksum_Into_PE_DebugDirectory()
+    {
+        var (pe, _) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        var entries = ReadDebugDirectoryEntries(pe);
+
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.CodeView);
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.PdbChecksum);
+    }
+
+    [Fact]
+    public void CodeView_PdbPath_Defaults_To_Bare_PdbFileName()
+    {
+        var (pe, _) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        using var peReader = new PEReader(new MemoryStream(pe.ToArray()));
+        var cv = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.CodeView);
+        var data = peReader.ReadCodeViewDebugDirectoryData(cv);
+
+        // Default path when /pdb:<path> is not set should be "<asm>.pdb".
+        Assert.EndsWith(".pdb", data.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain('/', data.Path);
+        Assert.DoesNotContain('\\', data.Path);
+    }
+
+    [Fact]
+    public void CodeView_Pdb_ContentId_Matches_Sidecar_PdbId()
+    {
+        var (pe, pdbBytes) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+
+        using var peReader = new PEReader(new MemoryStream(pe.ToArray()));
+        var cv = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.CodeView);
+        var data = peReader.ReadCodeViewDebugDirectoryData(cv);
+
+        using var pdbProvider = MetadataReaderProvider.FromPortablePdbStream(new MemoryStream(pdbBytes));
+        var pdbReader = pdbProvider.GetMetadataReader();
+        var pdbId = pdbReader.DebugMetadataHeader.Id;
+
+        // Portable PDB content id layout: first 16 bytes = guid, next 4 = stamp.
+        var pdbGuid = new Guid(pdbId.Slice(0, 16).ToArray());
+        Assert.Equal(pdbGuid, data.Guid);
+    }
+
+    [Fact]
+    public void PdbChecksum_Algorithm_Is_SHA256_And_Matches_Pdb_Content()
+    {
+        var (pe, pdbBytes) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+
+        using var peReader = new PEReader(new MemoryStream(pe.ToArray()));
+        var cs = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.PdbChecksum);
+        var data = peReader.ReadPdbChecksumDebugDirectoryData(cs);
+
+        Assert.Equal("SHA256", data.AlgorithmName);
+
+        using var sha = SHA256.Create();
+        var expected = sha.ComputeHash(pdbBytes);
+        Assert.Equal(expected, data.Checksum.ToArray());
+    }
+
+    [Fact]
+    public void Reproducible_Entry_Is_Present_When_Deterministic_Is_True()
+    {
+        var (pe, _) = EmitWith(new DebugInformationOptions
+        {
+            Format = DebugInformationFormat.Portable,
+            Deterministic = true,
+        });
+
+        var entries = ReadDebugDirectoryEntries(pe);
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.Reproducible);
+    }
+
+    [Fact]
+    public void Reproducible_Entry_Is_Absent_When_Deterministic_Is_False()
+    {
+        var (pe, _) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        var entries = ReadDebugDirectoryEntries(pe);
+        Assert.DoesNotContain(entries, e => e.Type == DebugDirectoryEntryType.Reproducible);
+    }
+
+    [Fact]
+    public void Pdb_DebugDirectory_Entries_Are_Absent_When_DebugFormat_Is_None()
+    {
+        var peStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.None },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: null, refStream: null);
+        Assert.True(result.Success);
+
+        using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
+        var entries = peReader.ReadDebugDirectory();
+
+        // ManagedPEBuilder may insert a bare Reproducible entry when given a
+        // deterministicIdProvider; what must NOT appear are PDB-pointing
+        // entries since the caller did not request debug info.
+        Assert.DoesNotContain(entries, e => e.Type == DebugDirectoryEntryType.CodeView);
+        Assert.DoesNotContain(entries, e => e.Type == DebugDirectoryEntryType.PdbChecksum);
+        Assert.DoesNotContain(entries, e => e.Type == DebugDirectoryEntryType.EmbeddedPortablePdb);
+    }
+
+    [Fact]
+    public void Embedded_Format_Writes_EmbeddedPortablePdb_Entry_And_Suppresses_Sidecar()
+    {
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Embedded },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        // Embedded format must not produce sidecar bytes even if the caller
+        // passed a stream — Roslyn behaves the same way.
+        Assert.Equal(0, pdbStream.Length);
+
+        using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
+        var entries = peReader.ReadDebugDirectory();
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.EmbeddedPortablePdb);
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.CodeView);
+        Assert.Contains(entries, e => e.Type == DebugDirectoryEntryType.PdbChecksum);
+    }
+
+    [Fact]
+    public void Embedded_Portable_Pdb_Roundtrips_With_Original_Documents()
+    {
+        var peStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Embedded },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: null, refStream: null);
+        Assert.True(result.Success);
+
+        using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
+        var embed = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.EmbeddedPortablePdb);
+        using var pdbProvider = peReader.ReadEmbeddedPortablePdbDebugDirectoryData(embed);
+        var pdbReader = pdbProvider.GetMetadataReader();
+
+        Assert.Equal(1, (int)pdbReader.Documents.Count);
+        var doc = pdbReader.GetDocument(pdbReader.Documents.First());
+        Assert.Equal("main.gs", pdbReader.GetString(doc.Name));
+        Assert.Equal(PortablePdbEmitterTestHelpers.GSharpLanguageGuid, pdbReader.GetGuid(doc.Language));
+    }
+
+    private static (MemoryStream Pe, byte[] PdbBytes) EmitWith(DebugInformationOptions options)
+    {
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = options,
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+        return (peStream, pdbStream.ToArray());
+    }
+
+    private static System.Collections.Immutable.ImmutableArray<DebugDirectoryEntry> ReadDebugDirectoryEntries(MemoryStream pe)
+    {
+        using var peReader = new PEReader(new MemoryStream(pe.ToArray()));
+        return peReader.ReadDebugDirectory();
     }
 }
