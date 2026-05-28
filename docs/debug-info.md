@@ -165,3 +165,26 @@ conventions.
 same surface every modern .NET SDK consumes, so existing CI snippets that set
 `<DebugType>embedded</DebugType>`, `<EmbedAllSources>true</EmbedAllSources>`, or
 `<Deterministic>true</Deterministic>` "just work" against a GSharp project.
+
+## Acceptance tests (Phase 9)
+
+The end-to-end debug-info contract is verified at two levels:
+
+* **`test/Compiler.Tests/Acceptance/StackTraceTests.cs`** — compiles a
+  small `.gs` source through `gsc` with `/debug:portable /pdb:...`, loads
+  the PE + sidecar PDB into an `AssemblyLoadContext` via
+  `LoadFromStream(peStream, pdbStream)`, invokes a method that throws, and
+  asserts that `Exception.StackTrace` cites the original `.gs` file at the
+  throwing line. Variants cover a synchronous throw, a throw inside a
+  `for x := 0; x < n; x++` body (validating that lowering preserves
+  user-visible sequence points), a throw across a non-trivial call
+  boundary, and a throw after `await` in an `async` function (validating
+  that Phase 5's async state-machine PDB rows resume on the correct line).
+* **`build/debugger-e2e.sh`** — a smoke test that packs the SDK, builds a
+  GSharp library, builds a C# console host that calls the library via
+  reflection, then drives [`netcoredbg`](https://github.com/Samsung/netcoredbg)
+  in MI mode. It sets a breakpoint by `<.gs-file>:<line>`, runs to the
+  break, lists locals, continues, and asserts the program exits with the
+  expected result. The script skips cleanly when `netcoredbg` is not
+  installed for the host's `(os, arch)` pair (in particular, upstream
+  does not yet ship `osx-arm64`), so it is safe to invoke in any CI lane.
