@@ -4,6 +4,7 @@
 
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -210,4 +211,13 @@ public sealed class BoundProgram
     /// observable from other assemblies.
     /// </summary>
     public ImmutableArray<GlobalVariableSymbol> Globals { get; }
+
+    /// <summary>
+    /// Gets the explicit (user-written) import symbols declared across all
+    /// syntax trees. Implicit compiler-synthesized imports (e.g. the implicit
+    /// <c>import System</c>) are excluded. Populated by
+    /// <see cref="Binding.Binder.BindProgram"/> from the bound global scope;
+    /// the PDB emitter uses this to produce per-file <c>ImportScope</c> chains.
+    /// </summary>
+    public ImmutableArray<ImportSymbol> Imports { get; internal set; } = ImmutableArray<ImportSymbol>.Empty;
 }

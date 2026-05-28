@@ -277,6 +277,29 @@ internal sealed class ReflectionMetadataEmitter
         if (needsPdb)
         {
             this.pdb = new PortablePdbEmitter(this.debugInformation);
+
+            // #217: Wire per-file import information so the PDB emitter can
+            // produce per-tree ImportScope rows. Group only the explicit
+            // (user-written) imports — implicit ones have a null Declaration
+            // and therefore no syntax-tree anchor.
+            var importsGrouped = new Dictionary<SyntaxTree, ImmutableArray<ImportSymbol>>();
+            foreach (var import in this.program.Imports)
+            {
+                var tree = import.Declaration?.SyntaxTree;
+                if (tree is null)
+                {
+                    continue;
+                }
+
+                if (!importsGrouped.TryGetValue(tree, out var list))
+                {
+                    list = ImmutableArray<ImportSymbol>.Empty;
+                }
+
+                importsGrouped[tree] = list.Add(import);
+            }
+
+            this.pdb.SetImportsPerTree(importsGrouped);
         }
 
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref
@@ -2666,7 +2689,7 @@ internal sealed class ReflectionMetadataEmitter
         // method post-lowering; sequence points and locals captured here surface
         // in debugger stack traces, locals window, and `step` commands across
         // `await` points.
-        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature);
+        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, plan.KickoffMethod?.Declaration?.SyntaxTree);
     }
 
     /// <summary>
@@ -3305,7 +3328,7 @@ internal sealed class ReflectionMetadataEmitter
         // async-kickoff path (the kickoff stub is fully synthesised — visible
         // PDB rows for the user's async body land via EmitStateMachineMoveNext
         // below).
-        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature);
+        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, function.Declaration?.SyntaxTree);
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
