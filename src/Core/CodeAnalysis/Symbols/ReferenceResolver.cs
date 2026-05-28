@@ -2,12 +2,16 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#pragma warning disable SA1201 // a struct should not follow a class — ReferenceInfo is paired with ReferenceResolver by design
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -137,6 +141,65 @@ public sealed class ReferenceResolver
         }
 
         return new ReferenceResolver(builder.ToImmutable(), mlc);
+    }
+
+    /// <summary>
+    /// Returns per-reference metadata needed to emit a
+    /// <c>CompilationMetadataReferences</c> <c>CustomDebugInformation</c> blob
+    /// per the Portable PDB spec. Each entry corresponds to one assembly in
+    /// <see cref="Assemblies"/> that can be read from disk; references with no
+    /// file on disk (in-memory, dynamic) are silently skipped.
+    /// </summary>
+    /// <returns>
+    /// An immutable array of <see cref="ReferenceInfo"/> values, one per
+    /// resolvable file-backed reference.
+    /// </returns>
+    public ImmutableArray<ReferenceInfo> GetReferenceInfos()
+    {
+        var builder = ImmutableArray.CreateBuilder<ReferenceInfo>();
+        foreach (var asm in this.assemblies)
+        {
+            var location = asm.Location;
+            if (string.IsNullOrEmpty(location) || !File.Exists(location))
+            {
+                continue;
+            }
+
+            try
+            {
+                var fileSize = (uint)new FileInfo(location).Length;
+                uint timeStamp = 0;
+                var mvid = Guid.Empty;
+
+                using (var fs = new FileStream(location, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var peReader = new PEReader(fs))
+                {
+                    timeStamp = (uint)peReader.PEHeaders.CoffHeader.TimeDateStamp;
+                    var mdReader = peReader.GetMetadataReader();
+                    var module = mdReader.GetModuleDefinition();
+                    mvid = mdReader.GetGuid(module.Mvid);
+                }
+
+                // Flags per Portable PDB spec § CompilationMetadataReferences:
+                //   bit 0 = EmbedInteropTypes (COM interop embed, false for normal refs)
+                //   bit 1 = MetadataImageKind.Assembly (true for .dll assemblies)
+                const byte flags = 0x02;
+
+                builder.Add(new ReferenceInfo(
+                    fileName: Path.GetFileName(location),
+                    aliases: string.Empty,
+                    flags: flags,
+                    timeStamp: timeStamp,
+                    fileSize: fileSize,
+                    mvid: mvid));
+            }
+            catch (Exception)
+            {
+                // Skip references that cannot be read (locked, corrupt, etc.).
+            }
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -277,4 +340,64 @@ public sealed class ReferenceResolver
         return tpa.Split(Path.PathSeparator)
                   .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
     }
+}
+
+/// <summary>
+/// Per-reference metadata record used to emit a
+/// <c>CompilationMetadataReferences</c> <c>CustomDebugInformation</c> blob
+/// per the Portable PDB spec § "CompilationMetadataReferences".
+/// </summary>
+public readonly struct ReferenceInfo
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ReferenceInfo"/> struct.
+    /// </summary>
+    /// <param name="fileName">File name (no directory) of the reference PE, e.g. <c>System.Console.dll</c>.</param>
+    /// <param name="aliases">Comma-separated extern alias list; empty string when there are no aliases.</param>
+    /// <param name="flags">Flags byte: bit 0 = EmbedInteropTypes; bit 1 = MetadataImageKind.Assembly.</param>
+    /// <param name="timeStamp">PE COFF header <c>TimeDateStamp</c> of the reference file.</param>
+    /// <param name="fileSize">Length of the reference file in bytes.</param>
+    /// <param name="mvid">Module version id read from the reference's PE metadata.</param>
+    public ReferenceInfo(string fileName, string aliases, byte flags, uint timeStamp, uint fileSize, Guid mvid)
+    {
+        FileName = fileName;
+        Aliases = aliases;
+        Flags = flags;
+        TimeStamp = timeStamp;
+        FileSize = fileSize;
+        Mvid = mvid;
+    }
+
+    /// <summary>
+    /// Gets the file name (no directory) of the reference PE, e.g.
+    /// <c>System.Console.dll</c>.
+    /// </summary>
+    public string FileName { get; }
+
+    /// <summary>
+    /// Gets the comma-separated extern alias list. Empty string for the
+    /// common case of no aliases.
+    /// </summary>
+    public string Aliases { get; }
+
+    /// <summary>
+    /// Gets the flags byte.
+    /// Bit 0 = EmbedInteropTypes; bit 1 = MetadataImageKind.Assembly.
+    /// </summary>
+    public byte Flags { get; }
+
+    /// <summary>
+    /// Gets the PE COFF header <c>TimeDateStamp</c> of the reference file.
+    /// </summary>
+    public uint TimeStamp { get; }
+
+    /// <summary>
+    /// Gets the length of the reference file in bytes.
+    /// </summary>
+    public uint FileSize { get; }
+
+    /// <summary>
+    /// Gets the module version id (MVID) read from the reference's PE metadata.
+    /// </summary>
+    public Guid Mvid { get; }
 }

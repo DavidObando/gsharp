@@ -1077,3 +1077,163 @@ func main() {
         }
     }
 }
+
+/// <summary>
+/// Issue #219: <c>CompilationMetadataReferences</c>
+/// <c>CustomDebugInformation</c> acceptance tests. Verifies that a CDI row
+/// keyed on <c>7E4D4708-096E-4C5C-AEDA-CB10BA6A740D</c> is written at the
+/// module level, and that the blob contains one record per file-backed
+/// reference with the expected layout and correct MVID.
+/// </summary>
+public class PortablePdbPhase219Tests
+{
+    public static readonly Guid CompilationMetadataReferencesKind = new Guid("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
+
+    private const string SimpleProgram = @"package main
+
+func main() {
+    let x = 1
+}
+";
+
+    [Fact]
+    public void CompilationMetadataReferences_CDI_Is_Emitted_As_Module_Level_Row()
+    {
+        var (_, pdb) = EmitWithDefault();
+        var rows = FindCdi(pdb, CompilationMetadataReferencesKind);
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, row => Assert.Equal(HandleKind.ModuleDefinition, row.Parent.Kind));
+    }
+
+    [Fact]
+    public void CompilationMetadataReferences_Blob_Contains_SystemConsole_With_Matching_Mvid()
+    {
+        // System.Console is always loaded by the Default() resolver via
+        // WellKnownBclAssemblyNames. Skip the test on environments where the
+        // assembly has no on-disk location (e.g. single-file publish).
+        var consolePath = typeof(Console).Assembly.Location;
+        if (string.IsNullOrEmpty(consolePath) || !File.Exists(consolePath))
+        {
+            return;
+        }
+
+        var (_, pdb) = EmitWithDefault();
+        var rows = FindCdi(pdb, CompilationMetadataReferencesKind);
+        Assert.NotEmpty(rows);
+
+        var blob = pdb.GetBlobBytes(rows[0].Value);
+        var records = DecodeReferenceRecords(blob);
+
+        // The blob must contain a record for System.Console.dll.
+        var consoleRecord = records.FirstOrDefault(r =>
+            r.FileName.EndsWith("System.Console.dll", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(consoleRecord.FileName);
+
+        // Its MVID must match the MVID read directly from the PE file.
+        Guid expectedMvid;
+        using (var fs = new FileStream(consolePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var peReader = new PEReader(fs))
+        {
+            var mdReader = peReader.GetMetadataReader();
+            var module = mdReader.GetModuleDefinition();
+            expectedMvid = mdReader.GetGuid(module.Mvid);
+        }
+
+        Assert.Equal(expectedMvid, consoleRecord.Mvid);
+    }
+
+    [Fact]
+    public void CompilationMetadataReferences_Record_Flags_Mark_Assembly_Kind()
+    {
+        var consolePath = typeof(Console).Assembly.Location;
+        if (string.IsNullOrEmpty(consolePath) || !File.Exists(consolePath))
+        {
+            return;
+        }
+
+        var (_, pdb) = EmitWithDefault();
+        var rows = FindCdi(pdb, CompilationMetadataReferencesKind);
+        var blob = pdb.GetBlobBytes(rows[0].Value);
+        var records = DecodeReferenceRecords(blob);
+
+        // Every record must have bit 1 set (MetadataImageKind.Assembly = 0x02).
+        Assert.All(records, r => Assert.Equal(0x02, r.Flags & 0x02));
+    }
+
+    private static (MemoryStream Pe, MetadataReader Pdb) EmitWithDefault()
+    {
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream: peStream, pdbStream: pdbStream, refStream: null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        return (peStream, provider.GetMetadataReader());
+    }
+
+    private static System.Collections.Generic.List<(EntityHandle Parent, BlobHandle Value)> FindCdi(
+        MetadataReader reader, Guid kind)
+    {
+        var matches = new System.Collections.Generic.List<(EntityHandle, BlobHandle)>();
+        foreach (var handle in reader.CustomDebugInformation)
+        {
+            var cdi = reader.GetCustomDebugInformation(handle);
+            if (reader.GetGuid(cdi.Kind) == kind)
+            {
+                matches.Add((cdi.Parent, cdi.Value));
+            }
+        }
+
+        return matches;
+    }
+
+    private static System.Collections.Generic.List<RefRecord> DecodeReferenceRecords(byte[] blob)
+    {
+        var records = new System.Collections.Generic.List<RefRecord>();
+        var i = 0;
+        while (i < blob.Length)
+        {
+            var fileName = ReadNullTerminatedUtf8(blob, ref i);
+            var aliases = ReadNullTerminatedUtf8(blob, ref i);
+            var flags = blob[i++];
+            var timeStamp = System.BitConverter.ToUInt32(blob, i);
+            i += 4;
+            var fileSize = System.BitConverter.ToUInt32(blob, i);
+            i += 4;
+            var mvidBytes = new byte[16];
+            System.Buffer.BlockCopy(blob, i, mvidBytes, 0, 16);
+            i += 16;
+            records.Add(new RefRecord(fileName, aliases, flags, timeStamp, fileSize, new Guid(mvidBytes)));
+        }
+
+        return records;
+    }
+
+    private static string ReadNullTerminatedUtf8(byte[] blob, ref int i)
+    {
+        var start = i;
+        while (i < blob.Length && blob[i] != 0)
+        {
+            i++;
+        }
+
+        var s = System.Text.Encoding.UTF8.GetString(blob, start, i - start);
+        i++; // skip null terminator
+        return s;
+    }
+
+    private readonly record struct RefRecord(
+        string FileName,
+        string Aliases,
+        byte Flags,
+        uint TimeStamp,
+        uint FileSize,
+        Guid Mvid);
+}
