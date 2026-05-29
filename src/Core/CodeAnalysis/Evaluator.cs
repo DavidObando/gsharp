@@ -1017,6 +1017,15 @@ public sealed class Evaluator
 
     private object EvaluateFieldAssignmentExpression(BoundFieldAssignmentExpression node)
     {
+        // ADR-0053: static field assignment — receiver is null; store in the
+        // static-field storage keyed by (StructType, Field).
+        if (node.Receiver == null)
+        {
+            var value = EvaluateExpression(node.Value);
+            staticFields[(node.StructType, node.Field)] = value;
+            return value;
+        }
+
         var current = node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
             ? globals[node.Receiver]
             : locals.Peek()[node.Receiver];

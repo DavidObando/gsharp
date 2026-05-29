@@ -8448,7 +8448,8 @@ internal sealed class ReflectionMetadataEmitter
                         }
                     }
 
-                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle))
+                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle)
+                        && !this.outer.methodHandles.TryGetValue(call.Function, out fnHandle))
                     {
                         throw new InvalidOperationException(
                             $"Call to function '{call.Function.Name}' has no emitted MethodDef.");

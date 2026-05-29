@@ -1281,14 +1281,30 @@ public static class BoundNodePrinter
 
     private static void WriteFieldAccessExpression(BoundFieldAccessExpression node, IndentedTextWriter writer)
     {
-        node.Receiver.WriteTo(writer);
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.StructType.Name);
+        }
+
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Field.Name);
     }
 
     private static void WriteFieldAssignmentExpression(BoundFieldAssignmentExpression node, IndentedTextWriter writer)
     {
-        writer.WriteIdentifier(node.Receiver.Name);
+        if (node.Receiver != null)
+        {
+            writer.WriteIdentifier(node.Receiver.Name);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.StructType.Name);
+        }
+
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Field.Name);
         writer.WriteSpace();

@@ -5514,6 +5514,26 @@ public sealed class Binder
             return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
         }
 
+        // ADR-0053: user-defined struct/class type → static field write.
+        if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
+        {
+            var staticValue = BindExpression(syntax.Value);
+            var fieldName = syntax.FieldIdentifier.Text;
+            if (userStruct.TryGetStaticField(fieldName, out var staticField))
+            {
+                if (staticField.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                }
+
+                var staticConverted = BindConversion(syntax.Value.Location, staticValue, staticField.Type);
+                return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
         var value = BindExpression(syntax.Value);
         if (variable == null)
