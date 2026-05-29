@@ -32,6 +32,11 @@ public class Program
                 .WithHandler<DocumentSyncHandler>()
                 .WithHandler<FoldingHandler>()
                 .WithHandler<HoverHandler>()
+                .WithHandler<DefinitionHandler>()
+                .WithHandler<DocumentSymbolHandler>()
+                .WithHandler<DocumentHighlightHandler>()
+                .WithHandler<SignatureHelpHandler>()
+                .WithHandler<CompletionHandler>()
                 .WithHandler<ReferencesHandler>()
                 .WithHandler<RenameHandler>()
                 .WithHandler<CodeActionHandler>());
