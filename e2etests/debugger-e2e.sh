@@ -197,9 +197,24 @@ DBG_PID=$!
 
 WAIT=0
 HIT=0
+PROCESSED_STOPPED=0
 while kill -0 "$DBG_PID" 2>/dev/null; do
-    if grep -q "\\*stopped,reason=\"breakpoint-hit\"" "$LOG" 2>/dev/null; then
-        HIT=1
+    if [[ -s "$LOG" ]]; then
+        STOPPED_COUNT=$(grep -c "^\*stopped" "$LOG" 2>/dev/null || true)
+        if [[ $STOPPED_COUNT -gt $PROCESSED_STOPPED ]]; then
+            NEW_STOPPED_COUNT=$((STOPPED_COUNT - PROCESSED_STOPPED))
+            PROCESSED_STOPPED=$STOPPED_COUNT
+            while IFS= read -r STOPPED_EVENT; do
+                if [[ "$STOPPED_EVENT" == *'reason="breakpoint-hit"'* ]]; then
+                    HIT=1
+                    break
+                fi
+
+                echo "-exec-continue" >&3
+            done < <(grep "^\*stopped" "$LOG" 2>/dev/null | tail -n "$NEW_STOPPED_COUNT")
+        fi
+    fi
+    if [[ $HIT -eq 1 ]]; then
         break
     fi
     sleep 0.2
