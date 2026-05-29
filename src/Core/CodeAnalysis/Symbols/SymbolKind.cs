@@ -63,4 +63,9 @@ public enum SymbolKind
     /// The symbol is an enum member.
     /// </summary>
     EnumMember,
+
+    /// <summary>
+    /// The symbol is a property on a struct or class.
+    /// </summary>
+    Property,
 }

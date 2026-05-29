@@ -65,6 +65,9 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the abstract method signatures declared on this interface. Populated by the binder via <see cref="SetMethods"/>.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; }
 
+    /// <summary>Gets the property signatures declared on this interface (ADR-0051). Populated by the binder via <see cref="SetProperties"/>.</summary>
+    public ImmutableArray<PropertySymbol> Properties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -82,6 +85,13 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetMethods(ImmutableArray<FunctionSymbol> methods)
     {
         Methods = methods;
+    }
+
+    /// <summary>Sets <see cref="Properties"/>. Intended to be called once by the binder (ADR-0051).</summary>
+    /// <param name="properties">The bound property signatures.</param>
+    public void SetProperties(ImmutableArray<PropertySymbol> properties)
+    {
+        Properties = properties;
     }
 
     /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3c). Intended to be called once by the binder.</summary>
