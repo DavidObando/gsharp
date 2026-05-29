@@ -332,7 +332,7 @@ public class PropertyInteropTests
         Assert.Equal("999", output.Split('\n')[2]);
     }
 
-    [Fact(Skip = "Data struct computed property getter has incorrect 'this' semantics for value types")]
+    [Fact]
     public void CSharp_DataStruct_ComputedProperty_IsAccessible()
     {
         var gsSource = """
