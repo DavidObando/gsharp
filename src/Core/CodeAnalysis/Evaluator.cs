@@ -493,6 +493,7 @@ public sealed class Evaluator
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
                 BoundNodeKind.ClrPropertyAssignmentExpression => EvaluateClrPropertyAssignmentExpression((BoundClrPropertyAssignmentExpression)node),
                 BoundNodeKind.ClrEventSubscriptionExpression => EvaluateClrEventSubscriptionExpression((BoundClrEventSubscriptionExpression)node),
+                BoundNodeKind.EventSubscriptionExpression => EvaluateEventSubscriptionExpression((BoundEventSubscriptionExpression)node),
                 BoundNodeKind.ClrBinaryOperatorExpression => EvaluateClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node),
                 BoundNodeKind.ClrUnaryOperatorExpression => EvaluateClrUnaryOperatorExpression((BoundClrUnaryOperatorExpression)node),
                 BoundNodeKind.ClrConversionCallExpression => EvaluateClrConversionCallExpression((BoundClrConversionCallExpression)node),
@@ -888,6 +889,55 @@ public sealed class Evaluator
         else
         {
             node.Event.RemoveEventHandler(receiver, handler);
+        }
+
+        return null;
+    }
+
+    private object EvaluateEventSubscriptionExpression(BoundEventSubscriptionExpression node)
+    {
+        var receiverValue = EvaluateExpression(node.Receiver);
+        var handlerValue = EvaluateExpression(node.Handler) as Delegate;
+
+        // Explicit accessor bodies: execute the bound add/remove body.
+        if (!node.Event.IsFieldLike)
+        {
+            var methodSymbol = node.IsAdd ? node.Event.AddMethodSymbol : node.Event.RemoveMethodSymbol;
+            if (methodSymbol != null && program.Functions.TryGetValue(methodSymbol, out var body))
+            {
+                var frame = new Dictionary<Symbols.VariableSymbol, object>();
+                if (methodSymbol.ThisParameter != null)
+                {
+                    frame[methodSymbol.ThisParameter] = receiverValue;
+                }
+
+                if (methodSymbol.Parameters.Length > 0)
+                {
+                    frame[methodSymbol.Parameters[0]] = handlerValue;
+                }
+
+                locals.Push(frame);
+                EvaluateStatement(body);
+                locals.Pop();
+            }
+
+            return null;
+        }
+
+        // Field-like event: use Delegate.Combine/Remove on the backing field.
+        if (receiverValue is StructValue sv && node.Event.BackingField != null)
+        {
+            var fieldName = node.Event.BackingField.Name;
+            var existing = sv.Fields.TryGetValue(fieldName, out var current) ? current as Delegate : null;
+
+            if (node.IsAdd)
+            {
+                sv.Fields[fieldName] = existing == null ? handlerValue : Delegate.Combine(existing, handlerValue);
+            }
+            else
+            {
+                sv.Fields[fieldName] = existing == null ? null : Delegate.Remove(existing, handlerValue);
+            }
         }
 
         return null;

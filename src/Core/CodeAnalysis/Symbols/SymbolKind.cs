@@ -68,4 +68,9 @@ public enum SymbolKind
     /// The symbol is a property on a struct or class.
     /// </summary>
     Property,
+
+    /// <summary>
+    /// The symbol is an event on a struct or class (ADR-0052).
+    /// </summary>
+    Event,
 }

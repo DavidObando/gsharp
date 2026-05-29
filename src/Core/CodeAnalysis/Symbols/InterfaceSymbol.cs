@@ -68,6 +68,9 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the property signatures declared on this interface (ADR-0051). Populated by the binder via <see cref="SetProperties"/>.</summary>
     public ImmutableArray<PropertySymbol> Properties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
 
+    /// <summary>Gets the event signatures declared on this interface (ADR-0052). Populated by the binder via <see cref="SetEvents"/>.</summary>
+    public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -92,6 +95,13 @@ public sealed class InterfaceSymbol : TypeSymbol
     public void SetProperties(ImmutableArray<PropertySymbol> properties)
     {
         Properties = properties;
+    }
+
+    /// <summary>Sets <see cref="Events"/>. Intended to be called once by the binder (ADR-0052).</summary>
+    /// <param name="events">The bound event signatures.</param>
+    public void SetEvents(ImmutableArray<EventSymbol> events)
+    {
+        Events = events;
     }
 
     /// <summary>Sets <see cref="TypeParameters"/> on a generic definition (Phase 4.3c). Intended to be called once by the binder.</summary>

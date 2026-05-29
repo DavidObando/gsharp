@@ -650,6 +650,7 @@ public class Parser
         SyntaxToken openBrace;
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
+        var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -673,6 +674,7 @@ public class Parser
                 openBrace,
                 fields.ToImmutable(),
                 properties.ToImmutable(),
+                events.ToImmutable(),
                 methods.ToImmutable(),
                 syntheticCloseBrace);
         }
@@ -699,7 +701,7 @@ public class Parser
                 Current.Kind == SyntaxKind.PrivateKeyword)
             {
                 // Accessibility modifier may be followed by an optional
-                // `open`/`override` and then `func` or `prop`.
+                // `open`/`override` and then `func`, `prop`, or `event`.
                 var ahead = 1;
                 while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
                 {
@@ -707,7 +709,8 @@ public class Parser
                 }
 
                 if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
-                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop"))
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
                 {
                     memberAccessibility = NextToken();
                 }
@@ -741,6 +744,12 @@ public class Parser
                 var property = ParsePropertyDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
                 property.WithAnnotations(memberAnnotations);
                 properties.Add(property);
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
+            {
+                var eventDecl = ParseEventDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                eventDecl.WithAnnotations(memberAnnotations);
+                events.Add(eventDecl);
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
@@ -789,6 +798,7 @@ public class Parser
             openBrace,
             fields.ToImmutable(),
             properties.ToImmutable(),
+            events.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
     }
@@ -804,6 +814,7 @@ public class Parser
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
+        var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
@@ -811,10 +822,15 @@ public class Parser
 
             // Per ADR-0018, interface members are method signatures only.
             // ADR-0051 extends this to also allow property declarations.
+            // ADR-0052 extends this to also allow event declarations.
             // No accessibility / open / override modifiers are accepted.
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
+            {
+                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
@@ -843,6 +859,7 @@ public class Parser
             interfaceKeyword,
             openBrace,
             properties.ToImmutable(),
+            events.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
     }
@@ -917,6 +934,88 @@ public class Parser
             openBraceToken: null,
             accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
             closeBraceToken: null);
+    }
+
+    private EventDeclarationSyntax ParseEventDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier)
+    {
+        var eventKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "event"
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var type = ParseTypeClause();
+
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var accessors = ParseEventAccessors();
+            var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            return new EventDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                openModifier,
+                overrideModifier,
+                eventKeyword,
+                identifier,
+                type,
+                openBrace,
+                accessors,
+                closeBrace);
+        }
+
+        // Field-like event: event Name Type
+        return new EventDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            openModifier,
+            overrideModifier,
+            eventKeyword,
+            identifier,
+            type,
+            openBraceToken: null,
+            accessors: ImmutableArray<EventAccessorSyntax>.Empty,
+            closeBraceToken: null);
+    }
+
+    private ImmutableArray<EventAccessorSyntax> ParseEventAccessors()
+    {
+        var accessors = ImmutableArray.CreateBuilder<EventAccessorSyntax>();
+
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            if (Current.Kind == SyntaxKind.IdentifierToken &&
+                (Current.Text == "add" || Current.Text == "remove"))
+            {
+                var accessorKeyword = NextToken();
+
+                BlockStatementSyntax body = null;
+                SyntaxToken semicolon = null;
+                if (Current.Kind == SyntaxKind.OpenBraceToken)
+                {
+                    body = ParseBlockStatement();
+                }
+                else if (Current.Kind == SyntaxKind.SemicolonToken)
+                {
+                    semicolon = NextToken();
+                }
+
+                accessors.Add(new EventAccessorSyntax(syntaxTree, accessorKeyword, body, semicolon));
+            }
+            else
+            {
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                NextToken();
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        return accessors.ToImmutable();
     }
 
     private ImmutableArray<PropertyAccessorSyntax> ParsePropertyAccessors()

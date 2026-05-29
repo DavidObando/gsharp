@@ -232,7 +232,9 @@ public enum SyntaxKind
 
     // ADR-0051: property declarations
     PropertyDeclaration,
+    EventDeclaration,
     PropertyAccessor,
+    EventAccessor,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
