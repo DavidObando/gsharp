@@ -78,4 +78,10 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets or sets the synthesized setter function symbol.</summary>
     public FunctionSymbol SetterSymbol { get; set; }
+
+    /// <summary>Gets or sets the getter accessor body syntax (for computed properties). Null for auto-properties.</summary>
+    public Syntax.BlockStatementSyntax GetterBodySyntax { get; set; }
+
+    /// <summary>Gets or sets the setter accessor body syntax (for computed properties). Null for auto-properties.</summary>
+    public Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
 }

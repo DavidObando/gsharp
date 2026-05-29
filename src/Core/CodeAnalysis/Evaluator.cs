@@ -999,8 +999,19 @@ public sealed class Evaluator
             return DefaultValue(node.Property.Type);
         }
 
-        // Computed property: accessor bodies not yet bound for interpreter evaluation.
-        // Return default value as a safe placeholder.
+        // Computed property: execute the bound getter body.
+        if (node.Property.GetterSymbol != null && program.Functions.TryGetValue(node.Property.GetterSymbol, out var getterBody))
+        {
+            var frame = new Dictionary<Symbols.VariableSymbol, object>
+            {
+                [node.Property.GetterSymbol.ThisParameter] = receiverValue,
+            };
+            locals.Push(frame);
+            var result = EvaluateStatement(getterBody);
+            locals.Pop();
+            return result;
+        }
+
         return DefaultValue(node.Property.Type);
     }
 
@@ -1039,7 +1050,21 @@ public sealed class Evaluator
             return value;
         }
 
-        // Computed property: setter body not yet bound. No-op for now.
+        // Computed property: execute the bound setter body.
+        if (node.Property.SetterSymbol != null && program.Functions.TryGetValue(node.Property.SetterSymbol, out var setterBody))
+        {
+            var receiverValue = EvaluateExpression(node.Receiver);
+            var frame = new Dictionary<Symbols.VariableSymbol, object>
+            {
+                [node.Property.SetterSymbol.ThisParameter] = receiverValue,
+                [node.Property.SetterSymbol.Parameters[0]] = value,
+            };
+            locals.Push(frame);
+            EvaluateStatement(setterBody);
+            locals.Pop();
+            return value;
+        }
+
         return value;
     }
 

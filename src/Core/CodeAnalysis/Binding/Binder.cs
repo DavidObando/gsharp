@@ -418,6 +418,48 @@ public sealed class Binder
             }
         }
 
+        // ADR-0051: bind computed property accessor bodies. These are analogous
+        // to method bodies but hang off PropertySymbol.GetterSymbol/SetterSymbol.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.Properties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var prop in structSym.Properties)
+            {
+                if (prop.IsAutoProperty)
+                {
+                    continue;
+                }
+
+                if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, prop.GetterSymbol);
+                    var body = binder.BindStatement(prop.GetterBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+
+                    if (!ControlFlowGraph.AllPathsReturn(loweredBody))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
+                    }
+
+                    functionBodies.Add(prop.GetterSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+
+                if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, prop.SetterSymbol);
+                    var body = binder.BindStatement(prop.SetterBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+                    functionBodies.Add(prop.SetterSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+            }
+        }
+
         var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
@@ -1080,6 +1122,46 @@ public sealed class Binder
                         Accessibility.Private,
                         isReadOnly: !hasSetter);
                     propertySymbol.BackingField = backingField;
+                }
+
+                // Create FunctionSymbols for computed property accessors (ADR-0051).
+                if (!isAutoProperty)
+                {
+                    var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+
+                    if (hasGetter && getAccessor?.Body != null)
+                    {
+                        var getterSymbol = new FunctionSymbol(
+                            $"get_{propName}",
+                            ImmutableArray<ParameterSymbol>.Empty,
+                            propType,
+                            declaration: null,
+                            package,
+                            propAccessibility,
+                            receiverType: structSymbol,
+                            isOpen: isVirtual,
+                            isOverride: isOverride);
+                        propertySymbol.GetterSymbol = getterSymbol;
+                        propertySymbol.GetterBodySyntax = getAccessor.Body;
+                    }
+
+                    if (hasSetter && setAccessor?.Body != null)
+                    {
+                        var setterParam = new ParameterSymbol(setterParamName, propType);
+                        var setterSymbol = new FunctionSymbol(
+                            $"set_{propName}",
+                            ImmutableArray.Create(setterParam),
+                            TypeSymbol.Void,
+                            declaration: null,
+                            package,
+                            propAccessibility,
+                            receiverType: structSymbol,
+                            isOpen: isVirtual,
+                            isOverride: isOverride);
+                        propertySymbol.SetterSymbol = setterSymbol;
+                        propertySymbol.SetterBodySyntax = setAccessor.Body;
+                    }
                 }
 
                 // Bind annotations
