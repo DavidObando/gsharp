@@ -491,6 +491,24 @@ internal sealed class ReflectionMetadataEmitter
             {
                 nextFieldRow += s.StaticFields.Length;
             }
+
+            // Issue #263: backing fields for static auto-properties.
+            foreach (var p in s.StaticProperties)
+            {
+                if (p.IsAutoProperty && p.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
+
+            // Issue #263: backing fields for static field-like events.
+            foreach (var ev in s.StaticEvents)
+            {
+                if (ev.IsFieldLike && ev.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
         }
 
         foreach (var s in nonSmStructs)
@@ -519,6 +537,24 @@ internal sealed class ReflectionMetadataEmitter
             if (!s.StaticFields.IsDefaultOrEmpty)
             {
                 nextFieldRow += s.StaticFields.Length;
+            }
+
+            // Issue #263: backing fields for static auto-properties.
+            foreach (var p in s.StaticProperties)
+            {
+                if (p.IsAutoProperty && p.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
+
+            // Issue #263: backing fields for static field-like events.
+            foreach (var ev in s.StaticEvents)
+            {
+                if (ev.IsFieldLike && ev.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
             }
         }
 
@@ -665,6 +701,32 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // Issue #263: plan accessor method rows for static properties on classes.
+            foreach (var prop in c.StaticProperties)
+            {
+                MethodDefinitionHandle? getterHandle = null;
+                MethodDefinitionHandle? setterHandle = null;
+                if (prop.HasGetter)
+                {
+                    getterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                if (prop.HasSetter)
+                {
+                    setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+            }
+
+            // Issue #263: plan accessor method rows for static events on classes.
+            foreach (var ev in c.StaticEvents)
+            {
+                var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+            }
+
             // Issue #262: plan .cctor row for classes with static field initializers.
             if (!c.StaticFieldInitializers.IsEmpty)
             {
@@ -676,7 +738,7 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
                 continue;
             }
@@ -729,6 +791,32 @@ internal sealed class ReflectionMetadataEmitter
                     aggregateMethodHandles[m] = handle;
                     this.methodHandles[m] = handle;
                 }
+            }
+
+            // Issue #263: plan accessor method rows for static properties on structs.
+            foreach (var prop in s.StaticProperties)
+            {
+                MethodDefinitionHandle? getterHandle = null;
+                MethodDefinitionHandle? setterHandle = null;
+                if (prop.HasGetter)
+                {
+                    getterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                if (prop.HasSetter)
+                {
+                    setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+            }
+
+            // Issue #263: plan accessor method rows for static events on structs.
+            foreach (var ev in s.StaticEvents)
+            {
+                var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
             }
 
             // Issue #262: plan .cctor row for structs with static field initializers.
@@ -1096,6 +1184,12 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // Issue #263: emit static property accessor methods for classes.
+            this.EmitStaticPropertyAccessors(c);
+
+            // Issue #263: emit static event accessor methods for classes.
+            this.EmitStaticEventAccessors(c);
+
             // Issue #262: emit .cctor for classes with static field initializers.
             if (this.cctorHandles.ContainsKey(c))
             {
@@ -1111,7 +1205,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInlineStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
                 continue;
             }
@@ -1145,6 +1239,12 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
             }
+
+            // Issue #263: emit static property accessor methods for structs.
+            this.EmitStaticPropertyAccessors(s);
+
+            // Issue #263: emit static event accessor methods for structs.
+            this.EmitStaticEventAccessors(s);
 
             // Issue #262: emit .cctor for structs with static field initializers.
             if (this.cctorHandles.ContainsKey(s))
@@ -1783,6 +1883,50 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #263: emit backing FieldDefs for static auto-properties.
+        foreach (var prop in structSym.StaticProperties)
+        {
+            if (!prop.IsAutoProperty || prop.BackingField == null)
+            {
+                continue;
+            }
+
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
+            var backingHandle = this.metadata.AddFieldDefinition(
+                attributes: FieldAttributes.Assembly | FieldAttributes.Static,
+                name: this.metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = backingHandle;
+            }
+
+            this.structFieldDefs[prop.BackingField] = backingHandle;
+        }
+
+        // Issue #263: emit backing FieldDefs for static field-like events.
+        foreach (var ev in structSym.StaticEvents)
+        {
+            if (!ev.IsFieldLike || ev.BackingField == null)
+            {
+                continue;
+            }
+
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
+            var backingHandle = this.metadata.AddFieldDefinition(
+                attributes: FieldAttributes.Private | FieldAttributes.Static,
+                name: this.metadata.GetOrAddString(ev.BackingField.Name),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = backingHandle;
+            }
+
+            this.structFieldDefs[ev.BackingField] = backingHandle;
+        }
+
         if (firstField.IsNil)
         {
             // Empty struct: no field rows added; point at next row, which is
@@ -2057,6 +2201,361 @@ internal sealed class ReflectionMetadataEmitter
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString($"set_{prop.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// Issue #263: emits accessor MethodDefs, PropertyDef rows, PropertyMap,
+    /// and MethodSemantics rows for static properties declared in a shared block.
+    /// </summary>
+    private void EmitStaticPropertyAccessors(StructSymbol structSym)
+    {
+        if (structSym.StaticProperties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        PropertyDefinitionHandle firstPropDef = default;
+        foreach (var prop in structSym.StaticProperties)
+        {
+            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit getter MethodDef.
+            MethodDefinitionHandle? emittedGetter = null;
+            if (prop.HasGetter && accessorHandles.Getter.HasValue)
+            {
+                emittedGetter = this.EmitStaticPropertyGetter(structSym, prop);
+            }
+
+            // Emit setter MethodDef.
+            MethodDefinitionHandle? emittedSetter = null;
+            if (prop.HasSetter && accessorHandles.Setter.HasValue)
+            {
+                emittedSetter = this.EmitStaticPropertySetter(structSym, prop);
+            }
+
+            // Emit PropertyDef row.
+            var propertySignature = new BlobBuilder();
+            new BlobEncoder(propertySignature)
+                .PropertySignature(isInstanceProperty: false)
+                .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+
+            var propDef = this.metadata.AddProperty(
+                attributes: PropertyAttributes.None,
+                name: this.metadata.GetOrAddString(prop.Name),
+                signature: this.metadata.GetOrAddBlob(propertySignature));
+
+            if (firstPropDef.IsNil)
+            {
+                firstPropDef = propDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
+            if (emittedGetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+            }
+
+            if (emittedSetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+            }
+        }
+
+        // PropertyMap row: links the TypeDef to its first PropertyDef.
+        // Only add if no instance properties already created a PropertyMap for this type.
+        if (!firstPropDef.IsNil && structSym.Properties.IsDefaultOrEmpty)
+        {
+            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+        }
+    }
+
+    /// <summary>
+    /// Issue #263: emits a static getter accessor MethodDef (get_PropertyName).
+    /// </summary>
+    private MethodDefinitionHandle EmitStaticPropertyGetter(StructSymbol structSym, PropertySymbol prop)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (prop.IsAutoProperty && prop.BackingField != null
+                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.OpCode(ILOpCode.Ldsfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (prop.GetterSymbol != null && this.program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
+            {
+                var handle = this.EmitFunction(prop.GetterSymbol, getterBody, isEntryPoint: false);
+                return handle;
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, r => this.EncodeTypeSymbol(r.Type(), prop.Type), _ => { });
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"get_{prop.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #263: emits a static setter accessor MethodDef (set_PropertyName).
+    /// </summary>
+    private MethodDefinitionHandle EmitStaticPropertySetter(StructSymbol structSym, PropertySymbol prop)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (prop.IsAutoProperty && prop.BackingField != null
+                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Stsfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (prop.SetterSymbol != null && this.program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
+            {
+                var handle = this.EmitFunction(prop.SetterSymbol, setterBody, isEntryPoint: false);
+                return handle;
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"set_{prop.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// Issue #263: emits add/remove accessor MethodDefs, EventDef rows, EventMap,
+    /// and MethodSemantics rows for static events declared in a shared block.
+    /// </summary>
+    private void EmitStaticEventAccessors(StructSymbol structSym)
+    {
+        if (structSym.StaticEvents.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        EventDefinitionHandle firstEventDef = default;
+        foreach (var ev in structSym.StaticEvents)
+        {
+            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit add_X MethodDef.
+            var addMethod = this.EmitStaticEventAddAccessor(structSym, ev);
+
+            // Emit remove_X MethodDef.
+            var removeMethod = this.EmitStaticEventRemoveAccessor(structSym, ev);
+
+            // Emit EventDef row.
+            var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+            var eventDef = this.metadata.AddEvent(
+                attributes: EventAttributes.None,
+                name: this.metadata.GetOrAddString(ev.Name),
+                type: eventTypeHandle);
+
+            if (firstEventDef.IsNil)
+            {
+                firstEventDef = eventDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the EventDef.
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+        }
+
+        // EventMap row: links the TypeDef to its first EventDef.
+        // Only add if no instance events already created an EventMap for this type.
+        if (!firstEventDef.IsNil && structSym.Events.IsDefaultOrEmpty)
+        {
+            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
+        }
+    }
+
+    /// <summary>
+    /// Issue #263: emits a static add_X accessor MethodDef for a static event.
+    /// </summary>
+    private MethodDefinitionHandle EmitStaticEventAddAccessor(StructSymbol structSym, EventSymbol ev)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (ev.IsFieldLike && ev.BackingField != null
+                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.OpCode(ILOpCode.Ldsfld);
+                il.Token(backingHandle);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetDelegateCombineRef());
+                il.OpCode(ILOpCode.Castclass);
+                il.Token(this.GetEventTypeHandle(ev.Type));
+                il.OpCode(ILOpCode.Stsfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
+            {
+                var handle = this.EmitFunction(ev.AddMethodSymbol, addBody, isEntryPoint: false);
+                return handle;
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"add_{ev.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// Issue #263: emits a static remove_X accessor MethodDef for a static event.
+    /// </summary>
+    private MethodDefinitionHandle EmitStaticEventRemoveAccessor(StructSymbol structSym, EventSymbol ev)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (ev.IsFieldLike && ev.BackingField != null
+                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.OpCode(ILOpCode.Ldsfld);
+                il.Token(backingHandle);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetDelegateRemoveRef());
+                il.OpCode(ILOpCode.Castclass);
+                il.Token(this.GetEventTypeHandle(ev.Type));
+                il.OpCode(ILOpCode.Stsfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
+            {
+                var handle = this.EmitFunction(ev.RemoveMethodSymbol, removeBody, isEntryPoint: false);
+                return handle;
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -10711,6 +11210,14 @@ internal sealed class ReflectionMetadataEmitter
                     $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
             }
 
+            // Issue #263: static property access — no receiver to load.
+            if (access.Receiver == null)
+            {
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(handles.Getter.Value);
+                return;
+            }
+
             // Load receiver.
             var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
             if (!receiverIsClass && access.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
@@ -10733,6 +11240,19 @@ internal sealed class ReflectionMetadataEmitter
             {
                 throw new InvalidOperationException(
                     $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
+            }
+
+            // Issue #263: static property assignment — no receiver.
+            if (assn.Receiver == null)
+            {
+                this.EmitExpression(assn.Value);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(handles.Setter.Value);
+
+                // Re-load the assigned value as the expression result via the getter.
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(handles.Getter.Value);
+                return;
             }
 
             // Load receiver, emit value, call setter.
@@ -10911,13 +11431,18 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitUserEventSubscription(BoundEventSubscriptionExpression node)
         {
             // ADR-0052: user-defined event subscription — call add_X or remove_X accessor.
-            this.EmitInstanceReceiver(node.Receiver);
+            if (node.Receiver != null)
+            {
+                this.EmitInstanceReceiver(node.Receiver);
+            }
+
             this.EmitExpression(node.Handler);
 
             if (this.outer.eventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
             {
                 var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
-                bool isVirtual = node.Event.IsVirtual || node.Event.IsOverride;
+                bool isStatic = node.Receiver == null;
+                bool isVirtual = !isStatic && (node.Event.IsVirtual || node.Event.IsOverride);
                 this.il.OpCode(isVirtual ? ILOpCode.Callvirt : ILOpCode.Call);
                 this.il.Token(accessorHandle);
             }

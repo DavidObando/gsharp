@@ -319,6 +319,12 @@ public sealed class Lowerer : BoundTreeRewriter
         {
             var value = RewriteExpression(node.Value);
 
+            // Issue #263: static auto-property assignment — lower to static field assignment.
+            if (node.Receiver == null)
+            {
+                return new BoundFieldAssignmentExpression(null, receiver: null, node.StructType, node.Property.BackingField, value);
+            }
+
             if (node.Receiver is BoundVariableExpression varExpr)
             {
                 return new BoundFieldAssignmentExpression(null, varExpr.Variable, node.StructType, node.Property.BackingField, value);

@@ -1315,15 +1315,33 @@ public static class BoundNodePrinter
 
     private static void WritePropertyAccessExpression(BoundPropertyAccessExpression node, IndentedTextWriter writer)
     {
-        node.Receiver.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.DotToken);
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.StructType.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+        }
+
         writer.WriteIdentifier(node.Property.Name);
     }
 
     private static void WritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node, IndentedTextWriter writer)
     {
-        node.Receiver.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.DotToken);
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.StructType.Name);
+            writer.WritePunctuation(SyntaxKind.DotToken);
+        }
+
         writer.WriteIdentifier(node.Property.Name);
         writer.WriteSpace();
         writer.WritePunctuation(SyntaxKind.EqualsToken);

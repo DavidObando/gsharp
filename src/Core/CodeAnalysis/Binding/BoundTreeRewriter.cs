@@ -1537,6 +1537,11 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
     {
+        if (node.Receiver == null)
+        {
+            return node;
+        }
+
         var receiver = RewriteExpression(node.Receiver);
         return receiver == node.Receiver ? node : new BoundPropertyAccessExpression(null, receiver, node.StructType, node.Property);
     }
@@ -1546,7 +1551,7 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
     {
-        var receiver = RewriteExpression(node.Receiver);
+        var receiver = node.Receiver != null ? RewriteExpression(node.Receiver) : null;
         var value = RewriteExpression(node.Value);
         return receiver == node.Receiver && value == node.Value ? node : new BoundPropertyAssignmentExpression(null, receiver, node.StructType, node.Property, value);
     }
