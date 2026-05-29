@@ -61,6 +61,8 @@ EnumKeyword
 EnumMember
 EqualsEqualsToken
 EqualsToken
+EventAccessor
+EventDeclaration
 EventSubscriptionExpression
 ExpressionStatement
 FallthroughKeyword

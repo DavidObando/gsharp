@@ -63,6 +63,36 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         ImmutableArray<PropertyDeclarationSyntax> properties,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, typeParameterList, sealedKeyword, interfaceKeyword, openBraceToken, properties, ImmutableArray<EventDeclarationSyntax>.Empty, methods, closeBraceToken)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class with property and event declarations (ADR-0051 / ADR-0052).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The interface identifier.</param>
+    /// <param name="typeParameterList">The optional type-parameter list (Phase 4.3c / ADR-0020).</param>
+    /// <param name="sealedKeyword">The optional <c>sealed</c> contextual keyword (Phase 3.B.5).</param>
+    /// <param name="interfaceKeyword">The <c>interface</c> keyword.</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="properties">The property declarations inside the interface body (ADR-0051).</param>
+    /// <param name="events">The event declarations inside the interface body (ADR-0052).</param>
+    /// <param name="methods">The method signatures declared inside the interface body.</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public InterfaceDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
+        SyntaxToken sealedKeyword,
+        SyntaxToken interfaceKeyword,
+        SyntaxToken openBraceToken,
+        ImmutableArray<PropertyDeclarationSyntax> properties,
+        ImmutableArray<EventDeclarationSyntax> events,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -73,6 +103,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         InterfaceKeyword = interfaceKeyword;
         OpenBraceToken = openBraceToken;
         Properties = properties;
+        Events = events;
         Methods = methods;
         CloseBraceToken = closeBraceToken;
     }
@@ -152,6 +183,9 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the property declarations inside the interface body (ADR-0051). Empty when no properties are declared.</summary>
     public ImmutableArray<PropertyDeclarationSyntax> Properties { get; }
+
+    /// <summary>Gets the event declarations inside the interface body (ADR-0052). Empty when no events are declared.</summary>
+    public ImmutableArray<EventDeclarationSyntax> Events { get; }
 
     /// <summary>Gets the method signatures (Body is always null on these, per ADR-0018).</summary>
     public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }
