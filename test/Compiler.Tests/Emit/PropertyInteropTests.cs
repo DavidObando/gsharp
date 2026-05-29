@@ -188,7 +188,7 @@ public class PropertyInteropTests
         Assert.Equal("derived\n", output);
     }
 
-    [Fact(Skip = "Interface properties do not yet emit PropertyDef rows (known limitation)")]
+    [Fact]
     public void CSharp_CanImplementInterface_WithGSharpProperty()
     {
         var gsSource = """

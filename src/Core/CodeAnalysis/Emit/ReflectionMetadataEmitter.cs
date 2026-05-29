@@ -538,6 +538,24 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.methodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
+
+            // Plan accessor method rows for interface properties (issue #248).
+            foreach (var prop in i.Properties)
+            {
+                MethodDefinitionHandle? getterHandle = null;
+                MethodDefinitionHandle? setterHandle = null;
+                if (prop.HasGetter)
+                {
+                    getterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                if (prop.HasSetter)
+                {
+                    setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+            }
         }
 
         // Plan method rows for non-SM class ctors + instance methods.
@@ -920,6 +938,9 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.EmitAbstractMethod(m);
             }
+
+            // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
+            this.EmitInterfacePropertyAccessors(i);
         }
 
         // B2. Non-SM class ctors + instance methods.
@@ -1711,6 +1732,11 @@ internal sealed class ReflectionMetadataEmitter
         {
             methodAttrs |= MethodAttributes.Virtual;
         }
+        else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
+        {
+            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
 
         return this.metadata.AddMethodDefinition(
             attributes: methodAttrs,
@@ -1773,6 +1799,11 @@ internal sealed class ReflectionMetadataEmitter
         {
             methodAttrs |= MethodAttributes.Virtual;
         }
+        else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
+        {
+            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
 
         // Emit a Parameter row for "value" so the setter has a named parameter.
         var firstParamHandle = this.NextParameterHandle();
@@ -1808,6 +1839,36 @@ internal sealed class ReflectionMetadataEmitter
             this.metadata.GetOrAddString(".ctor"),
             this.metadata.GetOrAddBlob(ctorSig));
         return this.notImplementedExceptionCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #248: determines whether a property on a class/struct implicitly implements
+    /// an interface property (same name and type on any implemented interface).
+    /// </summary>
+    private bool PropertyImplicitlyImplementsInterface(StructSymbol structSym, PropertySymbol prop)
+    {
+        if (structSym.Interfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var iface in structSym.Interfaces)
+        {
+            if (iface.Properties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ifaceProp in iface.Properties)
+            {
+                if (ifaceProp.Name == prop.Name)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -2668,6 +2729,108 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.EmitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
+    }
+
+    /// <summary>
+    /// Issue #248: emits abstract accessor MethodDefs, PropertyDef rows, PropertyMap,
+    /// and MethodSemantics rows for all properties declared on an interface.
+    /// </summary>
+    private void EmitInterfacePropertyAccessors(InterfaceSymbol ifaceSym)
+    {
+        if (ifaceSym.Properties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        PropertyDefinitionHandle firstPropDef = default;
+        foreach (var prop in ifaceSym.Properties)
+        {
+            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit abstract getter MethodDef.
+            MethodDefinitionHandle? emittedGetter = null;
+            if (prop.HasGetter && accessorHandles.Getter.HasValue)
+            {
+                var sigBlob = new BlobBuilder();
+                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                    .Parameters(0, r => this.EncodeTypeSymbol(r.Type(), prop.Type), _ => { });
+
+                var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                    | MethodAttributes.Virtual | MethodAttributes.Abstract
+                    | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                emittedGetter = this.metadata.AddMethodDefinition(
+                    attributes: attrs,
+                    implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                    name: this.metadata.GetOrAddString($"get_{prop.Name}"),
+                    signature: this.metadata.GetOrAddBlob(sigBlob),
+                    bodyOffset: -1,
+                    parameterList: this.NextParameterHandle());
+            }
+
+            // Emit abstract setter MethodDef.
+            MethodDefinitionHandle? emittedSetter = null;
+            if (prop.HasSetter && accessorHandles.Setter.HasValue)
+            {
+                var sigBlob = new BlobBuilder();
+                new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+                    .Parameters(1, r => r.Void(), ps =>
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                    });
+
+                var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                    | MethodAttributes.Virtual | MethodAttributes.Abstract
+                    | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                emittedSetter = this.metadata.AddMethodDefinition(
+                    attributes: attrs,
+                    implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                    name: this.metadata.GetOrAddString($"set_{prop.Name}"),
+                    signature: this.metadata.GetOrAddBlob(sigBlob),
+                    bodyOffset: -1,
+                    parameterList: this.NextParameterHandle());
+            }
+
+            // Emit PropertyDef row.
+            var propertySignature = new BlobBuilder();
+            new BlobEncoder(propertySignature)
+                .PropertySignature(isInstanceProperty: true)
+                .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+
+            var propDef = this.metadata.AddProperty(
+                attributes: PropertyAttributes.None,
+                name: this.metadata.GetOrAddString(prop.Name),
+                signature: this.metadata.GetOrAddBlob(propertySignature));
+
+            if (firstPropDef.IsNil)
+            {
+                firstPropDef = propDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
+            if (emittedGetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+            }
+
+            if (emittedSetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+            }
+        }
+
+        // PropertyMap row: links the TypeDef to its first PropertyDef.
+        if (!firstPropDef.IsNil)
+        {
+            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+        }
     }
 
     /// <summary>

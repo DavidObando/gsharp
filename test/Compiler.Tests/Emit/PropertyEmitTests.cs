@@ -214,9 +214,7 @@ public class PropertyEmitTests
     [Fact]
     public void InterfaceProperty_CompilesWithoutError()
     {
-        // Interface property declarations compile without error.
-        // The interface type is emitted as an abstract type; property accessors
-        // on interfaces are emitted as abstract methods (no PropertyDef row yet).
+        // Interface property declarations compile and emit PropertyDef metadata.
         var source = """
             package MyLib
             import System
@@ -229,6 +227,12 @@ public class PropertyEmitTests
         var assembly = CompileToAssembly(source);
         var namedType = assembly.GetTypes().Single(t => t.Name == "Named");
         Assert.True(namedType.IsInterface);
+
+        // Issue #248: PropertyDef row must be emitted.
+        var prop = namedType.GetProperty("Name");
+        Assert.NotNull(prop);
+        Assert.NotNull(prop!.GetMethod);
+        Assert.Equal("get_Name", prop.GetMethod!.Name);
     }
 
     [Fact]
