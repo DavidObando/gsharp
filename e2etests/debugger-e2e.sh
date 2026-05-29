@@ -71,7 +71,9 @@ VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
 
-WORK="$(mktemp -d -t gs-dbg-e2e-XXXXXX)"
+WORK_ROOT="${DBG_WORK_ROOT:-$ROOT/.e2e-work/debugger}"
+mkdir -p "$WORK_ROOT"
+WORK="$(mktemp -d "$WORK_ROOT/gs-dbg-e2e-XXXXXX")"
 KEEP_WORK="${KEEP_DBG_WORK:-}"
 cleanup() {
     if [[ -z "$KEEP_WORK" ]]; then
@@ -82,6 +84,15 @@ cleanup() {
 }
 trap cleanup EXIT
 echo "==> Workspace: $WORK"
+
+# Keep generated end-user projects isolated from this repo's Directory.Build.*
+# conventions when the workspace is inside the checkout.
+cat > "$WORK/Directory.Build.props" <<'EOF'
+<Project />
+EOF
+cat > "$WORK/Directory.Build.targets" <<'EOF'
+<Project />
+EOF
 
 # 2. Author a small GSharp library with a method we can break inside.
 mkdir -p "$WORK/lib"
@@ -107,6 +118,7 @@ cat > "$WORK/lib/Lib.gsproj" <<EOF
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <DebugType>portable</DebugType>
+    <Optimize>false</Optimize>
     <AssemblyName>GsLib</AssemblyName>
   </PropertyGroup>
 </Project>
@@ -118,14 +130,17 @@ package GsLib
 
 import System
 
-public func Add(a int, b int) int {
+public func Add(a int32, b int32) int32 {
     var sum = a + b
     return sum
 }
 EOF
 
-# Line of interest: line 6 (`var sum = a + b`).
+# Line of interest: line 6 (`var sum = a + b`). netcoredbg does not bind
+# GSharp file:line breakpoints before the library is loaded, but a method
+# breakpoint resolves to this sequence point and still verifies source mapping.
 GS_BREAK_LINE=6
+GS_BREAK_FUNCTION='GsLib.<Program>.Add'
 GS_FILE="$WORK/lib/Lib.gs"
 
 # 3. C# host that loads the GSharp library and calls Add.
@@ -143,6 +158,7 @@ cat > "$WORK/host/Host.csproj" <<EOF
 EOF
 cat > "$WORK/host/Program.cs" <<'EOF'
 using System;
+using System.IO;
 using System.Reflection;
 
 public static class Program
@@ -151,7 +167,8 @@ public static class Program
     {
         // Force GsLib to load and resolve Add via reflection so the
         // debugger has a concrete IL frame to break inside.
-        var asm = Assembly.Load("GsLib");
+        var appDir = AppContext.BaseDirectory;
+        var asm = Assembly.LoadFrom(Path.Combine(appDir, "GsLib.dll"));
         var prog = asm.GetType("GsLib.<Program>")!;
         var add = prog.GetMethod("Add", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
         var result = (int)add.Invoke(null, new object[] { 3, 4 })!;
@@ -174,7 +191,7 @@ cp "$WORK/lib/bin/Debug/net10.0/GsLib.pdb" "$HOST_BIN/GsLib.pdb"
 
 # 4. Write an MI script that:
 #    - sets the program path
-#    - inserts a breakpoint at Lib.gs:GS_BREAK_LINE
+#    - inserts a breakpoint in GsLib.Add, which resolves to Lib.gs:GS_BREAK_LINE
 #    - runs to the breakpoint, lists locals, continues, exits
 HOST_DLL="$HOST_BIN/Host.dll"
 HOST_EXE="$HOST_BIN/Host"
@@ -191,15 +208,31 @@ DBG_PID=$!
 # Stream the initial MI commands.
 {
     echo "-file-exec-and-symbols $HOST_EXE"
-    echo "-break-insert -f $GS_FILE:$GS_BREAK_LINE"
+    echo "-interpreter-exec console \"set just-my-code 0\""
+    echo "-break-insert -f $GS_BREAK_FUNCTION"
     echo "-exec-run"
 } >&3
 
 WAIT=0
 HIT=0
+PROCESSED_STOPPED=0
 while kill -0 "$DBG_PID" 2>/dev/null; do
-    if grep -q "\\*stopped,reason=\"breakpoint-hit\"" "$LOG" 2>/dev/null; then
-        HIT=1
+    if [[ -s "$LOG" ]]; then
+        STOPPED_COUNT=$(grep -c "^\*stopped" "$LOG" 2>/dev/null || true)
+        if [[ $STOPPED_COUNT -gt $PROCESSED_STOPPED ]]; then
+            NEW_STOPPED_COUNT=$((STOPPED_COUNT - PROCESSED_STOPPED))
+            PROCESSED_STOPPED=$STOPPED_COUNT
+            while IFS= read -r STOPPED_EVENT; do
+                if [[ "$STOPPED_EVENT" == *'reason="breakpoint-hit"'* ]]; then
+                    HIT=1
+                    break
+                fi
+
+                echo "-exec-continue" >&3
+            done < <(grep "^\*stopped" "$LOG" 2>/dev/null | tail -n "$NEW_STOPPED_COUNT")
+        fi
+    fi
+    if [[ $HIT -eq 1 ]]; then
         break
     fi
     sleep 0.2
@@ -213,11 +246,13 @@ while kill -0 "$DBG_PID" 2>/dev/null; do
     fi
 done
 
-# Query the stopped state: locals + stack, then continue and exit.
+# Query the stopped state: locals + stack, remove the method breakpoint, then
+# continue and exit. netcoredbg supports -stack-list-variables for locals.
 if [[ $HIT -eq 1 ]]; then
     {
         echo "-stack-list-frames"
-        echo "-stack-list-locals --all-values"
+        echo "-stack-list-variables --all-values"
+        echo "-break-delete 1"
         echo "-exec-continue"
     } >&3
 fi
@@ -252,6 +287,20 @@ if ! grep -q "Lib.gs" "$LOG"; then
     cat "$LOG"
     exit 1
 fi
+if ! grep -q "line=\"$GS_BREAK_LINE\"" "$LOG"; then
+    echo "FAIL: breakpoint hit was not on Lib.gs:$GS_BREAK_LINE"
+    echo "----- log -----"
+    cat "$LOG"
+    exit 1
+fi
+for LOCAL in a b sum; do
+    if ! grep -q "name=\"$LOCAL\"" "$LOG"; then
+        echo "FAIL: debugger locals did not include '$LOCAL'"
+        echo "----- log -----"
+        cat "$LOG"
+        exit 1
+    fi
+done
 if ! grep -q "result=7" "$LOG"; then
     echo "FAIL: program did not complete (expected 'result=7' in output)"
     echo "----- log -----"
@@ -260,6 +309,6 @@ if ! grep -q "result=7" "$LOG"; then
 fi
 
 echo "==> netcoredbg session summary"
-grep -E "breakpoint-hit|stack-list-locals|name=\"a\"|name=\"b\"|name=\"sum\"|result=7" "$LOG" | head -20 || true
+grep -E "breakpoint-hit|stack-list-variables|variables=|name=\"a\"|name=\"b\"|name=\"sum\"|result=7" "$LOG" | head -20 || true
 
-echo "PASS: netcoredbg hit a breakpoint inside Lib.gs at line $GS_BREAK_LINE — the SDK-produced Portable PDB drives a cross-language live debugger end-to-end."
+echo "PASS: netcoredbg hit $GS_BREAK_FUNCTION at Lib.gs line $GS_BREAK_LINE — the SDK-produced Portable PDB drives a cross-language live debugger end-to-end."

@@ -43,3 +43,37 @@ jobs:
           name: test-results
           path: TestResults/**/*.trx
 
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK (main)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Setup .NET 8 (for multitarget tests)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Install netcoredbg
+        run: |
+          URL=$(curl -sSL https://api.github.com/repos/Samsung/netcoredbg/releases/latest \
+            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-amd64\.tar\.gz')
+          curl -sSL "$URL" -o /tmp/netcoredbg.tar.gz
+          mkdir -p "$HOME/.tools/netcoredbg"
+          tar -xzf /tmp/netcoredbg.tar.gz -C "$HOME/.tools/netcoredbg" --strip-components=1
+          echo "$HOME/.tools/netcoredbg" >> "$GITHUB_PATH"
+
+      - name: Run end-to-end tests
+        run: ./build/run-e2e-tests.sh
+
