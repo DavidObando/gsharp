@@ -303,4 +303,114 @@ Console.WriteLine(Factory.create())
             loadContext.Unload();
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 5. Issue #261: Implicit bare-name access to sibling static members
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SharedBlock_ImplicitStaticFieldRead_InSharedMethod()
+    {
+        var source = @"
+type Foo class {
+    shared {
+        x int32
+        func bar() int32 {
+            return x
+        }
+    }
+}
+
+Foo.x = 42
+var result = Foo.bar()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_ImplicitStaticFieldWrite_InSharedMethod()
+    {
+        var source = @"
+type Foo class {
+    shared {
+        x int32
+        func setX(val int32) {
+            x = val
+        }
+    }
+}
+
+Foo.setX(99)
+var result = Foo.x
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_ImplicitStaticFieldReadWrite_InSharedMethod()
+    {
+        var source = @"
+type Counter class {
+    shared {
+        count int32
+        func increment() int32 {
+            count = count + 1
+            return count
+        }
+    }
+}
+
+Counter.count = 10
+var result = Counter.increment()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_ImplicitStaticFieldAccess_ChainedMemberAccess()
+    {
+        var source = @"
+type Holder class {
+    shared {
+        name string
+        func getLen() int32 {
+            return len(name)
+        }
+    }
+}
+
+Holder.name = ""hello""
+var result = Holder.getLen()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_ParameterShadowsStaticField()
+    {
+        var source = @"
+type Foo class {
+    shared {
+        x int32
+        func bar(x int32) int32 {
+            return x
+        }
+    }
+}
+
+Foo.x = 100
+var result = Foo.bar(7)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
 }
