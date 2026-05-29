@@ -71,6 +71,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
+    // Issue #262: .cctor (type initializer) handles for types with static field initializers.
+    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> cctorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
+
     // Phase 3.B.4: user-defined interface TypeDefs.
     private readonly Dictionary<InterfaceSymbol, TypeDefinitionHandle> interfaceTypeDefs = new Dictionary<InterfaceSymbol, TypeDefinitionHandle>();
 
@@ -661,13 +664,19 @@ internal sealed class ReflectionMetadataEmitter
                     this.methodHandles[m] = handle;
                 }
             }
+
+            // Issue #262: plan .cctor row for classes with static field initializers.
+            if (!c.StaticFieldInitializers.IsEmpty)
+            {
+                this.cctorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+            }
         }
 
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
                 continue;
             }
@@ -720,6 +729,12 @@ internal sealed class ReflectionMetadataEmitter
                     aggregateMethodHandles[m] = handle;
                     this.methodHandles[m] = handle;
                 }
+            }
+
+            // Issue #262: plan .cctor row for structs with static field initializers.
+            if (!s.StaticFieldInitializers.IsEmpty)
+            {
+                this.cctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
         }
 
@@ -1080,6 +1095,12 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
             }
+
+            // Issue #262: emit .cctor for classes with static field initializers.
+            if (this.cctorHandles.ContainsKey(c))
+            {
+                this.EmitStaticConstructor(c);
+            }
         }
 
         // 4b. Non-SM struct methods.
@@ -1090,7 +1111,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInlineStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
                 continue;
             }
@@ -1123,6 +1144,12 @@ internal sealed class ReflectionMetadataEmitter
                         this.methodHandles[m] = emittedHandle;
                     }
                 }
+            }
+
+            // Issue #262: emit .cctor for structs with static field initializers.
+            if (this.cctorHandles.ContainsKey(s))
+            {
+                this.EmitStaticConstructor(s);
             }
         }
 
@@ -3515,6 +3542,120 @@ internal sealed class ReflectionMetadataEmitter
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Emits a <c>.cctor</c> (type initializer) for a type with static field
+    /// initializers (Issue #262). The body evaluates each initializer expression
+    /// and stores the result into the corresponding static field via <c>stsfld</c>.
+    /// </summary>
+    private void EmitStaticConstructor(StructSymbol typeSym)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            // Build a synthetic body: for each field with an initializer,
+            // emit the expression + stsfld.
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var field in typeSym.StaticFields)
+            {
+                if (typeSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
+                {
+                    // Synthesize: field = initExpr (as an expression statement).
+                    var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, field, initExpr);
+                    statements.Add(new BoundExpressionStatement(null, assignment));
+                }
+            }
+
+            var body = new BoundBlockStatement(null, statements.ToImmutable());
+
+            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+            var locals = new Dictionary<VariableSymbol, int>();
+            var labels = new Dictionary<BoundLabel, LabelHandle>();
+            var localTypes = new List<TypeSymbol>();
+            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            var constValues = new Dictionary<VariableSymbol, object>();
+
+            CollectLocalsAndLabels(
+                body,
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                il);
+
+            var parameters = new Dictionary<ParameterSymbol, int>();
+
+            StandaloneSignatureHandle localsSignature = default;
+            if (localTypes.Count > 0)
+            {
+                var localsSigBlob = new BlobBuilder();
+                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+                foreach (var t in localTypes)
+                {
+                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                }
+
+                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+            }
+
+            var emitter = new BodyEmitter(
+                this,
+                il,
+                locals,
+                parameters,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                constValues: constValues);
+            emitter.EmitBlock(body);
+            il.OpCode(ILOpCode.Ret);
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        }
+
+        var cctorSig = new BlobBuilder();
+        new BlobEncoder(cctorSig).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName | MethodAttributes.Static,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".cctor"),
+            signature: this.metadata.GetOrAddBlob(cctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }

@@ -5,6 +5,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -207,6 +208,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the static events declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
     public ImmutableArray<EventSymbol> StaticEvents { get; private set; } = ImmutableArray<EventSymbol>.Empty;
 
+    /// <summary>Gets the bound initializer expressions for static fields with non-default values (Issue #262). Keyed by field symbol.</summary>
+    public ImmutableDictionary<FieldSymbol, BoundExpression> StaticFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -283,6 +287,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetStaticEvents(ImmutableArray<EventSymbol> events)
     {
         StaticEvents = events;
+    }
+
+    /// <summary>Sets <see cref="StaticFieldInitializers"/> after binding shared-block field initializers (Issue #262).</summary>
+    /// <param name="initializers">A mapping from field symbol to its bound initializer expression.</param>
+    public void SetStaticFieldInitializers(ImmutableDictionary<FieldSymbol, BoundExpression> initializers)
+    {
+        StaticFieldInitializers = initializers;
     }
 
     /// <summary>Tries to find a static field by name on this type (ADR-0053).</summary>
