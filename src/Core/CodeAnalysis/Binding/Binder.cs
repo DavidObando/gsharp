@@ -498,6 +498,35 @@ public sealed class Binder
             }
         }
 
+        // ADR-0053 Phase D: bind static method bodies declared in `shared` blocks.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.StaticMethods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var method in structSym.StaticMethods)
+            {
+                if (method.Declaration == null)
+                {
+                    continue;
+                }
+
+                var binder = new Binder(parentScope, method);
+                var body = binder.BindStatement(method.Declaration.Body);
+                var loweredBody = Lowerer.Lower(body);
+
+                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                {
+                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                }
+
+                functionBodies.Add(method, loweredBody);
+                diagnostics.AddRange(binder.Diagnostics);
+            }
+        }
+
         var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
