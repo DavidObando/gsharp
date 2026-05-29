@@ -18,17 +18,23 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
     /// <param name="identifier">The field identifier.</param>
     /// <param name="type">The field type clause.</param>
+    /// <param name="equalsToken">The optional <c>=</c> token preceding the initializer.</param>
+    /// <param name="initializer">The optional initializer expression.</param>
     public FieldDeclarationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken accessibilityModifier,
         SyntaxToken identifier,
-        TypeClauseSyntax type)
+        TypeClauseSyntax type,
+        SyntaxToken equalsToken = null,
+        ExpressionSyntax initializer = null)
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
         AccessibilityModifier = accessibilityModifier;
         Identifier = identifier;
         Type = type;
+        EqualsToken = equalsToken;
+        Initializer = initializer;
     }
 
     /// <inheritdoc/>
@@ -53,6 +59,12 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
 
     /// <summary>Gets the field type clause.</summary>
     public TypeClauseSyntax Type { get; }
+
+    /// <summary>Gets the optional <c>=</c> token preceding the initializer (Issue #262).</summary>
+    public SyntaxToken EqualsToken { get; }
+
+    /// <summary>Gets the optional initializer expression (Issue #262).</summary>
+    public ExpressionSyntax Initializer { get; }
 
     /// <summary>Attaches the given annotation list to this field declaration and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>

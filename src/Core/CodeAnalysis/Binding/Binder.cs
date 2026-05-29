@@ -1380,6 +1380,7 @@ public sealed class Binder
         {
             // Static fields
             var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+            var initializersBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
             foreach (var fieldSyntax in syntax.SharedBlock.Fields)
             {
                 var fieldName = fieldSyntax.Identifier.Text;
@@ -1408,10 +1409,22 @@ public sealed class Binder
                         System.AttributeTargets.Field));
                 }
 
+                // Issue #262: bind the initializer expression if present.
+                if (fieldSyntax.Initializer != null)
+                {
+                    var boundInit = BindExpression(fieldSyntax.Initializer);
+                    var convertedInit = BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
+                    initializersBuilder[fieldSymbol] = convertedInit;
+                }
+
                 staticFieldsBuilder.Add(fieldSymbol);
             }
 
             structSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable());
+            if (initializersBuilder.Count > 0)
+            {
+                structSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable());
+            }
 
             // Static methods
             var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();

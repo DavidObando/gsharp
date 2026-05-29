@@ -1181,7 +1181,17 @@ public class Parser
 
         var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var fieldType = ParseTypeClause();
-        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, fieldIdentifier, fieldType);
+
+        // Issue #262: optional initializer for static field declarations.
+        SyntaxToken equalsToken = null;
+        ExpressionSyntax initializer = null;
+        if (Current.Kind == SyntaxKind.EqualsToken)
+        {
+            equalsToken = NextToken();
+            initializer = ParseExpression();
+        }
+
+        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, fieldIdentifier, fieldType, equalsToken, initializer);
     }
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)

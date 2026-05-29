@@ -247,6 +247,106 @@ Console.WriteLine(Factory.create())
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // 4. Issue #262: Static field initializers and .cctor emission
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SharedBlock_StaticFieldInitializer_Parses()
+    {
+        var source = @"
+type Counter struct {
+    shared {
+        count int32 = 42
+    }
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticFieldInitializer_Emit_RoundTrip()
+    {
+        var source = @"package CctorEmit
+import System
+
+type Counter struct {
+    shared {
+        count int32 = 42
+    }
+}
+
+Console.WriteLine(Counter.count)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-CctorEmit");
+        Assert.Contains("42", output);
+    }
+
+    [Fact]
+    public void SharedBlock_MultipleStaticFieldInitializers_Emit_RoundTrip()
+    {
+        var source = @"package CctorMulti
+import System
+
+type Config struct {
+    shared {
+        x int32 = 10
+        y int32 = 20
+        name string = ""hello""
+    }
+}
+
+Console.WriteLine(Config.x)
+Console.WriteLine(Config.y)
+Console.WriteLine(Config.name)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-CctorMulti");
+        Assert.Contains("10", output);
+        Assert.Contains("20", output);
+        Assert.Contains("hello", output);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticFieldInitializer_ZeroValue_NoCctor()
+    {
+        // A field with default(T) initializer (= 0 for int) should still work.
+        var source = @"package CctorZero
+import System
+
+type Counter struct {
+    shared {
+        count int32 = 0
+        active int32 = 5
+    }
+}
+
+Console.WriteLine(Counter.count)
+Console.WriteLine(Counter.active)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-CctorZero");
+        Assert.Contains("0", output);
+        Assert.Contains("5", output);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticFieldInitializer_ClassType_Emit_RoundTrip()
+    {
+        var source = @"package CctorClass
+import System
+
+type Service class {
+    shared {
+        instanceCount int32 = 100
+    }
+}
+
+Console.WriteLine(Service.instanceCount)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-CctorClass");
+        Assert.Contains("100", output);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
