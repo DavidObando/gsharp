@@ -107,6 +107,9 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle? delegateCombineRef;
     private MemberReferenceHandle? delegateRemoveRef;
 
+    // Issue #256: cached open MemberRef for Interlocked.CompareExchange<T>(ref T, T, T).
+    private MemberReferenceHandle? interlockedCompareExchangeOpenRef;
+
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
     // Each lambda's synthetic FunctionSymbol is registered alongside user
@@ -2467,18 +2470,58 @@ internal sealed class ReflectionMetadataEmitter
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
-                var il = new InstructionEncoder(new BlobBuilder());
+                // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
+                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+                // ldsfld backingField; stloc.0
                 il.OpCode(ILOpCode.Ldsfld);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // loop_start:
+                var loopStart = il.DefineLabel();
+                il.MarkLabel(loopStart);
+
+                // ldloc.0; stloc.1
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Stloc_1);
+
+                // ldloc.1; ldarg.0; call Delegate.Combine; castclass T; stloc.2
+                il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Call);
                 il.Token(this.GetDelegateCombineRef());
                 il.OpCode(ILOpCode.Castclass);
-                il.Token(this.GetEventTypeHandle(ev.Type));
-                il.OpCode(ILOpCode.Stsfld);
+                il.Token(eventTypeHandle);
+                il.OpCode(ILOpCode.Stloc_2);
+
+                // ldsflda backingField; ldloc.2; ldloc.1
+                il.OpCode(ILOpCode.Ldsflda);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ldloc_2);
+                il.OpCode(ILOpCode.Ldloc_1);
+
+                // call Interlocked.CompareExchange<T>; stloc.0
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // ldloc.0; ldloc.1; bne.un.s loop_start
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Ldloc_1);
+                il.Branch(ILOpCode.Bne_un_s, loopStart);
+
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+
+                var localsSigBlob = new BlobBuilder();
+                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+
+                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
             else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -2528,18 +2571,58 @@ internal sealed class ReflectionMetadataEmitter
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
-                var il = new InstructionEncoder(new BlobBuilder());
+                // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
+                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+                // ldsfld backingField; stloc.0
                 il.OpCode(ILOpCode.Ldsfld);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // loop_start:
+                var loopStart = il.DefineLabel();
+                il.MarkLabel(loopStart);
+
+                // ldloc.0; stloc.1
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Stloc_1);
+
+                // ldloc.1; ldarg.0; call Delegate.Remove; castclass T; stloc.2
+                il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Call);
                 il.Token(this.GetDelegateRemoveRef());
                 il.OpCode(ILOpCode.Castclass);
-                il.Token(this.GetEventTypeHandle(ev.Type));
-                il.OpCode(ILOpCode.Stsfld);
+                il.Token(eventTypeHandle);
+                il.OpCode(ILOpCode.Stloc_2);
+
+                // ldsflda backingField; ldloc.2; ldloc.1
+                il.OpCode(ILOpCode.Ldsflda);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ldloc_2);
+                il.OpCode(ILOpCode.Ldloc_1);
+
+                // call Interlocked.CompareExchange<T>; stloc.0
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // ldloc.0; ldloc.1; bne.un.s loop_start
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Ldloc_1);
+                il.Branch(ILOpCode.Bne_un_s, loopStart);
+
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+
+                var localsSigBlob = new BlobBuilder();
+                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+
+                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
             else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
@@ -2768,20 +2851,60 @@ internal sealed class ReflectionMetadataEmitter
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.LoadArgument(0);
+                // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
+                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+                // ldarg.0; ldfld backingField; stloc.0
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // loop_start:
+                var loopStart = il.DefineLabel();
+                il.MarkLabel(loopStart);
+
+                // ldloc.0; stloc.1
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Stloc_1);
+
+                // ldloc.1; ldarg.1; call Delegate.Combine; castclass T; stloc.2
+                il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
                 il.Token(this.GetDelegateCombineRef());
                 il.OpCode(ILOpCode.Castclass);
-                il.Token(this.GetEventTypeHandle(ev.Type));
-                il.OpCode(ILOpCode.Stfld);
+                il.Token(eventTypeHandle);
+                il.OpCode(ILOpCode.Stloc_2);
+
+                // ldarg.0; ldflda backingField; ldloc.2; ldloc.1
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldflda);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ldloc_2);
+                il.OpCode(ILOpCode.Ldloc_1);
+
+                // call Interlocked.CompareExchange<T>; stloc.0
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // ldloc.0; ldloc.1; bne.un.s loop_start
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Ldloc_1);
+                il.Branch(ILOpCode.Bne_un_s, loopStart);
+
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+
+                var localsSigBlob = new BlobBuilder();
+                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+
+                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
             else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
@@ -2845,20 +2968,60 @@ internal sealed class ReflectionMetadataEmitter
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
-                var il = new InstructionEncoder(new BlobBuilder());
-                il.LoadArgument(0);
+                // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
+                var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+                var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+                // ldarg.0; ldfld backingField; stloc.0
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // loop_start:
+                var loopStart = il.DefineLabel();
+                il.MarkLabel(loopStart);
+
+                // ldloc.0; stloc.1
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Stloc_1);
+
+                // ldloc.1; ldarg.1; call Delegate.Remove; castclass T; stloc.2
+                il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
                 il.Token(this.GetDelegateRemoveRef());
                 il.OpCode(ILOpCode.Castclass);
-                il.Token(this.GetEventTypeHandle(ev.Type));
-                il.OpCode(ILOpCode.Stfld);
+                il.Token(eventTypeHandle);
+                il.OpCode(ILOpCode.Stloc_2);
+
+                // ldarg.0; ldflda backingField; ldloc.2; ldloc.1
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldflda);
                 il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ldloc_2);
+                il.OpCode(ILOpCode.Ldloc_1);
+
+                // call Interlocked.CompareExchange<T>; stloc.0
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetInterlockedCompareExchangeSpec(ev.Type));
+                il.OpCode(ILOpCode.Stloc_0);
+
+                // ldloc.0; ldloc.1; bne.un.s loop_start
+                il.OpCode(ILOpCode.Ldloc_0);
+                il.OpCode(ILOpCode.Ldloc_1);
+                il.Branch(ILOpCode.Bne_un_s, loopStart);
+
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+
+                var localsSigBlob = new BlobBuilder();
+                var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(3);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
+                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+
+                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
             else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
@@ -3039,6 +3202,51 @@ internal sealed class ReflectionMetadataEmitter
             this.metadata.GetOrAddString("Remove"),
             this.metadata.GetOrAddBlob(sig));
         return this.delegateRemoveRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #256: resolves the open MemberRef for Interlocked.CompareExchange&lt;T&gt;(ref T, T, T).
+    /// </summary>
+    private MemberReferenceHandle GetInterlockedCompareExchangeOpenRef()
+    {
+        if (this.interlockedCompareExchangeOpenRef.HasValue)
+        {
+            return this.interlockedCompareExchangeOpenRef.Value;
+        }
+
+        var interlockedTypeRef = this.GetTypeReference(typeof(System.Threading.Interlocked));
+
+        // Signature: static T CompareExchange<T>(ref T, T, T) with 1 generic param.
+        // In open form, T is !!0 (method type parameter at index 0).
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false, genericParameterCount: 1)
+            .Parameters(3,
+                r => r.Type().GenericMethodTypeParameter(0),
+                ps =>
+                {
+                    ps.AddParameter().Type(isByRef: true).GenericMethodTypeParameter(0);
+                    ps.AddParameter().Type().GenericMethodTypeParameter(0);
+                    ps.AddParameter().Type().GenericMethodTypeParameter(0);
+                });
+
+        this.interlockedCompareExchangeOpenRef = this.metadata.AddMemberReference(
+            interlockedTypeRef,
+            this.metadata.GetOrAddString("CompareExchange"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.interlockedCompareExchangeOpenRef.Value;
+    }
+
+    /// <summary>
+    /// Issue #256: produces a MethodSpec for Interlocked.CompareExchange&lt;EventType&gt;.
+    /// </summary>
+    private EntityHandle GetInterlockedCompareExchangeSpec(TypeSymbol eventType)
+    {
+        var openRef = this.GetInterlockedCompareExchangeOpenRef();
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
+        var typeEncoder = argsEncoder.AddArgument();
+        this.EncodeTypeSymbol(typeEncoder, eventType);
+        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
