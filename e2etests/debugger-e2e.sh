@@ -107,6 +107,7 @@ cat > "$WORK/lib/Lib.gsproj" <<EOF
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <DebugType>portable</DebugType>
+    <Optimize>false</Optimize>
     <AssemblyName>GsLib</AssemblyName>
   </PropertyGroup>
 </Project>
@@ -193,6 +194,7 @@ DBG_PID=$!
 # Stream the initial MI commands.
 {
     echo "-file-exec-and-symbols $HOST_EXE"
+    echo "-interpreter-exec console \"set just-my-code 0\""
     echo "-break-insert -f $GS_FILE:$GS_BREAK_LINE"
     echo "-exec-run"
 } >&3
