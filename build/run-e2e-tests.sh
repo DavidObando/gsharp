@@ -9,14 +9,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="$ROOT/build"
+E2E_DIR="$ROOT/e2etests"
 
 # Collect test scripts (sorted for deterministic ordering).
 if [[ $# -gt 0 ]]; then
     # Run specific tests by prefix (e.g. "sdk" runs "sdk-e2e.sh").
     SCRIPTS=()
     for name in "$@"; do
-        script="$BUILD_DIR/${name}-e2e.sh"
+        script="$E2E_DIR/${name}-e2e.sh"
         if [[ ! -f "$script" ]]; then
             echo "ERROR: $script not found"
             exit 1
@@ -24,11 +24,14 @@ if [[ $# -gt 0 ]]; then
         SCRIPTS+=("$script")
     done
 else
-    mapfile -t SCRIPTS < <(find "$BUILD_DIR" -maxdepth 1 -name '*-e2e.sh' -type f | sort)
+    SCRIPTS=()
+    while IFS= read -r script; do
+        SCRIPTS+=("$script")
+    done < <(find "$E2E_DIR" -maxdepth 1 -name '*-e2e.sh' -type f | sort)
 fi
 
 if [[ ${#SCRIPTS[@]} -eq 0 ]]; then
-    echo "No e2e test scripts found in $BUILD_DIR"
+    echo "No e2e test scripts found in $E2E_DIR"
     exit 1
 fi
 
