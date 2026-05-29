@@ -73,4 +73,31 @@ public class EventParserTests
         Assert.Equal(SyntaxKind.EventDeclaration, structDecl.Events[0].Kind);
         Assert.Equal("Click", structDecl.Events[0].Identifier.Text);
     }
+
+    [Fact]
+    public void ParsesEvent_WithRaiseAccessor()
+    {
+        const string source = "package P\ntype Foo class {\n  event Changed func() {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var ev = structDecl.Events[0];
+        Assert.Equal(3, ev.Accessors.Length);
+        Assert.True(ev.Accessors[2].IsRaise);
+    }
+
+    [Fact]
+    public void ParsesEvent_RaiseAccessorOnly_WithAddRemove()
+    {
+        const string source = "package P\ntype Foo class {\n  event Notify func(int32) {\n    add { }\n    remove { }\n    raise { }\n  }\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var structDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var ev = structDecl.Events[0];
+        Assert.Single(ev.Accessors.Where(a => a.IsAdd));
+        Assert.Single(ev.Accessors.Where(a => a.IsRemove));
+        Assert.Single(ev.Accessors.Where(a => a.IsRaise));
+    }
 }

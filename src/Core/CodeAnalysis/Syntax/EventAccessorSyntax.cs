@@ -45,4 +45,7 @@ public sealed class EventAccessorSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this accessor is a <c>remove</c> accessor.</summary>
     public bool IsRemove => AccessorKeyword?.Text == "remove";
+
+    /// <summary>Gets a value indicating whether this accessor is a <c>raise</c> accessor (issue #257).</summary>
+    public bool IsRaise => AccessorKeyword?.Text == "raise";
 }

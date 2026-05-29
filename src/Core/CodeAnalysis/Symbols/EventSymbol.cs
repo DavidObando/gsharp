@@ -67,9 +67,15 @@ public sealed class EventSymbol : Symbol
     /// <summary>Gets or sets the synthesized remove method symbol.</summary>
     public FunctionSymbol RemoveMethodSymbol { get; set; }
 
+    /// <summary>Gets or sets the synthesized raise method symbol (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
+    public FunctionSymbol RaiseMethodSymbol { get; set; }
+
     /// <summary>Gets or sets the explicit add body syntax (null for field-like events).</summary>
     public Syntax.BlockStatementSyntax AddBodySyntax { get; set; }
 
     /// <summary>Gets or sets the explicit remove body syntax (null for field-like events).</summary>
     public Syntax.BlockStatementSyntax RemoveBodySyntax { get; set; }
+
+    /// <summary>Gets or sets the explicit raise body syntax (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
+    public Syntax.BlockStatementSyntax RaiseBodySyntax { get; set; }
 }

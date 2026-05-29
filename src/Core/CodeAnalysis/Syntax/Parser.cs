@@ -1076,7 +1076,7 @@ public class Parser
             var startToken = Current;
 
             if (Current.Kind == SyntaxKind.IdentifierToken &&
-                (Current.Text == "add" || Current.Text == "remove"))
+                (Current.Text == "add" || Current.Text == "remove" || Current.Text == "raise"))
             {
                 var accessorKeyword = NextToken();
 

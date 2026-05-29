@@ -449,44 +449,42 @@ public sealed class Binder
         // to method bodies but hang off PropertySymbol.GetterSymbol/SetterSymbol.
         foreach (var structSym in globalScope.Structs)
         {
-            if (structSym.Properties.IsDefaultOrEmpty)
+            if (!structSym.Properties.IsDefaultOrEmpty)
             {
-                continue;
-            }
-
-            foreach (var prop in structSym.Properties)
-            {
-                if (prop.IsAutoProperty)
+                foreach (var prop in structSym.Properties)
                 {
-                    continue;
-                }
-
-                if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
-                {
-                    var binder = new Binder(parentScope, prop.GetterSymbol);
-                    var body = binder.BindStatement(prop.GetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
-
-                    if (!ControlFlowGraph.AllPathsReturn(loweredBody))
+                    if (prop.IsAutoProperty)
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
+                        continue;
                     }
 
-                    functionBodies.Add(prop.GetterSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
-                }
+                    if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
+                    {
+                        var binder = new Binder(parentScope, prop.GetterSymbol);
+                        var body = binder.BindStatement(prop.GetterBodySyntax);
+                        var loweredBody = Lowerer.Lower(body);
 
-                if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
-                {
-                    var binder = new Binder(parentScope, prop.SetterSymbol);
-                    var body = binder.BindStatement(prop.SetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
-                    functionBodies.Add(prop.SetterSymbol, loweredBody);
-                    diagnostics.AddRange(binder.Diagnostics);
+                        if (!ControlFlowGraph.AllPathsReturn(loweredBody))
+                        {
+                            binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
+                        }
+
+                        functionBodies.Add(prop.GetterSymbol, loweredBody);
+                        diagnostics.AddRange(binder.Diagnostics);
+                    }
+
+                    if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
+                    {
+                        var binder = new Binder(parentScope, prop.SetterSymbol);
+                        var body = binder.BindStatement(prop.SetterBodySyntax);
+                        var loweredBody = Lowerer.Lower(body);
+                        functionBodies.Add(prop.SetterSymbol, loweredBody);
+                        diagnostics.AddRange(binder.Diagnostics);
+                    }
                 }
             }
 
-            // ADR-0052: bind explicit event accessor bodies (add/remove).
+            // ADR-0052: bind explicit event accessor bodies (add/remove/raise).
             if (!structSym.Events.IsDefaultOrEmpty)
             {
                 foreach (var ev in structSym.Events)
@@ -511,6 +509,16 @@ public sealed class Binder
                         var body = binder.BindStatement(ev.RemoveBodySyntax);
                         var loweredBody = Lowerer.Lower(body);
                         functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
+                        diagnostics.AddRange(binder.Diagnostics);
+                    }
+
+                    // Issue #257: bind raise accessor body.
+                    if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
+                    {
+                        var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
+                        var body = binder.BindStatement(ev.RaiseBodySyntax);
+                        var loweredBody = Lowerer.Lower(body);
+                        functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
                         diagnostics.AddRange(binder.Diagnostics);
                     }
                 }
@@ -588,6 +596,16 @@ public sealed class Binder
                     var body = binder.BindStatement(ev.RemoveBodySyntax);
                     var loweredBody = Lowerer.Lower(body);
                     functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+
+                // Issue #257: bind raise accessor body for static events.
+                if (ev.RaiseMethodSymbol != null && ev.RaiseBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
+                    var body = binder.BindStatement(ev.RaiseBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+                    functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
                     diagnostics.AddRange(binder.Diagnostics);
                 }
             }
@@ -1398,6 +1416,7 @@ public sealed class Binder
                     // Explicit accessors — store body syntax
                     var addAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsAdd);
                     var removeAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsRemove);
+                    var raiseAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsRaise);
 
                     if (addAccessor?.Body != null)
                     {
@@ -1407,6 +1426,11 @@ public sealed class Binder
                     if (removeAccessor?.Body != null)
                     {
                         eventSymbol.RemoveBodySyntax = removeAccessor.Body;
+                    }
+
+                    if (raiseAccessor?.Body != null)
+                    {
+                        eventSymbol.RaiseBodySyntax = raiseAccessor.Body;
                     }
                 }
 
@@ -1421,7 +1445,7 @@ public sealed class Binder
                     eventAccessibility,
                     receiverType: structSymbol,
                     isOpen: isVirtual,
-                    isOverride: isOverride);
+                    isOverride: isOverride) { IsSpecialName = true };
                 eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
                     $"remove_{eventName}",
                     ImmutableArray.Create(handlerParam),
@@ -1431,7 +1455,34 @@ public sealed class Binder
                     eventAccessibility,
                     receiverType: structSymbol,
                     isOpen: isVirtual,
-                    isOverride: isOverride);
+                    isOverride: isOverride) { IsSpecialName = true };
+
+                // Issue #257: create raise method symbol if raise accessor is present.
+                if (eventSyntax.Accessors.Any(a => a.IsRaise))
+                {
+                    var raiseParams = ImmutableArray<ParameterSymbol>.Empty;
+                    if (handlerType is FunctionTypeSymbol fnType)
+                    {
+                        var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(fnType.ParameterTypes.Length);
+                        for (int pi = 0; pi < fnType.ParameterTypes.Length; pi++)
+                        {
+                            builder.Add(new ParameterSymbol($"arg{pi}", fnType.ParameterTypes[pi]));
+                        }
+
+                        raiseParams = builder.ToImmutable();
+                    }
+
+                    eventSymbol.RaiseMethodSymbol = new FunctionSymbol(
+                        $"raise_{eventName}",
+                        raiseParams,
+                        TypeSymbol.Void,
+                        declaration: null,
+                        package,
+                        eventAccessibility,
+                        receiverType: structSymbol,
+                        isOpen: isVirtual,
+                        isOverride: isOverride) { IsSpecialName = true };
+                }
 
                 // Bind annotations
                 if (!eventSyntax.Annotations.IsDefaultOrEmpty)
@@ -1726,6 +1777,28 @@ public sealed class Binder
                         isStatic: true);
                     eventSymbol.BackingField = backingField;
                 }
+                else
+                {
+                    // Issue #257: store explicit accessor bodies for static events.
+                    var addAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsAdd);
+                    var removeAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsRemove);
+                    var raiseAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsRaise);
+
+                    if (addAccessor?.Body != null)
+                    {
+                        eventSymbol.AddBodySyntax = addAccessor.Body;
+                    }
+
+                    if (removeAccessor?.Body != null)
+                    {
+                        eventSymbol.RemoveBodySyntax = removeAccessor.Body;
+                    }
+
+                    if (raiseAccessor?.Body != null)
+                    {
+                        eventSymbol.RaiseBodySyntax = raiseAccessor.Body;
+                    }
+                }
 
                 var handlerParam = new ParameterSymbol("value", handlerType);
                 eventSymbol.AddMethodSymbol = new FunctionSymbol(
@@ -1735,7 +1808,7 @@ public sealed class Binder
                     declaration: null,
                     package,
                     eventAccessibility,
-                    receiverType: null);
+                    receiverType: null) { IsSpecialName = true };
                 eventSymbol.AddMethodSymbol.IsStatic = true;
                 eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
                     $"remove_{eventName}",
@@ -1744,8 +1817,34 @@ public sealed class Binder
                     declaration: null,
                     package,
                     eventAccessibility,
-                    receiverType: null);
+                    receiverType: null) { IsSpecialName = true };
                 eventSymbol.RemoveMethodSymbol.IsStatic = true;
+
+                // Issue #257: create raise method symbol if raise accessor is present.
+                if (eventSyntax.Accessors.Any(a => a.IsRaise))
+                {
+                    var raiseParams = ImmutableArray<ParameterSymbol>.Empty;
+                    if (handlerType is FunctionTypeSymbol fnType)
+                    {
+                        var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(fnType.ParameterTypes.Length);
+                        for (int pi = 0; pi < fnType.ParameterTypes.Length; pi++)
+                        {
+                            builder.Add(new ParameterSymbol($"arg{pi}", fnType.ParameterTypes[pi]));
+                        }
+
+                        raiseParams = builder.ToImmutable();
+                    }
+
+                    eventSymbol.RaiseMethodSymbol = new FunctionSymbol(
+                        $"raise_{eventName}",
+                        raiseParams,
+                        TypeSymbol.Void,
+                        declaration: null,
+                        package,
+                        eventAccessibility,
+                        receiverType: null) { IsSpecialName = true };
+                    eventSymbol.RaiseMethodSymbol.IsStatic = true;
+                }
 
                 if (!eventSyntax.Annotations.IsDefaultOrEmpty)
                 {
