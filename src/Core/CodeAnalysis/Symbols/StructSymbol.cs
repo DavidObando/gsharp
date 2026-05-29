@@ -195,6 +195,18 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the events declared on this type (ADR-0052). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
 
+    /// <summary>Gets the static fields declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
+    public ImmutableArray<FieldSymbol> StaticFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
+
+    /// <summary>Gets the static methods declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
+    public ImmutableArray<FunctionSymbol> StaticMethods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
+
+    /// <summary>Gets the static properties declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
+    public ImmutableArray<PropertySymbol> StaticProperties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
+
+    /// <summary>Gets the static events declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
+    public ImmutableArray<EventSymbol> StaticEvents { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -243,6 +255,78 @@ public sealed class StructSymbol : TypeSymbol
     public void SetEvents(ImmutableArray<EventSymbol> events)
     {
         Events = events;
+    }
+
+    /// <summary>Sets <see cref="StaticFields"/> after binding shared-block field declarations (ADR-0053).</summary>
+    /// <param name="fields">The bound static field symbols owned by this type.</param>
+    public void SetStaticFields(ImmutableArray<FieldSymbol> fields)
+    {
+        StaticFields = fields;
+    }
+
+    /// <summary>Sets <see cref="StaticMethods"/> after binding shared-block method declarations (ADR-0053).</summary>
+    /// <param name="methods">The bound static method symbols owned by this type.</param>
+    public void SetStaticMethods(ImmutableArray<FunctionSymbol> methods)
+    {
+        StaticMethods = methods;
+    }
+
+    /// <summary>Sets <see cref="StaticProperties"/> after binding shared-block property declarations (ADR-0053).</summary>
+    /// <param name="properties">The bound static property symbols owned by this type.</param>
+    public void SetStaticProperties(ImmutableArray<PropertySymbol> properties)
+    {
+        StaticProperties = properties;
+    }
+
+    /// <summary>Sets <see cref="StaticEvents"/> after binding shared-block event declarations (ADR-0053).</summary>
+    /// <param name="events">The bound static event symbols owned by this type.</param>
+    public void SetStaticEvents(ImmutableArray<EventSymbol> events)
+    {
+        StaticEvents = events;
+    }
+
+    /// <summary>Tries to find a static field by name on this type (ADR-0053).</summary>
+    /// <param name="name">The field name.</param>
+    /// <param name="field">The found static field on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetStaticField(string name, out FieldSymbol field)
+    {
+        if (!StaticFields.IsDefaultOrEmpty)
+        {
+            foreach (var f in StaticFields)
+            {
+                if (f.Name == name)
+                {
+                    field = f;
+                    return true;
+                }
+            }
+        }
+
+        field = null;
+        return false;
+    }
+
+    /// <summary>Tries to find a static method by name on this type (ADR-0053).</summary>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found static method on success.</param>
+    /// <returns>True if found.</returns>
+    public bool TryGetStaticMethod(string name, out FunctionSymbol method)
+    {
+        if (!StaticMethods.IsDefaultOrEmpty)
+        {
+            foreach (var m in StaticMethods)
+            {
+                if (m.Name == name)
+                {
+                    method = m;
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
     }
 
     /// <summary>Appends additional methods after the initial declaration binding pass.</summary>

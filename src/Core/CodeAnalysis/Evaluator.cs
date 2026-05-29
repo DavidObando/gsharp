@@ -27,6 +27,7 @@ public sealed class Evaluator
     private readonly Stack<ScopeFrame> scopeFrames = new Stack<ScopeFrame>();
     private readonly Stack<System.Collections.IList> iteratorSinks = new Stack<System.Collections.IList>();
     private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = new Dictionary<Symbols.FunctionSymbol, bool>();
+    private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = new Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object>();
     private Random random;
 
     private object lastValue;
@@ -993,6 +994,18 @@ public sealed class Evaluator
 
     private object EvaluateFieldAccessExpression(BoundFieldAccessExpression node)
     {
+        // ADR-0053: static field access — receiver is null; look up in the
+        // static-field storage keyed by (StructType, Field).
+        if (node.Receiver == null)
+        {
+            if (staticFields.TryGetValue((node.StructType, node.Field), out var staticValue))
+            {
+                return staticValue;
+            }
+
+            return DefaultValue(node.Field.Type);
+        }
+
         var receiverValue = EvaluateExpression(node.Receiver);
         if (receiverValue is StructValue sv && sv.Fields.TryGetValue(node.Field.Name, out var value))
         {
@@ -1004,6 +1017,15 @@ public sealed class Evaluator
 
     private object EvaluateFieldAssignmentExpression(BoundFieldAssignmentExpression node)
     {
+        // ADR-0053: static field assignment — receiver is null; store in the
+        // static-field storage keyed by (StructType, Field).
+        if (node.Receiver == null)
+        {
+            var value = EvaluateExpression(node.Value);
+            staticFields[(node.StructType, node.Field)] = value;
+            return value;
+        }
+
         var current = node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
             ? globals[node.Receiver]
             : locals.Peek()[node.Receiver];
@@ -1036,6 +1058,20 @@ public sealed class Evaluator
 
     private object EvaluatePropertyAccessExpression(BoundPropertyAccessExpression node)
     {
+        // ADR-0053: static property access — receiver is null.
+        if (node.Receiver == null)
+        {
+            if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+            {
+                if (staticFields.TryGetValue((node.StructType, node.Property.BackingField), out var staticValue))
+                {
+                    return staticValue;
+                }
+            }
+
+            return DefaultValue(node.Property.Type);
+        }
+
         var receiverValue = EvaluateExpression(node.Receiver);
 
         // Auto-property fallback: access backing field directly.
@@ -2434,6 +2470,13 @@ public sealed class Evaluator
     /// <summary>ADR-0039: Writes back a value into a field after ref/out return.</summary>
     private void WriteBackField(BoundFieldAccessExpression fa, object value)
     {
+        if (fa.Receiver == null)
+        {
+            // ADR-0053: static field write-back.
+            staticFields[(fa.StructType, fa.Field)] = value;
+            return;
+        }
+
         var receiver = EvaluateExpression(fa.Receiver);
         if (receiver is StructValue sv)
         {
@@ -2446,6 +2489,13 @@ public sealed class Evaluator
     {
         if (pa.Property.IsAutoProperty && pa.Property.BackingField != null)
         {
+            if (pa.Receiver == null)
+            {
+                // ADR-0053: static property write-back.
+                staticFields[(pa.StructType, pa.Property.BackingField)] = value;
+                return;
+            }
+
             var receiver = EvaluateExpression(pa.Receiver);
             if (receiver is StructValue sv)
             {

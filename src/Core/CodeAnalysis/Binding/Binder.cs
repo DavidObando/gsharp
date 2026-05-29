@@ -498,6 +498,35 @@ public sealed class Binder
             }
         }
 
+        // ADR-0053 Phase D: bind static method bodies declared in `shared` blocks.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.StaticMethods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var method in structSym.StaticMethods)
+            {
+                if (method.Declaration == null)
+                {
+                    continue;
+                }
+
+                var binder = new Binder(parentScope, method);
+                var body = binder.BindStatement(method.Declaration.Body);
+                var loweredBody = Lowerer.Lower(body);
+
+                if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
+                {
+                    binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                }
+
+                functionBodies.Add(method, loweredBody);
+                diagnostics.AddRange(binder.Diagnostics);
+            }
+        }
+
         var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
@@ -1324,6 +1353,265 @@ public sealed class Binder
             }
 
             structSymbol.SetEvents(eventsBuilder.ToImmutable());
+        }
+
+        // ADR-0053: bind members declared inside the optional `shared { … }` block
+        // as static members on the struct/class symbol.
+        if (syntax.SharedBlock != null)
+        {
+            // Static fields
+            var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+            foreach (var fieldSyntax in syntax.SharedBlock.Fields)
+            {
+                var fieldName = fieldSyntax.Identifier.Text;
+                if (!existingNames.Add(fieldName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
+                    continue;
+                }
+
+                var fieldType = BindTypeClause(fieldSyntax.Type);
+                if (fieldType == null)
+                {
+                    continue;
+                }
+
+                var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
+                var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: false, isStatic: true);
+
+                if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    fieldSymbol.SetAttributes(BindAttributes(
+                        fieldSyntax.Annotations,
+                        AttributeTargetKind.Field,
+                        FieldDeclarationAllowedTargets,
+                        "a field declaration",
+                        System.AttributeTargets.Field));
+                }
+
+                staticFieldsBuilder.Add(fieldSymbol);
+            }
+
+            structSymbol.SetStaticFields(staticFieldsBuilder.ToImmutable());
+
+            // Static methods
+            var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            foreach (var methodSyntax in syntax.SharedBlock.Methods)
+            {
+                var methodName = methodSyntax.Identifier.Text;
+                if (!existingNames.Add(methodName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(methodSyntax.Identifier.Location, methodName);
+                    continue;
+                }
+
+                var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                var seenParameterNames = new HashSet<string>();
+                foreach (var parameterSyntax in methodSyntax.Parameters)
+                {
+                    var parameterName = parameterSyntax.Identifier.Text;
+                    var parameterType = BindTypeClause(parameterSyntax.Type);
+                    if (parameterSyntax.IsVariadic)
+                    {
+                        Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                    }
+
+                    if (!seenParameterNames.Add(parameterName))
+                    {
+                        Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                    }
+                    else
+                    {
+                        parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                    }
+                }
+
+                var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+
+                var methodSymbol = new FunctionSymbol(
+                    methodName,
+                    parameters.ToImmutable(),
+                    returnType,
+                    methodSyntax,
+                    package,
+                    methodAccessibility,
+                    receiverType: null);
+                methodSymbol.IsStatic = true;
+
+                if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    var methodAttributes = BindAttributes(
+                        methodSyntax.Annotations,
+                        AttributeTargetKind.Method,
+                        FunctionDeclarationAllowedTargets,
+                        "a method declaration",
+                        System.AttributeTargets.Method);
+                    methodSymbol.SetAttributes(methodAttributes);
+                }
+
+                staticMethodsBuilder.Add(methodSymbol);
+            }
+
+            structSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
+
+            // Static properties
+            var staticPropertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+            foreach (var propSyntax in syntax.SharedBlock.Properties)
+            {
+                var propName = propSyntax.Identifier.Text;
+                if (!existingNames.Add(propName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
+                    continue;
+                }
+
+                var propType = BindTypeClause(propSyntax.Type);
+                if (propType == null)
+                {
+                    continue;
+                }
+
+                var propAccessibility = ResolveAccessibility(propSyntax.AccessibilityModifier);
+                bool hasGetter = true;
+                bool hasSetter;
+                bool isAutoProperty;
+                string setterParamName = "value";
+
+                if (propSyntax.OpenBraceToken == null)
+                {
+                    hasSetter = true;
+                    isAutoProperty = true;
+                }
+                else
+                {
+                    var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+                    hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
+                    hasSetter = setAccessor != null;
+
+                    if (setAccessor != null && setAccessor.ParameterIdentifier != null)
+                    {
+                        setterParamName = setAccessor.ParameterIdentifier.Text;
+                    }
+
+                    isAutoProperty = (getAccessor == null || getAccessor.Body == null)
+                                  && (setAccessor == null || setAccessor.Body == null)
+                                  && propSyntax.Accessors.All(a => a.Body == null);
+                }
+
+                var propertySymbol = new PropertySymbol(
+                    propName,
+                    propType,
+                    propAccessibility,
+                    hasGetter,
+                    hasSetter,
+                    isAutoProperty,
+                    isVirtual: false,
+                    isOverride: false,
+                    setterParamName,
+                    isStatic: true);
+
+                if (isAutoProperty)
+                {
+                    var backingField = new FieldSymbol(
+                        $"<{propName}>k__BackingField",
+                        propType,
+                        Accessibility.Private,
+                        isReadOnly: !hasSetter,
+                        isStatic: true);
+                    propertySymbol.BackingField = backingField;
+                }
+
+                if (!propSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    propertySymbol.SetAttributes(BindAttributes(
+                        propSyntax.Annotations,
+                        AttributeTargetKind.Property,
+                        PropertyDeclarationAllowedTargets,
+                        "a property declaration",
+                        System.AttributeTargets.Property));
+                }
+
+                staticPropertiesBuilder.Add(propertySymbol);
+            }
+
+            structSymbol.SetStaticProperties(staticPropertiesBuilder.ToImmutable());
+
+            // Static events
+            var staticEventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
+            foreach (var eventSyntax in syntax.SharedBlock.Events)
+            {
+                var eventName = eventSyntax.Identifier.Text;
+                if (!existingNames.Add(eventName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
+                    continue;
+                }
+
+                var handlerType = BindTypeClause(eventSyntax.Type);
+                if (handlerType == null)
+                {
+                    continue;
+                }
+
+                var eventAccessibility = ResolveAccessibility(eventSyntax.AccessibilityModifier);
+                bool isFieldLike = eventSyntax.OpenBraceToken == null;
+
+                var eventSymbol = new EventSymbol(
+                    eventName,
+                    handlerType,
+                    eventAccessibility,
+                    isFieldLike,
+                    isVirtual: false,
+                    isOverride: false,
+                    isStatic: true);
+
+                if (isFieldLike)
+                {
+                    var backingField = new FieldSymbol(
+                        eventName,
+                        handlerType,
+                        Accessibility.Private,
+                        isReadOnly: false,
+                        isStatic: true);
+                    eventSymbol.BackingField = backingField;
+                }
+
+                var handlerParam = new ParameterSymbol("value", handlerType);
+                eventSymbol.AddMethodSymbol = new FunctionSymbol(
+                    $"add_{eventName}",
+                    ImmutableArray.Create(handlerParam),
+                    TypeSymbol.Void,
+                    declaration: null,
+                    package,
+                    eventAccessibility,
+                    receiverType: null);
+                eventSymbol.AddMethodSymbol.IsStatic = true;
+                eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
+                    $"remove_{eventName}",
+                    ImmutableArray.Create(handlerParam),
+                    TypeSymbol.Void,
+                    declaration: null,
+                    package,
+                    eventAccessibility,
+                    receiverType: null);
+                eventSymbol.RemoveMethodSymbol.IsStatic = true;
+
+                if (!eventSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    eventSymbol.SetAttributes(BindAttributes(
+                        eventSyntax.Annotations,
+                        AttributeTargetKind.Event,
+                        EventDeclarationAllowedTargets,
+                        "an event declaration",
+                        System.AttributeTargets.Event));
+                }
+
+                staticEventsBuilder.Add(eventSymbol);
+            }
+
+            structSymbol.SetStaticEvents(staticEventsBuilder.ToImmutable());
         }
 
         // Phase 3.B.4: validate interface implementation. Walks each
@@ -5226,6 +5514,26 @@ public sealed class Binder
             return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
         }
 
+        // ADR-0053: user-defined struct/class type → static field write.
+        if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
+        {
+            var staticValue = BindExpression(syntax.Value);
+            var fieldName = syntax.FieldIdentifier.Text;
+            if (userStruct.TryGetStaticField(fieldName, out var staticField))
+            {
+                if (staticField.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                }
+
+                var staticConverted = BindConversion(syntax.Value.Location, staticValue, staticField.Type);
+                return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
         var value = BindExpression(syntax.Value);
         if (variable == null)
@@ -6724,6 +7032,7 @@ public sealed class Binder
         BoundExpression receiver = null;
         ImportedClassSymbol classSymbol = null;
         EnumSymbol enumSymbol = null;
+        StructSymbol userStructSymbol = null;
 
         if (leftPart is NameExpressionSyntax leftName)
         {
@@ -6766,9 +7075,21 @@ public sealed class Binder
             {
                 classSymbol = importedClass;
             }
-            else if (scope.TryLookupTypeAlias(name, out var typeAlias) && typeAlias is EnumSymbol foundEnum)
+            else if (scope.TryLookupTypeAlias(name, out var typeAlias))
             {
-                enumSymbol = foundEnum;
+                if (typeAlias is EnumSymbol foundEnum)
+                {
+                    enumSymbol = foundEnum;
+                }
+                else if (typeAlias is StructSymbol foundStruct)
+                {
+                    userStructSymbol = foundStruct;
+                }
+                else
+                {
+                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
+                    return new BoundErrorExpression(null);
+                }
             }
             else
             {
@@ -6784,6 +7105,11 @@ public sealed class Binder
         if (enumSymbol != null)
         {
             return BindEnumAccessorStep(enumSymbol, rightPart);
+        }
+
+        if (userStructSymbol != null)
+        {
+            return BindUserTypeStaticAccessorStep(userStructSymbol, rightPart);
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
@@ -6903,6 +7229,88 @@ public sealed class Binder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Handles <c>TypeName.member</c> and <c>TypeName.method(args)</c> accessor
+    /// resolution for user-defined struct/class static members (ADR-0053).
+    /// </summary>
+    private BoundExpression BindUserTypeStaticAccessorStep(StructSymbol structSym, ExpressionSyntax rightPart)
+    {
+        switch (rightPart)
+        {
+            case AccessorExpressionSyntax nested:
+                var head = BindUserTypeStaticAccessorStep(structSym, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
+
+            case CallExpressionSyntax ce:
+                return BindUserTypeStaticCall(structSym, ce);
+
+            case NameExpressionSyntax ne:
+                return BindUserTypeStaticMemberAccess(structSym, ne);
+
+            default:
+                return new BoundErrorExpression(null);
+        }
+    }
+
+    private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
+    {
+        var memberName = ne.IdentifierToken.Text;
+
+        if (structSym.TryGetStaticField(memberName, out var field))
+        {
+            return new BoundFieldAccessExpression(null, receiver: null, structSym, field);
+        }
+
+        foreach (var prop in structSym.StaticProperties)
+        {
+            if (prop.Name == memberName)
+            {
+                return new BoundPropertyAccessExpression(null, receiver: null, structSym, prop);
+            }
+        }
+
+        Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
+        return new BoundErrorExpression(null);
+    }
+
+    private BoundExpression BindUserTypeStaticCall(StructSymbol structSym, CallExpressionSyntax ce)
+    {
+        var methodName = ce.Identifier.Text;
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var argument in ce.Arguments)
+        {
+            boundArguments.Add(BindExpression(argument));
+        }
+
+        var arguments = boundArguments.ToImmutable();
+
+        if (structSym.TryGetStaticMethod(methodName, out var method))
+        {
+            if (arguments.Length != method.Parameters.Length)
+            {
+                Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
+                return new BoundErrorExpression(null);
+            }
+
+            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], method.Parameters[i].Type));
+            }
+
+            return new BoundCallExpression(null, method, convertedArgs.ToImmutable());
+        }
+
+        Diagnostics.ReportUnableToFindMember(ce.Location, methodName);
+        return new BoundErrorExpression(null);
     }
 
     private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)

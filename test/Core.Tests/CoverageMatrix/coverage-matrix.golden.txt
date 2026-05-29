@@ -164,6 +164,7 @@ SelectKeyword
 SelectStatement
 SemicolonToken
 SequenceKeyword
+SharedBlock
 ShiftLeftEqualsToken
 ShiftLeftToken
 ShiftRightEqualsToken

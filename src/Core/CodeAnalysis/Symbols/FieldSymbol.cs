@@ -16,12 +16,14 @@ public sealed class FieldSymbol : Symbol
     /// <param name="type">The field type.</param>
     /// <param name="accessibility">The field accessibility.</param>
     /// <param name="isReadOnly">True when the field is init-only after construction.</param>
-    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false)
+    /// <param name="isStatic">True when the field is declared inside a <c>shared</c> block (ADR-0053).</param>
+    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false)
         : base(name)
     {
         Type = type;
         Accessibility = accessibility;
         IsReadOnly = isReadOnly;
+        IsStatic = isStatic;
     }
 
     /// <inheritdoc/>
@@ -35,4 +37,7 @@ public sealed class FieldSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this field is init-only after construction.</summary>
     public bool IsReadOnly { get; }
+
+    /// <summary>Gets a value indicating whether this field is declared inside a <c>shared</c> block (ADR-0053).</summary>
+    public bool IsStatic { get; }
 }

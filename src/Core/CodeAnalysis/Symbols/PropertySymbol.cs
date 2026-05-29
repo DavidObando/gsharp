@@ -21,6 +21,7 @@ public sealed class PropertySymbol : Symbol
     /// <param name="isVirtual">Whether this property is virtual (open).</param>
     /// <param name="isOverride">Whether this property overrides a base property.</param>
     /// <param name="setterParameterName">The setter parameter name (defaults to "value").</param>
+    /// <param name="isStatic">Whether this property is declared inside a <c>shared</c> block (ADR-0053).</param>
     public PropertySymbol(
         string name,
         TypeSymbol type,
@@ -30,7 +31,8 @@ public sealed class PropertySymbol : Symbol
         bool isAutoProperty,
         bool isVirtual,
         bool isOverride,
-        string setterParameterName = "value")
+        string setterParameterName = "value",
+        bool isStatic = false)
         : base(name)
     {
         Type = type;
@@ -41,6 +43,7 @@ public sealed class PropertySymbol : Symbol
         IsVirtual = isVirtual;
         IsOverride = isOverride;
         SetterParameterName = setterParameterName;
+        IsStatic = isStatic;
     }
 
     /// <inheritdoc/>
@@ -69,6 +72,9 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets the setter parameter name (defaults to "value").</summary>
     public string SetterParameterName { get; }
+
+    /// <summary>Gets a value indicating whether this property is declared inside a <c>shared</c> block (ADR-0053).</summary>
+    public bool IsStatic { get; }
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol BackingField { get; set; }

@@ -652,6 +652,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        SharedBlockSyntax structDecl_sharedBlock = null;
         if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
         {
             openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", null);
@@ -751,6 +752,25 @@ public class Parser
                 eventDecl.WithAnnotations(memberAnnotations);
                 events.Add(eventDecl);
             }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                // ADR-0053: shared block grouping static member declarations.
+                if (memberAccessibility != null || memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberAccessibility ?? memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.IdentifierToken, SyntaxKind.OpenBraceToken);
+                }
+
+                var sharedBlock = ParseSharedBlock();
+                if (structDecl_sharedBlock != null)
+                {
+                    Diagnostics.ReportDuplicateSharedBlock(sharedBlock.SharedKeyword.Location);
+                }
+                else
+                {
+                    structDecl_sharedBlock = sharedBlock;
+                }
+            }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
                 if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
@@ -780,7 +800,7 @@ public class Parser
         }
 
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new StructDeclarationSyntax(
+        var structDecl = new StructDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
             typeKeyword,
@@ -795,6 +815,76 @@ public class Parser
             baseColon,
             baseTypeIdentifier,
             additionalBaseIdentifiers.ToImmutable(),
+            openBrace,
+            fields.ToImmutable(),
+            properties.ToImmutable(),
+            events.ToImmutable(),
+            methods.ToImmutable(),
+            closeBrace);
+        structDecl.SharedBlock = structDecl_sharedBlock;
+        return structDecl;
+    }
+
+    private SharedBlockSyntax ParseSharedBlock()
+    {
+        var sharedKeyword = NextToken(); // consume the contextual "shared" identifier
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+
+        var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
+        var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            SyntaxToken memberAccessibility = null;
+            if (Current.Kind == SyntaxKind.PublicKeyword ||
+                Current.Kind == SyntaxKind.InternalKeyword ||
+                Current.Kind == SyntaxKind.PrivateKeyword)
+            {
+                var ahead = 1;
+                while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
+                {
+                    ahead++;
+                }
+
+                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
+                {
+                    memberAccessibility = NextToken();
+                }
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            {
+                properties.Add(ParsePropertyDeclaration(memberAccessibility, null, null));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
+            {
+                events.Add(ParseEventDeclaration(memberAccessibility, null, null));
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                methods.Add((FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, null, null));
+            }
+            else
+            {
+                fields.Add(ParseFieldDeclaration());
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new SharedBlockSyntax(
+            syntaxTree,
+            sharedKeyword,
             openBrace,
             fields.ToImmutable(),
             properties.ToImmutable(),

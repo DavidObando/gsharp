@@ -482,6 +482,12 @@ internal sealed class ReflectionMetadataEmitter
                     nextFieldRow++;
                 }
             }
+
+            // ADR-0053: static fields from shared block.
+            if (!s.StaticFields.IsDefaultOrEmpty)
+            {
+                nextFieldRow += s.StaticFields.Length;
+            }
         }
 
         foreach (var s in nonSmStructs)
@@ -504,6 +510,12 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     nextFieldRow++;
                 }
+            }
+
+            // ADR-0053: static fields from shared block.
+            if (!s.StaticFields.IsDefaultOrEmpty)
+            {
+                nextFieldRow += s.StaticFields.Length;
             }
         }
 
@@ -638,13 +650,24 @@ internal sealed class ReflectionMetadataEmitter
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 this.eventAccessorHandles[ev] = (addHandle, removeHandle);
             }
+
+            // ADR-0053: plan method rows for static methods on classes.
+            if (!c.StaticMethods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.StaticMethods)
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                    aggregateMethodHandles[m] = handle;
+                    this.methodHandles[m] = handle;
+                }
+            }
         }
 
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -686,6 +709,17 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+            }
+
+            // ADR-0053: plan method rows for static methods on structs.
+            if (!s.StaticMethods.IsDefaultOrEmpty)
+            {
+                foreach (var m in s.StaticMethods)
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                    aggregateMethodHandles[m] = handle;
+                    this.methodHandles[m] = handle;
+                }
             }
         }
 
@@ -797,6 +831,13 @@ internal sealed class ReflectionMetadataEmitter
             // Class instance methods are owned by their class TypeDef, not by
             // a package's <Program> container.
             if (kvp.Key.IsInstanceMethod)
+            {
+                continue;
+            }
+
+            // ADR-0053: static methods on structs/classes are emitted as part of
+            // their owning TypeDef, not as package-level functions.
+            if (kvp.Key.IsStatic && aggregateMethodHandles.ContainsKey(kvp.Key))
             {
                 continue;
             }
@@ -1026,6 +1067,19 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0052: emit event accessor methods for classes.
             this.EmitEventAccessors(c);
+
+            // ADR-0053: emit static methods for classes.
+            if (!c.StaticMethods.IsDefaultOrEmpty)
+            {
+                foreach (var m in c.StaticMethods)
+                {
+                    if (this.program.Functions.TryGetValue(m, out var staticBody))
+                    {
+                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
+                        this.methodHandles[m] = emittedHandle;
+                    }
+                }
+            }
         }
 
         // 4b. Non-SM struct methods.
@@ -1036,7 +1090,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInlineStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -1057,6 +1111,19 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0052: emit event accessor methods for structs.
             this.EmitEventAccessors(s);
+
+            // ADR-0053: emit static methods for structs.
+            if (!s.StaticMethods.IsDefaultOrEmpty)
+            {
+                foreach (var m in s.StaticMethods)
+                {
+                    if (this.program.Functions.TryGetValue(m, out var staticBody))
+                    {
+                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
+                        this.methodHandles[m] = emittedHandle;
+                    }
+                }
+            }
         }
 
         // Phase 4 emit parity (F2, type-erased): now that every generic
@@ -1661,6 +1728,32 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.structFieldDefs[ev.BackingField] = backingHandle;
+        }
+
+        // ADR-0053: emit static field definitions from shared block.
+        if (!structSym.StaticFields.IsDefaultOrEmpty)
+        {
+            foreach (var staticField in structSym.StaticFields)
+            {
+                var sigBlob = new BlobBuilder();
+                this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), staticField.Type);
+                var attrs = MapFieldAccessibility(staticField.Accessibility) | FieldAttributes.Static;
+                if (staticField.IsReadOnly)
+                {
+                    attrs |= FieldAttributes.InitOnly;
+                }
+
+                var handle = this.metadata.AddFieldDefinition(
+                    attributes: attrs,
+                    name: this.metadata.GetOrAddString(staticField.Name),
+                    signature: this.metadata.GetOrAddBlob(sigBlob));
+                if (firstField.IsNil)
+                {
+                    firstField = handle;
+                }
+
+                this.structFieldDefs[staticField] = handle;
+            }
         }
 
         if (firstField.IsNil)
@@ -6158,7 +6251,11 @@ internal sealed class ReflectionMetadataEmitter
                 WalkForStructLiterals(blockExpr.Expression, sink);
                 break;
             case BoundFieldAccessExpression fa:
-                WalkForStructLiterals(fa.Receiver, sink);
+                if (fa.Receiver != null)
+                {
+                    WalkForStructLiterals(fa.Receiver, sink);
+                }
+
                 break;
             case BoundFieldAssignmentExpression fas:
                 WalkForStructLiterals(fas.Value, sink);
@@ -6677,7 +6774,11 @@ internal sealed class ReflectionMetadataEmitter
                 WalkForNullConditional(conv.Expression, sink);
                 break;
             case BoundFieldAccessExpression fa:
-                WalkForNullConditional(fa.Receiver, sink);
+                if (fa.Receiver != null)
+                {
+                    WalkForNullConditional(fa.Receiver, sink);
+                }
+
                 break;
             case BoundFieldAssignmentExpression fas:
                 WalkForNullConditional(fas.Value, sink);
@@ -8347,7 +8448,8 @@ internal sealed class ReflectionMetadataEmitter
                         }
                     }
 
-                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle))
+                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle)
+                        && !this.outer.methodHandles.TryGetValue(call.Function, out fnHandle))
                     {
                         throw new InvalidOperationException(
                             $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
@@ -10004,6 +10106,14 @@ internal sealed class ReflectionMetadataEmitter
                     $"Struct field '{fa.Field.Name}' has no emitted FieldDef.");
             }
 
+            // ADR-0053: static field access — no receiver, use ldsfld.
+            if (fa.Receiver == null)
+            {
+                this.il.OpCode(ILOpCode.Ldsfld);
+                this.il.Token(fieldHandle);
+                return;
+            }
+
             // Class receivers are references: load the value (the ref) and ldfld.
             // For struct receivers, load by address when the receiver is a
             // simple variable (avoids a copy and is verifier-friendly); fall
@@ -10366,6 +10476,19 @@ internal sealed class ReflectionMetadataEmitter
             {
                 throw new InvalidOperationException(
                     $"Struct field '{fas.Field.Name}' has no emitted FieldDef.");
+            }
+
+            // ADR-0053: static field assignment — no receiver, use stsfld/ldsfld.
+            if (fas.Receiver == null)
+            {
+                this.EmitExpression(fas.Value);
+                this.il.OpCode(ILOpCode.Stsfld);
+                this.il.Token(fieldHandle);
+
+                // Leave the assigned value on the stack as the expression result.
+                this.il.OpCode(ILOpCode.Ldsfld);
+                this.il.Token(fieldHandle);
+                return;
             }
 
             // Class field assignment: load the reference, evaluate the value,
@@ -11123,6 +11246,14 @@ internal sealed class ReflectionMetadataEmitter
             {
                 throw new InvalidOperationException(
                     $"Cannot take address of field '{fa.Field.Name}': no emitted FieldDef.");
+            }
+
+            // ADR-0053: static field address — use ldsflda.
+            if (fa.Receiver == null)
+            {
+                this.il.OpCode(ILOpCode.Ldsflda);
+                this.il.Token(fieldHandle);
+                return;
             }
 
             // Load receiver address, then ldflda.

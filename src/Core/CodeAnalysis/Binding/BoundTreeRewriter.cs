@@ -1513,6 +1513,12 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
     {
+        // ADR-0053: static field access has no receiver (null).
+        if (node.Receiver == null)
+        {
+            return node;
+        }
+
         var receiver = RewriteExpression(node.Receiver);
         return receiver == node.Receiver ? node : new BoundFieldAccessExpression(null, receiver, node.StructType, node.Field, node.NarrowedType);
     }
