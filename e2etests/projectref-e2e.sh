@@ -8,6 +8,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+mtime() {
+    if stat -c %Y "$1" >/dev/null 2>&1; then
+        stat -c %Y "$1"
+    else
+        stat -f %m "$1"
+    fi
+}
+
 echo "==> Packing Gsharp.NET.Sdk into .nugs/"
 dotnet build src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj -c Release --nologo -v:q
 mkdir -p .nugs
@@ -61,7 +69,7 @@ echo "==> Verifying refasm-gated incremental rebuild"
 
 # Record the downstream App DLL timestamp after the clean build.
 APP_DLL="$SAMPLE/App/bin/Debug/net10.0/App.dll"
-TS_BEFORE=$(stat -f %m "$APP_DLL" 2>/dev/null || stat -c %Y "$APP_DLL")
+TS_BEFORE=$(mtime "$APP_DLL")
 
 # Touch the Lib source with a body-only change (add a comment) — the public
 # surface (refasm) should NOT change, so the downstream should NOT rebuild.
@@ -69,9 +77,9 @@ sleep 1
 echo "// body-only change" >> "$SAMPLE/Lib/Greeter.gs"
 dotnet build "$SAMPLE/App/App.gsproj" --nologo -v:q
 
-TS_AFTER=$(stat -f %m "$APP_DLL" 2>/dev/null || stat -c %Y "$APP_DLL")
+TS_AFTER=$(mtime "$APP_DLL")
 if [[ "$TS_BEFORE" != "$TS_AFTER" ]]; then
-    echo "    INFO: body-only Lib change rebuilt downstream App (refasm gate not yet effective)"
+    echo "    FAIL: body-only Lib change rebuilt downstream App (refasm gate not effective)"
     REFASM_GATE_WORKS=false
 else
     echo "    PASS: body-only Lib change did NOT rebuild downstream App"
@@ -79,7 +87,7 @@ else
 fi
 
 # Now make a public signature change — add a new public method.
-TS_BEFORE2=$(stat -f %m "$APP_DLL" 2>/dev/null || stat -c %Y "$APP_DLL")
+TS_BEFORE2=$(mtime "$APP_DLL")
 sleep 1
 cat > "$SAMPLE/Lib/Greeter.gs" <<'EOF'
 package ProjectRefLib
@@ -98,7 +106,7 @@ type Greeter class(Name string) {
 EOF
 dotnet build "$SAMPLE/App/App.gsproj" --nologo -v:q
 
-TS_AFTER2=$(stat -f %m "$APP_DLL" 2>/dev/null || stat -c %Y "$APP_DLL")
+TS_AFTER2=$(mtime "$APP_DLL")
 if [[ "$TS_BEFORE2" == "$TS_AFTER2" ]]; then
     echo "    WARN: public Lib signature change did NOT rebuild downstream App"
 else
@@ -111,5 +119,6 @@ git checkout -- "$SAMPLE/Lib/Greeter.gs" 2>/dev/null || true
 if [[ "$REFASM_GATE_WORKS" == "true" ]]; then
     echo "PASS: cross-project references and refasm incremental rebuild verified."
 else
-    echo "INFO: refasm incremental rebuild gating is not yet effective — skipping as non-blocking."
+    echo "FAIL: refasm incremental rebuild gating is not working."
+    exit 1
 fi
