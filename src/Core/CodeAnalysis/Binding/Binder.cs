@@ -5011,6 +5011,19 @@ public sealed class Binder
 
         if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
         {
+            // ADR-0051: check if it's a property.
+            if (TryGetPropertyIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, out var prop))
+            {
+                if (!prop.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propConverted = BindConversion(syntax.Value.Location, value, prop.Type);
+                return new BoundPropertyAssignmentExpression(null, new BoundVariableExpression(null, variable), structSymbol, prop, propConverted);
+            }
+
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
             return new BoundErrorExpression(null);
         }
@@ -6676,6 +6689,18 @@ public sealed class Binder
                             ReportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{c.Name}.{field.Name}");
                             return new BoundFieldAccessExpression(null, receiver, c, field);
                         }
+                    }
+
+                    // ADR-0051: check properties before reporting "unable to find member".
+                    if (TryGetPropertyIncludingInherited(structSym, ne.IdentifierToken.Text, out var prop))
+                    {
+                        if (!prop.HasGetter)
+                        {
+                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.Text);
+                            return new BoundErrorExpression(null);
+                        }
+
+                        return new BoundPropertyAccessExpression(null, receiver, structSym, prop);
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);

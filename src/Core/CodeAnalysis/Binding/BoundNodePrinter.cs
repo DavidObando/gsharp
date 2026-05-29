@@ -181,6 +181,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.FieldAssignmentExpression:
                 WriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node, writer);
                 break;
+            case BoundNodeKind.PropertyAccessExpression:
+                WritePropertyAccessExpression((BoundPropertyAccessExpression)node, writer);
+                break;
+            case BoundNodeKind.PropertyAssignmentExpression:
+                WritePropertyAssignmentExpression((BoundPropertyAssignmentExpression)node, writer);
+                break;
             case BoundNodeKind.NullConditionalAccessExpression:
                 WriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node, writer);
                 break;
@@ -1263,6 +1269,24 @@ public static class BoundNodePrinter
         writer.WriteIdentifier(node.Receiver.Name);
         writer.WritePunctuation(SyntaxKind.DotToken);
         writer.WriteIdentifier(node.Field.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
+    }
+
+    private static void WritePropertyAccessExpression(BoundPropertyAccessExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Property.Name);
+    }
+
+    private static void WritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node, IndentedTextWriter writer)
+    {
+        node.Receiver.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Property.Name);
         writer.WriteSpace();
         writer.WritePunctuation(SyntaxKind.EqualsToken);
         writer.WriteSpace();

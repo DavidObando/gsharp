@@ -264,6 +264,8 @@ MapLiteralExpression
 NullConditionalAccessExpression
 PatternSwitchArm
 PatternSwitchStatement
+PropertyAccessExpression
+PropertyAssignmentExpression
 PropertyPattern
 PropertyPatternField
 RelationalPattern
