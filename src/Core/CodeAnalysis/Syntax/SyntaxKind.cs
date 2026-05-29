@@ -229,6 +229,10 @@ public enum SyntaxKind
     // Issue #141 / ADR-0047: attribute (annotation) syntax
     Annotation,
     AnnotationTarget,
+
+    // ADR-0051: property declarations
+    PropertyDeclaration,
+    PropertyAccessor,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

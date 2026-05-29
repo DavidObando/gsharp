@@ -213,6 +213,50 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken, baseTypeIdentifier, additionalBaseTypeIdentifiers, openBraceToken, fields, ImmutableArray<PropertyDeclarationSyntax>.Empty, methods, closeBraceToken)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class (ADR-0051 — with property declarations).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="typeKeyword">The <c>type</c> keyword.</param>
+    /// <param name="identifier">The aggregate identifier.</param>
+    /// <param name="dataKeyword">The optional <c>data</c> contextual keyword.</param>
+    /// <param name="inlineKeyword">The optional <c>inline</c> contextual keyword.</param>
+    /// <param name="openModifier">The optional <c>open</c> contextual keyword (classes only).</param>
+    /// <param name="structKeyword">The <c>struct</c> or <c>class</c> keyword.</param>
+    /// <param name="primaryConstructorOpenParen">The optional opening paren of a primary constructor.</param>
+    /// <param name="primaryConstructorParameters">The primary constructor parameter list.</param>
+    /// <param name="primaryConstructorCloseParen">The optional closing paren of the primary constructor.</param>
+    /// <param name="baseColonToken">The optional <c>:</c> token introducing a base/interface clause.</param>
+    /// <param name="baseTypeIdentifier">The first identifier in the base/interface clause.</param>
+    /// <param name="additionalBaseTypeIdentifiers">Subsequent comma-separated identifiers in the base/interface clause (Phase 3.B.4).</param>
+    /// <param name="openBraceToken">The opening brace of the body.</param>
+    /// <param name="fields">The body field declarations.</param>
+    /// <param name="properties">The property declarations in the body (ADR-0051).</param>
+    /// <param name="methods">The method declarations in the body.</param>
+    /// <param name="closeBraceToken">The closing brace.</param>
+    public StructDeclarationSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        SyntaxToken dataKeyword,
+        SyntaxToken inlineKeyword,
+        SyntaxToken openModifier,
+        SyntaxToken structKeyword,
+        SyntaxToken primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
+        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken baseColonToken,
+        SyntaxToken baseTypeIdentifier,
+        ImmutableArray<SyntaxToken> additionalBaseTypeIdentifiers,
+        SyntaxToken openBraceToken,
+        ImmutableArray<FieldDeclarationSyntax> fields,
+        ImmutableArray<PropertyDeclarationSyntax> properties,
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -230,6 +274,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
         AdditionalBaseTypeIdentifiers = additionalBaseTypeIdentifiers;
         OpenBraceToken = openBraceToken;
         Fields = fields;
+        Properties = properties;
         Methods = methods;
         CloseBraceToken = closeBraceToken;
     }
@@ -299,6 +344,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the field declarations.</summary>
     public ImmutableArray<FieldDeclarationSyntax> Fields { get; }
+
+    /// <summary>Gets the property declarations in the body (ADR-0051). Empty for types that declare no properties.</summary>
+    public ImmutableArray<PropertyDeclarationSyntax> Properties { get; }
 
     /// <summary>Gets the method declarations declared inside the body (Phase 3.B.3 sub-step 2b — classes only). Empty for struct types and for bodyless declarations.</summary>
     public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }

@@ -141,6 +141,8 @@ PlusEqualsToken
 PlusPlusToken
 PlusToken
 PrivateKeyword
+PropertyAccessor
+PropertyDeclaration
 PropertyPattern
 PropertyPatternField
 PublicKeyword
