@@ -275,6 +275,90 @@ public class PropertyEmitTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public void ComputedProperty_Getter_EmitsCorrectIL()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Rect class {
+                prop Width int32
+                prop Height int32
+                prop Area int32 {
+                    get {
+                        return this.Width * this.Height
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var rectType = assembly.GetTypes().Single(t => t.Name == "Rect");
+        var instance = Activator.CreateInstance(rectType);
+        rectType.GetProperty("Width")!.SetMethod!.Invoke(instance, new object[] { 3 });
+        rectType.GetProperty("Height")!.SetMethod!.Invoke(instance, new object[] { 4 });
+        var area = rectType.GetProperty("Area")!.GetMethod!.Invoke(instance, null);
+        Assert.Equal(12, area);
+    }
+
+    [Fact]
+    public void ComputedProperty_Setter_EmitsCorrectIL()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Counter class {
+                prop raw int32
+                prop Value int32 {
+                    get {
+                        return this.raw * 2
+                    }
+                    set(v) {
+                        this.raw = v
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var counterType = assembly.GetTypes().Single(t => t.Name == "Counter");
+        var instance = Activator.CreateInstance(counterType);
+        counterType.GetProperty("Value")!.SetMethod!.Invoke(instance, new object[] { 5 });
+        var result = counterType.GetProperty("Value")!.GetMethod!.Invoke(instance, null);
+        Assert.Equal(10, result);
+    }
+
+    [Fact]
+    public void ComputedProperty_GetOnly_HasNoSetter()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Greeter class {
+                prop Name string
+                prop Greeting string {
+                    get {
+                        return "Hello, " + this.Name
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var greeterType = assembly.GetTypes().Single(t => t.Name == "Greeter");
+        var instance = Activator.CreateInstance(greeterType);
+        greeterType.GetProperty("Name")!.SetMethod!.Invoke(instance, new object[] { "World" });
+        var greetingProp = greeterType.GetProperty("Greeting");
+        Assert.NotNull(greetingProp);
+        Assert.True(greetingProp!.CanRead);
+        Assert.False(greetingProp.CanWrite);
+        var result = greetingProp.GetMethod!.Invoke(instance, null);
+        Assert.Equal("Hello, World", result);
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_property_emit_").FullName;

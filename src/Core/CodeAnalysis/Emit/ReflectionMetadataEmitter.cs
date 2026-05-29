@@ -1663,32 +1663,39 @@ internal sealed class ReflectionMetadataEmitter
     /// <summary>
     /// ADR-0051 Phase 6: emits a getter accessor MethodDef (get_PropertyName).
     /// For auto-properties: ldarg.0, ldfld backing, ret.
-    /// For computed properties: throws NotImplementedException (placeholder).
+    /// For computed properties: emits the bound getter body IL.
     /// </summary>
     private MethodDefinitionHandle EmitPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (prop.GetterSymbol != null && this.program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
+            {
+                // Computed property with bound body: emit using EmitFunction infrastructure.
+                var handle = this.EmitFunction(prop.GetterSymbol, getterBody, isEntryPoint: false);
+                return handle;
             }
             else
             {
-                // Computed property placeholder: throw new NotImplementedException().
+                // Fallback: throw new NotImplementedException().
+                var il = new InstructionEncoder(new BlobBuilder());
                 var nieCtor = this.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
             }
-
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
         }
 
         var sigBlob = new BlobBuilder();
@@ -1717,33 +1724,40 @@ internal sealed class ReflectionMetadataEmitter
     /// <summary>
     /// ADR-0051 Phase 6: emits a setter accessor MethodDef (set_PropertyName).
     /// For auto-properties: ldarg.0, ldarg.1, stfld backing, ret.
-    /// For computed properties: throws NotImplementedException (placeholder).
+    /// For computed properties: emits the bound setter body IL.
     /// </summary>
     private MethodDefinitionHandle EmitPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
         if (!this.metadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
+                var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Stfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (prop.SetterSymbol != null && this.program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
+            {
+                // Computed property with bound body: emit using EmitFunction infrastructure.
+                var handle = this.EmitFunction(prop.SetterSymbol, setterBody, isEntryPoint: false);
+                return handle;
             }
             else
             {
-                // Computed property placeholder: throw new NotImplementedException().
+                // Fallback: throw new NotImplementedException().
+                var il = new InstructionEncoder(new BlobBuilder());
                 var nieCtor = this.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
             }
-
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
         }
 
         var sigBlob = new BlobBuilder();

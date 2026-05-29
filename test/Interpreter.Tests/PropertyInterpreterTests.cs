@@ -114,6 +114,74 @@ public class PropertyInterpreterTests
         Assert.Contains("GS0189", output);
     }
 
+    [Fact]
+    public void ComputedProperty_Getter_ReturnsValue()
+    {
+        var source = """
+            type Rect class {
+                prop Width int32
+                prop Height int32
+                prop Area int32 {
+                    get {
+                        return this.Width * this.Height
+                    }
+                }
+            }
+            let r = Rect{}
+            r.Width = 3
+            r.Height = 4
+            r.Area
+            """;
+        var output = RunSubmission(source);
+        Assert.Contains("12", output);
+        Assert.DoesNotContain("error GS", output);
+    }
+
+    [Fact]
+    public void ComputedProperty_Setter_UpdatesBackingState()
+    {
+        var source = """
+            type Counter class {
+                prop raw int32
+                prop Value int32 {
+                    get {
+                        return this.raw * 2
+                    }
+                    set(v) {
+                        this.raw = v
+                    }
+                }
+            }
+            let c = Counter{}
+            c.Value = 5
+            c.Value
+            """;
+        var output = RunSubmission(source);
+        Assert.Contains("10", output);
+        Assert.DoesNotContain("error GS", output);
+    }
+
+    [Fact]
+    public void ComputedProperty_GetOnly_NoSetter()
+    {
+        var source = """
+            type Greeter class {
+                prop Name string
+                prop Greeting string {
+                    get {
+                        return "Hello, " + this.Name
+                    }
+                }
+            }
+            let g = Greeter{}
+            g.Name = "World"
+            g.Greeting
+            """;
+        var output = RunSubmission(source);
+        Assert.Contains("Hello, World", output);
+        Assert.DoesNotContain("error GS", output);
+    }
+
     private static string RunSubmission(string text)
     {
         using var outWriter = new StringWriter();
