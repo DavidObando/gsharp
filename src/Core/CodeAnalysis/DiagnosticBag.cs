@@ -1011,6 +1011,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0188", $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
     }
 
+    /// <summary>ADR-0051: reports an auto-property declared inside a <c>data struct</c>, which is not allowed.</summary>
+    /// <param name="location">The text location of the property identifier.</param>
+    /// <param name="propertyName">The property name.</param>
+    public void ReportAutoPropertyInDataStruct(TextLocation location, string propertyName)
+    {
+        Report(location, "GS0189", $"Property '{propertyName}' cannot be an auto-property in a data struct; use a computed property with an explicit body instead.");
+    }
+
+    /// <summary>ADR-0051: reports an <c>open</c> member declared on a class that is not itself <c>open</c>.</summary>
+    /// <param name="location">The text location of the <c>open</c> modifier.</param>
+    /// <param name="memberName">The member name.</param>
+    public void ReportOpenMemberInNonOpenClass(TextLocation location, string memberName)
+    {
+        Report(location, "GS0190", $"Member '{memberName}' is marked 'open' but the enclosing class is not open.");
+    }
+
     /// <summary>GS9001: Cannot take address of a non-lvalue expression.</summary>
     /// <param name="location">The text location of the <c>&amp;</c> operator.</param>
     /// <param name="expressionText">A textual representation of the offending expression.</param>

@@ -51,6 +51,14 @@ public sealed class Binder
         ImmutableHashSet.Create(AttributeTargetKind.Field);
 
     /// <summary>
+    /// Targets permitted on a property declaration (ADR-0051):
+    /// <c>property</c> by default; <c>field</c> for the backing field;
+    /// <c>method</c> for the synthesized accessors.
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> PropertyDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Property, AttributeTargetKind.Field, AttributeTargetKind.Method);
+
+    /// <summary>
     /// Targets permitted on a <c>var</c>/<c>let</c>/<c>const</c> variable
     /// declaration. ADR-0047 §2 assigns the default target <c>field</c> to
     /// these declarations (both at top level — where the variable becomes a
@@ -856,6 +864,14 @@ public sealed class Binder
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
 
+        // Collect existing member names for duplicate detection across fields,
+        // methods, and properties.
+        var existingNames = new HashSet<string>();
+        foreach (var f in structSymbol.Fields)
+        {
+            existingNames.Add(f.Name);
+        }
+
         // Phase 3.B.3 sub-step 2b: bind methods declared inside the class body.
         // Methods are only legal on `class` types (struct methods rejected by
         // the parser already). Each method becomes a FunctionSymbol with
@@ -863,12 +879,6 @@ public sealed class Binder
         // BindProgram by walking StructSymbol.Methods.
         if (syntax.IsClass && !syntax.Methods.IsDefaultOrEmpty)
         {
-            var existingNames = new HashSet<string>();
-            foreach (var f in structSymbol.Fields)
-            {
-                existingNames.Add(f.Name);
-            }
-
             var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
             foreach (var methodSyntax in syntax.Methods)
             {
@@ -963,6 +973,132 @@ public sealed class Binder
             structSymbol.SetMethods(methodsBuilder.ToImmutable());
         }
 
+        // ADR-0051: bind property declarations.
+        if (!syntax.Properties.IsDefaultOrEmpty)
+        {
+            var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+            foreach (var propSyntax in syntax.Properties)
+            {
+                var propName = propSyntax.Identifier.Text;
+
+                // Check for duplicate names (fields + methods + other properties)
+                if (!existingNames.Add(propName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
+                    continue;
+                }
+
+                var propType = BindTypeClause(propSyntax.Type);
+                if (propType == null)
+                {
+                    continue;
+                }
+
+                var propAccessibility = ResolveAccessibility(propSyntax.AccessibilityModifier);
+
+                // Determine accessor presence
+                bool hasGetter = true;
+                bool hasSetter;
+                bool isAutoProperty;
+                string setterParamName = "value";
+
+                if (propSyntax.OpenBraceToken == null)
+                {
+                    // Bare auto-property: prop Name Type
+                    hasSetter = true;
+                    isAutoProperty = true;
+                }
+                else
+                {
+                    // Has body — check accessors
+                    var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+                    hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
+                    hasSetter = setAccessor != null;
+
+                    if (setAccessor != null && setAccessor.ParameterIdentifier != null)
+                    {
+                        setterParamName = setAccessor.ParameterIdentifier.Text;
+                    }
+
+                    // Auto-property if accessors have no bodies
+                    isAutoProperty = (getAccessor == null || getAccessor.Body == null)
+                                  && (setAccessor == null || setAccessor.Body == null)
+                                  && propSyntax.Accessors.All(a => a.Body == null);
+                }
+
+                // Validate: auto-property not allowed on data struct
+                if (isAutoProperty && syntax.IsData)
+                {
+                    Diagnostics.ReportAutoPropertyInDataStruct(propSyntax.Identifier.Location, propName);
+                }
+
+                // Validate: open only on open class
+                bool isVirtual = propSyntax.OpenModifier != null;
+                bool isOverride = propSyntax.OverrideModifier != null;
+
+                if (isVirtual && !structSymbol.IsOpen)
+                {
+                    Diagnostics.ReportOpenMemberInNonOpenClass(propSyntax.OpenModifier.Location, propName);
+                }
+
+                // Validate: override needs base property
+                PropertySymbol overriddenProperty = null;
+                if (isOverride)
+                {
+                    if (structSymbol.BaseClass == null || !TryGetPropertyIncludingInherited(structSymbol.BaseClass, propName, out var baseProp))
+                    {
+                        Diagnostics.ReportNoBaseMethodToOverride(propSyntax.Identifier.Location, propName);
+                    }
+                    else if (!baseProp.IsVirtual && !baseProp.IsOverride)
+                    {
+                        Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
+                    }
+                    else
+                    {
+                        overriddenProperty = baseProp;
+                    }
+                }
+
+                var propertySymbol = new PropertySymbol(
+                    propName,
+                    propType,
+                    propAccessibility,
+                    hasGetter,
+                    hasSetter,
+                    isAutoProperty,
+                    isVirtual,
+                    isOverride,
+                    setterParamName);
+
+                // Create backing field for auto-properties
+                if (isAutoProperty && !syntax.IsData)
+                {
+                    var backingField = new FieldSymbol(
+                        $"<{propName}>k__BackingField",
+                        propType,
+                        Accessibility.Private,
+                        isReadOnly: !hasSetter);
+                    propertySymbol.BackingField = backingField;
+                }
+
+                // Bind annotations
+                if (!propSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    propertySymbol.SetAttributes(BindAttributes(
+                        propSyntax.Annotations,
+                        AttributeTargetKind.Property,
+                        PropertyDeclarationAllowedTargets,
+                        "a property declaration",
+                        System.AttributeTargets.Property));
+                }
+
+                propertiesBuilder.Add(propertySymbol);
+            }
+
+            structSymbol.SetProperties(propertiesBuilder.ToImmutable());
+        }
+
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
         // methods) provides a same-name, same-signature method. The check
@@ -1008,8 +1144,70 @@ public sealed class Binder
                             imethod.Name);
                     }
                 }
+
+                // ADR-0051: verify property requirements.
+                foreach (var iprop in iface.Properties)
+                {
+                    var found = false;
+                    foreach (var implProp in structSymbol.Properties)
+                    {
+                        if (implProp.Name == iprop.Name)
+                        {
+                            if (iprop.HasGetter && !implProp.HasGetter)
+                            {
+                                Diagnostics.ReportInterfaceMethodNotImplemented(
+                                    syntax.Identifier.Location,
+                                    structSymbol.Name,
+                                    iface.Name,
+                                    iprop.Name + " (getter)");
+                            }
+
+                            if (iprop.HasSetter && !implProp.HasSetter)
+                            {
+                                Diagnostics.ReportInterfaceMethodNotImplemented(
+                                    syntax.Identifier.Location,
+                                    structSymbol.Name,
+                                    iface.Name,
+                                    iprop.Name + " (setter)");
+                            }
+
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                    {
+                        Diagnostics.ReportInterfaceMethodNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol.Name,
+                            iface.Name,
+                            iprop.Name);
+                    }
+                }
             }
         }
+    }
+
+    private static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
+    {
+        var current = type;
+        while (current != null)
+        {
+            foreach (var p in current.Properties)
+            {
+                if (p.Name == name)
+                {
+                    property = p;
+                    return true;
+                }
+            }
+
+            current = current.BaseClass;
+        }
+
+        property = null;
+        return false;
     }
 
     private InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package)
@@ -1121,6 +1319,60 @@ public sealed class Binder
         }
 
         interfaceSymbol.SetMethods(methodsBuilder.ToImmutable());
+
+        // ADR-0051: bind interface property declarations.
+        if (!syntax.Properties.IsDefaultOrEmpty)
+        {
+            var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+            foreach (var propSyntax in syntax.Properties)
+            {
+                var propName = propSyntax.Identifier.Text;
+                if (!seenNames.Add(propName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
+                    continue;
+                }
+
+                var propType = BindTypeClause(propSyntax.Type);
+                if (propType == null)
+                {
+                    continue;
+                }
+
+                bool hasGetter = true;
+                bool hasSetter = false;
+
+                if (propSyntax.OpenBraceToken != null)
+                {
+                    hasGetter = propSyntax.Accessors.Any(a => a.IsGetter);
+                    hasSetter = propSyntax.Accessors.Any(a => a.IsSetter);
+                    if (!hasGetter && !hasSetter)
+                    {
+                        hasGetter = true;
+                        hasSetter = true;
+                    }
+                }
+                else
+                {
+                    // Bare: prop Name Type in interface = get + set
+                    hasSetter = true;
+                }
+
+                var propSymbol = new PropertySymbol(
+                    propName,
+                    propType,
+                    Accessibility.Public,
+                    hasGetter,
+                    hasSetter,
+                    isAutoProperty: false,
+                    isVirtual: false,
+                    isOverride: false);
+
+                propertiesBuilder.Add(propSymbol);
+            }
+
+            interfaceSymbol.SetProperties(propertiesBuilder.ToImmutable());
+        }
 
         // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
         // parameter types (contravariant position) and return type (covariant
