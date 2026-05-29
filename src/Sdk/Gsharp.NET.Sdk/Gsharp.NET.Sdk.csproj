@@ -9,6 +9,10 @@
     <PackageId>Gsharp.NET.Sdk</PackageId>
     <Description>MSBuild Project SDK for the GSharp language. Enables `&lt;Project Sdk="Gsharp.NET.Sdk"&gt;` and .gsproj files to build with `dotnet build`.</Description>
     <PackageTags>gsharp;dotnet;sdk;msbuild;compiler</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <DevelopmentDependency>true</DevelopmentDependency>
     <NoPackageAnalysis>true</NoPackageAnalysis>
@@ -41,6 +45,9 @@
     <None Include="build\Gsharp.NET.Sdk.props" Pack="true" PackagePath="build\Gsharp.NET.Sdk.props" />
     <None Include="build\Gsharp.NET.Current.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Current.Sdk.targets" />
     <None Include="build\Gsharp.NET.Core.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Core.Sdk.targets" />
+    <!-- Package metadata files -->
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
   <!-- Pack the BuildTask DLL (this assembly's build output) under tools/task/. -->
