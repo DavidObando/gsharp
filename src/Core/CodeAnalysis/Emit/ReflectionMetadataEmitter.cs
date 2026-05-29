@@ -3840,6 +3840,17 @@ internal sealed class ReflectionMetadataEmitter
                 this.asyncIteratorEmitContexts.TryGetValue(owningSmClass, out aiEmitCtx);
             }
 
+            // For struct instance methods, pass structThisParameter so the
+            // BodyEmitter knows arg0 is already a managed pointer (ref T) and
+            // emits ldarg.0 instead of ldarga.0 when accessing fields via this.
+            ParameterSymbol structThis = null;
+            if (function.IsInstanceMethod
+                && function.ReceiverType is StructSymbol recvStruct
+                && !recvStruct.IsClass)
+            {
+                structThis = function.ThisParameter;
+            }
+
             var emitter = new BodyEmitter(
                 this,
                 il,
@@ -3858,6 +3869,7 @@ internal sealed class ReflectionMetadataEmitter
                 selectStatementSlots,
                 goEnclosingScopes,
                 constValues: constValues,
+                structThisParameter: structThis,
                 asyncIteratorEmitCtx: aiEmitCtx);
             emitter.EmitBlock(body);
 
