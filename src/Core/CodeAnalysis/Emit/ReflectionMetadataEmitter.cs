@@ -93,8 +93,15 @@ internal sealed class ReflectionMetadataEmitter
     // ADR-0051 Phase 6: property accessor method handles for PropertyDef + MethodSemantics emission.
     private readonly Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)> propertyAccessorHandles = new Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)>();
 
+    // ADR-0052: event accessor method handles for EventDef + MethodSemantics emission.
+    private readonly Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove)> eventAccessorHandles = new Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove)>();
+
     // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
     private MemberReferenceHandle? notImplementedExceptionCtorRef;
+
+    // ADR-0052: cached MemberReferenceHandles for Delegate.Combine and Delegate.Remove.
+    private MemberReferenceHandle? delegateCombineRef;
+    private MemberReferenceHandle? delegateRemoveRef;
 
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
@@ -466,6 +473,15 @@ internal sealed class ReflectionMetadataEmitter
                     nextFieldRow++;
                 }
             }
+
+            // ADR-0052: backing fields for field-like events.
+            foreach (var ev in s.Events)
+            {
+                if (ev.IsFieldLike && ev.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
         }
 
         foreach (var s in nonSmStructs)
@@ -476,6 +492,15 @@ internal sealed class ReflectionMetadataEmitter
             foreach (var p in s.Properties)
             {
                 if (p.IsAutoProperty && p.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
+
+            // ADR-0052: backing fields for field-like events.
+            foreach (var ev in s.Events)
+            {
+                if (ev.IsFieldLike && ev.BackingField != null)
                 {
                     nextFieldRow++;
                 }
@@ -556,6 +581,14 @@ internal sealed class ReflectionMetadataEmitter
 
                 this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
+
+            // ADR-0052: plan accessor method rows for interface events.
+            foreach (var ev in i.Events)
+            {
+                var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+            }
         }
 
         // Plan method rows for non-SM class ctors + instance methods.
@@ -597,13 +630,21 @@ internal sealed class ReflectionMetadataEmitter
 
                 this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
+
+            // ADR-0052: plan accessor method rows for class events.
+            foreach (var ev in c.Events)
+            {
+                var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+            }
         }
 
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -637,6 +678,14 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+            }
+
+            // ADR-0052: plan accessor method rows for struct events.
+            foreach (var ev in s.Events)
+            {
+                var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
             }
         }
 
@@ -941,6 +990,9 @@ internal sealed class ReflectionMetadataEmitter
 
             // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
             this.EmitInterfacePropertyAccessors(i);
+
+            // ADR-0052: emit abstract accessor MethodDefs + EventDef rows for interface events.
+            this.EmitInterfaceEventAccessors(i);
         }
 
         // B2. Non-SM class ctors + instance methods.
@@ -971,6 +1023,9 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for classes.
             this.EmitPropertyAccessors(c);
+
+            // ADR-0052: emit event accessor methods for classes.
+            this.EmitEventAccessors(c);
         }
 
         // 4b. Non-SM struct methods.
@@ -981,7 +1036,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInlineStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -999,6 +1054,9 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for structs.
             this.EmitPropertyAccessors(s);
+
+            // ADR-0052: emit event accessor methods for structs.
+            this.EmitEventAccessors(s);
         }
 
         // Phase 4 emit parity (F2, type-erased): now that every generic
@@ -1583,6 +1641,28 @@ internal sealed class ReflectionMetadataEmitter
             this.structFieldDefs[prop.BackingField] = backingHandle;
         }
 
+        // ADR-0052: emit backing FieldDefs for field-like events.
+        foreach (var ev in structSym.Events)
+        {
+            if (!ev.IsFieldLike || ev.BackingField == null)
+            {
+                continue;
+            }
+
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
+            var backingHandle = this.metadata.AddFieldDefinition(
+                attributes: FieldAttributes.Private,
+                name: this.metadata.GetOrAddString(ev.BackingField.Name),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = backingHandle;
+            }
+
+            this.structFieldDefs[ev.BackingField] = backingHandle;
+        }
+
         if (firstField.IsNil)
         {
             // Empty struct: no field rows added; point at next row, which is
@@ -1910,6 +1990,318 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0052: determines whether an event on a class/struct implicitly implements
+    /// an interface event (same name on any implemented interface).
+    /// </summary>
+    private bool EventImplicitlyImplementsInterface(StructSymbol structSym, EventSymbol ev)
+    {
+        if (structSym.Interfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var iface in structSym.Interfaces)
+        {
+            if (iface.Events.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ifaceEvent in iface.Events)
+            {
+                if (ifaceEvent.Name == ev.Name)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0052: emits add/remove accessor MethodDefs, EventDef rows, EventMap,
+    /// and MethodSemantics rows for all events declared on a type.
+    /// </summary>
+    private void EmitEventAccessors(StructSymbol structSym)
+    {
+        if (structSym.Events.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        EventDefinitionHandle firstEventDef = default;
+        foreach (var ev in structSym.Events)
+        {
+            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit add_X MethodDef.
+            var addMethod = this.EmitEventAddAccessor(structSym, ev);
+
+            // Emit remove_X MethodDef.
+            var removeMethod = this.EmitEventRemoveAccessor(structSym, ev);
+
+            // Emit EventDef row.
+            var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+            var eventDef = this.metadata.AddEvent(
+                attributes: EventAttributes.None,
+                name: this.metadata.GetOrAddString(ev.Name),
+                type: eventTypeHandle);
+
+            if (firstEventDef.IsNil)
+            {
+                firstEventDef = eventDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the EventDef.
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+        }
+
+        // EventMap row: links the TypeDef to its first EventDef.
+        if (!firstEventDef.IsNil)
+        {
+            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0052: resolves the EntityHandle for the event handler type used in the EventDef row.
+    /// </summary>
+    private EntityHandle GetEventTypeHandle(TypeSymbol type)
+    {
+        if (type is FunctionTypeSymbol fnType)
+        {
+            var clrType = fnType.ClrType;
+            if (clrType != null)
+            {
+                return this.GetTypeHandleForMember(clrType);
+            }
+        }
+
+        if (type.ClrType != null)
+        {
+            return this.GetTypeHandleForMember(type.ClrType);
+        }
+
+        if (type is StructSymbol structSym && this.structTypeDefs.TryGetValue(structSym, out var td))
+        {
+            return td;
+        }
+
+        if (type is InterfaceSymbol ifaceSym && this.interfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
+        {
+            return ifaceDef;
+        }
+
+        // Fallback: encode as System.Delegate.
+        return this.GetTypeReference(typeof(System.Delegate));
+    }
+
+    /// <summary>
+    /// ADR-0052: emits the add_X accessor MethodDef for an event.
+    /// </summary>
+    private MethodDefinitionHandle EmitEventAddAccessor(StructSymbol structSym, EventSymbol ev)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (ev.IsFieldLike && ev.BackingField != null
+                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(backingHandle);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetDelegateCombineRef());
+                il.OpCode(ILOpCode.Castclass);
+                il.Token(this.GetEventTypeHandle(ev.Type));
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else
+            {
+                // Fallback: throw new NotImplementedException().
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        if (ev.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (ev.IsOverride)
+        {
+            methodAttrs |= MethodAttributes.Virtual;
+        }
+        else if (this.EventImplicitlyImplementsInterface(structSym, ev))
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"add_{ev.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// ADR-0052: emits the remove_X accessor MethodDef for an event.
+    /// </summary>
+    private MethodDefinitionHandle EmitEventRemoveAccessor(StructSymbol structSym, EventSymbol ev)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (ev.IsFieldLike && ev.BackingField != null
+                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(backingHandle);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetDelegateRemoveRef());
+                il.OpCode(ILOpCode.Castclass);
+                il.Token(this.GetEventTypeHandle(ev.Type));
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else
+            {
+                // Fallback: throw new NotImplementedException().
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        if (ev.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (ev.IsOverride)
+        {
+            methodAttrs |= MethodAttributes.Virtual;
+        }
+        else if (this.EventImplicitlyImplementsInterface(structSym, ev))
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>ADR-0052: resolves a MemberReferenceHandle for Delegate.Combine(Delegate, Delegate).</summary>
+    private MemberReferenceHandle GetDelegateCombineRef()
+    {
+        if (this.delegateCombineRef.HasValue)
+        {
+            return this.delegateCombineRef.Value;
+        }
+
+        var delegateTypeRef = this.GetTypeReference(typeof(System.Delegate));
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(2,
+                r => r.Type().Type(delegateTypeRef, isValueType: false),
+                ps =>
+                {
+                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
+                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
+                });
+
+        this.delegateCombineRef = this.metadata.AddMemberReference(
+            delegateTypeRef,
+            this.metadata.GetOrAddString("Combine"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.delegateCombineRef.Value;
+    }
+
+    /// <summary>ADR-0052: resolves a MemberReferenceHandle for Delegate.Remove(Delegate, Delegate).</summary>
+    private MemberReferenceHandle GetDelegateRemoveRef()
+    {
+        if (this.delegateRemoveRef.HasValue)
+        {
+            return this.delegateRemoveRef.Value;
+        }
+
+        var delegateTypeRef = this.GetTypeReference(typeof(System.Delegate));
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(2,
+                r => r.Type().Type(delegateTypeRef, isValueType: false),
+                ps =>
+                {
+                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
+                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
+                });
+
+        this.delegateRemoveRef = this.metadata.AddMemberReference(
+            delegateTypeRef,
+            this.metadata.GetOrAddString("Remove"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.delegateRemoveRef.Value;
     }
 
     /// <summary>
@@ -2871,6 +3263,87 @@ internal sealed class ReflectionMetadataEmitter
         if (!firstPropDef.IsNil)
         {
             this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0052: emits abstract add/remove accessor MethodDefs, EventDef rows, EventMap,
+    /// and MethodSemantics rows for all events declared on an interface.
+    /// </summary>
+    private void EmitInterfaceEventAccessors(InterfaceSymbol ifaceSym)
+    {
+        if (ifaceSym.Events.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        EventDefinitionHandle firstEventDef = default;
+        foreach (var ev in ifaceSym.Events)
+        {
+            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit abstract add_X MethodDef.
+            var addSigBlob = new BlobBuilder();
+            new BlobEncoder(addSigBlob).MethodSignature(isInstanceMethod: true)
+                .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+            var addAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                | MethodAttributes.Virtual | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+            var emittedAdd = this.metadata.AddMethodDefinition(
+                attributes: addAttrs,
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.metadata.GetOrAddString($"add_{ev.Name}"),
+                signature: this.metadata.GetOrAddBlob(addSigBlob),
+                bodyOffset: -1,
+                parameterList: this.NextParameterHandle());
+
+            // Emit abstract remove_X MethodDef.
+            var removeSigBlob = new BlobBuilder();
+            new BlobEncoder(removeSigBlob).MethodSignature(isInstanceMethod: true)
+                .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
+
+            var removeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                | MethodAttributes.Virtual | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+            var emittedRemove = this.metadata.AddMethodDefinition(
+                attributes: removeAttrs,
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
+                signature: this.metadata.GetOrAddBlob(removeSigBlob),
+                bodyOffset: -1,
+                parameterList: this.NextParameterHandle());
+
+            // Emit EventDef row.
+            var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
+
+            var eventDef = this.metadata.AddEvent(
+                attributes: EventAttributes.None,
+                name: this.metadata.GetOrAddString(ev.Name),
+                type: eventTypeHandle);
+
+            if (firstEventDef.IsNil)
+            {
+                firstEventDef = eventDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the EventDef.
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, emittedAdd);
+            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, emittedRemove);
+        }
+
+        // EventMap row: links the TypeDef to its first EventDef.
+        if (!firstEventDef.IsNil)
+        {
+            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
         }
     }
 
