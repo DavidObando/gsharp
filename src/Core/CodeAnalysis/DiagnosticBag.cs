@@ -1372,6 +1372,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0212", $"Function '{functionName}' is marked '@Conditional' but does not return 'void'; conditional methods must return 'void' because calls may be elided at the call site.");
     }
 
+    /// <summary>GS9007: A type may contain at most one 'shared' block.</summary>
+    /// <param name="location">The text location of the duplicate shared keyword.</param>
+    public void ReportDuplicateSharedBlock(TextLocation location)
+    {
+        Report(location, "GS9007", "A type may contain at most one 'shared' block.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -426,4 +426,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>type Box[T any] class { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
     public TypeParameterListSyntax TypeParameterList { get; set; }
+
+    /// <summary>Gets or sets the optional <c>shared { … }</c> block (ADR-0053) grouping static member declarations. Null when the type has no shared block.</summary>
+    public SharedBlockSyntax SharedBlock { get; set; }
 }

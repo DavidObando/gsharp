@@ -168,6 +168,7 @@ ShiftLeftEqualsToken
 ShiftLeftToken
 ShiftRightEqualsToken
 ShiftRightToken
+SharedBlock
 SlashEqualsToken
 SlashToken
 StarEqualsToken

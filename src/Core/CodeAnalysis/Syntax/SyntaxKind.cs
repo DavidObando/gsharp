@@ -235,6 +235,9 @@ public enum SyntaxKind
     EventDeclaration,
     PropertyAccessor,
     EventAccessor,
+
+    // ADR-0053: static (shared) members
+    SharedBlock,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
