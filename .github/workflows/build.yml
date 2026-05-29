@@ -62,6 +62,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
       - name: Install netcoredbg
         run: |
           URL=$(curl -sSL https://api.github.com/repos/Samsung/netcoredbg/releases/latest \
