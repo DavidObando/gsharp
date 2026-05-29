@@ -1,0 +1,34 @@
+name: publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Test
+        run: dotnet test GSharp.sln --configuration Release --no-build
+
+      - name: Push to NuGet
+        run: dotnet nuget push "out/bin/Release/nupkgs/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
