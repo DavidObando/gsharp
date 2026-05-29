@@ -214,6 +214,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ClrEventSubscriptionExpression:
                 WriteClrEventSubscriptionExpression((BoundClrEventSubscriptionExpression)node, writer);
                 break;
+            case BoundNodeKind.EventSubscriptionExpression:
+                WriteEventSubscriptionExpression((BoundEventSubscriptionExpression)node, writer);
+                break;
             case BoundNodeKind.ClrBinaryOperatorExpression:
                 WriteClrBinaryOperatorExpression((BoundClrBinaryOperatorExpression)node, writer);
                 break;
@@ -1164,6 +1167,25 @@ public static class BoundNodePrinter
         else if (node.Event.DeclaringType != null)
         {
             writer.WriteIdentifier(node.Event.DeclaringType.Name);
+        }
+
+        writer.WritePunctuation(SyntaxKind.DotToken);
+        writer.WriteIdentifier(node.Event.Name);
+        writer.WriteSpace();
+        writer.WritePunctuation(node.IsAdd ? SyntaxKind.PlusEqualsToken : SyntaxKind.MinusEqualsToken);
+        writer.WriteSpace();
+        node.Handler.WriteTo(writer);
+    }
+
+    private static void WriteEventSubscriptionExpression(BoundEventSubscriptionExpression node, IndentedTextWriter writer)
+    {
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.StructType.Name);
         }
 
         writer.WritePunctuation(SyntaxKind.DotToken);

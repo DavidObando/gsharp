@@ -5317,6 +5317,17 @@ public sealed class Binder
                 return new BoundErrorExpression(null);
             }
 
+            // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
+            if (boundReceiver.Type is StructSymbol userStruct && !userStruct.Events.IsDefaultOrEmpty)
+            {
+                var ev = userStruct.Events.FirstOrDefault(e => e.Name == eventName);
+                if (ev != null)
+                {
+                    var userHandler = BindExpression(syntax.Value);
+                    return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
+                }
+            }
+
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {

@@ -241,6 +241,7 @@ DefaultExpression
 DereferenceExpression
 DiscardPattern
 ErrorExpression
+EventSubscriptionExpression
 ExpressionStatement
 FieldAccessExpression
 FieldAssignmentExpression

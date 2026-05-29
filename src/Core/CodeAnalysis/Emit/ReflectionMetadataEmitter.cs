@@ -8488,6 +8488,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundClrEventSubscriptionExpression clrEventSub:
                     this.EmitClrEventSubscription(clrEventSub);
                     break;
+                case BoundEventSubscriptionExpression userEventSub:
+                    this.EmitUserEventSubscription(userEventSub);
+                    break;
                 case BoundClrBinaryOperatorExpression clrBinOp:
                     this.EmitClrBinaryOperator(clrBinOp);
                     break;
@@ -10627,6 +10630,21 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(accessor));
+        }
+
+        private void EmitUserEventSubscription(BoundEventSubscriptionExpression node)
+        {
+            // ADR-0052: user-defined event subscription — call add_X or remove_X accessor.
+            this.EmitInstanceReceiver(node.Receiver);
+            this.EmitExpression(node.Handler);
+
+            if (this.outer.eventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
+            {
+                var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
+                bool isVirtual = node.Event.IsVirtual || node.Event.IsOverride;
+                this.il.OpCode(isVirtual ? ILOpCode.Callvirt : ILOpCode.Call);
+                this.il.Token(accessorHandle);
+            }
         }
 
         private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)
