@@ -466,6 +466,36 @@ public sealed class Binder
                     diagnostics.AddRange(binder.Diagnostics);
                 }
             }
+
+            // ADR-0052: bind explicit event accessor bodies (add/remove).
+            if (!structSym.Events.IsDefaultOrEmpty)
+            {
+                foreach (var ev in structSym.Events)
+                {
+                    if (ev.IsFieldLike)
+                    {
+                        continue;
+                    }
+
+                    if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
+                    {
+                        var binder = new Binder(parentScope, ev.AddMethodSymbol);
+                        var body = binder.BindStatement(ev.AddBodySyntax);
+                        var loweredBody = Lowerer.Lower(body);
+                        functionBodies.Add(ev.AddMethodSymbol, loweredBody);
+                        diagnostics.AddRange(binder.Diagnostics);
+                    }
+
+                    if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
+                    {
+                        var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
+                        var body = binder.BindStatement(ev.RemoveBodySyntax);
+                        var loweredBody = Lowerer.Lower(body);
+                        functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
+                        diagnostics.AddRange(binder.Diagnostics);
+                    }
+                }
+            }
         }
 
         var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));

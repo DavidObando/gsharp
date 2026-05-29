@@ -2136,6 +2136,12 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.methodBodyStream.AddMethodBody(il);
             }
+            else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
+            {
+                // Explicit accessor with bound body: emit using EmitFunction infrastructure.
+                var handle = this.EmitFunction(ev.AddMethodSymbol, addBody, isEntryPoint: false);
+                return handle;
+            }
             else
             {
                 // Fallback: throw new NotImplementedException().
@@ -2206,6 +2212,12 @@ internal sealed class ReflectionMetadataEmitter
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+            else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
+            {
+                // Explicit accessor with bound body: emit using EmitFunction infrastructure.
+                var handle = this.EmitFunction(ev.RemoveMethodSymbol, removeBody, isEntryPoint: false);
+                return handle;
             }
             else
             {
