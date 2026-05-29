@@ -143,6 +143,7 @@ cat > "$WORK/host/Host.csproj" <<EOF
 EOF
 cat > "$WORK/host/Program.cs" <<'EOF'
 using System;
+using System.IO;
 using System.Reflection;
 
 public static class Program
@@ -151,7 +152,8 @@ public static class Program
     {
         // Force GsLib to load and resolve Add via reflection so the
         // debugger has a concrete IL frame to break inside.
-        var asm = Assembly.Load("GsLib");
+        var appDir = AppContext.BaseDirectory;
+        var asm = Assembly.LoadFrom(Path.Combine(appDir, "GsLib.dll"));
         var prog = asm.GetType("GsLib.<Program>")!;
         var add = prog.GetMethod("Add", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
         var result = (int)add.Invoke(null, new object[] { 3, 4 })!;
