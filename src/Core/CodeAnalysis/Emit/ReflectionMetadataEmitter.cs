@@ -1123,6 +1123,10 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 7.7b: emit cross-language interop attributes for NuGet consumability.
         this.EmitAssemblyInteropAttributes(assemblyHandle);
+        if (!this.metadataOnly && this.pdb != null)
+        {
+            this.EmitDebuggableAttribute(assemblyHandle);
+        }
 
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
@@ -1352,6 +1356,43 @@ internal sealed class ReflectionMetadataEmitter
         // nullable context as "annotated" so C# consumers see non-null by
         // default for GSharp types (GSharp has no null references).
         this.EmitNullableContextAttribute(assemblyHandle);
+    }
+
+    /// <summary>
+    /// Emits <c>System.Diagnostics.DebuggableAttribute(true, true)</c> when
+    /// debug information is present so managed debuggers treat the assembly as
+    /// JIT-tracked and non-optimized.
+    /// </summary>
+    private void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
+    {
+        var attrType = this.references.TryResolveType("System.Diagnostics.DebuggableAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Diagnostics.DebuggableAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), p =>
+            {
+                p.AddParameter().Type().Boolean();
+                p.AddParameter().Type().Boolean();
+            });
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteBoolean(true);  // isJITTrackingEnabled
+        valueBlob.WriteBoolean(true);  // isJITOptimizerDisabled
+        valueBlob.WriteUInt16(0);      // NumNamed
+
+        this.metadata.AddCustomAttribute(
+            parent: assemblyHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
