@@ -145,6 +145,25 @@ public sealed class Binder
                 }
             }
 
+            // Issue #261 / ADR-0053: expose sibling static fields as bare names
+            // inside shared method bodies so `x` resolves without requiring
+            // `TypeName.x`. Skip fields whose name collides with a parameter
+            // so that parameters shadow static fields naturally.
+            if (function.IsStatic && function.StaticOwnerType is StructSymbol ownerStruct)
+            {
+                if (!ownerStruct.StaticFields.IsDefaultOrEmpty)
+                {
+                    var paramNames = new HashSet<string>(function.Parameters.Select(p => p.Name));
+                    foreach (var fld in ownerStruct.StaticFields)
+                    {
+                        if (!paramNames.Contains(fld.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerStruct, fld));
+                        }
+                    }
+                }
+            }
+
             foreach (var p in function.Parameters)
             {
                 if (ReferenceEquals(p, function.ThisParameter))
@@ -1438,6 +1457,7 @@ public sealed class Binder
                     methodAccessibility,
                     receiverType: null);
                 methodSymbol.IsStatic = true;
+                methodSymbol.StaticOwnerType = structSymbol;
 
                 if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                 {
@@ -5117,6 +5137,21 @@ public sealed class Binder
                 narrowedFieldType);
         }
 
+        // Issue #261: bare static field name inside a shared method body.
+        if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
+        {
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitStaticField.Field,
+                $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+
+            return new BoundFieldAccessExpression(
+                null,
+                receiver: null,
+                implicitStaticField.StructType,
+                implicitStaticField.Field);
+        }
+
         return new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
     }
 
@@ -5162,6 +5197,23 @@ public sealed class Binder
 
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
             return new BoundFieldAssignmentExpression(null, implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
+        }
+
+        // Issue #261: bare static field assignment inside a shared method body.
+        if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
+        {
+            if (implicitStaticField.Field.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            }
+
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitStaticField.Field,
+                $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+
+            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
+            return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
         }
 
         if (variable.IsReadOnly)
@@ -7060,6 +7112,21 @@ public sealed class Binder
                         implicitField.StructType,
                         implicitField.Field,
                         TryGetNarrowedType(implicitField));
+                }
+                else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
+                {
+                    // Issue #261: bare static field name as accessor receiver
+                    // inside a shared method body.
+                    ReportObsoleteUseIfApplicable(
+                        leftName.IdentifierToken.Location,
+                        implicitStaticField.Field,
+                        $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
+
+                    receiver = new BoundFieldAccessExpression(
+                        null,
+                        receiver: null,
+                        implicitStaticField.StructType,
+                        implicitStaticField.Field);
                 }
                 else
                 {
