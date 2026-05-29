@@ -54,6 +54,8 @@ public enum BoundNodeKind
     UserInstanceCallExpression,
     FieldAccessExpression,
     FieldAssignmentExpression,
+    PropertyAccessExpression,
+    PropertyAssignmentExpression,
     NullConditionalAccessExpression,
     TupleLiteralExpression,
     TupleElementAccessExpression,

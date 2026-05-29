@@ -649,6 +649,7 @@ public class Parser
 
         SyntaxToken openBrace;
         var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -671,6 +672,7 @@ public class Parser
                 additionalBaseIdentifiers.ToImmutable(),
                 openBrace,
                 fields.ToImmutable(),
+                properties.ToImmutable(),
                 methods.ToImmutable(),
                 syntheticCloseBrace);
         }
@@ -697,14 +699,15 @@ public class Parser
                 Current.Kind == SyntaxKind.PrivateKeyword)
             {
                 // Accessibility modifier may be followed by an optional
-                // `open`/`override` and then `func`.
+                // `open`/`override` and then `func` or `prop`.
                 var ahead = 1;
                 while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
                 {
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword)
+                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop"))
                 {
                     memberAccessibility = NextToken();
                 }
@@ -732,7 +735,14 @@ public class Parser
                 }
             }
 
-            if (Current.Kind == SyntaxKind.FuncKeyword)
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            {
+                // ADR-0051: property declaration inside struct/class body.
+                var property = ParsePropertyDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                property.WithAnnotations(memberAnnotations);
+                properties.Add(property);
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
                 if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
                 {
@@ -778,6 +788,7 @@ public class Parser
             additionalBaseIdentifiers.ToImmutable(),
             openBrace,
             fields.ToImmutable(),
+            properties.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
     }
@@ -792,14 +803,20 @@ public class Parser
         var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
+        var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
 
             // Per ADR-0018, interface members are method signatures only.
+            // ADR-0051 extends this to also allow property declarations.
             // No accessibility / open / override modifiers are accepted.
-            if (Current.Kind == SyntaxKind.FuncKeyword)
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            {
+                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
                 methods.Add(ParseInterfaceMethodSignature());
             }
@@ -825,6 +842,7 @@ public class Parser
             sealedModifier,
             interfaceKeyword,
             openBrace,
+            properties.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
     }
@@ -858,6 +876,108 @@ public class Parser
             closeParenthesisToken,
             type,
             body: null);
+    }
+
+    private PropertyDeclarationSyntax ParsePropertyDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken openModifier,
+        SyntaxToken overrideModifier)
+    {
+        var propKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "prop"
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var type = ParseTypeClause();
+
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+            var accessors = ParsePropertyAccessors();
+            var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+            return new PropertyDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                openModifier,
+                overrideModifier,
+                propKeyword,
+                identifier,
+                type,
+                openBrace,
+                accessors,
+                closeBrace);
+        }
+
+        // Bare auto-property: prop Name Type
+        return new PropertyDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            openModifier,
+            overrideModifier,
+            propKeyword,
+            identifier,
+            type,
+            openBraceToken: null,
+            accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
+            closeBraceToken: null);
+    }
+
+    private ImmutableArray<PropertyAccessorSyntax> ParsePropertyAccessors()
+    {
+        var accessors = ImmutableArray.CreateBuilder<PropertyAccessorSyntax>();
+
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var startToken = Current;
+
+            if (Current.Kind == SyntaxKind.IdentifierToken &&
+                (Current.Text == "get" || Current.Text == "set"))
+            {
+                var accessorKeyword = NextToken();
+
+                // For set, optionally parse (paramName)
+                SyntaxToken openParen = null;
+                SyntaxToken paramIdentifier = null;
+                SyntaxToken closeParen = null;
+                if (accessorKeyword.Text == "set" && Current.Kind == SyntaxKind.OpenParenthesisToken)
+                {
+                    openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+                    paramIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+                    closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+                }
+
+                // Optional body or semicolon
+                BlockStatementSyntax body = null;
+                SyntaxToken semicolon = null;
+                if (Current.Kind == SyntaxKind.OpenBraceToken)
+                {
+                    body = ParseBlockStatement();
+                }
+                else if (Current.Kind == SyntaxKind.SemicolonToken)
+                {
+                    semicolon = NextToken();
+                }
+
+                // else: bare accessor (no body, no semicolon) — valid in interfaces
+                accessors.Add(new PropertyAccessorSyntax(
+                    syntaxTree,
+                    accessorKeyword,
+                    openParen,
+                    paramIdentifier,
+                    closeParen,
+                    body,
+                    semicolon));
+            }
+            else
+            {
+                // Unknown token in accessor list — skip to avoid infinite loop.
+                NextToken();
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        return accessors.ToImmutable();
     }
 
     private FieldDeclarationSyntax ParseFieldDeclaration()

@@ -90,6 +90,12 @@ internal sealed class ReflectionMetadataEmitter
     // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
+    // ADR-0051 Phase 6: property accessor method handles for PropertyDef + MethodSemantics emission.
+    private readonly Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)> propertyAccessorHandles = new Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)>();
+
+    // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
+    private MemberReferenceHandle? notImplementedExceptionCtorRef;
+
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
     // Each lambda's synthetic FunctionSymbol is registered alongside user
@@ -452,12 +458,28 @@ internal sealed class ReflectionMetadataEmitter
         {
             structFirstFieldRow[s] = nextFieldRow;
             nextFieldRow += s.Fields.Length;
+            // ADR-0051 Phase 6: backing fields for auto-properties.
+            foreach (var p in s.Properties)
+            {
+                if (p.IsAutoProperty && p.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
         }
 
         foreach (var s in nonSmStructs)
         {
             structFirstFieldRow[s] = nextFieldRow;
             nextFieldRow += s.Fields.Length;
+            // ADR-0051 Phase 6: backing fields for auto-properties.
+            foreach (var p in s.Properties)
+            {
+                if (p.IsAutoProperty && p.BackingField != null)
+                {
+                    nextFieldRow++;
+                }
+            }
         }
 
         // Issue #193: each user-defined enum contributes 1 instance field
@@ -539,13 +561,31 @@ internal sealed class ReflectionMetadataEmitter
                     this.methodHandles[m] = handle;
                 }
             }
+
+            // ADR-0051 Phase 6: plan accessor method rows for class properties.
+            foreach (var prop in c.Properties)
+            {
+                MethodDefinitionHandle? getterHandle = null;
+                MethodDefinitionHandle? setterHandle = null;
+                if (prop.HasGetter)
+                {
+                    getterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                if (prop.HasSetter)
+                {
+                    setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+            }
         }
 
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -561,6 +601,24 @@ internal sealed class ReflectionMetadataEmitter
                 var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 aggregateMethodHandles[m] = handle;
                 this.methodHandles[m] = handle;
+            }
+
+            // ADR-0051 Phase 6: plan accessor method rows for struct properties.
+            foreach (var prop in s.Properties)
+            {
+                MethodDefinitionHandle? getterHandle = null;
+                MethodDefinitionHandle? setterHandle = null;
+                if (prop.HasGetter)
+                {
+                    getterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                if (prop.HasSetter)
+                {
+                    setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
+
+                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
         }
 
@@ -889,6 +947,9 @@ internal sealed class ReflectionMetadataEmitter
                     this.methodHandles[m] = emittedHandle;
                 }
             }
+
+            // ADR-0051 Phase 6: emit property accessor methods for classes.
+            this.EmitPropertyAccessors(c);
         }
 
         // 4b. Non-SM struct methods.
@@ -899,7 +960,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInlineStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -914,6 +975,9 @@ internal sealed class ReflectionMetadataEmitter
                 var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
                 this.methodHandles[m] = emittedHandle;
             }
+
+            // ADR-0051 Phase 6: emit property accessor methods for structs.
+            this.EmitPropertyAccessors(s);
         }
 
         // Phase 4 emit parity (F2, type-erased): now that every generic
@@ -1435,6 +1499,28 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitUserAttributes(handle, field, AttributeTargetKind.Field);
         }
 
+        // ADR-0051 Phase 6: emit backing FieldDefs for auto-properties.
+        foreach (var prop in structSym.Properties)
+        {
+            if (!prop.IsAutoProperty || prop.BackingField == null)
+            {
+                continue;
+            }
+
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
+            var backingHandle = this.metadata.AddFieldDefinition(
+                attributes: FieldAttributes.Private,
+                name: this.metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
+                signature: this.metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = backingHandle;
+            }
+
+            this.structFieldDefs[prop.BackingField] = backingHandle;
+        }
+
         if (firstField.IsNil)
         {
             // Empty struct: no field rows added; point at next row, which is
@@ -1498,6 +1584,216 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.EmitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
+    }
+
+    /// <summary>
+    /// ADR-0051 Phase 6: emits accessor MethodDefs, PropertyDef rows, PropertyMap,
+    /// and MethodSemantics rows for all properties declared on a type.
+    /// Called during Phase B (MethodDef emission) after the type's regular methods.
+    /// </summary>
+    private void EmitPropertyAccessors(StructSymbol structSym)
+    {
+        if (structSym.Properties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        PropertyDefinitionHandle firstPropDef = default;
+        foreach (var prop in structSym.Properties)
+        {
+            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            {
+                continue;
+            }
+
+            // Emit getter MethodDef.
+            MethodDefinitionHandle? emittedGetter = null;
+            if (prop.HasGetter && accessorHandles.Getter.HasValue)
+            {
+                emittedGetter = this.EmitPropertyGetter(structSym, prop);
+            }
+
+            // Emit setter MethodDef.
+            MethodDefinitionHandle? emittedSetter = null;
+            if (prop.HasSetter && accessorHandles.Setter.HasValue)
+            {
+                emittedSetter = this.EmitPropertySetter(structSym, prop);
+            }
+
+            // Emit PropertyDef row.
+            var propertySignature = new BlobBuilder();
+            new BlobEncoder(propertySignature)
+                .PropertySignature(isInstanceProperty: true)
+                .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+
+            var propDef = this.metadata.AddProperty(
+                attributes: PropertyAttributes.None,
+                name: this.metadata.GetOrAddString(prop.Name),
+                signature: this.metadata.GetOrAddBlob(propertySignature));
+
+            if (firstPropDef.IsNil)
+            {
+                firstPropDef = propDef;
+            }
+
+            // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
+            if (emittedGetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+            }
+
+            if (emittedSetter.HasValue)
+            {
+                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+            }
+        }
+
+        // PropertyMap row: links the TypeDef to its first PropertyDef.
+        if (!firstPropDef.IsNil)
+        {
+            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0051 Phase 6: emits a getter accessor MethodDef (get_PropertyName).
+    /// For auto-properties: ldarg.0, ldfld backing, ret.
+    /// For computed properties: throws NotImplementedException (placeholder).
+    /// </summary>
+    private MethodDefinitionHandle EmitPropertyGetter(StructSymbol structSym, PropertySymbol prop)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            if (prop.IsAutoProperty && prop.BackingField != null
+                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+            {
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
+            {
+                // Computed property placeholder: throw new NotImplementedException().
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+            }
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => this.EncodeTypeSymbol(r.Type(), prop.Type), _ => { });
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        if (prop.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (prop.IsOverride)
+        {
+            methodAttrs |= MethodAttributes.Virtual;
+        }
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"get_{prop.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// ADR-0051 Phase 6: emits a setter accessor MethodDef (set_PropertyName).
+    /// For auto-properties: ldarg.0, ldarg.1, stfld backing, ret.
+    /// For computed properties: throws NotImplementedException (placeholder).
+    /// </summary>
+    private MethodDefinitionHandle EmitPropertySetter(StructSymbol structSym, PropertySymbol prop)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            if (prop.IsAutoProperty && prop.BackingField != null
+                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+            {
+                il.LoadArgument(0);
+                il.LoadArgument(1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(backingHandle);
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
+            {
+                // Computed property placeholder: throw new NotImplementedException().
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+            }
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        if (prop.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (prop.IsOverride)
+        {
+            methodAttrs |= MethodAttributes.Virtual;
+        }
+
+        // Emit a Parameter row for "value" so the setter has a named parameter.
+        var firstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
+            sequenceNumber: 1);
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"set_{prop.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>Resolves a MemberReferenceHandle for System.NotImplementedException..ctor().</summary>
+    private MemberReferenceHandle GetNotImplementedExceptionCtor()
+    {
+        if (this.notImplementedExceptionCtorRef.HasValue)
+        {
+            return this.notImplementedExceptionCtorRef.Value;
+        }
+
+        var nieType = typeof(System.NotImplementedException);
+        var nieTypeRef = this.GetTypeReference(nieType);
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+        this.notImplementedExceptionCtorRef = this.metadata.AddMemberReference(
+            nieTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+        return this.notImplementedExceptionCtorRef.Value;
     }
 
     /// <summary>
@@ -6834,6 +7130,14 @@ internal sealed class ReflectionMetadataEmitter
                     this.TryAdd(fas.StructType);
                     this.TryAdd(fas.Field.Type);
                     break;
+                case BoundPropertyAccessExpression pa:
+                    this.TryAdd(pa.StructType);
+                    this.TryAdd(pa.Property.Type);
+                    break;
+                case BoundPropertyAssignmentExpression pas:
+                    this.TryAdd(pas.StructType);
+                    this.TryAdd(pas.Property.Type);
+                    break;
                 case BoundConstructorCallExpression cc:
                     this.TryAdd(cc.StructType);
                     break;
@@ -7459,6 +7763,12 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundFieldAssignmentExpression fas:
                     this.EmitFieldAssignment(fas);
+                    break;
+                case BoundPropertyAccessExpression propAcc:
+                    this.EmitPropertyAccess(propAcc);
+                    break;
+                case BoundPropertyAssignmentExpression propAsn:
+                    this.EmitPropertyAssignment(propAsn);
                     break;
                 case BoundNullConditionalAccessExpression nc:
                     this.EmitNullConditionalAccess(nc);
@@ -9406,6 +9716,70 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
+        }
+
+        // ADR-0051 Phase 6: emit IL for BoundPropertyAccessExpression (computed properties).
+        // Auto-properties are lowered to BoundFieldAccessExpression by the Lowerer,
+        // so this only fires for computed properties that still reference the accessor.
+        private void EmitPropertyAccess(BoundPropertyAccessExpression access)
+        {
+            if (!this.outer.propertyAccessorHandles.TryGetValue(access.Property, out var handles) || !handles.Getter.HasValue)
+            {
+                throw new InvalidOperationException(
+                    $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
+            }
+
+            // Load receiver.
+            var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
+            if (!receiverIsClass && access.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+            {
+                // address loaded
+            }
+            else
+            {
+                this.EmitExpression(access.Receiver);
+            }
+
+            this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+            this.il.Token(handles.Getter.Value);
+        }
+
+        // ADR-0051 Phase 6: emit IL for BoundPropertyAssignmentExpression (computed properties).
+        private void EmitPropertyAssignment(BoundPropertyAssignmentExpression assn)
+        {
+            if (!this.outer.propertyAccessorHandles.TryGetValue(assn.Property, out var handles) || !handles.Setter.HasValue)
+            {
+                throw new InvalidOperationException(
+                    $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
+            }
+
+            // Load receiver, emit value, call setter.
+            var receiverIsClass = assn.Receiver.Type is StructSymbol rs && rs.IsClass;
+            if (!receiverIsClass && assn.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+            {
+                // address loaded
+            }
+            else
+            {
+                this.EmitExpression(assn.Receiver);
+            }
+
+            this.EmitExpression(assn.Value);
+            this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+            this.il.Token(handles.Setter.Value);
+
+            // Re-load the assigned value as the expression result via the getter.
+            if (!receiverIsClass && assn.Receiver is BoundVariableExpression bv2 && this.TryLoadVariableAddress(bv2.Variable))
+            {
+                // address loaded
+            }
+            else
+            {
+                this.EmitExpression(assn.Receiver);
+            }
+
+            this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
+            this.il.Token(handles.Getter.Value);
         }
 
         private void EmitClrConstructorCall(BoundClrConstructorCallExpression ctorCall)

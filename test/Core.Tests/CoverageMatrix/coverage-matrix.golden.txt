@@ -141,6 +141,8 @@ PlusEqualsToken
 PlusPlusToken
 PlusToken
 PrivateKeyword
+PropertyAccessor
+PropertyDeclaration
 PropertyPattern
 PropertyPatternField
 PublicKeyword
@@ -262,6 +264,8 @@ MapLiteralExpression
 NullConditionalAccessExpression
 PatternSwitchArm
 PatternSwitchStatement
+PropertyAccessExpression
+PropertyAssignmentExpression
 PropertyPattern
 PropertyPatternField
 RelationalPattern

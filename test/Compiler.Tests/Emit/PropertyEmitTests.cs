@@ -1,0 +1,315 @@
+// <copyright file="PropertyEmitTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using Xunit;
+
+namespace GSharp.Compiler.Tests.Emit;
+
+/// <summary>
+/// ADR-0051 Phase 8: compiler emit tests for property declarations.
+/// Validates that compiled assemblies contain correct PropertyDef metadata
+/// and that property accessors work at runtime via reflection.
+/// </summary>
+public class PropertyEmitTests
+{
+    [Fact]
+    public void AutoProperty_EmitsPropertyDef_WithGetterAndSetter()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Person class {
+                prop Name string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var person = assembly.GetTypes().Single(t => t.Name == "Person");
+        var prop = person.GetProperty("Name");
+
+        Assert.NotNull(prop);
+        Assert.Equal(typeof(string), prop!.PropertyType);
+        Assert.True(prop.CanRead);
+        Assert.True(prop.CanWrite);
+        Assert.Equal("get_Name", prop.GetMethod!.Name);
+        Assert.Equal("set_Name", prop.SetMethod!.Name);
+        Assert.True(prop.GetMethod.IsSpecialName);
+        Assert.True(prop.SetMethod.IsSpecialName);
+    }
+
+    [Fact]
+    public void AutoProperty_HasBackingField()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Person class {
+                prop Name string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var person = assembly.GetTypes().Single(t => t.Name == "Person");
+        var backingField = person.GetField("<Name>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(backingField);
+        Assert.Equal(typeof(string), backingField!.FieldType);
+        Assert.True(backingField.IsPrivate);
+    }
+
+    [Fact]
+    public void AutoProperty_ReadOnly_EmitsOnlyGetter()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Foo class {
+                prop X int32 { get }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var foo = assembly.GetTypes().Single(t => t.Name == "Foo");
+        var prop = foo.GetProperty("X");
+
+        Assert.NotNull(prop);
+        Assert.True(prop!.CanRead);
+        Assert.False(prop.CanWrite);
+        Assert.NotNull(prop.GetMethod);
+        Assert.Null(prop.SetMethod);
+    }
+
+    [Fact]
+    public void AutoProperty_RoundTrip_SetAndGet()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Box class {
+                prop Item string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var boxType = assembly.GetTypes().Single(t => t.Name == "Box");
+        var instance = Activator.CreateInstance(boxType);
+        var prop = boxType.GetProperty("Item");
+
+        Assert.NotNull(prop);
+        prop!.SetMethod!.Invoke(instance, new object[] { "hello" });
+        var result = prop.GetMethod!.Invoke(instance, null);
+        Assert.Equal("hello", result);
+    }
+
+    [Fact]
+    public void AutoProperty_RoundTrip_Int32()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Counter class {
+                prop Value int32
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var counterType = assembly.GetTypes().Single(t => t.Name == "Counter");
+        var instance = Activator.CreateInstance(counterType);
+        var prop = counterType.GetProperty("Value");
+
+        Assert.NotNull(prop);
+        prop!.SetMethod!.Invoke(instance, new object[] { 42 });
+        var result = prop.GetMethod!.Invoke(instance, null);
+        Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public void MultipleProperties_EmitCorrectly()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Person class {
+                prop Name string
+                prop Age int32
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var person = assembly.GetTypes().Single(t => t.Name == "Person");
+
+        var nameProp = person.GetProperty("Name");
+        var ageProp = person.GetProperty("Age");
+
+        Assert.NotNull(nameProp);
+        Assert.NotNull(ageProp);
+        Assert.Equal(typeof(string), nameProp!.PropertyType);
+        Assert.Equal(typeof(int), ageProp!.PropertyType);
+
+        // Round-trip both properties
+        var instance = Activator.CreateInstance(person);
+        nameProp.SetMethod!.Invoke(instance, new object[] { "Alice" });
+        ageProp.SetMethod!.Invoke(instance, new object[] { 30 });
+        Assert.Equal("Alice", nameProp.GetMethod!.Invoke(instance, null));
+        Assert.Equal(30, ageProp.GetMethod!.Invoke(instance, null));
+    }
+
+    [Fact]
+    public void VirtualProperty_EmitsVirtualAccessors()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Base open class {
+                open prop Label string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var baseType = assembly.GetTypes().Single(t => t.Name == "Base");
+        var prop = baseType.GetProperty("Label");
+
+        Assert.NotNull(prop);
+        Assert.True(prop!.GetMethod!.IsVirtual);
+        Assert.True(prop.SetMethod!.IsVirtual);
+    }
+
+    [Fact]
+    public void OverrideProperty_EmitsOverrideAccessors()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Base open class {
+                open prop Label string
+            }
+
+            type Derived class : Base {
+                override prop Label string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var derivedType = assembly.GetTypes().Single(t => t.Name == "Derived");
+        var prop = derivedType.GetProperty("Label");
+
+        Assert.NotNull(prop);
+        Assert.True(prop!.GetMethod!.IsVirtual);
+        // Override should not have NewSlot
+        Assert.False((prop.GetMethod.Attributes & MethodAttributes.NewSlot) != 0);
+    }
+
+    [Fact]
+    public void InterfaceProperty_CompilesWithoutError()
+    {
+        // Interface property declarations compile without error.
+        // The interface type is emitted as an abstract type; property accessors
+        // on interfaces are emitted as abstract methods (no PropertyDef row yet).
+        var source = """
+            package MyLib
+            import System
+
+            type Named interface {
+                prop Name string { get }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var namedType = assembly.GetTypes().Single(t => t.Name == "Named");
+        Assert.True(namedType.IsInterface);
+    }
+
+    [Fact]
+    public void Property_DefaultValue_IsZeroForInt32()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Foo class {
+                prop Count int32
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var fooType = assembly.GetTypes().Single(t => t.Name == "Foo");
+        var instance = Activator.CreateInstance(fooType);
+        var prop = fooType.GetProperty("Count");
+
+        Assert.NotNull(prop);
+        var result = prop!.GetMethod!.Invoke(instance, null);
+        Assert.Equal(0, result);
+    }
+
+    [Fact]
+    public void Property_DefaultValue_IsNullForString()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            type Foo class {
+                prop Name string
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var fooType = assembly.GetTypes().Single(t => t.Name == "Foo");
+        var instance = Activator.CreateInstance(fooType);
+        var prop = fooType.GetProperty("Name");
+
+        Assert.NotNull(prop);
+        var result = prop!.GetMethod!.Invoke(instance, null);
+        Assert.Null(result);
+    }
+
+    private static Assembly CompileToAssembly(string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_property_emit_").FullName;
+        var srcPath = Path.Combine(tempDir, "test.gs");
+        var outPath = Path.Combine(tempDir, "test.dll");
+        File.WriteAllText(srcPath, source);
+
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(
+            compileExit == 0,
+            $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+
+        var bytes = File.ReadAllBytes(outPath);
+        return Assembly.Load(bytes);
+    }
+}

@@ -482,6 +482,8 @@ public sealed class Evaluator
                 BoundNodeKind.UserInstanceCallExpression => EvaluateUserInstanceCallExpression((BoundUserInstanceCallExpression)node),
                 BoundNodeKind.FieldAccessExpression => EvaluateFieldAccessExpression((BoundFieldAccessExpression)node),
                 BoundNodeKind.FieldAssignmentExpression => EvaluateFieldAssignmentExpression((BoundFieldAssignmentExpression)node),
+                BoundNodeKind.PropertyAccessExpression => EvaluatePropertyAccessExpression((BoundPropertyAccessExpression)node),
+                BoundNodeKind.PropertyAssignmentExpression => EvaluatePropertyAssignmentExpression((BoundPropertyAssignmentExpression)node),
                 BoundNodeKind.NullConditionalAccessExpression => EvaluateNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node),
                 BoundNodeKind.TupleLiteralExpression => EvaluateTupleLiteralExpression((BoundTupleLiteralExpression)node),
                 BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
@@ -980,6 +982,65 @@ public sealed class Evaluator
             Assign(node.Receiver, copy);
             return value;
         }
+    }
+
+    private object EvaluatePropertyAccessExpression(BoundPropertyAccessExpression node)
+    {
+        var receiverValue = EvaluateExpression(node.Receiver);
+
+        // Auto-property fallback: access backing field directly.
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        {
+            if (receiverValue is StructValue sv && sv.Fields.TryGetValue(node.Property.BackingField.Name, out var value))
+            {
+                return value;
+            }
+
+            return DefaultValue(node.Property.Type);
+        }
+
+        // Computed property: accessor bodies not yet bound for interpreter evaluation.
+        // Return default value as a safe placeholder.
+        return DefaultValue(node.Property.Type);
+    }
+
+    private object EvaluatePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+    {
+        var value = EvaluateExpression(node.Value);
+
+        // Auto-property fallback: store to backing field.
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        {
+            if (node.Receiver is BoundVariableExpression bve)
+            {
+                var receiverVar = bve.Variable;
+                var current = receiverVar.Kind == Symbols.SymbolKind.GlobalVariable
+                    ? globals[receiverVar]
+                    : locals.Peek()[receiverVar];
+
+                var sv = current as StructValue ?? new StructValue(node.StructType);
+
+                if (node.StructType.IsClass)
+                {
+                    sv.Fields[node.Property.BackingField.Name] = value;
+                    if (!ReferenceEquals(sv, current))
+                    {
+                        Assign(receiverVar, sv);
+                    }
+                }
+                else
+                {
+                    var copy = sv.Copy();
+                    copy.Fields[node.Property.BackingField.Name] = value;
+                    Assign(receiverVar, copy);
+                }
+            }
+
+            return value;
+        }
+
+        // Computed property: setter body not yet bound. No-op for now.
+        return value;
     }
 
     private static object DefaultValue(Symbols.TypeSymbol type)
@@ -2285,6 +2346,9 @@ public sealed class Evaluator
                 case BoundFieldAccessExpression fa:
                     WriteBackField(fa, value);
                     break;
+                case BoundPropertyAccessExpression pa:
+                    WriteBackProperty(pa, value);
+                    break;
                 case BoundIndexExpression idx:
                     WriteBackIndex(idx, value);
                     break;
@@ -2299,6 +2363,19 @@ public sealed class Evaluator
         if (receiver is StructValue sv)
         {
             sv.Fields[fa.Field.Name] = value;
+        }
+    }
+
+    /// <summary>ADR-0051: Writes back a value into a property backing field after ref/out return.</summary>
+    private void WriteBackProperty(BoundPropertyAccessExpression pa, object value)
+    {
+        if (pa.Property.IsAutoProperty && pa.Property.BackingField != null)
+        {
+            var receiver = EvaluateExpression(pa.Receiver);
+            if (receiver is StructValue sv)
+            {
+                sv.Fields[pa.Property.BackingField.Name] = value;
+            }
         }
     }
 

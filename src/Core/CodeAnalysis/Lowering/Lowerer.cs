@@ -297,6 +297,38 @@ public sealed class Lowerer : BoundTreeRewriter
         return RewriteStatement(lowered);
     }
 
+    /// <inheritdoc/>
+    protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
+    {
+        // ADR-0051: auto-properties lower to backing field access.
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        {
+            return new BoundFieldAccessExpression(null, node.Receiver, node.StructType, node.Property.BackingField);
+        }
+
+        // Computed properties remain as BoundPropertyAccessExpression —
+        // the interpreter evaluates the getter body and the emitter emits a call to get_X.
+        return base.RewritePropertyAccessExpression(node);
+    }
+
+    /// <inheritdoc/>
+    protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+    {
+        // ADR-0051: auto-properties lower to backing field assignment.
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        {
+            var value = RewriteExpression(node.Value);
+
+            if (node.Receiver is BoundVariableExpression varExpr)
+            {
+                return new BoundFieldAssignmentExpression(null, varExpr.Variable, node.StructType, node.Property.BackingField, value);
+            }
+        }
+
+        // Computed properties (or non-variable receivers) remain as BoundPropertyAssignmentExpression.
+        return base.RewritePropertyAssignmentExpression(node);
+    }
+
     private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body)
     {
         var streamClr = stream.Type?.ClrType;

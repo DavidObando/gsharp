@@ -370,6 +370,10 @@ public abstract class BoundTreeRewriter
                 return RewriteFieldAccessExpression((BoundFieldAccessExpression)node);
             case BoundNodeKind.FieldAssignmentExpression:
                 return RewriteFieldAssignmentExpression((BoundFieldAssignmentExpression)node);
+            case BoundNodeKind.PropertyAccessExpression:
+                return RewritePropertyAccessExpression((BoundPropertyAccessExpression)node);
+            case BoundNodeKind.PropertyAssignmentExpression:
+                return RewritePropertyAssignmentExpression((BoundPropertyAssignmentExpression)node);
             case BoundNodeKind.NullConditionalAccessExpression:
                 return RewriteNullConditionalAccessExpression((BoundNullConditionalAccessExpression)node);
             case BoundNodeKind.TupleLiteralExpression:
@@ -1503,6 +1507,25 @@ public abstract class BoundTreeRewriter
     {
         var value = RewriteExpression(node.Value);
         return value == node.Value ? node : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+    }
+
+    /// <summary>Rewrites a property read (ADR-0051).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        return receiver == node.Receiver ? node : new BoundPropertyAccessExpression(null, receiver, node.StructType, node.Property);
+    }
+
+    /// <summary>Rewrites a property assignment (ADR-0051).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+    {
+        var receiver = RewriteExpression(node.Receiver);
+        var value = RewriteExpression(node.Value);
+        return receiver == node.Receiver && value == node.Value ? node : new BoundPropertyAssignmentExpression(null, receiver, node.StructType, node.Property, value);
     }
 
     /// <summary>Rewrites a null-conditional access expression (Phase 3.C.3b).</summary>
