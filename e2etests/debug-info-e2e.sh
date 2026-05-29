@@ -48,7 +48,7 @@ EOF
 cat > "$WORK/Debuggable.gs" <<'EOF'
 package debuggable
 
-public func Add(a int, b int) int {
+public func Add(a int32, b int32) int32 {
     var sum = a + b
     return sum
 }
