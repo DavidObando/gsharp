@@ -118,7 +118,7 @@ package GsLib
 
 import System
 
-public func Add(a int, b int) int {
+public func Add(a int32, b int32) int32 {
     var sum = a + b
     return sum
 }
