@@ -513,4 +513,156 @@ var result = Foo.bar(7)
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6. Issue #263: Static property accessor support in shared blocks
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SharedBlock_StaticAutoProperty_ReadWrite()
+    {
+        var source = @"
+type Config class {
+    shared {
+        prop name string
+    }
+}
+
+Config.name = ""hello""
+var result = Config.name
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("hello", result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticComputedProperty_Getter()
+    {
+        var source = @"
+type Counter class {
+    shared {
+        count int32
+        prop doubled int32 {
+            get { return count * 2 }
+        }
+    }
+}
+
+Counter.count = 21
+var result = Counter.doubled
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticComputedProperty_GetterSetter()
+    {
+        var source = @"
+type Config class {
+    shared {
+        _value int32
+        prop value int32 {
+            get { return _value }
+            set(v) { _value = v }
+        }
+    }
+}
+
+Config.value = 99
+var result = Config.value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticAutoProperty_Emit_RoundTrip()
+    {
+        var source = @"package StaticAutoPropEmit
+import System
+
+type Config class {
+    shared {
+        prop name string
+    }
+}
+
+Config.name = ""world""
+Console.WriteLine(Config.name)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-StaticAutoProp");
+        Assert.Contains("world", output);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticComputedProperty_Emit_RoundTrip()
+    {
+        var source = @"package StaticComputedPropEmit
+import System
+
+type Counter class {
+    shared {
+        count int32
+        prop doubled int32 {
+            get { return count * 2 }
+        }
+    }
+}
+
+Counter.count = 21
+Console.WriteLine(Counter.doubled)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-StaticComputedProp");
+        Assert.Contains("42", output);
+    }
+
+    [Fact]
+    public void SharedBlock_StaticComputedPropertyGetSet_Emit_RoundTrip()
+    {
+        var source = @"package StaticComputedPropGetSetEmit
+import System
+
+type Config class {
+    shared {
+        _value int32
+        prop value int32 {
+            get { return _value }
+            set(v) { _value = v }
+        }
+    }
+}
+
+Config.value = 77
+Console.WriteLine(Config.value)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-StaticComputedPropGetSet");
+        Assert.Contains("77", output);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 7. Issue #263: Static event accessor support in shared blocks
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SharedBlock_StaticFieldLikeEvent_Emit_RoundTrip()
+    {
+        var source = @"package StaticEventEmit
+import System
+
+type EventBus class {
+    shared {
+        event onNotify Action
+    }
+}
+
+EventBus.onNotify += func() { }
+Console.WriteLine(""subscribed"")
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-StaticEvent");
+        Assert.Contains("subscribed", output);
+    }
 }

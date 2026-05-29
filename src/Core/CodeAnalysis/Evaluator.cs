@@ -1068,6 +1068,15 @@ public sealed class Evaluator
                     return staticValue;
                 }
             }
+            else if (node.Property.GetterSymbol != null && program.Functions.TryGetValue(node.Property.GetterSymbol, out var staticGetterBody))
+            {
+                // Issue #263: computed static property getter — no 'this' parameter.
+                var frame = new Dictionary<Symbols.VariableSymbol, object>();
+                locals.Push(frame);
+                var result = EvaluateStatement(staticGetterBody);
+                locals.Pop();
+                return result;
+            }
 
             return DefaultValue(node.Property.Type);
         }
@@ -1104,6 +1113,27 @@ public sealed class Evaluator
     private object EvaluatePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
     {
         var value = EvaluateExpression(node.Value);
+
+        // Issue #263: static property assignment (receiver is null).
+        if (node.Receiver == null)
+        {
+            if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+            {
+                staticFields[(node.StructType, node.Property.BackingField)] = value;
+            }
+            else if (node.Property.SetterSymbol != null && program.Functions.TryGetValue(node.Property.SetterSymbol, out var staticSetterBody))
+            {
+                var frame = new Dictionary<Symbols.VariableSymbol, object>
+                {
+                    [node.Property.SetterSymbol.Parameters[0]] = value,
+                };
+                locals.Push(frame);
+                EvaluateStatement(staticSetterBody);
+                locals.Pop();
+            }
+
+            return value;
+        }
 
         // Auto-property fallback: store to backing field.
         if (node.Property.IsAutoProperty && node.Property.BackingField != null)

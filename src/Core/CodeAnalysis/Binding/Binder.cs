@@ -517,6 +517,82 @@ public sealed class Binder
             }
         }
 
+        // Issue #263: bind static property accessor bodies declared in `shared` blocks.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.StaticProperties.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var prop in structSym.StaticProperties)
+            {
+                if (prop.IsAutoProperty)
+                {
+                    continue;
+                }
+
+                if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, prop.GetterSymbol);
+                    var body = binder.BindStatement(prop.GetterBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+
+                    if (!ControlFlowGraph.AllPathsReturn(loweredBody))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(prop.GetterBodySyntax.OpenBraceToken.Location);
+                    }
+
+                    functionBodies.Add(prop.GetterSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+
+                if (prop.SetterSymbol != null && prop.SetterBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, prop.SetterSymbol);
+                    var body = binder.BindStatement(prop.SetterBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+                    functionBodies.Add(prop.SetterSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+            }
+        }
+
+        // Issue #263: bind static event accessor bodies declared in `shared` blocks.
+        foreach (var structSym in globalScope.Structs)
+        {
+            if (structSym.StaticEvents.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ev in structSym.StaticEvents)
+            {
+                if (ev.IsFieldLike)
+                {
+                    continue;
+                }
+
+                if (ev.AddMethodSymbol != null && ev.AddBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, ev.AddMethodSymbol);
+                    var body = binder.BindStatement(ev.AddBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+                    functionBodies.Add(ev.AddMethodSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+
+                if (ev.RemoveMethodSymbol != null && ev.RemoveBodySyntax != null)
+                {
+                    var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
+                    var body = binder.BindStatement(ev.RemoveBodySyntax);
+                    var loweredBody = Lowerer.Lower(body);
+                    functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
+                    diagnostics.AddRange(binder.Diagnostics);
+                }
+            }
+        }
+
         // ADR-0053 Phase D: bind static method bodies declared in `shared` blocks.
         foreach (var structSym in globalScope.Structs)
         {
@@ -1554,6 +1630,46 @@ public sealed class Binder
                         isReadOnly: !hasSetter,
                         isStatic: true);
                     propertySymbol.BackingField = backingField;
+                }
+
+                // Issue #263: create FunctionSymbols for computed static property accessors.
+                if (!isAutoProperty)
+                {
+                    var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
+                    var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
+
+                    if (hasGetter && getAccessor?.Body != null)
+                    {
+                        var getterSymbol = new FunctionSymbol(
+                            $"get_{propName}",
+                            ImmutableArray<ParameterSymbol>.Empty,
+                            propType,
+                            declaration: null,
+                            package,
+                            propAccessibility,
+                            receiverType: null);
+                        getterSymbol.IsStatic = true;
+                        getterSymbol.StaticOwnerType = structSymbol;
+                        propertySymbol.GetterSymbol = getterSymbol;
+                        propertySymbol.GetterBodySyntax = getAccessor.Body;
+                    }
+
+                    if (hasSetter && setAccessor?.Body != null)
+                    {
+                        var setterParam = new ParameterSymbol(setterParamName, propType);
+                        var setterSymbol = new FunctionSymbol(
+                            $"set_{propName}",
+                            ImmutableArray.Create(setterParam),
+                            TypeSymbol.Void,
+                            declaration: null,
+                            package,
+                            propAccessibility,
+                            receiverType: null);
+                        setterSymbol.IsStatic = true;
+                        setterSymbol.StaticOwnerType = structSymbol;
+                        propertySymbol.SetterSymbol = setterSymbol;
+                        propertySymbol.SetterBodySyntax = setAccessor.Body;
+                    }
                 }
 
                 if (!propSyntax.Annotations.IsDefaultOrEmpty)
@@ -5595,6 +5711,22 @@ public sealed class Binder
                 return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
             }
 
+            // Issue #263: static property assignment.
+            foreach (var prop in userStruct.StaticProperties)
+            {
+                if (prop.Name == fieldName)
+                {
+                    if (!prop.HasSetter)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var propConverted = BindConversion(syntax.Value.Location, staticValue, prop.Type);
+                    return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
+                }
+            }
+
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
             return new BoundErrorExpression(null);
         }
@@ -5711,6 +5843,22 @@ public sealed class Binder
         {
             receiverClrType = importedClass.ClassType;
             flags = BindingFlags.Public | BindingFlags.Static;
+        }
+        else if (accessor.LeftPart is NameExpressionSyntax staticLeftName
+            && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
+            && staticTypeAlias is StructSymbol staticStruct
+            && !staticStruct.StaticEvents.IsDefaultOrEmpty)
+        {
+            // Issue #263: static event subscription on a user-defined type.
+            var ev = staticStruct.StaticEvents.FirstOrDefault(e => e.Name == eventName);
+            if (ev != null)
+            {
+                var userHandler = BindExpression(syntax.Value);
+                return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
+            }
+
+            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+            return new BoundErrorExpression(null);
         }
         else
         {
