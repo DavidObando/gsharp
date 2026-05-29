@@ -192,6 +192,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the properties declared on this type (ADR-0051). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<PropertySymbol> Properties { get; private set; } = ImmutableArray<PropertySymbol>.Empty;
 
+    /// <summary>Gets the events declared on this type (ADR-0052). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
+    public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -233,6 +236,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetProperties(ImmutableArray<PropertySymbol> properties)
     {
         Properties = properties;
+    }
+
+    /// <summary>Sets <see cref="Events"/> after binding event declarations (ADR-0052).</summary>
+    /// <param name="events">The bound event symbols owned by this type.</param>
+    public void SetEvents(ImmutableArray<EventSymbol> events)
+    {
+        Events = events;
     }
 
     /// <summary>Appends additional methods after the initial declaration binding pass.</summary>

@@ -59,6 +59,14 @@ public sealed class Binder
         ImmutableHashSet.Create(AttributeTargetKind.Property, AttributeTargetKind.Field, AttributeTargetKind.Method);
 
     /// <summary>
+    /// Targets permitted on an event declaration (ADR-0052):
+    /// <c>event</c> by default; <c>field</c> for the backing field;
+    /// <c>method</c> for the synthesized add/remove accessors.
+    /// </summary>
+    private static readonly ImmutableHashSet<AttributeTargetKind> EventDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Event, AttributeTargetKind.Field, AttributeTargetKind.Method);
+
+    /// <summary>
     /// Targets permitted on a <c>var</c>/<c>let</c>/<c>const</c> variable
     /// declaration. ADR-0047 §2 assigns the default target <c>field</c> to
     /// these declarations (both at top level — where the variable becomes a
@@ -1181,6 +1189,113 @@ public sealed class Binder
             structSymbol.SetProperties(propertiesBuilder.ToImmutable());
         }
 
+        // ADR-0052: bind event declarations.
+        if (!syntax.Events.IsDefaultOrEmpty)
+        {
+            var eventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
+            foreach (var eventSyntax in syntax.Events)
+            {
+                var eventName = eventSyntax.Identifier.Text;
+
+                // Check for duplicate names
+                if (!existingNames.Add(eventName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
+                    continue;
+                }
+
+                var handlerType = BindTypeClause(eventSyntax.Type);
+                if (handlerType == null)
+                {
+                    continue;
+                }
+
+                var eventAccessibility = ResolveAccessibility(eventSyntax.AccessibilityModifier);
+                bool isFieldLike = eventSyntax.OpenBraceToken == null;
+                bool isVirtual = eventSyntax.OpenModifier != null;
+                bool isOverride = eventSyntax.OverrideModifier != null;
+
+                // Validate: open only on open class
+                if (isVirtual && !structSymbol.IsOpen)
+                {
+                    Diagnostics.ReportOpenMemberInNonOpenClass(eventSyntax.OpenModifier.Location, eventName);
+                }
+
+                var eventSymbol = new EventSymbol(
+                    eventName,
+                    handlerType,
+                    eventAccessibility,
+                    isFieldLike,
+                    isVirtual,
+                    isOverride);
+
+                // Create backing field for field-like events
+                if (isFieldLike)
+                {
+                    var backingField = new FieldSymbol(
+                        eventName,
+                        handlerType,
+                        Accessibility.Private,
+                        isReadOnly: false);
+                    eventSymbol.BackingField = backingField;
+                }
+                else
+                {
+                    // Explicit accessors — store body syntax
+                    var addAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsAdd);
+                    var removeAccessor = eventSyntax.Accessors.FirstOrDefault(a => a.IsRemove);
+
+                    if (addAccessor?.Body != null)
+                    {
+                        eventSymbol.AddBodySyntax = addAccessor.Body;
+                    }
+
+                    if (removeAccessor?.Body != null)
+                    {
+                        eventSymbol.RemoveBodySyntax = removeAccessor.Body;
+                    }
+                }
+
+                // Create add/remove method symbols
+                var handlerParam = new ParameterSymbol("value", handlerType);
+                eventSymbol.AddMethodSymbol = new FunctionSymbol(
+                    $"add_{eventName}",
+                    ImmutableArray.Create(handlerParam),
+                    TypeSymbol.Void,
+                    declaration: null,
+                    package,
+                    eventAccessibility,
+                    receiverType: structSymbol,
+                    isOpen: isVirtual,
+                    isOverride: isOverride);
+                eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
+                    $"remove_{eventName}",
+                    ImmutableArray.Create(handlerParam),
+                    TypeSymbol.Void,
+                    declaration: null,
+                    package,
+                    eventAccessibility,
+                    receiverType: structSymbol,
+                    isOpen: isVirtual,
+                    isOverride: isOverride);
+
+                // Bind annotations
+                if (!eventSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    eventSymbol.SetAttributes(BindAttributes(
+                        eventSyntax.Annotations,
+                        AttributeTargetKind.Event,
+                        EventDeclarationAllowedTargets,
+                        "an event declaration",
+                        System.AttributeTargets.Event));
+                }
+
+                eventsBuilder.Add(eventSymbol);
+            }
+
+            structSymbol.SetEvents(eventsBuilder.ToImmutable());
+        }
+
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
         // methods) provides a same-name, same-signature method. The check
@@ -1454,6 +1569,39 @@ public sealed class Binder
             }
 
             interfaceSymbol.SetProperties(propertiesBuilder.ToImmutable());
+        }
+
+        // ADR-0052: bind interface event declarations.
+        if (!syntax.Events.IsDefaultOrEmpty)
+        {
+            var eventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
+            foreach (var eventSyntax in syntax.Events)
+            {
+                var eventName = eventSyntax.Identifier.Text;
+                if (!seenNames.Add(eventName))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
+                    continue;
+                }
+
+                var handlerType = BindTypeClause(eventSyntax.Type);
+                if (handlerType == null)
+                {
+                    continue;
+                }
+
+                var eventSymbol = new EventSymbol(
+                    eventName,
+                    handlerType,
+                    Accessibility.Public,
+                    isFieldLike: false,
+                    isVirtual: false,
+                    isOverride: false);
+
+                eventsBuilder.Add(eventSymbol);
+            }
+
+            interfaceSymbol.SetEvents(eventsBuilder.ToImmutable());
         }
 
         // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
