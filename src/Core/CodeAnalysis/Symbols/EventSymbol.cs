@@ -18,13 +18,15 @@ public sealed class EventSymbol : Symbol
     /// <param name="isFieldLike">Whether this is a field-like event (no explicit accessors).</param>
     /// <param name="isVirtual">Whether this event is virtual (open modifier present).</param>
     /// <param name="isOverride">Whether this event overrides a base event.</param>
+    /// <param name="isStatic">Whether this event is declared inside a <c>shared</c> block (ADR-0053).</param>
     public EventSymbol(
         string name,
         TypeSymbol type,
         Accessibility accessibility,
         bool isFieldLike,
         bool isVirtual,
-        bool isOverride)
+        bool isOverride,
+        bool isStatic = false)
         : base(name)
     {
         Type = type;
@@ -32,6 +34,7 @@ public sealed class EventSymbol : Symbol
         IsFieldLike = isFieldLike;
         IsVirtual = isVirtual;
         IsOverride = isOverride;
+        IsStatic = isStatic;
     }
 
     /// <inheritdoc/>
@@ -51,6 +54,9 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this event overrides a base event.</summary>
     public bool IsOverride { get; }
+
+    /// <summary>Gets a value indicating whether this event is declared inside a <c>shared</c> block (ADR-0053).</summary>
+    public bool IsStatic { get; }
 
     /// <summary>Gets or sets the synthesized backing delegate field (null for explicit accessors).</summary>
     public FieldSymbol BackingField { get; set; }
