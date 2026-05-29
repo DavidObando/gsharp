@@ -212,6 +212,9 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets the struct/class that owns this static method (ADR-0053 / #261). <c>null</c> for non-static or top-level functions.</summary>
     public StructSymbol StaticOwnerType { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether this function should be emitted with <c>MethodAttributes.SpecialName</c> (e.g., event accessor methods).</summary>
+    public bool IsSpecialName { get; set; }
+
     /// <summary>Gets or sets a value indicating whether this function is declared <c>async</c> (Phase 5.1 / ADR-0023). When true, callers observe the function's return as <c>Task[T]</c> (or <c>Task</c> when no return type was declared) and the body may use <c>await</c>.</summary>
     public bool IsAsync { get; set; }
 

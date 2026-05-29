@@ -97,7 +97,8 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)> propertyAccessorHandles = new Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)>();
 
     // ADR-0052: event accessor method handles for EventDef + MethodSemantics emission.
-    private readonly Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove)> eventAccessorHandles = new Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove)>();
+    // Issue #257: extended with optional Raise handle.
+    private readonly Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)> eventAccessorHandles = new Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)>();
 
     // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
     private MemberReferenceHandle? notImplementedExceptionCtorRef;
@@ -638,7 +639,8 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+                MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
         }
 
@@ -687,7 +689,8 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+                MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // ADR-0053: plan method rows for static methods on classes.
@@ -724,7 +727,8 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+                MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // Issue #262: plan .cctor row for classes with static field initializers.
@@ -779,7 +783,8 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+                MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // ADR-0053: plan method rows for static methods on structs.
@@ -816,7 +821,8 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle);
+                MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
+                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // Issue #262: plan .cctor row for structs with static field initializers.
@@ -2413,6 +2419,13 @@ internal sealed class ReflectionMetadataEmitter
             // Emit remove_X MethodDef.
             var removeMethod = this.EmitStaticEventRemoveAccessor(structSym, ev);
 
+            // Issue #257: emit raise_X MethodDef if present.
+            MethodDefinitionHandle? raiseMethod = null;
+            if (ev.RaiseMethodSymbol != null)
+            {
+                raiseMethod = this.EmitEventRaiseAccessor(structSym, ev, isStatic: true);
+            }
+
             // Emit EventDef row.
             var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
 
@@ -2429,6 +2442,10 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+            if (raiseMethod.HasValue)
+            {
+                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
+            }
         }
 
         // EventMap row: links the TypeDef to its first EventDef.
@@ -2671,6 +2688,13 @@ internal sealed class ReflectionMetadataEmitter
             // Emit remove_X MethodDef.
             var removeMethod = this.EmitEventRemoveAccessor(structSym, ev);
 
+            // Issue #257: emit raise_X MethodDef if present.
+            MethodDefinitionHandle? raiseMethod = null;
+            if (ev.RaiseMethodSymbol != null)
+            {
+                raiseMethod = this.EmitEventRaiseAccessor(structSym, ev, isStatic: false);
+            }
+
             // Emit EventDef row.
             var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
 
@@ -2687,6 +2711,10 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+            if (raiseMethod.HasValue)
+            {
+                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
+            }
         }
 
         // EventMap row: links the TypeDef to its first EventDef.
@@ -2878,6 +2906,84 @@ internal sealed class ReflectionMetadataEmitter
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
+            signature: this.metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: bodyOffset,
+            parameterList: firstParamHandle);
+    }
+
+    /// <summary>
+    /// Issue #257: emits the raise_X accessor MethodDef for an event.
+    /// The raise accessor body is always user-provided (explicit).
+    /// </summary>
+    private MethodDefinitionHandle EmitEventRaiseAccessor(StructSymbol structSym, EventSymbol ev, bool isStatic)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            if (ev.RaiseMethodSymbol != null && this.program.Functions.TryGetValue(ev.RaiseMethodSymbol, out var raiseBody))
+            {
+                var handle = this.EmitFunction(ev.RaiseMethodSymbol, raiseBody, isEntryPoint: false);
+                return handle;
+            }
+            else
+            {
+                // Fallback: throw new NotImplementedException().
+                var il = new InstructionEncoder(new BlobBuilder());
+                var nieCtor = this.GetNotImplementedExceptionCtor();
+                il.OpCode(ILOpCode.Newobj);
+                il.Token(nieCtor);
+                il.OpCode(ILOpCode.Throw);
+                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            }
+        }
+
+        // Build signature: parameters match the handler type's parameters, return void.
+        int paramCount = 0;
+        if (ev.Type is FunctionTypeSymbol fnType)
+        {
+            paramCount = fnType.ParameterTypes.Length;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !isStatic)
+            .Parameters(paramCount, r => r.Void(), ps =>
+            {
+                if (ev.Type is FunctionTypeSymbol fn)
+                {
+                    foreach (var pt in fn.ParameterTypes)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), pt);
+                    }
+                }
+            });
+
+        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        if (isStatic)
+        {
+            methodAttrs |= MethodAttributes.Static;
+        }
+        else if (ev.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (ev.IsOverride)
+        {
+            methodAttrs |= MethodAttributes.Virtual;
+        }
+
+        var firstParamHandle = this.NextParameterHandle();
+        for (int i = 0; i < paramCount; i++)
+        {
+            this.metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.metadata.GetOrAddString($"arg{i}"),
+                sequenceNumber: i + 1);
+        }
+
+        return this.metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString($"raise_{ev.Name}"),
             signature: this.metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -3969,6 +4075,42 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, emittedAdd);
             this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, emittedRemove);
+
+            // Issue #257: emit abstract raise_X MethodDef if present.
+            if (ev.RaiseMethodSymbol != null)
+            {
+                int raiseParamCount = 0;
+                if (ev.Type is FunctionTypeSymbol fnType)
+                {
+                    raiseParamCount = fnType.ParameterTypes.Length;
+                }
+
+                var raiseSigBlob = new BlobBuilder();
+                new BlobEncoder(raiseSigBlob).MethodSignature(isInstanceMethod: true)
+                    .Parameters(raiseParamCount, r => r.Void(), ps =>
+                    {
+                        if (ev.Type is FunctionTypeSymbol fn)
+                        {
+                            foreach (var pt in fn.ParameterTypes)
+                            {
+                                this.EncodeTypeSymbol(ps.AddParameter().Type(), pt);
+                            }
+                        }
+                    });
+
+                var raiseAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                    | MethodAttributes.Virtual | MethodAttributes.Abstract
+                    | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+                var emittedRaise = this.metadata.AddMethodDefinition(
+                    attributes: raiseAttrs,
+                    implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                    name: this.metadata.GetOrAddString($"raise_{ev.Name}"),
+                    signature: this.metadata.GetOrAddBlob(raiseSigBlob),
+                    bodyOffset: -1,
+                    parameterList: this.NextParameterHandle());
+
+                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, emittedRaise);
+            }
         }
 
         // EventMap row: links the TypeDef to its first EventDef.
@@ -5196,6 +5338,12 @@ internal sealed class ReflectionMetadataEmitter
         // convention came from `func (a T) operator +(...)` and should round-
         // trip as SpecialName so consumers (e.g. C#) see them as operators.
         if (function.IsExtension && function.Name != null && function.Name.StartsWith("op_"))
+        {
+            methodAttrs |= MethodAttributes.SpecialName;
+        }
+
+        // Issue #257: event accessor methods (add_X, remove_X, raise_X) are marked SpecialName.
+        if (function.IsSpecialName)
         {
             methodAttrs |= MethodAttributes.SpecialName;
         }
