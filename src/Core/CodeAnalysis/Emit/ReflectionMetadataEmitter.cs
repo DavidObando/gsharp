@@ -1971,6 +1971,13 @@ internal sealed class ReflectionMetadataEmitter
             {
                 baseType = baseHandle;
             }
+            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
+            {
+                // Issue #296: the class inherits from an imported CLR base
+                // class; reference it as the TypeDef's base type so the emitted
+                // metadata extends the imported base.
+                baseType = this.GetTypeReference(importedBaseClr);
+            }
             else
             {
                 baseType = this.objectTypeRef;
@@ -3409,6 +3416,11 @@ internal sealed class ReflectionMetadataEmitter
             {
                 baseType = baseHandle;
             }
+            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
+            {
+                // Issue #296: nested class inheriting an imported CLR base.
+                baseType = this.GetTypeReference(importedBaseClr);
+            }
             else
             {
                 baseType = this.objectTypeRef;
@@ -4524,7 +4536,56 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetSystemAttributeCtorRef();
         }
 
+        if (classSym.ImportedBaseType?.ClrType is Type importedBaseClr)
+        {
+            // Issue #296: chain the generated ctor to the imported CLR base's
+            // accessible parameterless constructor.
+            return this.GetImportedBaseDefaultCtorReference(importedBaseClr);
+        }
+
         return this.objectCtorRef;
+    }
+
+    /// <summary>
+    /// Issue #296: resolves a MemberRef to the imported CLR base class's
+    /// accessible parameterless <c>.ctor()</c> for base-constructor chaining.
+    /// Uses metadata-safe reflection (the declaring type is loaded under a
+    /// MetadataLoadContext). Falls back to a synthesized parameterless ctor
+    /// reference when no explicit parameterless ctor is discoverable.
+    /// </summary>
+    private EntityHandle GetImportedBaseDefaultCtorReference(Type importedBaseClr)
+    {
+        ConstructorInfo parameterless = null;
+        foreach (var ctor in importedBaseClr.GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (ctor.GetParameters().Length != 0)
+            {
+                continue;
+            }
+
+            if (ctor.IsPublic || ctor.IsFamily || ctor.IsFamilyOrAssembly)
+            {
+                parameterless = ctor;
+                break;
+            }
+        }
+
+        if (parameterless != null)
+        {
+            return this.GetCtorReference(parameterless);
+        }
+
+        // No explicit accessible parameterless ctor was found; reference a
+        // synthesized parameterless ctor signature on the base type ref. This
+        // matches the implicit default ctor a base class would otherwise expose.
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+        return this.metadata.AddMemberReference(
+            parent: this.GetTypeReference(importedBaseClr),
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(sigBlob));
     }
 
     private EntityHandle GetSystemAttributeTypeRef()

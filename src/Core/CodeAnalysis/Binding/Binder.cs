@@ -982,6 +982,7 @@ public sealed class Binder
         // first identifier. Declaration order rules apply: base/interfaces
         // must be declared before this type.
         StructSymbol baseClassSymbol = null;
+        TypeSymbol importedBaseType = null;
         var implementedInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
         if (syntax.HasBaseType)
         {
@@ -1014,6 +1015,20 @@ public sealed class Binder
 
                     if (!scope.TryLookupTypeAlias(baseName, out var resolved))
                     {
+                        // Issue #296: a GSharp class may inherit from an imported
+                        // (CLR) base class. The base-type name did not match any
+                        // user-declared GSharp type, so consult the same imported
+                        // type resolution used for construction / static access.
+                        // Only the first identifier (the base-class slot) may be
+                        // a CLR class; the rest are interfaces (CLR interface
+                        // implementation is out of scope here).
+                        if (i == 0 && !hasAttributeSugar
+                            && TryResolveImportedBaseType(baseName, out var importedBase))
+                        {
+                            importedBaseType = importedBase;
+                            continue;
+                        }
+
                         Diagnostics.ReportUnableToFindType(token.Location, baseName);
                         continue;
                     }
@@ -1085,6 +1100,15 @@ public sealed class Binder
             // Phase 4 of #141 / ADR-0047 §5: tag the class so the emitter
             // overrides its CLR base type to System.Attribute.
             structSymbol.SetIsAttributeClass();
+        }
+
+        if (importedBaseType != null)
+        {
+            // Issue #296: record the imported CLR base class so the emitter
+            // writes it as the TypeDef base type, chains the generated ctor to
+            // the CLR base's parameterless ctor, and member lookup walks into
+            // the CLR base for inherited members.
+            structSymbol.SetImportedBaseType(importedBaseType);
         }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
@@ -7945,6 +7969,25 @@ public sealed class Binder
                         return new BoundPropertyAccessExpression(null, receiver, structSym, prop);
                     }
 
+                    // Issue #296: a GSharp class inheriting an imported CLR base
+                    // exposes the base's instance properties/fields. Fall back to
+                    // CLR member lookup on the imported base type.
+                    if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+                    {
+                        var memberName = ne.IdentifierToken.Text;
+                        var clrProp = inheritedBaseClr.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
+                        if (clrProp != null && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead)
+                        {
+                            return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                        }
+
+                        var clrFld = inheritedBaseClr.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+                        if (clrFld != null)
+                        {
+                            return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                        }
+                    }
+
                     Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                 }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
@@ -8077,6 +8120,19 @@ public sealed class Binder
                 return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce);
             }
 
+            // Issue #296: a GSharp class inheriting an imported CLR base class
+            // exposes the base's instance members. After user-defined and
+            // extension lookups fail, resolve the call against the imported
+            // base CLR type so inherited members are callable on the derived
+            // GSharp instance. Inherited instance members take precedence over
+            // imported extension methods.
+            if (receiver != null && receiver.Type is StructSymbol inheritedDerived
+                && inheritedDerived.ImportedBaseType?.ClrType is System.Type inheritedBaseClr
+                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall))
+            {
+                return inheritedCall;
+            }
+
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
@@ -8154,6 +8210,62 @@ public sealed class Binder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #296: resolves an instance method call against an imported CLR
+    /// base class for a GSharp class receiver that inherits it. Uses the same
+    /// overload resolution as direct imported-instance calls; <c>GetMethods</c>
+    /// on the base type already includes members inherited up the CLR chain.
+    /// Returns <c>true</c> with a bound call when a unique match is found.
+    /// </summary>
+    private bool TryBindInheritedClrInstanceCall(
+        BoundExpression receiver,
+        System.Type importedBaseClr,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var candidates = importedBaseClr
+            .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Where(m => m.Name == methodName)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var argTypes = new System.Type[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = arguments[i].Type?.ClrType;
+            if (t == null)
+            {
+                return false;
+            }
+
+            argTypes[i] = t;
+        }
+
+        var resolution = OverloadResolution.Resolve(candidates, argTypes);
+        switch (resolution.Outcome)
+        {
+            case OverloadResolution.ResolutionOutcome.Resolved:
+                var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                var refKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
+                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
+                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, refKinds);
+                return true;
+            case OverloadResolution.ResolutionOutcome.Ambiguous:
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                result = new BoundErrorExpression(null);
+                return true;
+            default:
+                return false;
+        }
     }
 
     private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
@@ -8858,6 +8970,39 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #296: resolves a class declaration's base-type name to an imported
+    /// CLR base class. Honors imports and aliases (via <see cref="LookupType"/>)
+    /// for simple names and falls back to direct fully-qualified resolution.
+    /// Only non-sealed reference (class) types are accepted as a base; CLR
+    /// interfaces, value types, and sealed classes are rejected so the regular
+    /// "cannot find type" / single-inheritance diagnostics still apply.
+    /// </summary>
+    private bool TryResolveImportedBaseType(string baseName, out TypeSymbol importedBaseType)
+    {
+        importedBaseType = null;
+
+        // Simple name honoring imports/aliases, e.g. `MemoryStream` with
+        // `import System.IO`. This is the same path used to resolve imported
+        // types for construction and static access.
+        var candidate = LookupType(baseName)?.ClrType;
+
+        // Fully-qualified name, e.g. `System.IO.MemoryStream`, resolved directly
+        // against the reference set.
+        if (candidate == null && scope.References.TryResolveType(baseName, out var resolvedType))
+        {
+            candidate = resolvedType;
+        }
+
+        if (candidate == null || !candidate.IsClass || candidate.IsInterface || candidate.IsSealed)
+        {
+            return false;
+        }
+
+        importedBaseType = TypeSymbol.FromClrType(candidate);
+        return importedBaseType?.ClrType != null;
     }
 
     /// <summary>
