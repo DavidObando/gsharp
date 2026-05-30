@@ -3,7 +3,7 @@
   "displayName": "GSharp",
   "description": "Rich language support for GSharp (.gs files, .gsproj projects)",
   "version": "0.1.0",
-  "publisher": "gsharp",
+  "publisher": "gsharplang",
   "license": "MIT",
   "icon": "icon.png",
   "repository": {
