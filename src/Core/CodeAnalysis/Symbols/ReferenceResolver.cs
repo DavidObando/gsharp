@@ -244,6 +244,67 @@ public sealed class ReferenceResolver
     }
 
     /// <summary>
+    /// Projects a CLR <see cref="Type"/> that may originate from the gsc host
+    /// runtime onto the equivalent <see cref="Type"/> from this resolver's
+    /// reference set (its <see cref="MetadataLoadContext"/> when one is in
+    /// play). This is required before calling
+    /// <see cref="Type.MakeGenericType(Type[])"/> on an open generic obtained
+    /// from <see cref="TryResolveType"/>: <c>MakeGenericType</c> demands that
+    /// every type argument was loaded by the SAME context as the generic
+    /// definition, otherwise it throws
+    /// <see cref="ArgumentException"/> ("was not loaded by the
+    /// MetadataLoadContext that loaded the generic type or method").
+    /// </summary>
+    /// <remarks>
+    /// For the <see cref="Default"/> resolver (no
+    /// <see cref="MetadataLoadContext"/>) the host type is already the right
+    /// identity and is returned unchanged. Arrays and constructed generics are
+    /// projected element-by-element so nested type arguments (e.g.
+    /// <c>List[int]</c>) are mapped too. When a leaf type cannot be resolved by
+    /// name from the references, the original host type is returned as a
+    /// best-effort fallback.
+    /// </remarks>
+    /// <param name="hostType">The CLR type to project; may be <c>null</c>.</param>
+    /// <returns>The projected type, or <c>null</c> when <paramref name="hostType"/> is <c>null</c>.</returns>
+    public Type MapClrTypeToReferences(Type hostType)
+    {
+        if (hostType == null)
+        {
+            return null;
+        }
+
+        // The Default resolver searches host-runtime assemblies, so host types
+        // already share identity with anything TryResolveType returns. No
+        // projection is needed (and attempting one would be wasted work).
+        if (metadataContext == null)
+        {
+            return hostType;
+        }
+
+        if (hostType.IsArray)
+        {
+            var mappedElement = MapClrTypeToReferences(hostType.GetElementType());
+            var rank = hostType.GetArrayRank();
+            return rank == 1 ? mappedElement.MakeArrayType() : mappedElement.MakeArrayType(rank);
+        }
+
+        if (hostType.IsGenericType && !hostType.IsGenericTypeDefinition)
+        {
+            var mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition());
+            var mappedArgs = hostType.GetGenericArguments().Select(MapClrTypeToReferences).ToArray();
+            return mappedDefinition.MakeGenericType(mappedArgs);
+        }
+
+        var fullName = hostType.FullName;
+        if (!string.IsNullOrEmpty(fullName) && TryResolveType(fullName, out var mapped) && mapped != null)
+        {
+            return mapped;
+        }
+
+        return hostType;
+    }
+
+    /// <summary>
     /// Resolves a well-known core CLR type (e.g. <c>System.Object</c>,
     /// <c>System.String</c>) by full name. Used by the emitter so type
     /// references for primitives originate from the target framework's

@@ -14,4 +14,15 @@ public class SourceTextTests
         var sourceText = SourceText.From(text);
         Assert.Equal(expectedLineCount, sourceText.Lines.Length);
     }
+
+    [Fact]
+    public void SourceText_ToString_WithOutOfRangeBounds_DoesNotThrow()
+    {
+        var sourceText = SourceText.From("hello");
+
+        Assert.Equal(string.Empty, sourceText.ToString(2, -33));
+        Assert.Equal("llo", sourceText.ToString(2, 100));
+        Assert.Equal(string.Empty, sourceText.ToString(100, 5));
+        Assert.Equal(string.Empty, sourceText.ToString(-5, 0));
+    }
 }
