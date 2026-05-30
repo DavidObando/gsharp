@@ -80,4 +80,28 @@ internal static class ClrTypeUtilities
 
         return false;
     }
+
+    /// <summary>
+    /// Returns whether <paramref name="type"/> is a CLR delegate type, i.e. it
+    /// (transitively) derives from <c>System.MulticastDelegate</c> /
+    /// <c>System.Delegate</c>. Walks the base-type chain by name so it is safe
+    /// for types loaded through a <see cref="System.Reflection.MetadataLoadContext"/>,
+    /// where <c>typeof(Delegate).IsAssignableFrom</c> would throw.
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><c>true</c> when the type is a delegate type.</returns>
+    public static bool IsDelegateType(Type type)
+    {
+        for (var t = type; t != null; t = t.BaseType)
+        {
+            var fullName = t.FullName;
+            if (string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal)
+                || string.Equals(fullName, "System.Delegate", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
