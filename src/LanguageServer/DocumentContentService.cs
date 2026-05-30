@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace GSharp.LanguageServer;
 
@@ -12,6 +13,11 @@ namespace GSharp.LanguageServer;
 public class DocumentContentService
 {
     private readonly ConcurrentDictionary<string, DocumentContent> documentContents = new();
+
+    /// <summary>
+    /// Gets all documents currently in the buffer.
+    /// </summary>
+    public IEnumerable<KeyValuePair<string, DocumentContent>> AllDocuments => this.documentContents;
 
     /// <summary>
     /// Adds a document to the service buffer.
