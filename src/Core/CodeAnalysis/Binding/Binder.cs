@@ -6912,7 +6912,12 @@ public sealed class Binder
 
         if (scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var taskOpen))
         {
-            var closed = taskOpen.MakeGenericType(clr);
+            // Route the element CLR type through the SAME resolver as Task`1.
+            // Under the SDK build path the references are loaded via a
+            // MetadataLoadContext, and MakeGenericType requires the type
+            // argument to originate from that same context (issue #290).
+            var elementClr = scope.References.MapClrTypeToReferences(clr);
+            var closed = taskOpen.MakeGenericType(elementClr);
             return ImportedTypeSymbol.Get(closed);
         }
 
