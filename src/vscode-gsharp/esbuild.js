@@ -17,10 +17,13 @@ function buildLanguageServer() {
     stdio: 'inherit',
   });
 
-  // Copy server output to .server/ for the extension to find
-  if (!fs.existsSync(serverTargetDir)) {
-    fs.mkdirSync(serverTargetDir, { recursive: true });
+  // Copy server output to .server/ for the extension to find.
+  // Recreate the directory from scratch so stale artifacts (e.g. from a previous
+  // OmniSharp-based build) are not left behind.
+  if (fs.existsSync(serverTargetDir)) {
+    fs.rmSync(serverTargetDir, { recursive: true, force: true });
   }
+  fs.mkdirSync(serverTargetDir, { recursive: true });
 
   const files = fs.readdirSync(serverOutputDir);
   for (const file of files) {

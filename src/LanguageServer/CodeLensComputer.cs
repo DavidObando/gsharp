@@ -4,67 +4,11 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Syntax;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using OmniSharp.Extensions.LanguageServer.Protocol.Window;
+using GSharp.LanguageServer.Protocol;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer;
-
-/// <summary>
-/// CodeLens handler — shows reference counts above declarations.
-/// </summary>
-public class CodeLensHandler : CodeLensHandlerBase
-{
-    private readonly ILanguageServerFacade router;
-    private readonly DocumentContentService documentContentService;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="CodeLensHandler"/> class.
-    /// </summary>
-    /// <param name="router"><see cref="ILanguageServerFacade"/> for LSP.</param>
-    /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    public CodeLensHandler(ILanguageServerFacade router, DocumentContentService documentContentService)
-    {
-        this.router = router;
-        this.documentContentService = documentContentService;
-    }
-
-    /// <inheritdoc/>
-    public override Task<CodeLensContainer> Handle(CodeLensParams request, CancellationToken cancellationToken)
-    {
-        var key = request.TextDocument.Uri.ToString();
-        if (!this.documentContentService.TryGet(key, out DocumentContent content))
-        {
-            this.router.Window.LogWarning($"No syntax tree for {key}");
-            return Task.FromResult(new CodeLensContainer());
-        }
-
-        var lenses = CodeLensComputer.ComputeLenses(content);
-        return Task.FromResult(new CodeLensContainer(lenses));
-    }
-
-    /// <inheritdoc/>
-    public override Task<CodeLens> Handle(CodeLens request, CancellationToken cancellationToken)
-    {
-        // Resolve — no additional resolution needed
-        return Task.FromResult(request);
-    }
-
-    /// <inheritdoc/>
-    protected override CodeLensRegistrationOptions CreateRegistrationOptions(CodeLensCapability capability, ClientCapabilities clientCapabilities)
-    {
-        return new CodeLensRegistrationOptions
-        {
-            DocumentSelector = Constants.DocumentSelector,
-            ResolveProvider = false,
-        };
-    }
-}
 
 /// <summary>
 /// Pure-function CodeLens computer usable by both the handler and tests.
@@ -138,7 +82,7 @@ internal static class CodeLensComputer
         return lenses;
     }
 
-    private static CodeLens CreateReferenceLens(OmniSharp.Extensions.LanguageServer.Protocol.Models.Range range, int refCount)
+    private static CodeLens CreateReferenceLens(Range range, int refCount)
     {
         var title = refCount == 1 ? "1 reference" : $"{refCount} references";
         return new CodeLens

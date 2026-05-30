@@ -4,8 +4,7 @@
 
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Text;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;

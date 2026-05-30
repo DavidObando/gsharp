@@ -5,6 +5,9 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.LanguageServer</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <!-- Protocol/Server files are hand-authored LSP plumbing (marked auto-generated for StyleCop);
+         they intentionally omit XML doc comments. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="@(OmniSharpExtensionsLanguageServerPackageReference)" />
+    <PackageReference Include="@(StreamJsonRpcPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,68 +4,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using OmniSharp.Extensions.LanguageServer.Protocol.Window;
+using GSharp.LanguageServer.Protocol;
 
 namespace GSharp.LanguageServer;
-
-/// <summary>
-/// Inlay hint handler — shows parameter names at call sites.
-/// </summary>
-public class InlayHintHandler : InlayHintsHandlerBase
-{
-    private readonly ILanguageServerFacade router;
-    private readonly DocumentContentService documentContentService;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="InlayHintHandler"/> class.
-    /// </summary>
-    /// <param name="router"><see cref="ILanguageServerFacade"/> for LSP.</param>
-    /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    public InlayHintHandler(ILanguageServerFacade router, DocumentContentService documentContentService)
-    {
-        this.router = router;
-        this.documentContentService = documentContentService;
-    }
-
-    /// <inheritdoc/>
-    public override Task<InlayHintContainer> Handle(InlayHintParams request, CancellationToken cancellationToken)
-    {
-        var key = request.TextDocument.Uri.ToString();
-        if (!this.documentContentService.TryGet(key, out DocumentContent content))
-        {
-            this.router.Window.LogWarning($"No syntax tree for {key}");
-            return Task.FromResult(new InlayHintContainer());
-        }
-
-        var hints = InlayHintComputer.ComputeHints(content);
-        return Task.FromResult(new InlayHintContainer(hints));
-    }
-
-    /// <inheritdoc/>
-    public override Task<InlayHint> Handle(InlayHint request, CancellationToken cancellationToken)
-    {
-        // Resolve handler — no additional resolution needed
-        return Task.FromResult(request);
-    }
-
-    /// <inheritdoc/>
-    protected override InlayHintRegistrationOptions CreateRegistrationOptions(InlayHintClientCapabilities capability, ClientCapabilities clientCapabilities)
-    {
-        return new InlayHintRegistrationOptions
-        {
-            DocumentSelector = Constants.DocumentSelector,
-            ResolveProvider = false,
-        };
-    }
-}
 
 /// <summary>
 /// Pure-function inlay hint computer usable by both the handler and tests.

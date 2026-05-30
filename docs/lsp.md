@@ -1,6 +1,6 @@
 # GSharp Language Server Protocol (LSP) Support
 
-The GSharp Language Server provides rich IDE features for `.gs` files via the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/). It is built on [OmniSharp Extensions](https://github.com/OmniSharp/csharp-language-server-protocol) and communicates over stdin/stdout.
+The GSharp Language Server provides rich IDE features for `.gs` files via the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/). It is built on [StreamJsonRpc](https://github.com/microsoft/vs-streamjsonrpc) with a hand-authored System.Text.Json protocol layer and communicates over stdin/stdout (or a named pipe / Unix domain socket).
 
 ## Supported Capabilities
 
@@ -56,6 +56,18 @@ VS Code ↔ LSP-client (TypeScript extension) ↔ stdin/stdout ↔ GSharp.Langua
 ```
 
 The server creates a `Compilation` per document edit and builds a `SemanticModel` that maps syntax tokens to their resolved symbols. All LSP feature computers are pure functions that take a `DocumentContent` (holding the `SyntaxTree`) and a cursor `Position`, then return the appropriate LSP response.
+
+### Command-line options
+
+The server reads/writes LSP messages over stdin/stdout by default. The following arguments are recognized:
+
+| Argument | Description |
+|----------|-------------|
+| `--pipe=<name>` | Communicate over a named pipe (Windows) or Unix domain socket instead of stdio. |
+| `--log` | Enable protocol logging to a default temporary file (`gsharp-lsp-debug.log` under the system temp directory). |
+| `--log=<path>` | Enable protocol logging to a specific file. |
+
+Logging is **opt-in**: when `--log` is not supplied, no log file is created. From the VS Code extension, logging is controlled by the `gsharp.server.log` and `gsharp.server.logPath` settings.
 
 ### Key internal types
 

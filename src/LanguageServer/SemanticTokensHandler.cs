@@ -3,24 +3,18 @@
 // </copyright>
 
 using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Threading;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using OmniSharp.Extensions.LanguageServer.Protocol.Window;
+using GSharp.LanguageServer.Protocol;
 using GSharpSymbolKind = GSharp.Core.CodeAnalysis.Symbols.SymbolKind;
 
 namespace GSharp.LanguageServer;
 
 /// <summary>
-/// Semantic tokens handler for GSharp — provides full and range semantic token highlighting.
+/// Semantic tokens metadata for GSharp — the legend (token types + modifiers) shared by the
+/// server dispatch target and tests.
 /// </summary>
-public class SemanticTokensHandler : SemanticTokensHandlerBase
+public static class SemanticTokensHandler
 {
     internal static readonly SemanticTokenType[] TokenTypes =
     [
@@ -54,63 +48,14 @@ public class SemanticTokensHandler : SemanticTokensHandlerBase
         SemanticTokenModifier.Deprecated,  // 5
     ];
 
-    private readonly ILanguageServerFacade router;
-    private readonly DocumentContentService documentContentService;
-    private SemanticTokensDocument cachedDocument;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="SemanticTokensHandler"/> class.
-    /// </summary>
-    /// <param name="router"><see cref="ILanguageServerFacade"/> for LSP.</param>
-    /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    public SemanticTokensHandler(ILanguageServerFacade router, DocumentContentService documentContentService)
-    {
-        this.router = router;
-        this.documentContentService = documentContentService;
-    }
-
     /// <summary>
     /// Gets the semantic tokens legend (token types + modifiers).
     /// </summary>
     internal static SemanticTokensLegend Legend { get; } = new SemanticTokensLegend
     {
-        TokenTypes = new Container<SemanticTokenType>(SemanticTokensHandler.TokenTypes),
-        TokenModifiers = new Container<SemanticTokenModifier>(SemanticTokensHandler.TokenModifiers),
+        TokenTypes = TokenTypes,
+        TokenModifiers = TokenModifiers,
     };
-
-    /// <inheritdoc/>
-    protected override SemanticTokensRegistrationOptions CreateRegistrationOptions(
-        SemanticTokensCapability capability, ClientCapabilities clientCapabilities)
-    {
-        return new SemanticTokensRegistrationOptions
-        {
-            DocumentSelector = Constants.DocumentSelector,
-            Legend = Legend,
-            Full = new SemanticTokensCapabilityRequestFull { Delta = true },
-            Range = true,
-        };
-    }
-
-    /// <inheritdoc/>
-    protected override Task Tokenize(SemanticTokensBuilder builder, ITextDocumentIdentifierParams identifier, CancellationToken cancellationToken)
-    {
-        var key = identifier.TextDocument.Uri.ToString();
-        if (!this.documentContentService.TryGet(key, out DocumentContent content))
-        {
-            this.router.Window.LogWarning($"No syntax tree for {key}");
-            return Task.CompletedTask;
-        }
-
-        SemanticTokensComputer.Tokenize(builder, content);
-        return Task.CompletedTask;
-    }
-
-    /// <inheritdoc/>
-    protected override Task<SemanticTokensDocument> GetSemanticTokensDocument(ITextDocumentIdentifierParams @params, CancellationToken cancellationToken)
-    {
-        this.cachedDocument ??= new SemanticTokensDocument(Legend);
-        return Task.FromResult(this.cachedDocument);
-    }
 }
 
 /// <summary>

@@ -3,7 +3,7 @@
 // </copyright>
 
 using System.Linq;
-using OmniSharp.Extensions.LanguageServer.Protocol;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;

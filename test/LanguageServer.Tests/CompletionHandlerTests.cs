@@ -3,7 +3,7 @@
 // </copyright>
 
 using System.Linq;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;
@@ -16,7 +16,7 @@ public class CompletionHandlerTests
         const string source = "let x = 42\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var items = CompletionComputer.ComputeCompletions(content, new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(0, 0));
+        var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
 
         Assert.Contains(items, i => i.Label == "let" && i.Kind == CompletionItemKind.Keyword);
         Assert.Contains(items, i => i.Label == "func" && i.Kind == CompletionItemKind.Keyword);
@@ -29,7 +29,7 @@ public class CompletionHandlerTests
         const string source = "let answer = 42\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var items = CompletionComputer.ComputeCompletions(content, new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(0, 0));
+        var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
 
         Assert.Contains(items, i => i.Label == "answer" && i.Kind == CompletionItemKind.Variable);
     }
@@ -40,7 +40,7 @@ public class CompletionHandlerTests
         const string source = "func greet() { }\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var items = CompletionComputer.ComputeCompletions(content, new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(0, 0));
+        var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
 
         Assert.Contains(items, i => i.Label == "greet" && i.Kind == CompletionItemKind.Function);
     }
@@ -51,7 +51,7 @@ public class CompletionHandlerTests
         const string source = "let x = 1\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var items = CompletionComputer.ComputeCompletions(content, new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(0, 0));
+        var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
 
         Assert.Contains(items, i => i.Label == "int32");
         Assert.Contains(items, i => i.Label == "string");
@@ -77,7 +77,7 @@ public class CompletionHandlerTests
         const string source = "type Point struct {\nX int32\nY int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
-        var items = CompletionComputer.ComputeCompletions(content, new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(0, 0));
+        var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
 
         Assert.Contains(items, i => i.Label == "Point" && i.Kind == CompletionItemKind.Struct);
     }

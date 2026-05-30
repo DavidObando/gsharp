@@ -4,7 +4,7 @@
 
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Syntax;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 
 namespace GSharp.LanguageServer.Tests;
 

@@ -4,9 +4,9 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
-using LspSymbolKind = OmniSharp.Extensions.LanguageServer.Protocol.Models.SymbolKind;
+using LspSymbolKind = GSharp.LanguageServer.Protocol.SymbolKind;
 
 namespace GSharp.LanguageServer.Tests;
 

@@ -5,11 +5,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using OmniSharp.Extensions.LanguageServer.Server;
-using LanguageServerHost = OmniSharp.Extensions.LanguageServer.Server.LanguageServer;
+using GSharp.LanguageServer.Protocol;
+using GSharp.LanguageServer.Server;
+using StreamJsonRpc;
 
 namespace GSharp.LanguageServer;
 
@@ -25,155 +25,143 @@ public class Program
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     public static async Task Main(string[] args)
     {
-        var logFile = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
-            ? Path.Combine(Path.GetTempPath(), "gsharp-lsp-debug.log")
-            : "/tmp/gsharp-lsp-debug.log";
+        var logFile = GetLogPath(args);
+        var logEnabled = logFile != null;
 
-        File.AppendAllText(logFile, $"\n\n--- SERVER START ---\nArgs: {string.Join(" ", args)}\n");
+        if (logEnabled)
+        {
+            File.AppendAllText(logFile, $"\n\n--- SERVER START ---\nArgs: {string.Join(" ", args)}\n");
+        }
 
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
-            File.AppendAllText(logFile, $"UNHANDLED EXCEPTION: {e.ExceptionObject}\n");
-        };
-        TaskScheduler.UnobservedTaskException += (s, e) =>
-        {
-            File.AppendAllText(logFile, $"UNOBSERVED TASK EXCEPTION: {e.Exception}\n");
-            e.SetObserved();
+            if (logEnabled)
+            {
+                File.AppendAllText(logFile, $"UNHANDLED EXCEPTION: {e.ExceptionObject}\n");
+            }
         };
 
         var pipeName = GetPipeName(args);
-        File.AppendAllText(logFile, $"Resolved pipe name: {pipeName ?? "NULL"}\n");
+
+        Stream stream = null;
+        Stream sending;
+        Stream receiving;
+
+        if (pipeName != null)
+        {
+            stream = await ConnectPipeAsync(pipeName);
+            sending = stream;
+            receiving = stream;
+        }
+        else
+        {
+            sending = Console.OpenStandardOutput();
+            receiving = Console.OpenStandardInput();
+        }
+
+        if (logEnabled)
+        {
+            sending = new LoggingStream(sending, logFile, "OUT");
+            receiving = new LoggingStream(receiving, logFile, "IN");
+        }
 
         try
         {
-            if (pipeName != null)
-            {
-                await RunWithPipeTransportAsync(pipeName, logFile);
-            }
-            else
-            {
-                await RunWithStdioTransportAsync();
-            }
+            await RunAsync(sending, receiving);
         }
         catch (Exception ex)
         {
-            File.AppendAllText(logFile, $"FATAL ERROR: {ex}\n");
+            if (logEnabled)
+            {
+                File.AppendAllText(logFile, $"FATAL ERROR: {ex}\n");
+            }
+
             throw;
+        }
+        finally
+        {
+            if (stream != null)
+            {
+                await stream.DisposeAsync();
+            }
         }
     }
 
-    private static async Task RunWithPipeTransportAsync(string pipeName, string logFile)
+    private static async Task RunAsync(Stream sending, Stream receiving)
     {
-        Stream stream;
-        File.AppendAllText(logFile, "Starting pipe connection...\n");
+        var documentContentService = new DocumentContentService();
+        var workspaceState = new WorkspaceState();
+        var target = new LspServer(documentContentService, workspaceState);
 
+        var formatter = new SystemTextJsonFormatter { JsonSerializerOptions = LspJson.Options };
+        var handler = new HeaderDelimitedMessageHandler(sending, receiving, formatter);
+        var rpc = new JsonRpc(handler);
+        rpc.AddLocalRpcTarget(target, new JsonRpcTargetOptions { DisposeOnDisconnect = false });
+        target.Attach(rpc);
+        rpc.StartListening();
+
+        await target.WaitForExit;
+    }
+
+    private static async Task<Stream> ConnectPipeAsync(string pipeName)
+    {
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
         {
-            // On Windows, vscode-languageclient creates a Windows Named Pipe at \\.\pipe\<name>.
-            // NamedPipeClientStream expects just the pipe name (after \\.\pipe\).
             const string pipePrefix = @"\\.\pipe\";
             var name = pipeName.StartsWith(pipePrefix, StringComparison.OrdinalIgnoreCase)
                 ? pipeName.Substring(pipePrefix.Length)
                 : pipeName;
 
-            File.AppendAllText(logFile, $"Windows Named Pipe connecting to: {name}\n");
             var pipeStream = new System.IO.Pipes.NamedPipeClientStream(".", name, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
             await pipeStream.ConnectAsync();
-            stream = pipeStream;
-        }
-        else
-        {
-            // On Unix/macOS, vscode-languageclient creates a Unix domain socket at the given path.
-            // We must connect with a raw socket, NOT NamedPipeClientStream (which prepends /tmp/CoreFxPipe_).
-            File.AppendAllText(logFile, $"Unix socket connecting to: {pipeName}\n");
-            var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
-            var endpoint = new System.Net.Sockets.UnixDomainSocketEndPoint(pipeName);
-            await socket.ConnectAsync(endpoint);
-            stream = new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+            return pipeStream;
         }
 
-        File.AppendAllText(logFile, "Pipe connected successfully. Creating LanguageServerHost...\n");
-
-        // Let's create two separate streams from the same socket/pipe to ensure clean thread-safe duplex
-        Stream inputStream = new LoggingStream(stream, logFile, "IN");
-        Stream outputStream = new LoggingStream(stream, logFile, "OUT");
-        if (stream is System.Net.Sockets.NetworkStream ns)
-        {
-            // NetworkStream is duplex, but just in case OmniSharp assumes separate instances
-            // Actually, NetworkStream is perfectly safe for simultaneous read/write.
-        }
-
-        var server = await CreateServerAsync(inputStream, outputStream);
-        File.AppendAllText(logFile, "LanguageServerHost created. Waiting for exit...\n");
-        await server.WaitForExit;
-        File.AppendAllText(logFile, "Server exited gracefully.\n");
-    }
-
-    private static async Task RunWithStdioTransportAsync()
-    {
-        var server = await CreateServerAsync(Console.OpenStandardInput(), Console.OpenStandardOutput());
-        await server.WaitForExit;
-    }
-
-    private static Task<LanguageServerHost> CreateServerAsync(Stream input, Stream output)
-    {
-        return LanguageServerHost.From(options =>
-            options
-                .WithInput(input)
-                .WithOutput(output)
-                .ConfigureLogging(builder =>
-                {
-                    // Only log warnings and above to avoid polluting the stdio transport
-                    builder.SetMinimumLevel(LogLevel.Warning);
-                })
-                .WithServices(ConfigureServices)
-                .WithHandler<DocumentSyncHandler>()
-                .WithHandler<FoldingHandler>()
-                .WithHandler<HoverHandler>()
-                .WithHandler<DefinitionHandler>()
-                .WithHandler<DocumentSymbolHandler>()
-                .WithHandler<DocumentHighlightHandler>()
-                .WithHandler<SignatureHelpHandler>()
-                .WithHandler<CompletionHandler>()
-                .WithHandler<ReferencesHandler>()
-                .WithHandler<RenameHandler>()
-                .WithHandler<CodeActionHandler>()
-                .WithHandler<SemanticTokensHandler>()
-                .WithHandler<WorkspaceSymbolHandler>()
-                .WithHandler<InlayHintHandler>()
-                .WithHandler<CodeLensHandler>()
-                .WithHandler<FormattingHandler>()
-                .WithHandler<RangeFormattingHandler>()
-                .WithHandler<OnTypeFormattingHandler>()
-                .WithHandler<PrepareRenameHandler>()
-                .WithHandler<ImplementationHandler>()
-                .WithHandler<TypeDefinitionHandler>()
-                .WithHandler<SelectionRangeHandler>()
-                .WithHandler<DiagnosticHandler>()
-                .WithHandler<LinkedEditingRangeHandler>()
-                .WithHandler<FileWatchHandler>()
-                .OnInitialize((server, request, ct) =>
-                {
-                    var initializer = server.Services.GetRequiredService<WorkspaceInitializer>();
-                    return initializer.OnInitialize(server, request, ct);
-                }));
+        var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        var endpoint = new System.Net.Sockets.UnixDomainSocketEndPoint(pipeName);
+        await socket.ConnectAsync(endpoint);
+        return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
     }
 
     private static string GetPipeName(string[] args)
     {
-        // vscode-languageclient passes --pipe=<name> for named pipe transport
         var pipeArg = args.FirstOrDefault(a => a.StartsWith("--pipe=", StringComparison.OrdinalIgnoreCase));
         return pipeArg != null ? pipeArg.Substring("--pipe=".Length) : null;
     }
 
-    private static void ConfigureServices(IServiceCollection services)
+    /// <summary>
+    /// Resolves the debug log file path from the command line. Logging is opt-in via the
+    /// <c>--log</c> argument: pass <c>--log</c> to write to the default location, or
+    /// <c>--log=&lt;path&gt;</c> to write to a specific file. Returns <see langword="null"/>
+    /// when <c>--log</c> is absent, in which case no log file is created.
+    /// </summary>
+    private static string GetLogPath(string[] args)
     {
-        services.AddSingleton<DocumentContentService>();
-        services.AddSingleton<WorkspaceState>();
-        services.AddSingleton<WorkspaceInitializer>();
+        var logArg = args.FirstOrDefault(a =>
+            string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
+            a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase));
+
+        if (logArg == null)
+        {
+            return null;
+        }
+
+        var separatorIndex = logArg.IndexOf('=');
+        if (separatorIndex >= 0)
+        {
+            var path = logArg.Substring(separatorIndex + 1).Trim();
+            if (!string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+        }
+
+        return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+            ? Path.Combine(Path.GetTempPath(), "gsharp-lsp-debug.log")
+            : "/tmp/gsharp-lsp-debug.log";
     }
 
-    private class LoggingStream : Stream
+    private sealed class LoggingStream : Stream
     {
         private readonly Stream inner;
         private readonly string logFile;
@@ -208,27 +196,27 @@ public class Program
         public override int Read(byte[] buffer, int offset, int count)
         {
             int read = this.inner.Read(buffer, offset, count);
-            this.LogRead(buffer, offset, read);
+            this.Log(buffer, offset, read);
             return read;
         }
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             int read = await this.inner.ReadAsync(buffer, offset, count, cancellationToken);
-            this.LogRead(buffer, offset, read);
+            this.Log(buffer, offset, read);
             return read;
         }
 
         public override void Write(byte[] buffer, int offset, int count)
         {
             this.inner.Write(buffer, offset, count);
-            this.LogWrite(buffer, offset, count);
+            this.Log(buffer, offset, count);
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             await this.inner.WriteAsync(buffer, offset, count, cancellationToken);
-            this.LogWrite(buffer, offset, count);
+            this.Log(buffer, offset, count);
         }
 
         protected override void Dispose(bool disposing)
@@ -241,27 +229,17 @@ public class Program
             base.Dispose(disposing);
         }
 
-        private void LogRead(byte[] buffer, int offset, int count)
+        private void Log(byte[] buffer, int offset, int count)
         {
-            if (count > 0)
+            if (count <= 0)
             {
-                var text = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
-                lock (this.lockObj)
-                {
-                    File.AppendAllText(this.logFile, $"[{this.prefix} READ] {text}\n");
-                }
+                return;
             }
-        }
 
-        private void LogWrite(byte[] buffer, int offset, int count)
-        {
-            if (count > 0)
+            var text = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
+            lock (this.lockObj)
             {
-                var text = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
-                lock (this.lockObj)
-                {
-                    File.AppendAllText(this.logFile, $"[{this.prefix} WRITE] {text}\n");
-                }
+                File.AppendAllText(this.logFile, $"[{this.prefix}] {text}\n");
             }
         }
     }

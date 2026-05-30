@@ -11,10 +11,9 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using LspSymbolKind = OmniSharp.Extensions.LanguageServer.Protocol.Models.SymbolKind;
-using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
+using GSharp.LanguageServer.Protocol;
+using LspSymbolKind = GSharp.LanguageServer.Protocol.SymbolKind;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer;
 
@@ -475,7 +474,7 @@ internal static class DocumentSymbolComputer
                         Kind = LspSymbolKind.Struct,
                         Range = SemanticLookup.ToRange(text, structDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(structDecl.Identifier),
-                        Children = new Container<DocumentSymbol>(children),
+                        Children = children,
                     }));
                     break;
                 case EnumDeclarationSyntax enumDecl:
@@ -497,7 +496,7 @@ internal static class DocumentSymbolComputer
                         Kind = LspSymbolKind.Enum,
                         Range = SemanticLookup.ToRange(text, enumDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(enumDecl.Identifier),
-                        Children = new Container<DocumentSymbol>(enumChildren),
+                        Children = enumChildren,
                     }));
                     break;
             }
@@ -561,19 +560,19 @@ internal static class SignatureHelpComputer
         var parameters = function.Parameters
             .Select(p => new ParameterInformation
             {
-                Label = new ParameterInformationLabel($"{p.Name} {FormatType(p.Type)}"),
+                Label = $"{p.Name} {FormatType(p.Type)}",
             })
             .ToList();
 
         var signature = new SignatureInformation
         {
             Label = HoverComputer.FormatSymbol(function),
-            Parameters = new Container<ParameterInformation>(parameters),
+            Parameters = parameters,
         };
 
         return new SignatureHelp
         {
-            Signatures = new Container<SignatureInformation>(signature),
+            Signatures = new[] { signature },
             ActiveSignature = 0,
             ActiveParameter = Math.Min(activeParameter, Math.Max(0, parameters.Count - 1)),
         };

@@ -107,7 +107,7 @@ internal static class SemanticLookup
         return EnumerateTokens(tree.Root).Where(t => t.Kind == SyntaxKind.IdentifierToken);
     }
 
-    public static int ToOffset(DocumentContent content, OmniSharp.Extensions.LanguageServer.Protocol.Models.Position position)
+    public static int ToOffset(DocumentContent content, GSharp.LanguageServer.Protocol.Position position)
     {
         if (position.Line < 0 || position.Line >= content.SyntaxTree.Text.Lines.Length)
         {
@@ -117,12 +117,12 @@ internal static class SemanticLookup
         return Math.Min(content.SyntaxTree.Text.Lines[position.Line].Start + position.Character, content.SyntaxTree.Text.Length);
     }
 
-    public static OmniSharp.Extensions.LanguageServer.Protocol.Models.Range ToRange(SyntaxToken token)
+    public static GSharp.LanguageServer.Protocol.Range ToRange(SyntaxToken token)
     {
         return ToRange(token.SyntaxTree.Text, token.Span);
     }
 
-    public static OmniSharp.Extensions.LanguageServer.Protocol.Models.Range ToRange(SourceText text, TextSpan span)
+    public static GSharp.LanguageServer.Protocol.Range ToRange(SourceText text, TextSpan span)
     {
         var startLine = text.GetLineIndex(span.Start);
         var endPosition = Math.Max(span.Start, span.End);
@@ -132,9 +132,9 @@ internal static class SemanticLookup
             endLine = text.Lines.Length - 1;
         }
 
-        return new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-            new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(startLine, span.Start - text.Lines[startLine].Start),
-            new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(endLine, span.End - text.Lines[endLine].Start));
+        return new GSharp.LanguageServer.Protocol.Range(
+            new GSharp.LanguageServer.Protocol.Position(startLine, span.Start - text.Lines[startLine].Start),
+            new GSharp.LanguageServer.Protocol.Position(endLine, span.End - text.Lines[endLine].Start));
     }
 
     private static SemanticModel BuildModel(Compilation compilation)

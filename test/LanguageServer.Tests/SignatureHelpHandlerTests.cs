@@ -17,7 +17,7 @@ public class SignatureHelpHandlerTests
 
         // Position just after the opening paren
         var position = LanguageServerTestHelpers.PositionOf(source, "add(");
-        position = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(position.Line, position.Character + 4);
+        position = new GSharp.LanguageServer.Protocol.Position(position.Line, position.Character + 4);
 
         var help = SignatureHelpComputer.ComputeSignatureHelp(content, position);
 
@@ -35,7 +35,7 @@ public class SignatureHelpHandlerTests
 
         // Position just after the comma
         var position = LanguageServerTestHelpers.PositionOf(source, "1,");
-        position = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(position.Line, position.Character + 2);
+        position = new GSharp.LanguageServer.Protocol.Position(position.Line, position.Character + 2);
 
         var help = SignatureHelpComputer.ComputeSignatureHelp(content, position);
 

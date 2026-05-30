@@ -6,7 +6,31 @@ import {
   ServerOptions,
   State,
   TransportKind,
+  InitializeParams,
 } from 'vscode-languageclient/node';
+
+class GSharpLanguageClient extends LanguageClient {
+  protected fillInitializeParams(params: InitializeParams): void {
+    super.fillInitializeParams(params);
+    
+    // The GSharp language server advertises all capabilities statically in the initialize
+    // response and does not support dynamic (client/registerCapability) registration. Strip
+    // dynamicRegistration from the client capabilities so the client relies on static registration.
+    const disableDynamicRegistration = (obj: any) => {
+      if (typeof obj === 'object' && obj !== null) {
+        for (const key of Object.keys(obj)) {
+          if (key === 'dynamicRegistration') {
+            obj[key] = false;
+          } else {
+            disableDynamicRegistration(obj[key]);
+          }
+        }
+      }
+    };
+    disableDynamicRegistration(params.capabilities);
+  }
+}
+
 import { resolveDotnetRuntime, getServerPath } from '../utils/dotnetResolver';
 import { getServerOptions } from './serverOptions';
 import { Logger } from '../utils/logger';
@@ -95,6 +119,9 @@ export class ServerManager {
       if (options.waitForDebugger) {
         args.push('--debug');
       }
+      if (options.log) {
+        args.push(options.logPath ? `--log=${options.logPath}` : '--log');
+      }
 
       this.logger.info(`Using dotnet: ${dotnetPath}`);
       this.logger.info(`Using server: ${serverPath}`);
@@ -109,11 +136,11 @@ export class ServerManager {
       };
 
       const serverOptions: ServerOptions = {
-        run: { command: dotnetPath, args, transport: TransportKind.pipe, options: { env } },
+        run: { command: dotnetPath, args, transport: TransportKind.stdio, options: { env } },
         debug: {
           command: dotnetPath,
           args: [...args, '--debug'],
-          transport: TransportKind.pipe,
+          transport: TransportKind.stdio,
           options: { env },
         },
       };
@@ -131,30 +158,10 @@ export class ServerManager {
           formattingUseTabs: vscode.workspace
             .getConfiguration('gsharp')
             .get<boolean>('formatting.useTabs', false),
-        },
-        middleware: {
-          // OmniSharp dynamic capability registration can deadlock during initialization
-          // if it blocks the dispatcher waiting for client response. By stripping dynamicRegistration
-          // from the client capabilities, we force OmniSharp to use static registration in the initialize response.
-          initialize: async (params, next) => {
-            const disableDynamicRegistration = (obj: any) => {
-              if (typeof obj === 'object' && obj !== null) {
-                for (const key of Object.keys(obj)) {
-                  if (key === 'dynamicRegistration') {
-                    obj[key] = false;
-                  } else {
-                    disableDynamicRegistration(obj[key]);
-                  }
-                }
-              }
-            };
-            disableDynamicRegistration(params.capabilities);
-            return next(params);
-          }
         }
       };
 
-      client = new LanguageClient('gsharp', 'GSharp Language Server', serverOptions, clientOptions);
+      client = new GSharpLanguageClient('gsharp', 'GSharp Language Server', serverOptions, clientOptions);
       this.client = client;
 
       client.onDidChangeState((e) => {
@@ -241,7 +248,7 @@ export class ServerManager {
   }
 
   private reportMissingServer(serverPath: string) {
-    const message = `GSharp language server not found at ${serverPath}. Set \"gsharp.server.path\" to a valid GSharp.LanguageServer.dll path.`;
+    const message = `GSharp language server not found at ${serverPath}. Set "gsharp.server.path" to a valid GSharp.LanguageServer.dll path.`;
     this.client = undefined;
     this.setStatus('error');
     this.logger.error(message);

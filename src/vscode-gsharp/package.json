@@ -94,6 +94,16 @@
             "default": false,
             "description": "Pass --debug flag to the language server to wait for a debugger to attach."
           },
+          "gsharp.server.log": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable language server protocol logging to a file (passes --log to the server)."
+          },
+          "gsharp.server.logPath": {
+            "type": "string",
+            "default": "",
+            "description": "Optional file path for the language server log. If empty, a default temporary file is used. Only used when gsharp.server.log is enabled."
+          },
           "gsharp.trace.server": {
             "type": "string",
             "enum": [

@@ -24,7 +24,7 @@
   <ItemGroup>
     <!-- Runtime packages-->
     <MicrosoftVisualStudioValidationPackageReference Include="Microsoft.VisualStudio.Validation" Version="17.8.8" />
-    <OmniSharpExtensionsLanguageServerPackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
+    <StreamJsonRpcPackageReference Include="StreamJsonRpc" Version="2.21.10" />
     <!-- Design-time packages -->
     <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.6.143" PrivateAssets="All" />
     <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">

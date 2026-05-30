@@ -5,106 +5,19 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
-using MediatR;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Window;
-using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
+using GSharp.LanguageServer.Protocol;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer;
 
 /// <summary>
-/// GSharp validation handler.
+/// GSharp diagnostics computation used by document synchronization.
 /// </summary>
-public class DocumentSyncHandler : TextDocumentSyncHandlerBase
+public static class DocumentSyncHandler
 {
-    private readonly ILanguageServerFacade router;
-    private readonly DocumentContentService documentContentService;
-    private readonly WorkspaceState workspaceState;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DocumentSyncHandler"/> class.
-    /// </summary>
-    /// <param name="router"><see cref="ILanguageServerFacade"/> for LSP.</param>
-    /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    /// <param name="workspaceState"><see cref="WorkspaceState"/> instance.</param>
-    public DocumentSyncHandler(ILanguageServerFacade router, DocumentContentService documentContentService, WorkspaceState workspaceState)
-    {
-        this.router = router;
-        this.documentContentService = documentContentService;
-        this.workspaceState = workspaceState;
-    }
-
-    /// <inheritdoc/>
-    public override TextDocumentAttributes GetTextDocumentAttributes(DocumentUri uri)
-    {
-        return new TextDocumentAttributes(uri, "gsharp");
-    }
-
-    /// <inheritdoc/>
-    public override Task<Unit> Handle(DidOpenTextDocumentParams request, CancellationToken cancellationToken)
-    {
-        try
-        {
-            string text = request.TextDocument?.Text;
-            var uri = request.TextDocument?.Uri;
-            if (string.IsNullOrEmpty(text))
-            {
-                this.router.Window.LogWarning($"DidOpen: empty text for {uri}");
-                return Unit.Task;
-            }
-
-            this.DiagnoseText(uri!, text);
-        }
-        catch (Exception ex)
-        {
-            System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gsharp-lsp-debug.log"), $"[DidOpen ERROR] {ex}\n");
-        }
-
-        return Unit.Task;
-    }
-
-    /// <inheritdoc/>
-    public override Task<Unit> Handle(DidChangeTextDocumentParams request, CancellationToken cancellationToken)
-    {
-        string text = request.ContentChanges?.FirstOrDefault()?.Text;
-        if (!string.IsNullOrEmpty(text))
-        {
-            this.DiagnoseText(request.TextDocument.Uri, text);
-        }
-
-        return Unit.Task;
-    }
-
-    /// <inheritdoc/>
-    public override Task<Unit> Handle(DidSaveTextDocumentParams request, CancellationToken cancellationToken)
-    {
-        var text = request.Text;
-        if (!string.IsNullOrEmpty(text))
-        {
-            // Open/change keeps binding diagnostics disabled for responsive typing; save runs the full pipeline.
-            this.DiagnoseText(request.TextDocument.Uri, text, skipBinding: false);
-        }
-
-        return Unit.Task;
-    }
-
-    /// <inheritdoc/>
-    public override Task<Unit> Handle(DidCloseTextDocumentParams request, CancellationToken cancellationToken)
-    {
-        this.documentContentService.TryRemove(request.TextDocument.Uri.ToString());
-        return Unit.Task;
-    }
-
     internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
         return ComputeDiagnostics(text, skipBinding, project: null);
@@ -158,37 +71,6 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
         return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
     }
 
-    /// <inheritdoc/>
-    protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(
-        TextSynchronizationCapability capability, ClientCapabilities clientCapabilities)
-    {
-        return new TextDocumentSyncRegistrationOptions(TextDocumentSyncKind.Full)
-        {
-            DocumentSelector = Constants.DocumentSelector,
-            Save = new BooleanOr<SaveOptions>(new SaveOptions { IncludeText = true }),
-        };
-    }
-
-    private void DiagnoseText(DocumentUri documentUri, string text, bool skipBinding = true)
-    {
-        var filePath = documentUri.GetFileSystemPath();
-        var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
-
-        // Update the project state with the new text
-        if (project != null)
-        {
-            project.UpdateFile(filePath, text);
-        }
-
-        var result = ComputeDiagnostics(text, skipBinding, project);
-        this.documentContentService.AddOrUpdate(documentUri.ToString(), result.Content);
-        this.router.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams
-        {
-            Uri = documentUri,
-            Diagnostics = new Container<Diagnostic>(result.Diagnostics),
-        });
-    }
-
     private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, List<int> newLines)
     {
         int line = newLines.Count(charNumber => charNumber < start);
@@ -208,8 +90,8 @@ internal sealed class DiagnosticComputationResult
 {
     public DiagnosticComputationResult(DocumentContent content, IReadOnlyList<Diagnostic> diagnostics)
     {
-        Content = content;
-        Diagnostics = diagnostics;
+        this.Content = content;
+        this.Diagnostics = diagnostics;
     }
 
     public DocumentContent Content { get; }
