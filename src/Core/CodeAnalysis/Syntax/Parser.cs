@@ -569,6 +569,33 @@ public class Parser
         return new SeparatedSyntaxList<EnumMemberSyntax>(nodesAndSeparators.ToImmutable());
     }
 
+    /// <summary>
+    /// Issue #296: matches a base-type name that may be fully qualified
+    /// (e.g. <c>System.IO.MemoryStream</c>). The dotted segments are folded
+    /// into a single <see cref="SyntaxKind.IdentifierToken"/> whose text is the
+    /// dotted name, so the binder resolves it via the imported/alias-aware type
+    /// resolution path. A bare identifier (e.g. <c>MemoryStream</c>) is returned
+    /// unchanged.
+    /// </summary>
+    private SyntaxToken MatchQualifiedTypeName()
+    {
+        var first = MatchToken(SyntaxKind.IdentifierToken);
+        if (Current.Kind != SyntaxKind.DotToken || Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return first;
+        }
+
+        var text = first.Text;
+        while (Current.Kind == SyntaxKind.DotToken && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            NextToken();
+            var segment = MatchToken(SyntaxKind.IdentifierToken);
+            text += "." + segment.Text;
+        }
+
+        return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, first.Position, text, null);
+    }
+
     private StructDeclarationSyntax ParseStructDeclaration(
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
@@ -637,12 +664,12 @@ public class Parser
             }
 
             baseColon = MatchToken(SyntaxKind.ColonToken);
-            baseTypeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            baseTypeIdentifier = MatchQualifiedTypeName();
 
             while (Current.Kind == SyntaxKind.CommaToken)
             {
                 NextToken();
-                var next = MatchToken(SyntaxKind.IdentifierToken);
+                var next = MatchQualifiedTypeName();
                 additionalBaseIdentifiers.Add(next);
             }
         }

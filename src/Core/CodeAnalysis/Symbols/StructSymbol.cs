@@ -233,6 +233,24 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public bool IsAttributeClass { get; private set; }
 
+    /// <summary>
+    /// Gets the imported (CLR) base class this GSharp class derives from
+    /// (issue #296), or <c>null</c> when the class derives from another GSharp
+    /// class (<see cref="BaseClass"/>) or directly from <c>System.Object</c>.
+    /// When set, the emitter writes this CLR type as the TypeDef's base type
+    /// and chains the generated constructor to the CLR base's parameterless
+    /// <c>.ctor()</c>; member lookup walks into this type so inherited CLR
+    /// members are accessible on instances of the derived GSharp class.
+    /// </summary>
+    public TypeSymbol ImportedBaseType { get; private set; }
+
+    /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
+    /// <param name="importedBaseType">The imported CLR base type symbol.</param>
+    public void SetImportedBaseType(TypeSymbol importedBaseType)
+    {
+        ImportedBaseType = importedBaseType;
+    }
+
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
     /// <param name="interfaces">The interfaces this class implements directly.</param>
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
@@ -542,6 +560,11 @@ public sealed class StructSymbol : TypeSymbol
         constructed.TypeArguments = typeArguments;
         constructed.SetInterfaces(definition.Interfaces);
         constructed.SetMethods(definition.Methods);
+        if (definition.ImportedBaseType != null)
+        {
+            constructed.SetImportedBaseType(definition.ImportedBaseType);
+        }
+
         return constructed;
     }
 
