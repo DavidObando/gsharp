@@ -39,7 +39,13 @@ public class Program
                 .WithHandler<CompletionHandler>()
                 .WithHandler<ReferencesHandler>()
                 .WithHandler<RenameHandler>()
-                .WithHandler<CodeActionHandler>());
+                .WithHandler<CodeActionHandler>()
+                .WithHandler<FileWatchHandler>()
+                .OnInitialize((server, request, ct) =>
+                {
+                    var initializer = server.Services.GetRequiredService<WorkspaceInitializer>();
+                    return initializer.OnInitialize(server, request, ct);
+                }));
 
         await server.WaitForExit;
     }
@@ -47,5 +53,7 @@ public class Program
     private static void ConfigureServices(IServiceCollection services)
     {
         services.AddSingleton<DocumentContentService>();
+        services.AddSingleton<WorkspaceState>();
+        services.AddSingleton<WorkspaceInitializer>();
     }
 }

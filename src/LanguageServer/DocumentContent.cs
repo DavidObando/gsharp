@@ -12,7 +12,8 @@ namespace GSharp.LanguageServer;
 /// </summary>
 /// <param name="syntaxTree">The <see cref="SyntaxTree"/> of the document.</param>
 /// <param name="lines">The position for line breaks in the document content.</param>
-public class DocumentContent(SyntaxTree syntaxTree, IReadOnlyList<int> lines)
+/// <param name="project">The owning project state, if available.</param>
+public class DocumentContent(SyntaxTree syntaxTree, IReadOnlyList<int> lines, ProjectState project = null)
 {
     /// <summary>
     /// Gets the document syntax tree.
@@ -23,4 +24,9 @@ public class DocumentContent(SyntaxTree syntaxTree, IReadOnlyList<int> lines)
     /// Gets the document content line breaks.
     /// </summary>
     public IReadOnlyList<int> Lines { get; } = lines;
+
+    /// <summary>
+    /// Gets the owning project state, or null if the file is not part of a project.
+    /// </summary>
+    public ProjectState Project { get; } = project;
 }
