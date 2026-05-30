@@ -16,14 +16,16 @@ class GSharpLanguageClient extends LanguageClient {
     // The GSharp language server advertises all capabilities statically in the initialize
     // response and does not support dynamic (client/registerCapability) registration. Strip
     // dynamicRegistration from the client capabilities so the client relies on static registration.
-    const disableDynamicRegistration = (obj: any) => {
-      if (typeof obj === 'object' && obj !== null) {
-        for (const key of Object.keys(obj)) {
-          if (key === 'dynamicRegistration') {
-            obj[key] = false;
-          } else {
-            disableDynamicRegistration(obj[key]);
-          }
+    const disableDynamicRegistration = (obj: unknown): void => {
+      if (typeof obj !== 'object' || obj === null) {
+        return;
+      }
+      const record = obj as Record<string, unknown>;
+      for (const key of Object.keys(record)) {
+        if (key === 'dynamicRegistration') {
+          record[key] = false;
+        } else {
+          disableDynamicRegistration(record[key]);
         }
       }
     };
