@@ -88,6 +88,12 @@ public sealed class Binder
     private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
 
+    // Issue #294: cache of imported static [Extension] classes for
+    // instance-syntax extension-method dispatch. Recomputed when the import
+    // count changes (imports only grow during binding).
+    private List<Type> cachedImportedExtensionClasses;
+    private int cachedImportedExtensionImportCount = -1;
+
     // SA1202 exempt: static initializer placement matches Binder's design.
 #pragma warning disable SA1642
     /// <summary>
@@ -8070,6 +8076,14 @@ public sealed class Binder
                 return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce);
             }
 
+            // Issue #294: imported [Extension] method dispatched with instance
+            // (receiver) syntax, when the receiver carries a CLR type even
+            // though its symbol is a user/interface shape.
+            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt))
+            {
+                return userPathExt;
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
@@ -8128,6 +8142,15 @@ public sealed class Binder
             return BindExtensionFunctionCall(receiver, extFn, arguments, ce);
         }
 
+        // Issue #294: BCL/library [Extension] method dispatched with instance
+        // (receiver) syntax. After instance members and user extension
+        // functions fail, fall back to imported static [Extension] methods
+        // whose first parameter is compatible with the receiver type.
+        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt))
+        {
+            return importedExt;
+        }
+
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
     }
@@ -8151,6 +8174,249 @@ public sealed class Binder
         }
 
         return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// Issue #294: resolves a call written with instance ("receiver") syntax
+    /// against an imported CLR static method marked with
+    /// <c>[System.Runtime.CompilerServices.ExtensionAttribute]</c> whose first
+    /// parameter is compatible with the receiver's type. This makes BCL/library
+    /// extension methods (LINQ <c>Where</c>/<c>Select</c>/<c>ToList</c>, the
+    /// ASP.NET Core minimal-API/middleware surface, etc.) callable as
+    /// <c>receiver.Method(args)</c> rather than only statically as
+    /// <c>DeclaringClass.Method(receiver, args)</c>.
+    /// </summary>
+    /// <param name="receiver">The bound receiver expression.</param>
+    /// <param name="methodName">The method name at the call site.</param>
+    /// <param name="arguments">The bound user arguments (excluding the receiver).</param>
+    /// <param name="ce">The originating call expression.</param>
+    /// <param name="result">The bound call when resolution succeeds (or a bound error on ambiguity).</param>
+    /// <returns>True when an imported extension method was matched (success or ambiguity); false to let the caller report GS0159.</returns>
+    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result)
+    {
+        result = null;
+
+        var receiverClrType = receiver?.Type?.ClrType;
+        if (receiverClrType == null)
+        {
+            return false;
+        }
+
+        // Build the argument-type vector as the extension method sees it: the
+        // receiver becomes the first ("this") parameter, followed by the user
+        // arguments. Every argument must carry a concrete CLR type so overload
+        // resolution (including generic inference) can run.
+        var argTypes = new Type[arguments.Length + 1];
+        argTypes[0] = receiverClrType;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = arguments[i].Type?.ClrType;
+            if (t == null)
+            {
+                return false;
+            }
+
+            argTypes[i + 1] = t;
+        }
+
+        var candidates = CollectImportedExtensionMethods(methodName);
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        // OverloadResolution.Resolve infers type arguments for open generic
+        // method definitions (e.g. Where<TSource>(IEnumerable<TSource>,
+        // Func<TSource,bool>)) from the receiver and argument types.
+        var resolution = OverloadResolution.Resolve(candidates, argTypes);
+        switch (resolution.Outcome)
+        {
+            case OverloadResolution.ResolutionOutcome.Resolved:
+                break;
+            case OverloadResolution.ResolutionOutcome.Ambiguous:
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                result = new BoundErrorExpression(null);
+                return true;
+            default:
+                return false;
+        }
+
+        var best = resolution.Best;
+        var declaringType = best.DeclaringType;
+        if (declaringType == null)
+        {
+            return false;
+        }
+
+        var importedClass = new ImportedClassSymbol(declaringType, ce);
+        var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce);
+
+        var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
+        allArguments.Add(receiver);
+        allArguments.AddRange(arguments);
+        var bound = allArguments.MoveToImmutable();
+
+        var refKinds = ComputeArgumentRefKinds(best.GetParameters());
+        ValidateRefArguments(bound, refKinds, methodName, ce.Location);
+        result = new BoundImportedCallExpression(null, function, bound, refKinds);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #294: collects imported CLR static <c>[Extension]</c> methods with
+    /// the given name whose declaring static class lives in an imported
+    /// namespace. Candidates may be open generic method definitions; generic
+    /// inference happens later in overload resolution.
+    /// </summary>
+    /// <param name="methodName">The method name at the call site.</param>
+    /// <returns>The matching candidate methods (possibly empty).</returns>
+    private List<MethodInfo> CollectImportedExtensionMethods(string methodName)
+    {
+        var result = new List<MethodInfo>();
+        foreach (var type in GetImportedExtensionClasses())
+        {
+            MethodInfo[] methods;
+            try
+            {
+                methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var method in methods)
+            {
+                if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!HasExtensionAttribute(method))
+                {
+                    continue;
+                }
+
+                if (method.GetParameters().Length == 0)
+                {
+                    continue;
+                }
+
+                result.Add(method);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #294: enumerates static classes declared in the currently imported
+    /// namespaces that carry <c>[Extension]</c> (i.e. host extension methods).
+    /// The result is cached per binder; the import count acts as a cheap
+    /// invalidation key because imports only grow during binding.
+    /// </summary>
+    /// <returns>The imported static extension-holding classes.</returns>
+    private List<Type> GetImportedExtensionClasses()
+    {
+        var imports = scope.GetDeclaredImports();
+        var importCount = imports.IsDefault ? 0 : imports.Length;
+        if (cachedImportedExtensionClasses != null && cachedImportedExtensionImportCount == importCount)
+        {
+            return cachedImportedExtensionClasses;
+        }
+
+        var namespaces = new HashSet<string>(StringComparer.Ordinal);
+        if (!imports.IsDefault)
+        {
+            foreach (var import in imports)
+            {
+                if (!string.IsNullOrEmpty(import.Target))
+                {
+                    namespaces.Add(import.Target);
+                }
+            }
+        }
+
+        var classes = new List<Type>();
+        if (namespaces.Count > 0)
+        {
+            foreach (var assembly in scope.References.Assemblies)
+            {
+                IEnumerable<Type> types;
+                try
+                {
+                    types = assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    types = ex.Types.Where(t => t != null);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var type in types)
+                {
+                    if (type == null || type.Namespace == null || !namespaces.Contains(type.Namespace))
+                    {
+                        continue;
+                    }
+
+                    if (!IsStaticClass(type) || !HasExtensionAttribute(type))
+                    {
+                        continue;
+                    }
+
+                    classes.Add(type);
+                }
+            }
+        }
+
+        cachedImportedExtensionClasses = classes;
+        cachedImportedExtensionImportCount = importCount;
+        return classes;
+    }
+
+    /// <summary>
+    /// A C# static class is a sealed abstract class. Detected structurally so
+    /// it works under <see cref="System.Reflection.MetadataLoadContext"/>.
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <returns>Whether the type is a static class.</returns>
+    private static bool IsStaticClass(Type type)
+        => type.IsClass && type.IsAbstract && type.IsSealed;
+
+    /// <summary>
+    /// Robustly detects <c>[System.Runtime.CompilerServices.ExtensionAttribute]</c>
+    /// via <see cref="CustomAttributeData"/> (never runtime
+    /// <c>GetCustomAttribute</c>, which throws under
+    /// <see cref="System.Reflection.MetadataLoadContext"/>).
+    /// </summary>
+    /// <param name="member">The type or method to inspect.</param>
+    /// <returns>Whether the member carries the extension attribute.</returns>
+    private static bool HasExtensionAttribute(MemberInfo member)
+    {
+        try
+        {
+            foreach (var attribute in member.GetCustomAttributesData())
+            {
+                if (string.Equals(
+                    attribute.AttributeType?.FullName,
+                    "System.Runtime.CompilerServices.ExtensionAttribute",
+                    StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // MetadataLoadContext may throw resolving the attribute type; treat
+            // as "not an extension" rather than failing the whole binding.
+        }
+
+        return false;
     }
 
     private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
