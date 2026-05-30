@@ -144,6 +144,20 @@ public sealed class Conversion
             return Conversion.None;
         }
 
+        // Issue #295: a GSharp function value (a `func` literal or any
+        // function-typed value) implicitly converts to ANY compatible CLR
+        // delegate type — one deriving from System.MulticastDelegate whose
+        // `Invoke` signature is assignment-compatible. This lifts the
+        // materialization that previously only happened in argument position
+        // into a general rule, so assignment, return, and cast positions all
+        // accept func → delegate conversions (Action/Func/Predicate and named
+        // delegate types alike).
+        if (from is FunctionTypeSymbol fnSource && to?.ClrType != null
+            && IsFunctionToDelegateConvertible(fnSource, to.ClrType))
+        {
+            return Conversion.Implicit;
+        }
+
         // ADR-0044 numeric lattice. Both operands must be CLR primitives in
         // the numeric set; the widening map decides implicit vs. explicit.
         // Decimal narrowings (decimal → int etc.) and signed/unsigned
@@ -238,5 +252,55 @@ public sealed class Conversion
         }
 
         return Conversion.None;
+    }
+
+    /// <summary>
+    /// Determines whether a GSharp function type is convertible to a CLR
+    /// delegate type by matching parameter arity / assignability and the
+    /// return type. Uses metadata-safe (name-based) checks so it works for
+    /// delegate types loaded through a MetadataLoadContext.
+    /// </summary>
+    private static bool IsFunctionToDelegateConvertible(FunctionTypeSymbol fn, Type delegateType)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(delegateType))
+        {
+            return false;
+        }
+
+        var invoke = delegateType.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        var parms = invoke.GetParameters();
+        if (parms.Length != fn.ParameterTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < parms.Length; i++)
+        {
+            var fnParamClr = fn.ParameterTypes[i]?.ClrType;
+            if (fnParamClr == null || !ClrTypeUtilities.IsAssignableByName(parms[i].ParameterType, fnParamClr))
+            {
+                return false;
+            }
+        }
+
+        var invokeReturnIsVoid = invoke.ReturnType == null
+            || string.Equals(invoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal);
+        if (fn.ReturnType == TypeSymbol.Void || fn.ReturnType == null)
+        {
+            return invokeReturnIsVoid;
+        }
+
+        if (invokeReturnIsVoid)
+        {
+            return false;
+        }
+
+        var fnReturnClr = fn.ReturnType.ClrType;
+        return fnReturnClr != null && ClrTypeUtilities.IsAssignableByName(invoke.ReturnType, fnReturnClr);
     }
 }
