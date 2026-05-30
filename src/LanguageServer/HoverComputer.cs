@@ -22,7 +22,7 @@ internal static class HoverComputer
 {
     public static Hover ComputeHover(DocumentContent content, Position position)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
@@ -88,7 +88,7 @@ internal static class ReferencesComputer
 {
     public static IReadOnlyList<Location> ComputeReferences(DocumentUri uri, DocumentContent content, Position position, bool includeDeclaration)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var target = SemanticLookup.ResolveSymbol(compilation, token);
@@ -97,16 +97,15 @@ internal static class ReferencesComputer
             return Array.Empty<Location>();
         }
 
-        // Phase 7.5 intentionally limits references to the currently tracked document; cross-file package awareness is future LSP work.
         return SemanticLookup.FindReferences(compilation, target)
             .Where(t => includeDeclaration || !IsDeclaration(compilation, t, target))
-            .Select(t => new Location { Uri = uri, Range = SemanticLookup.ToRange(t) })
+            .Select(t => new Location { Uri = GetDocumentUri(t, uri), Range = SemanticLookup.ToRange(t) })
             .ToList();
     }
 
     public static IReadOnlyList<SyntaxToken> ComputeReferenceTokens(DocumentContent content, Position position, bool includeDeclaration)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var target = SemanticLookup.ResolveSymbol(compilation, token);
@@ -129,7 +128,8 @@ internal static class ReferencesComputer
                 continue;
             }
 
-            var parentDeclaration = FindSmallestContainingDeclaration(compilation.SyntaxTrees[0].Root, token);
+            var containingTree = compilation.SyntaxTrees.FirstOrDefault(t => t.Text == token.SyntaxTree?.Text) ?? compilation.SyntaxTrees[0];
+            var parentDeclaration = FindSmallestContainingDeclaration(containingTree.Root, token);
             return parentDeclaration switch
             {
                 VariableDeclarationSyntax v => ReferenceEquals(v.Identifier, token),
@@ -144,6 +144,16 @@ internal static class ReferencesComputer
         }
 
         return false;
+    }
+
+    private static DocumentUri GetDocumentUri(SyntaxToken token, DocumentUri fallback)
+    {
+        if (!string.IsNullOrEmpty(token.SyntaxTree?.Text?.FileName))
+        {
+            return DocumentUri.FromFileSystemPath(token.SyntaxTree.Text.FileName);
+        }
+
+        return fallback;
     }
 
     private static SyntaxNode FindSmallestContainingDeclaration(SyntaxNode node, SyntaxToken token)
@@ -182,7 +192,7 @@ internal static class RenameComputer
             return null;
         }
 
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var target = SemanticLookup.ResolveSymbol(compilation, token);
@@ -191,21 +201,40 @@ internal static class RenameComputer
             return null;
         }
 
-        var edits = SemanticLookup.FindReferences(compilation, target)
-            .Select(t => new TextEdit { Range = SemanticLookup.ToRange(t), NewText = newName })
-            .ToList();
-        if (edits.Count == 0)
+        var references = SemanticLookup.FindReferences(compilation, target).ToList();
+        if (references.Count == 0)
         {
             return null;
         }
 
+        // Group edits by document URI for cross-file rename support
+        var editsByUri = new Dictionary<DocumentUri, List<TextEdit>>();
+        foreach (var refToken in references)
+        {
+            var docUri = GetDocumentUri(refToken, uri);
+            if (!editsByUri.TryGetValue(docUri, out var edits))
+            {
+                edits = new List<TextEdit>();
+                editsByUri[docUri] = edits;
+            }
+
+            edits.Add(new TextEdit { Range = SemanticLookup.ToRange(refToken), NewText = newName });
+        }
+
         return new WorkspaceEdit
         {
-            Changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>>
-            {
-                [uri] = edits,
-            },
+            Changes = editsByUri.ToDictionary(kv => kv.Key, kv => (IEnumerable<TextEdit>)kv.Value),
         };
+    }
+
+    private static DocumentUri GetDocumentUri(SyntaxToken token, DocumentUri fallback)
+    {
+        if (!string.IsNullOrEmpty(token.SyntaxTree?.Text?.FileName))
+        {
+            return DocumentUri.FromFileSystemPath(token.SyntaxTree.Text.FileName);
+        }
+
+        return fallback;
     }
 }
 
@@ -279,7 +308,7 @@ internal static class DefinitionComputer
 {
     public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
@@ -294,7 +323,18 @@ internal static class DefinitionComputer
             return null;
         }
 
-        return new Location { Uri = uri, Range = SemanticLookup.ToRange(declarationToken) };
+        var targetUri = GetDocumentUri(declarationToken, uri);
+        return new Location { Uri = targetUri, Range = SemanticLookup.ToRange(declarationToken) };
+    }
+
+    private static DocumentUri GetDocumentUri(SyntaxToken token, DocumentUri fallback)
+    {
+        if (!string.IsNullOrEmpty(token.SyntaxTree?.Text?.FileName))
+        {
+            return DocumentUri.FromFileSystemPath(token.SyntaxTree.Text.FileName);
+        }
+
+        return fallback;
     }
 
     private static SyntaxToken FindDeclarationToken(Compilation compilation, Symbol symbol)
@@ -471,7 +511,7 @@ internal static class SignatureHelpComputer
 {
     public static SignatureHelp ComputeSignatureHelp(DocumentContent content, Position position)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
 
         // Walk backwards from cursor to find the function name token before the opening paren
@@ -549,7 +589,7 @@ internal static class CompletionComputer
 {
     public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position)
     {
-        var compilation = new Compilation(content.SyntaxTree);
+        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 

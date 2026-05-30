@@ -28,16 +28,19 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
 {
     private readonly ILanguageServerFacade router;
     private readonly DocumentContentService documentContentService;
+    private readonly WorkspaceState workspaceState;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DocumentSyncHandler"/> class.
     /// </summary>
     /// <param name="router"><see cref="ILanguageServerFacade"/> for LSP.</param>
     /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    public DocumentSyncHandler(ILanguageServerFacade router, DocumentContentService documentContentService)
+    /// <param name="workspaceState"><see cref="WorkspaceState"/> instance.</param>
+    public DocumentSyncHandler(ILanguageServerFacade router, DocumentContentService documentContentService, WorkspaceState workspaceState)
     {
         this.router = router;
         this.documentContentService = documentContentService;
+        this.workspaceState = workspaceState;
     }
 
     /// <inheritdoc/>
@@ -92,6 +95,11 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
 
     internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
+        return ComputeDiagnostics(text, skipBinding, project: null);
+    }
+
+    internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project)
+    {
         var newLines = new List<int>();
         int nextNewLine = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
         while (nextNewLine >= 0)
@@ -108,9 +116,16 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
             diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
         }
 
-        var compilation = new Compilation(syntaxTree);
+        // Use project-level compilation if available for cross-file awareness
+        var compilation = project != null ? project.GetCompilation() : new Compilation(syntaxTree);
         foreach (var d in compilation.GlobalScope.Diagnostics)
         {
+            // Only report diagnostics that originate from this file's syntax tree
+            if (project != null && d.Location.Text != syntaxTree.Text)
+            {
+                continue;
+            }
+
             diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
         }
 
@@ -119,11 +134,16 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
             var program = Binder.BindProgram(compilation.GlobalScope);
             foreach (var d in program.Diagnostics)
             {
+                if (project != null && d.Location.Text != syntaxTree.Text)
+                {
+                    continue;
+                }
+
                 diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
             }
         }
 
-        return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines), diagnostics);
+        return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
     }
 
     /// <inheritdoc/>
@@ -139,7 +159,16 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
 
     private void DiagnoseText(DocumentUri documentUri, string text, bool skipBinding = true)
     {
-        var result = ComputeDiagnostics(text, skipBinding);
+        var filePath = documentUri.GetFileSystemPath();
+        var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
+
+        // Update the project state with the new text
+        if (project != null)
+        {
+            project.UpdateFile(filePath, text);
+        }
+
+        var result = ComputeDiagnostics(text, skipBinding, project);
         this.documentContentService.AddOrUpdate(documentUri.ToString(), result.Content);
         this.router.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams
         {
