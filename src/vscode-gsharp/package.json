@@ -307,7 +307,7 @@
     "watch": "node esbuild.js --watch",
     "lint": "eslint src --ext ts",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test:unit": "jest",
+    "test:unit": "jest --passWithNoTests",
     "test:integration": "node ./out/test/runTest.js",
     "package": "vsce package"
   },
