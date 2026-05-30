@@ -1,0 +1,324 @@
+{
+  "name": "vscode-gsharp",
+  "displayName": "GSharp",
+  "description": "Rich language support for GSharp (.gs files, .gsproj projects)",
+  "version": "0.1.0",
+  "publisher": "gsharp",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DavidObando/gsharp"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Linters",
+    "Snippets"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onLanguage:gsharp",
+    "workspaceContains:**/*.{gsproj,gs}",
+    "onDebugResolve:gsharp",
+    "onDebugResolve:coreclr",
+    "onCommand:gsharp.restartServer"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "ms-dotnettools.vscode-dotnet-runtime"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gsharp",
+        "aliases": [
+          "GSharp",
+          "G#"
+        ],
+        "extensions": [
+          ".gs"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/gsharp-icon-light.png",
+          "dark": "./images/gsharp-icon-dark.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gsharp",
+        "scopeName": "source.gsharp",
+        "path": "./syntaxes/gsharp.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gsharp",
+        "path": "./snippets/gsharp.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "GSharp Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/gsharp-dark.json"
+      },
+      {
+        "label": "GSharp Light",
+        "uiTheme": "vs",
+        "path": "./themes/gsharp-light.json"
+      }
+    ],
+    "configuration": [
+      {
+        "title": "GSharp",
+        "properties": {
+          "gsharp.server.path": {
+            "type": "string",
+            "default": "",
+            "description": "Path to the GSharp Language Server executable. If empty, uses the bundled server."
+          },
+          "gsharp.server.startTimeout": {
+            "type": "number",
+            "default": 30000,
+            "description": "Timeout in ms for the language server to start."
+          },
+          "gsharp.server.waitForDebugger": {
+            "type": "boolean",
+            "default": false,
+            "description": "Pass --debug flag to the language server to wait for a debugger to attach."
+          },
+          "gsharp.trace.server": {
+            "type": "string",
+            "enum": [
+              "off",
+              "messages",
+              "verbose"
+            ],
+            "default": "off",
+            "description": "Trace communication between VS Code and the GSharp language server."
+          },
+          "gsharp.formatting.indentSize": {
+            "type": "number",
+            "default": 4,
+            "description": "Number of spaces per indentation level."
+          },
+          "gsharp.formatting.useTabs": {
+            "type": "boolean",
+            "default": false,
+            "description": "Use tabs instead of spaces for indentation."
+          },
+          "gsharp.diagnostics.enableOnType": {
+            "type": "boolean",
+            "default": true,
+            "description": "Run diagnostics as you type (on every keystroke)."
+          },
+          "gsharp.completion.triggerOnDot": {
+            "type": "boolean",
+            "default": true,
+            "description": "Trigger auto-completion after typing a dot."
+          },
+          "gsharp.codeLens.enableReferences": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show reference counts above functions and types."
+          },
+          "gsharp.inlayHints.enableParameterNames": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show inlay hints for parameter names at call sites."
+          },
+          "gsharp.inlayHints.enableTypeHints": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show inlay hints for inferred variable types."
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "gsharp.restartServer",
+        "title": "GSharp: Restart Language Server"
+      },
+      {
+        "command": "gsharp.openOutput",
+        "title": "GSharp: Show Output Channel"
+      },
+      {
+        "command": "gsharp.buildProject",
+        "title": "GSharp: Build Project"
+      },
+      {
+        "command": "gsharp.runProject",
+        "title": "GSharp: Run Project"
+      },
+      {
+        "command": "gsharp.test.runInContext",
+        "title": "GSharp: Run Tests at Cursor"
+      },
+      {
+        "command": "gsharp.test.debugInContext",
+        "title": "GSharp: Debug Tests at Cursor"
+      },
+      {
+        "command": "gsharp.generateAssets",
+        "title": "GSharp: Generate Build & Debug Assets"
+      },
+      {
+        "command": "gsharp.fixAll.document",
+        "title": "GSharp: Fix All (Document)"
+      },
+      {
+        "command": "gsharp.fixAll.project",
+        "title": "GSharp: Fix All (Project)"
+      },
+      {
+        "command": "gsharp.reportIssue",
+        "title": "GSharp: Report Issue"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gsharp.buildProject",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorLangId == gsharp"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "gsharp",
+        "label": "GSharp",
+        "languages": [
+          "gsharp"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the .dll to debug"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "console": {
+                "type": "string",
+                "enum": [
+                  "internalConsole",
+                  "integratedTerminal",
+                  "externalTerminal"
+                ]
+              },
+              "stopAtEntry": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "processId": {
+                "type": [
+                  "number",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "GSharp: Launch",
+            "description": "Launch a GSharp application",
+            "body": {
+              "name": "Launch GSharp App",
+              "type": "coreclr",
+              "request": "launch",
+              "preLaunchTask": "dotnet: build",
+              "program": "^\"\\${workspaceFolder}/bin/Debug/net10.0/${1:AppName}.dll\"",
+              "args": [],
+              "cwd": "^\"\\${workspaceFolder}\"",
+              "console": "integratedTerminal",
+              "stopAtEntry": false
+            }
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "gsharp"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "gsharp",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "enum": [
+              "build",
+              "run",
+              "test",
+              "clean"
+            ]
+          },
+          "project": {
+            "type": "string",
+            "description": "Path to .gsproj file"
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test:unit": "jest",
+    "test:integration": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "semver": "^7.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@types/semver": "^7.5.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.3.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "@types/jest": "^29.5.11"
+  }
+}

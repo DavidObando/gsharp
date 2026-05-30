@@ -34,10 +34,11 @@ public class HoverHandler : HoverHandlerBase
     /// <inheritdoc/>
     public override Task<Hover> Handle(HoverParams request, CancellationToken cancellationToken)
     {
+        System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gsharp-lsp-debug.log"), $"Received Hover request for {request.TextDocument.Uri}\n");
         var key = request.TextDocument.Uri.ToString();
         if (!this.documentContentService.TryGet(key, out DocumentContent content))
         {
-            this.router.Window.LogWarning($"No syntax tree for {key}");
+            this.router.Window.LogWarning($"[HoverHandler] No syntax tree for {key}");
             return Task.FromResult<Hover>(null);
         }
 

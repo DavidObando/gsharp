@@ -17,6 +17,7 @@ using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 using OmniSharp.Extensions.LanguageServer.Protocol.Server;
 using OmniSharp.Extensions.LanguageServer.Protocol.Server.Capabilities;
+using OmniSharp.Extensions.LanguageServer.Protocol.Window;
 using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
 
 namespace GSharp.LanguageServer;
@@ -46,16 +47,27 @@ public class DocumentSyncHandler : TextDocumentSyncHandlerBase
     /// <inheritdoc/>
     public override TextDocumentAttributes GetTextDocumentAttributes(DocumentUri uri)
     {
-        return new TextDocumentAttributes(uri, "plaintext");
+        return new TextDocumentAttributes(uri, "gsharp");
     }
 
     /// <inheritdoc/>
     public override Task<Unit> Handle(DidOpenTextDocumentParams request, CancellationToken cancellationToken)
     {
-        string text = request.TextDocument?.Text;
-        if (!string.IsNullOrEmpty(text))
+        try
         {
-            this.DiagnoseText(request.TextDocument!.Uri, text);
+            string text = request.TextDocument?.Text;
+            var uri = request.TextDocument?.Uri;
+            if (string.IsNullOrEmpty(text))
+            {
+                this.router.Window.LogWarning($"DidOpen: empty text for {uri}");
+                return Unit.Task;
+            }
+
+            this.DiagnoseText(uri!, text);
+        }
+        catch (Exception ex)
+        {
+            System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gsharp-lsp-debug.log"), $"[DidOpen ERROR] {ex}\n");
         }
 
         return Unit.Task;

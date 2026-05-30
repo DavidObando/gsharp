@@ -22,6 +22,7 @@ public static class Constants
     public static TextDocumentSelector DocumentSelector { get; } = new(
         new TextDocumentFilter
         {
-            Pattern = "**/*.gs",
+            Scheme = "file",
+            Language = "gsharp",
         });
 }

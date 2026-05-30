@@ -1,0 +1,93 @@
+{
+  "name": "GSharp Light",
+  "type": "light",
+  "colors": {
+    "editor.background": "#ffffff",
+    "editor.foreground": "#1e1e1e",
+    "editorLineNumber.foreground": "#237893",
+    "editorCursor.foreground": "#000000",
+    "editor.selectionBackground": "#add6ff",
+    "editor.inactiveSelectionBackground": "#e5ebf1"
+  },
+  "tokenColors": [
+    {
+      "scope": "comment",
+      "settings": { "foreground": "#008000" }
+    },
+    {
+      "scope": "keyword",
+      "settings": { "foreground": "#0000FF" }
+    },
+    {
+      "scope": "keyword.control",
+      "settings": { "foreground": "#AF00DB" }
+    },
+    {
+      "scope": "keyword.control.async",
+      "settings": { "foreground": "#AF00DB" }
+    },
+    {
+      "scope": "keyword.declaration",
+      "settings": { "foreground": "#0000FF" }
+    },
+    {
+      "scope": "keyword.modifier",
+      "settings": { "foreground": "#0000FF" }
+    },
+    {
+      "scope": "string",
+      "settings": { "foreground": "#A31515" }
+    },
+    {
+      "scope": "constant.numeric",
+      "settings": { "foreground": "#098658" }
+    },
+    {
+      "scope": "constant.language",
+      "settings": { "foreground": "#0000FF" }
+    },
+    {
+      "scope": "support.type.primitive",
+      "settings": { "foreground": "#0000FF" }
+    },
+    {
+      "scope": "entity.name.function",
+      "settings": { "foreground": "#795E26" }
+    },
+    {
+      "scope": "entity.name.type",
+      "settings": { "foreground": "#267F99" }
+    },
+    {
+      "scope": "variable",
+      "settings": { "foreground": "#001080" }
+    },
+    {
+      "scope": "keyword.operator",
+      "settings": { "foreground": "#1e1e1e" }
+    },
+    {
+      "scope": "punctuation",
+      "settings": { "foreground": "#1e1e1e" }
+    }
+  ],
+  "semanticHighlighting": true,
+  "semanticTokenColors": {
+    "type": "#267F99",
+    "interface": "#267F99",
+    "struct": "#267F99",
+    "enum": "#267F99",
+    "enumMember": "#0070C1",
+    "namespace": "#1e1e1e",
+    "function": "#795E26",
+    "method": "#795E26",
+    "parameter": "#001080",
+    "variable": "#001080",
+    "property": "#001080",
+    "keyword": "#0000FF",
+    "string": "#A31515",
+    "number": "#098658",
+    "operator": "#1e1e1e",
+    "comment": "#008000"
+  }
+}
