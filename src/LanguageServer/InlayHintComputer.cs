@@ -13,7 +13,7 @@ namespace GSharp.LanguageServer;
 /// <summary>
 /// Pure-function inlay hint computer usable by both the handler and tests.
 /// </summary>
-internal static class InlayHintComputer
+public static class InlayHintComputer
 {
     public static IReadOnlyList<InlayHint> ComputeHints(DocumentContent content)
     {

@@ -13,7 +13,7 @@ namespace GSharp.LanguageServer;
 /// Pure-function folding range computer that the language server and tests can both use
 /// without needing an LSP transport.
 /// </summary>
-internal static class FoldingComputer
+public static class FoldingComputer
 {
     public static IEnumerable<FoldingRange> ComputeFoldings(DocumentContent content)
     {

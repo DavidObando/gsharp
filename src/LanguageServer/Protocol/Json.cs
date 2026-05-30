@@ -11,7 +11,7 @@ namespace GSharp.LanguageServer.Protocol;
 /// <summary>
 /// Central System.Text.Json configuration for the language server protocol.
 /// </summary>
-internal static class LspJson
+public static class LspJson
 {
     public static JsonSerializerOptions Options { get; } = Create();
 
@@ -39,7 +39,7 @@ internal static class LspJson
     }
 }
 
-internal sealed class DocumentUriConverter : JsonConverter<DocumentUri>
+public sealed class DocumentUriConverter : JsonConverter<DocumentUri>
 {
     public override DocumentUri Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => DocumentUri.From(reader.GetString());
@@ -54,7 +54,7 @@ internal sealed class DocumentUriConverter : JsonConverter<DocumentUri>
         => writer.WritePropertyName(value?.ToString() ?? string.Empty);
 }
 
-internal sealed class MarkupKindConverter : JsonConverter<MarkupKind>
+public sealed class MarkupKindConverter : JsonConverter<MarkupKind>
 {
     public override MarkupKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new MarkupKind(reader.GetString());
@@ -63,7 +63,7 @@ internal sealed class MarkupKindConverter : JsonConverter<MarkupKind>
         => writer.WriteStringValue(value.Value);
 }
 
-internal sealed class CodeActionKindConverter : JsonConverter<CodeActionKind>
+public sealed class CodeActionKindConverter : JsonConverter<CodeActionKind>
 {
     public override CodeActionKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new CodeActionKind(reader.GetString());
@@ -72,7 +72,7 @@ internal sealed class CodeActionKindConverter : JsonConverter<CodeActionKind>
         => writer.WriteStringValue(value.Value);
 }
 
-internal sealed class FoldingRangeKindConverter : JsonConverter<FoldingRangeKind>
+public sealed class FoldingRangeKindConverter : JsonConverter<FoldingRangeKind>
 {
     public override FoldingRangeKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new FoldingRangeKind(reader.GetString());
@@ -81,7 +81,7 @@ internal sealed class FoldingRangeKindConverter : JsonConverter<FoldingRangeKind
         => writer.WriteStringValue(value.Value);
 }
 
-internal sealed class SemanticTokenTypeConverter : JsonConverter<SemanticTokenType>
+public sealed class SemanticTokenTypeConverter : JsonConverter<SemanticTokenType>
 {
     public override SemanticTokenType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new SemanticTokenType(reader.GetString());
@@ -90,7 +90,7 @@ internal sealed class SemanticTokenTypeConverter : JsonConverter<SemanticTokenTy
         => writer.WriteStringValue(value.Value);
 }
 
-internal sealed class SemanticTokenModifierConverter : JsonConverter<SemanticTokenModifier>
+public sealed class SemanticTokenModifierConverter : JsonConverter<SemanticTokenModifier>
 {
     public override SemanticTokenModifier Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new SemanticTokenModifier(reader.GetString());
@@ -99,7 +99,7 @@ internal sealed class SemanticTokenModifierConverter : JsonConverter<SemanticTok
         => writer.WriteStringValue(value.Value);
 }
 
-internal sealed class MarkedStringsOrMarkupContentConverter : JsonConverter<MarkedStringsOrMarkupContent>
+public sealed class MarkedStringsOrMarkupContentConverter : JsonConverter<MarkedStringsOrMarkupContent>
 {
     public override MarkedStringsOrMarkupContent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -111,7 +111,7 @@ internal sealed class MarkedStringsOrMarkupContentConverter : JsonConverter<Mark
         => JsonSerializer.Serialize(writer, value.MarkupContent, options);
 }
 
-internal sealed class SymbolInformationOrDocumentSymbolConverter : JsonConverter<SymbolInformationOrDocumentSymbol>
+public sealed class SymbolInformationOrDocumentSymbolConverter : JsonConverter<SymbolInformationOrDocumentSymbol>
 {
     public override SymbolInformationOrDocumentSymbol Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -123,7 +123,7 @@ internal sealed class SymbolInformationOrDocumentSymbolConverter : JsonConverter
         => JsonSerializer.Serialize(writer, value.DocumentSymbol, options);
 }
 
-internal sealed class CommandOrCodeActionConverter : JsonConverter<CommandOrCodeAction>
+public sealed class CommandOrCodeActionConverter : JsonConverter<CommandOrCodeAction>
 {
     public override CommandOrCodeAction Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -144,7 +144,7 @@ internal sealed class CommandOrCodeActionConverter : JsonConverter<CommandOrCode
     }
 }
 
-internal sealed class CommandOrCodeActionContainerConverter : JsonConverter<CommandOrCodeActionContainer>
+public sealed class CommandOrCodeActionContainerConverter : JsonConverter<CommandOrCodeActionContainer>
 {
     public override CommandOrCodeActionContainer Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -164,7 +164,7 @@ internal sealed class CommandOrCodeActionContainerConverter : JsonConverter<Comm
     }
 }
 
-internal sealed class StringOrInlayHintLabelPartsConverter : JsonConverter<StringOrInlayHintLabelParts>
+public sealed class StringOrInlayHintLabelPartsConverter : JsonConverter<StringOrInlayHintLabelParts>
 {
     public override StringOrInlayHintLabelParts Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new StringOrInlayHintLabelParts(reader.GetString());
@@ -173,7 +173,7 @@ internal sealed class StringOrInlayHintLabelPartsConverter : JsonConverter<Strin
         => writer.WriteStringValue(value.String);
 }
 
-internal sealed class DiagnosticCodeConverter : JsonConverter<DiagnosticCode>
+public sealed class DiagnosticCodeConverter : JsonConverter<DiagnosticCode>
 {
     public override DiagnosticCode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         => new DiagnosticCode(reader.GetString());

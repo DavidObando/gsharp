@@ -13,7 +13,7 @@ namespace GSharp.LanguageServer;
 /// <summary>
 /// Pure-function CodeLens computer usable by both the handler and tests.
 /// </summary>
-internal static class CodeLensComputer
+public static class CodeLensComputer
 {
     public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content)
     {

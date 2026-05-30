@@ -10,7 +10,7 @@ namespace GSharp.LanguageServer.Server;
 /// Builds the static <see cref="ServerCapabilities"/> advertised in the initialize result.
 /// The vscode client strips dynamic registration, so every feature is declared statically here.
 /// </summary>
-internal static class ServerCapabilitiesFactory
+public static class ServerCapabilitiesFactory
 {
     public static ServerCapabilities Create()
     {

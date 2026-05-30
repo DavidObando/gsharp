@@ -12,7 +12,7 @@ namespace GSharp.LanguageServer;
 /// <summary>
 /// Formats GSharp source code by re-lexing and applying canonical whitespace rules.
 /// </summary>
-internal static class FormattingEngine
+public static class FormattingEngine
 {
     private const string Indent = "  ";
 

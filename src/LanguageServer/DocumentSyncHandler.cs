@@ -18,12 +18,12 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class DocumentSyncHandler
 {
-    internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
         return ComputeDiagnostics(text, skipBinding, project: null);
     }
 
-    internal static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project)
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project)
     {
         var newLines = new List<int>();
         int nextNewLine = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
@@ -86,7 +86,7 @@ public static class DocumentSyncHandler
     }
 }
 
-internal sealed class DiagnosticComputationResult
+public sealed class DiagnosticComputationResult
 {
     public DiagnosticComputationResult(DocumentContent content, IReadOnlyList<Diagnostic> diagnostics)
     {

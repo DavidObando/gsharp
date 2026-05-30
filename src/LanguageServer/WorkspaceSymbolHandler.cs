@@ -16,7 +16,7 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class WorkspaceSymbolHandler
 {
-    internal static void CollectSymbols(List<WorkspaceSymbol> results, string uri, DocumentContent content, string query)
+    public static void CollectSymbols(List<WorkspaceSymbol> results, string uri, DocumentContent content, string query)
     {
         var text = content.SyntaxTree.Text;
 

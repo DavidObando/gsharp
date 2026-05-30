@@ -121,7 +121,7 @@ public sealed class SemanticTokensBuilder
     private readonly SemanticTokensLegend legend;
     private readonly List<(int Line, int Character, int Length, int Type, int Modifiers)> tokens = new();
 
-    internal SemanticTokensBuilder(SemanticTokensDocument document, SemanticTokensLegend legend)
+    public SemanticTokensBuilder(SemanticTokensDocument document, SemanticTokensLegend legend)
     {
         this.document = document;
         this.legend = legend;
@@ -199,5 +199,5 @@ public sealed class SemanticTokensDocument
 
     public SemanticTokens GetSemanticTokens() => new SemanticTokens { Data = this.data };
 
-    internal void SetData(ImmutableArray<int> value) => this.data = value;
+    public void SetData(ImmutableArray<int> value) => this.data = value;
 }

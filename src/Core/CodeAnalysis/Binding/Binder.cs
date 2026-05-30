@@ -2927,11 +2927,26 @@ public sealed class Binder
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
             || syntax.Keyword?.Kind == SyntaxKind.LetKeyword;
         var type = BindTypeClause(syntax.TypeClause);
-        var initializer = BindExpression(syntax.Initializer);
-        var variableType = type ?? initializer.Type;
+
+        BoundExpression convertedInitializer;
+        TypeSymbol variableType;
+        if (syntax.Initializer == null)
+        {
+            // Bare `var x T` declaration: the variable is initialized to the
+            // type's default value (Go-style zero value). The parser only
+            // produces a null initializer when a type clause is present.
+            variableType = type ?? TypeSymbol.Error;
+            convertedInitializer = new BoundDefaultExpression(syntax, variableType);
+        }
+        else
+        {
+            var initializer = BindExpression(syntax.Initializer);
+            variableType = type ?? initializer.Type;
+            convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+        }
+
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
-        var convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
 
         // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach
         // them to the variable symbol so #175 use-site diagnostics
@@ -7657,6 +7672,16 @@ public sealed class Binder
                 return BindAccessorCall(receiver, classSymbol, ce);
 
             case NameExpressionSyntax ne:
+                if (ne.IdentifierToken.IsMissing)
+                {
+                    // Incomplete member access such as `x.` with no member name yet.
+                    // The parser already reported the missing identifier; binding a
+                    // null member name would throw (e.g. Type.GetProperty(null)), so
+                    // bail out gracefully. This keeps completion / semantic tokens
+                    // working while the user is mid-typing.
+                    return new BoundErrorExpression(null);
+                }
+
                 if (classSymbol != null)
                 {
                     var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out var staticMember);

@@ -12,7 +12,7 @@ namespace GSharp.LanguageServer;
 /// <summary>
 /// Pure-function selection range computer.
 /// </summary>
-internal static class SelectionRangeComputer
+public static class SelectionRangeComputer
 {
     public static SelectionRange ComputeSelectionRange(DocumentContent content, Position position)
     {

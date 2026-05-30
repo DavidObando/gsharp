@@ -16,7 +16,7 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class SemanticTokensHandler
 {
-    internal static readonly SemanticTokenType[] TokenTypes =
+    public static readonly SemanticTokenType[] TokenTypes =
     [
         SemanticTokenType.Namespace,      // 0
         SemanticTokenType.Type,           // 1
@@ -38,7 +38,7 @@ public static class SemanticTokensHandler
         SemanticTokenType.Event,          // 17
     ];
 
-    internal static readonly SemanticTokenModifier[] TokenModifiers =
+    public static readonly SemanticTokenModifier[] TokenModifiers =
     [
         SemanticTokenModifier.Declaration, // 0
         SemanticTokenModifier.Definition,  // 1
@@ -51,7 +51,7 @@ public static class SemanticTokensHandler
     /// <summary>
     /// Gets the semantic tokens legend (token types + modifiers).
     /// </summary>
-    internal static SemanticTokensLegend Legend { get; } = new SemanticTokensLegend
+    public static SemanticTokensLegend Legend { get; } = new SemanticTokensLegend
     {
         TokenTypes = TokenTypes,
         TokenModifiers = TokenModifiers,
@@ -61,7 +61,7 @@ public static class SemanticTokensHandler
 /// <summary>
 /// Pure-function semantic token computer usable by both the handler and tests.
 /// </summary>
-internal static class SemanticTokensComputer
+public static class SemanticTokensComputer
 {
     public static void Tokenize(SemanticTokensBuilder builder, DocumentContent content)
     {
