@@ -137,13 +137,21 @@ public static class TextWriterExtensions
             writer.WriteLine(diagnostic.Message);
             writer.ResetColor();
 
-            var lineStart = diagnostic.Location.Text.Lines[diagnostic.Location.StartLine];
-            var lineEnd = diagnostic.Location.Text.Lines[diagnostic.Location.EndLine];
-            var prefixSpan = TextSpan.FromBounds(lineStart.Start, diagnostic.Location.Span.Start);
-            var suffixSpan = TextSpan.FromBounds(diagnostic.Location.Span.End, lineStart.End);
+            // Render the snippet relative to the line containing the start of the
+            // diagnostic span. When the span crosses line boundaries the span end can
+            // be far past the end of the start line, so clamp every boundary to the
+            // start line to keep all computed lengths non-negative.
+            var startLine = diagnostic.Location.Text.Lines[diagnostic.Location.StartLine];
+
+            var spanStart = Math.Clamp(diagnostic.Location.Span.Start, startLine.Start, startLine.End);
+            var spanEnd = Math.Clamp(diagnostic.Location.Span.End, spanStart, startLine.End);
+
+            var prefixSpan = TextSpan.FromBounds(startLine.Start, spanStart);
+            var errorSpan = TextSpan.FromBounds(spanStart, spanEnd);
+            var suffixSpan = TextSpan.FromBounds(spanEnd, startLine.End);
 
             var prefix = diagnostic.Location.Text.ToString(prefixSpan);
-            var error = diagnostic.Location.Text.ToString(diagnostic.Location.Span);
+            var error = diagnostic.Location.Text.ToString(errorSpan);
             var suffix = diagnostic.Location.Text.ToString(suffixSpan);
 
             writer.Write("    ");
