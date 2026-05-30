@@ -4,6 +4,8 @@ A modern, simple, and accessible programming language for .NET.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
 
+![](assets/gsharp-icon.svg?raw=true)
+
 ## Getting started
 
 GSharp ships an MSBuild SDK (`Gsharp.NET.Sdk`) and a `dotnet new` template (`Gsharp.Templates`) so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
