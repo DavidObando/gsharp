@@ -2100,6 +2100,26 @@ public class Parser
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
+
+        // A `var` declaration may omit its initializer when an explicit type
+        // clause is present (e.g. `var x int32`), in which case the variable
+        // takes that type's default value. `let`/`const` remain immutable, so
+        // an initializer stays mandatory for them; and without a type clause
+        // there is nothing to infer from, so an initializer is still required.
+        if (expected == SyntaxKind.VarKeyword
+            && typeClause != null
+            && Current.Kind != SyntaxKind.EqualsToken)
+        {
+            return new VariableDeclarationSyntax(
+                syntaxTree,
+                accessibilityModifier,
+                keyword,
+                identifier,
+                typeClause,
+                equalsToken: null,
+                initializer: null);
+        }
+
         var equals = MatchToken(SyntaxKind.EqualsToken);
         var initializer = ParseExpression();
         return new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);

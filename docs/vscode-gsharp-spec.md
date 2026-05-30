@@ -35,7 +35,7 @@ This document specifies the design and implementation plan for a Visual Studio C
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
 │  GSharp Language Server (.NET process)                         │
-│  • OmniSharp.Extensions.LanguageServer framework               │
+│  • StreamJsonRpc + hand-authored System.Text.Json protocol     │
 │  • Document sync, completion, hover, go-to-def, references,    │
 │    rename, code actions, signature help, document symbols,     │
 │    folding, document highlight, diagnostics, semantic tokens   │
@@ -146,6 +146,16 @@ Ship two bundled color themes optimized for GSharp's semantic token types:
             "type": "boolean",
             "default": false,
             "description": "Pass --debug flag to the language server to wait for a debugger to attach."
+          },
+          "gsharp.server.log": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable language server protocol logging to a file (passes --log to the server)."
+          },
+          "gsharp.server.logPath": {
+            "type": "string",
+            "default": "",
+            "description": "Optional file path for the language server log. If empty, a default temporary file is used. Only used when gsharp.server.log is enabled."
           },
           "gsharp.trace.server": {
             "type": "string",
@@ -799,7 +809,7 @@ vscode-gsharp/
 | Razor/XAML | Additional embedded languages | Not applicable |
 | DevKit integration | Optional proprietary companion | Not applicable |
 | Debug adapter | Bundled vsdbg | Reuses vsdbg via `coreclr` type |
-| Server framework | Custom LSP implementation | OmniSharp.Extensions.LanguageServer |
+| Server framework | Custom LSP implementation | StreamJsonRpc + hand-authored System.Text.Json protocol |
 | Project system | .sln/.csproj complex resolution | Single `.gsproj` per workspace (simpler) |
 | Service broker | Inter-process brokered services | Not needed initially |
 

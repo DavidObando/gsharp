@@ -6,19 +6,19 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using LspSymbolKind = OmniSharp.Extensions.LanguageServer.Protocol.Models.SymbolKind;
-using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
+using GSharp.LanguageServer.Protocol;
+using LspSymbolKind = GSharp.LanguageServer.Protocol.SymbolKind;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer;
 
-internal static class HoverComputer
+public static class HoverComputer
 {
     public static Hover ComputeHover(DocumentContent content, Position position)
     {
@@ -26,12 +26,16 @@ internal static class HoverComputer
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
-        if (symbol == null)
+
+        var signature = symbol != null
+            ? FormatSymbol(symbol, compilation)
+            : FormatImportedClrType(content.SyntaxTree, compilation, token);
+
+        if (signature == null)
         {
             return null;
         }
 
-        var signature = FormatSymbol(symbol);
         return new Hover
         {
             Contents = new MarkedStringsOrMarkupContent(new MarkupContent
@@ -43,11 +47,17 @@ internal static class HoverComputer
         };
     }
 
-    internal static string FormatSymbol(Symbol symbol)
+    public static string FormatSymbol(Symbol symbol)
+    {
+        return FormatSymbol(symbol, compilation: null);
+    }
+
+    public static string FormatSymbol(Symbol symbol, Compilation compilation)
     {
         return symbol switch
         {
-            VariableSymbol variable => $"let {variable.Name}: {FormatType(variable.Type)}",
+            ParameterSymbol parameter => $"{parameter.Name} {FormatType(parameter.Type)}",
+            VariableSymbol variable => $"{ResolveVariableKeyword(variable, compilation)} {variable.Name} {FormatType(variable.Type)}",
             FunctionSymbol function => FormatFunction(function),
             StructSymbol aggregate => FormatAggregate(aggregate),
             EnumSymbol enumSymbol => FormatEnum(enumSymbol),
@@ -56,6 +66,71 @@ internal static class HoverComputer
             TypeSymbol type => $"type {FormatType(type)}",
             _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}",
         };
+    }
+
+    private static string ResolveVariableKeyword(VariableSymbol variable, Compilation compilation)
+    {
+        if (compilation != null && variable.DeclaringSyntax is SyntaxToken identifier)
+        {
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                foreach (var declaration in FindVariableDeclarations(tree.Root))
+                {
+                    if (ReferenceEquals(declaration.Identifier, identifier)
+                        || (declaration.Identifier.Span.Start == identifier.Span.Start
+                            && declaration.Identifier.Span.Length == identifier.Span.Length
+                            && declaration.Identifier.Text == identifier.Text))
+                    {
+                        var keyword = declaration.Keyword?.Text;
+                        if (!string.IsNullOrEmpty(keyword))
+                        {
+                            return keyword;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback when the declaration cannot be located: `let` is read-only,
+        // `var` is mutable (ADR keeps `const` read-only as well).
+        return variable.IsReadOnly ? "let" : "var";
+    }
+
+    private static IEnumerable<VariableDeclarationSyntax> FindVariableDeclarations(SyntaxNode node)
+    {
+        if (node is VariableDeclarationSyntax declaration)
+        {
+            yield return declaration;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            foreach (var descendant in FindVariableDeclarations(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static string FormatImportedClrType(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    {
+        if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return null;
+        }
+
+        var clrType = SemanticLookup.ResolveImportedClrType(tree, compilation, token.Text);
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        var keyword = clrType.IsInterface ? "interface"
+            : clrType.IsEnum ? "enum"
+            : clrType.IsValueType ? "struct"
+            : "class";
+
+        return $"{keyword} {clrType.FullName ?? clrType.Name}";
     }
 
     private static string FormatFunction(FunctionSymbol function)
@@ -84,7 +159,7 @@ internal static class HoverComputer
     }
 }
 
-internal static class ReferencesComputer
+public static class ReferencesComputer
 {
     public static IReadOnlyList<Location> ComputeReferences(DocumentUri uri, DocumentContent content, Position position, bool includeDeclaration)
     {
@@ -183,7 +258,7 @@ internal static class ReferencesComputer
     }
 }
 
-internal static class RenameComputer
+public static class RenameComputer
 {
     public static WorkspaceEdit ComputeRename(DocumentUri uri, DocumentContent content, Position position, string newName)
     {
@@ -238,7 +313,7 @@ internal static class RenameComputer
     }
 }
 
-internal static class CodeActionComputer
+public static class CodeActionComputer
 {
     public static CommandOrCodeActionContainer ComputeCodeActions(DocumentUri uri, DocumentContent content, Range range)
     {
@@ -304,7 +379,7 @@ internal static class CodeActionComputer
     }
 }
 
-internal static class DefinitionComputer
+public static class DefinitionComputer
 {
     public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position)
     {
@@ -427,7 +502,7 @@ internal static class DefinitionComputer
     }
 }
 
-internal static class DocumentSymbolComputer
+public static class DocumentSymbolComputer
 {
     public static IReadOnlyList<SymbolInformationOrDocumentSymbol> ComputeDocumentSymbols(DocumentContent content)
     {
@@ -475,7 +550,7 @@ internal static class DocumentSymbolComputer
                         Kind = LspSymbolKind.Struct,
                         Range = SemanticLookup.ToRange(text, structDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(structDecl.Identifier),
-                        Children = new Container<DocumentSymbol>(children),
+                        Children = children,
                     }));
                     break;
                 case EnumDeclarationSyntax enumDecl:
@@ -497,7 +572,7 @@ internal static class DocumentSymbolComputer
                         Kind = LspSymbolKind.Enum,
                         Range = SemanticLookup.ToRange(text, enumDecl.Span),
                         SelectionRange = SemanticLookup.ToRange(enumDecl.Identifier),
-                        Children = new Container<DocumentSymbol>(enumChildren),
+                        Children = enumChildren,
                     }));
                     break;
             }
@@ -507,7 +582,7 @@ internal static class DocumentSymbolComputer
     }
 }
 
-internal static class SignatureHelpComputer
+public static class SignatureHelpComputer
 {
     public static SignatureHelp ComputeSignatureHelp(DocumentContent content, Position position)
     {
@@ -561,19 +636,19 @@ internal static class SignatureHelpComputer
         var parameters = function.Parameters
             .Select(p => new ParameterInformation
             {
-                Label = new ParameterInformationLabel($"{p.Name} {FormatType(p.Type)}"),
+                Label = $"{p.Name} {FormatType(p.Type)}",
             })
             .ToList();
 
         var signature = new SignatureInformation
         {
             Label = HoverComputer.FormatSymbol(function),
-            Parameters = new Container<ParameterInformation>(parameters),
+            Parameters = parameters,
         };
 
         return new SignatureHelp
         {
-            Signatures = new Container<SignatureInformation>(signature),
+            Signatures = new[] { signature },
             ActiveSignature = 0,
             ActiveParameter = Math.Min(activeParameter, Math.Max(0, parameters.Count - 1)),
         };
@@ -585,11 +660,22 @@ internal static class SignatureHelpComputer
     }
 }
 
-internal static class CompletionComputer
+public static class CompletionComputer
 {
     public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
+        var offset = SemanticLookup.ToOffset(content, position);
+
+        // Member-access context (`receiver.<caret>`): offer the receiver's members
+        // instead of the global keyword/symbol list. Returns null only when the
+        // caret is not positioned after a member-access dot.
+        var memberItems = TryComputeMemberCompletions(content, compilation, offset);
+        if (memberItems != null)
+        {
+            return memberItems;
+        }
+
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -660,7 +746,6 @@ internal static class CompletionComputer
         }
 
         // Add local symbols from the containing function
-        var offset = SemanticLookup.ToOffset(content, position);
         var containingFunction = FindContainingFunction(content.SyntaxTree, offset);
         if (containingFunction != null)
         {
@@ -708,6 +793,196 @@ internal static class CompletionComputer
         }
 
         return best;
+    }
+
+    private static IReadOnlyList<CompletionItem> TryComputeMemberCompletions(DocumentContent content, Compilation compilation, int offset)
+    {
+        var accessor = FindReceiverAccessor(content.SyntaxTree.Root, offset);
+        if (accessor == null)
+        {
+            // Not a member-access context — caller falls back to the global list.
+            return null;
+        }
+
+        var items = new List<CompletionItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (accessor.LeftPart is not NameExpressionSyntax leftName || leftName.IdentifierToken.IsMissing)
+        {
+            // Chained or complex receivers (e.g. `a.b.`) are not resolved yet, but we
+            // still suppress the keyword list rather than offering irrelevant items.
+            return items;
+        }
+
+        var receiver = SemanticLookup.ResolveSymbol(compilation, leftName.IdentifierToken);
+        switch (receiver)
+        {
+            case VariableSymbol variable:
+                AddInstanceTypeMembers(items, seen, variable.Type);
+                break;
+            case EnumSymbol enumSymbol:
+                AddEnumMembers(items, seen, enumSymbol);
+                break;
+            case StructSymbol structType:
+                AddStructStaticMembers(items, seen, structType);
+                break;
+            case TypeSymbol typeSymbol:
+                AddClrMembers(items, seen, typeSymbol.ClrType, staticMembers: true);
+                break;
+            case null:
+                // An imported CLR type referenced by name (e.g. `Console`).
+                AddClrMembers(items, seen, SemanticLookup.ResolveImportedClrType(content.SyntaxTree, compilation, leftName.IdentifierToken.Text), staticMembers: true);
+                break;
+        }
+
+        return items;
+    }
+
+    private static AccessorExpressionSyntax FindReceiverAccessor(SyntaxNode node, int offset)
+    {
+        AccessorExpressionSyntax best = null;
+        foreach (var accessor in FindAccessors(node))
+        {
+            var dot = accessor.DotToken;
+            if (dot == null || dot.IsMissing)
+            {
+                continue;
+            }
+
+            // Caret must sit after the dot and within the accessor expression.
+            if (dot.Span.End <= offset && offset <= accessor.Span.End)
+            {
+                if (best == null || dot.Span.End > best.DotToken.Span.End)
+                {
+                    best = accessor;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    private static IEnumerable<AccessorExpressionSyntax> FindAccessors(SyntaxNode node)
+    {
+        if (node is AccessorExpressionSyntax accessor)
+        {
+            yield return accessor;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            foreach (var descendant in FindAccessors(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
+    private static void AddInstanceTypeMembers(List<CompletionItem> items, HashSet<string> seen, TypeSymbol type)
+    {
+        if (type is StructSymbol structType)
+        {
+            AddStructInstanceMembers(items, seen, structType);
+            return;
+        }
+
+        AddClrMembers(items, seen, type?.ClrType, staticMembers: false);
+    }
+
+    private static void AddStructInstanceMembers(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType)
+    {
+        for (var current = structType; current != null; current = current.BaseClass)
+        {
+            foreach (var field in current.Fields)
+            {
+                AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
+            }
+
+            foreach (var property in current.Properties)
+            {
+                AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
+            }
+
+            foreach (var method in current.Methods)
+            {
+                AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
+            }
+        }
+    }
+
+    private static void AddStructStaticMembers(List<CompletionItem> items, HashSet<string> seen, StructSymbol structType)
+    {
+        foreach (var field in structType.StaticFields)
+        {
+            AddItem(items, seen, field.Name, CompletionItemKind.Field, HoverComputer.FormatSymbol(field));
+        }
+
+        foreach (var property in structType.StaticProperties)
+        {
+            AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.Type?.Name}");
+        }
+
+        foreach (var method in structType.StaticMethods)
+        {
+            AddItem(items, seen, method.Name, CompletionItemKind.Method, HoverComputer.FormatSymbol(method));
+        }
+    }
+
+    private static void AddEnumMembers(List<CompletionItem> items, HashSet<string> seen, EnumSymbol enumSymbol)
+    {
+        foreach (var member in enumSymbol.Members)
+        {
+            AddItem(items, seen, member.Name, CompletionItemKind.EnumMember, $"{enumSymbol.Name}.{member.Name}");
+        }
+    }
+
+    private static void AddClrMembers(List<CompletionItem> items, HashSet<string> seen, Type clrType, bool staticMembers)
+    {
+        if (clrType == null)
+        {
+            return;
+        }
+
+        var flags = BindingFlags.Public | (staticMembers ? BindingFlags.Static : BindingFlags.Instance);
+
+        foreach (var property in clrType.GetProperties(flags))
+        {
+            if (property.GetIndexParameters().Length == 0)
+            {
+                AddItem(items, seen, property.Name, CompletionItemKind.Property, $"{property.Name}: {property.PropertyType.Name}");
+            }
+        }
+
+        foreach (var field in clrType.GetFields(flags))
+        {
+            var kind = field.IsLiteral ? CompletionItemKind.Constant : CompletionItemKind.Field;
+            AddItem(items, seen, field.Name, kind, $"{field.Name}: {field.FieldType.Name}");
+        }
+
+        foreach (var method in clrType.GetMethods(flags))
+        {
+            if (method.IsSpecialName)
+            {
+                continue;
+            }
+
+            AddItem(items, seen, method.Name, CompletionItemKind.Method, $"{method.Name}(...): {method.ReturnType.Name}");
+        }
+
+        foreach (var evt in clrType.GetEvents(flags))
+        {
+            AddItem(items, seen, evt.Name, CompletionItemKind.Event, evt.Name);
+        }
+    }
+
+    private static void AddItem(List<CompletionItem> items, HashSet<string> seen, string label, CompletionItemKind kind, string detail)
+    {
+        if (string.IsNullOrEmpty(label) || !seen.Add(label))
+        {
+            return;
+        }
+
+        items.Add(new CompletionItem { Label = label, Kind = kind, Detail = detail });
     }
 
     private static IEnumerable<string> GetKeywords()

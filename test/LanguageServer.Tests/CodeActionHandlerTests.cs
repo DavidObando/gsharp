@@ -3,10 +3,9 @@
 // </copyright>
 
 using System.Linq;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
-using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer.Tests;
 

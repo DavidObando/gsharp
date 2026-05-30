@@ -1,0 +1,93 @@
+{
+  "name": "GSharp Dark",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1e1e1e",
+    "editor.foreground": "#d4d4d4",
+    "editorLineNumber.foreground": "#858585",
+    "editorCursor.foreground": "#aeafad",
+    "editor.selectionBackground": "#264f78",
+    "editor.inactiveSelectionBackground": "#3a3d41"
+  },
+  "tokenColors": [
+    {
+      "scope": "comment",
+      "settings": { "foreground": "#6A9955" }
+    },
+    {
+      "scope": "keyword",
+      "settings": { "foreground": "#569CD6" }
+    },
+    {
+      "scope": "keyword.control",
+      "settings": { "foreground": "#C586C0" }
+    },
+    {
+      "scope": "keyword.control.async",
+      "settings": { "foreground": "#C586C0" }
+    },
+    {
+      "scope": "keyword.declaration",
+      "settings": { "foreground": "#569CD6" }
+    },
+    {
+      "scope": "keyword.modifier",
+      "settings": { "foreground": "#569CD6" }
+    },
+    {
+      "scope": "string",
+      "settings": { "foreground": "#CE9178" }
+    },
+    {
+      "scope": "constant.numeric",
+      "settings": { "foreground": "#B5CEA8" }
+    },
+    {
+      "scope": "constant.language",
+      "settings": { "foreground": "#569CD6" }
+    },
+    {
+      "scope": "support.type.primitive",
+      "settings": { "foreground": "#569CD6" }
+    },
+    {
+      "scope": "entity.name.function",
+      "settings": { "foreground": "#DCDCAA" }
+    },
+    {
+      "scope": "entity.name.type",
+      "settings": { "foreground": "#4EC9B0" }
+    },
+    {
+      "scope": "variable",
+      "settings": { "foreground": "#9CDCFE" }
+    },
+    {
+      "scope": "keyword.operator",
+      "settings": { "foreground": "#D4D4D4" }
+    },
+    {
+      "scope": "punctuation",
+      "settings": { "foreground": "#D4D4D4" }
+    }
+  ],
+  "semanticHighlighting": true,
+  "semanticTokenColors": {
+    "type": "#4EC9B0",
+    "interface": "#B8D7A3",
+    "struct": "#86C691",
+    "enum": "#B8D7A3",
+    "enumMember": "#4FC1FF",
+    "namespace": "#D4D4D4",
+    "function": "#DCDCAA",
+    "method": "#DCDCAA",
+    "parameter": "#9CDCFE",
+    "variable": "#9CDCFE",
+    "property": "#9CDCFE",
+    "keyword": "#569CD6",
+    "string": "#CE9178",
+    "number": "#B5CEA8",
+    "operator": "#D4D4D4",
+    "comment": "#6A9955"
+  }
+}

@@ -9,10 +9,13 @@ namespace GSharp.LanguageServer.Tests;
 public class HoverHandlerTests
 {
     [Theory]
-    [InlineData("let answer = 42\n", "answer", "let answer: int32")]
+    [InlineData("let answer = 42\n", "answer", "let answer int32")]
+    [InlineData("var count = 0\n", "count", "var count int32")]
     [InlineData("func add(a int32, b int32) int32 { return a + b }\n", "add", "func add(a int32, b int32) int32")]
+    [InlineData("func greet(name string) { }\n", "name", "name string")]
     [InlineData("type Point struct {\nX int32\nY int32\n}\n", "Point", "struct Point { X int32; Y int32 }")]
     [InlineData("type Color enum { Red, Green }\n", "Color", "enum Color { Red, Green }")]
+    [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "class System.Console")]
     public void ComputeHover_ReturnsMarkdownSignature(string source, string token, string expected)
     {
         var content = LanguageServerTestHelpers.Content(source);

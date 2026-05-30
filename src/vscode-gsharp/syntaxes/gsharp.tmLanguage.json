@@ -1,0 +1,207 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GSharp",
+  "scopeName": "source.gsharp",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#function-calls" },
+    { "include": "#identifiers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.gsharp",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.interpolated.gsharp",
+          "begin": "\\$\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.gsharp",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.gsharp",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.definition.interpolation.begin.gsharp" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
+              },
+              "patterns": [
+                { "include": "source.gsharp" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.gsharp",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.gsharp",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.gsharp",
+          "match": "'(\\\\.|[^'\\\\])'"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.gsharp",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.gsharp",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.gsharp",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?[fFdDmM]?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.gsharp",
+          "match": "\\b[0-9][0-9_]*[lLuU]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.gsharp",
+          "match": "\\b(if|else|for|while|switch|case|default|break|continue|return|goto|fallthrough|range|select)\\b"
+        },
+        {
+          "name": "keyword.control.flow.gsharp",
+          "match": "\\b(try|catch|finally|throw|defer)\\b"
+        },
+        {
+          "name": "keyword.control.async.gsharp",
+          "match": "\\b(async|await|go)\\b"
+        },
+        {
+          "name": "keyword.declaration.gsharp",
+          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence)\\b"
+        },
+        {
+          "name": "keyword.modifier.gsharp",
+          "match": "\\b(public|private|internal|open|sealed|override|const|static)\\b"
+        },
+        {
+          "name": "keyword.other.gsharp",
+          "match": "\\b(import|package|using|var|let|is|scope|chan|map)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.gsharp",
+          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.true.gsharp",
+          "match": "\\btrue\\b"
+        },
+        {
+          "name": "constant.language.boolean.false.gsharp",
+          "match": "\\bfalse\\b"
+        },
+        {
+          "name": "constant.language.null.gsharp",
+          "match": "\\bnil\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.gsharp",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.gsharp",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.assignment.gsharp",
+          "match": "(\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|=)"
+        },
+        {
+          "name": "keyword.operator.bitwise.gsharp",
+          "match": "(&|\\||\\^|~|<<|>>)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.gsharp",
+          "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.arrow.gsharp",
+          "match": "(=>|->)"
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "name": "meta.function-call.gsharp",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.gsharp" }
+          }
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.gsharp",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.gsharp",
+          "match": "[;,.]"
+        },
+        {
+          "name": "punctuation.bracket.gsharp",
+          "match": "[{}()\\[\\]]"
+        }
+      ]
+    }
+  }
+}

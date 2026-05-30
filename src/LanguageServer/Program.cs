@@ -3,11 +3,13 @@
 // </copyright>
 
 using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using OmniSharp.Extensions.LanguageServer.Server;
-using LanguageServerHost = OmniSharp.Extensions.LanguageServer.Server.LanguageServer;
+using GSharp.LanguageServer.Protocol;
+using GSharp.LanguageServer.Server;
+using StreamJsonRpc;
 
 namespace GSharp.LanguageServer;
 
@@ -23,50 +25,222 @@ public class Program
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     public static async Task Main(string[] args)
     {
-        var server = await LanguageServerHost.From(options =>
-            options
-                .WithInput(Console.OpenStandardInput())
-                .WithOutput(Console.OpenStandardOutput())
-                .ConfigureLogging(builder => builder.SetMinimumLevel(LogLevel.Trace))
-                .WithServices(ConfigureServices)
-                .WithHandler<DocumentSyncHandler>()
-                .WithHandler<FoldingHandler>()
-                .WithHandler<HoverHandler>()
-                .WithHandler<DefinitionHandler>()
-                .WithHandler<DocumentSymbolHandler>()
-                .WithHandler<DocumentHighlightHandler>()
-                .WithHandler<SignatureHelpHandler>()
-                .WithHandler<CompletionHandler>()
-                .WithHandler<ReferencesHandler>()
-                .WithHandler<RenameHandler>()
-                .WithHandler<CodeActionHandler>()
-                .WithHandler<SemanticTokensHandler>()
-                .WithHandler<WorkspaceSymbolHandler>()
-                .WithHandler<InlayHintHandler>()
-                .WithHandler<CodeLensHandler>()
-                .WithHandler<FormattingHandler>()
-                .WithHandler<RangeFormattingHandler>()
-                .WithHandler<OnTypeFormattingHandler>()
-                .WithHandler<PrepareRenameHandler>()
-                .WithHandler<ImplementationHandler>()
-                .WithHandler<TypeDefinitionHandler>()
-                .WithHandler<SelectionRangeHandler>()
-                .WithHandler<DiagnosticHandler>()
-                .WithHandler<LinkedEditingRangeHandler>()
-                .WithHandler<FileWatchHandler>()
-                .OnInitialize((server, request, ct) =>
-                {
-                    var initializer = server.Services.GetRequiredService<WorkspaceInitializer>();
-                    return initializer.OnInitialize(server, request, ct);
-                }));
+        var logFile = GetLogPath(args);
+        var logEnabled = logFile != null;
 
-        await server.WaitForExit;
+        if (logEnabled)
+        {
+            File.AppendAllText(logFile, $"\n\n--- SERVER START ---\nArgs: {string.Join(" ", args)}\n");
+        }
+
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            if (logEnabled)
+            {
+                File.AppendAllText(logFile, $"UNHANDLED EXCEPTION: {e.ExceptionObject}\n");
+            }
+        };
+
+        var pipeName = GetPipeName(args);
+
+        Stream stream = null;
+        Stream sending;
+        Stream receiving;
+
+        if (pipeName != null)
+        {
+            stream = await ConnectPipeAsync(pipeName);
+            sending = stream;
+            receiving = stream;
+        }
+        else
+        {
+            sending = Console.OpenStandardOutput();
+            receiving = Console.OpenStandardInput();
+        }
+
+        if (logEnabled)
+        {
+            sending = new LoggingStream(sending, logFile, "OUT");
+            receiving = new LoggingStream(receiving, logFile, "IN");
+        }
+
+        try
+        {
+            await RunAsync(sending, receiving);
+        }
+        catch (Exception ex)
+        {
+            if (logEnabled)
+            {
+                File.AppendAllText(logFile, $"FATAL ERROR: {ex}\n");
+            }
+
+            throw;
+        }
+        finally
+        {
+            if (stream != null)
+            {
+                await stream.DisposeAsync();
+            }
+        }
     }
 
-    private static void ConfigureServices(IServiceCollection services)
+    private static async Task RunAsync(Stream sending, Stream receiving)
     {
-        services.AddSingleton<DocumentContentService>();
-        services.AddSingleton<WorkspaceState>();
-        services.AddSingleton<WorkspaceInitializer>();
+        var documentContentService = new DocumentContentService();
+        var workspaceState = new WorkspaceState();
+        var target = new LspServer(documentContentService, workspaceState);
+
+        var formatter = new SystemTextJsonFormatter { JsonSerializerOptions = LspJson.Options };
+        var handler = new HeaderDelimitedMessageHandler(sending, receiving, formatter);
+        var rpc = new JsonRpc(handler);
+        rpc.AddLocalRpcTarget(target, new JsonRpcTargetOptions { DisposeOnDisconnect = false });
+        target.Attach(rpc);
+        rpc.StartListening();
+
+        await target.WaitForExit;
+    }
+
+    private static async Task<Stream> ConnectPipeAsync(string pipeName)
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            const string pipePrefix = @"\\.\pipe\";
+            var name = pipeName.StartsWith(pipePrefix, StringComparison.OrdinalIgnoreCase)
+                ? pipeName.Substring(pipePrefix.Length)
+                : pipeName;
+
+            var pipeStream = new System.IO.Pipes.NamedPipeClientStream(".", name, System.IO.Pipes.PipeDirection.InOut, System.IO.Pipes.PipeOptions.Asynchronous);
+            await pipeStream.ConnectAsync();
+            return pipeStream;
+        }
+
+        var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+        var endpoint = new System.Net.Sockets.UnixDomainSocketEndPoint(pipeName);
+        await socket.ConnectAsync(endpoint);
+        return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+    }
+
+    private static string GetPipeName(string[] args)
+    {
+        var pipeArg = args.FirstOrDefault(a => a.StartsWith("--pipe=", StringComparison.OrdinalIgnoreCase));
+        return pipeArg != null ? pipeArg.Substring("--pipe=".Length) : null;
+    }
+
+    /// <summary>
+    /// Resolves the debug log file path from the command line. Logging is opt-in via the
+    /// <c>--log</c> argument: pass <c>--log</c> to write to the default location, or
+    /// <c>--log=&lt;path&gt;</c> to write to a specific file. Returns <see langword="null"/>
+    /// when <c>--log</c> is absent, in which case no log file is created.
+    /// </summary>
+    private static string GetLogPath(string[] args)
+    {
+        var logArg = args.FirstOrDefault(a =>
+            string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
+            a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase));
+
+        if (logArg == null)
+        {
+            return null;
+        }
+
+        var separatorIndex = logArg.IndexOf('=');
+        if (separatorIndex >= 0)
+        {
+            var path = logArg.Substring(separatorIndex + 1).Trim();
+            if (!string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+        }
+
+        return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+            ? Path.Combine(Path.GetTempPath(), "gsharp-lsp-debug.log")
+            : "/tmp/gsharp-lsp-debug.log";
+    }
+
+    private sealed class LoggingStream : Stream
+    {
+        private readonly Stream inner;
+        private readonly string logFile;
+        private readonly string prefix;
+        private readonly object lockObj = new object();
+
+        public LoggingStream(Stream inner, string logFile, string prefix)
+        {
+            this.inner = inner;
+            this.logFile = logFile;
+            this.prefix = prefix;
+        }
+
+        public override bool CanRead => this.inner.CanRead;
+
+        public override bool CanSeek => this.inner.CanSeek;
+
+        public override bool CanWrite => this.inner.CanWrite;
+
+        public override long Length => this.inner.Length;
+
+        public override long Position { get => this.inner.Position; set => this.inner.Position = value; }
+
+        public override void Flush() => this.inner.Flush();
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => this.inner.FlushAsync(cancellationToken);
+
+        public override long Seek(long offset, SeekOrigin origin) => this.inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => this.inner.SetLength(value);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int read = this.inner.Read(buffer, offset, count);
+            this.Log(buffer, offset, read);
+            return read;
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            int read = await this.inner.ReadAsync(buffer, offset, count, cancellationToken);
+            this.Log(buffer, offset, read);
+            return read;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            this.inner.Write(buffer, offset, count);
+            this.Log(buffer, offset, count);
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            await this.inner.WriteAsync(buffer, offset, count, cancellationToken);
+            this.Log(buffer, offset, count);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                this.inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        private void Log(byte[] buffer, int offset, int count)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            var text = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
+            lock (this.lockObj)
+            {
+                File.AppendAllText(this.logFile, $"[{this.prefix}] {text}\n");
+            }
+        }
     }
 }

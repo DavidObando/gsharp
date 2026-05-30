@@ -1,0 +1,118 @@
+{
+  "Function declaration": {
+    "prefix": "fn",
+    "body": [
+      "func ${1:name}(${2:params}) ${3:returnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "If statement": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "If/else statement": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:condition} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If/else statement"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i} := ${2:0}; ${1:i} < ${3:count}; ${1:i}++ {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For loop"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": [
+      "for ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop (for with condition)"
+  },
+  "Class declaration": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Class declaration"
+  },
+  "Struct declaration": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "Enum declaration": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Value1},",
+      "\t${3:Value2},",
+      "\t$0",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "Match expression": {
+    "prefix": "match",
+    "body": [
+      "switch ${1:value} {",
+      "\tcase ${2:pattern}:",
+      "\t\t$0",
+      "\tdefault:",
+      "\t\t",
+      "}"
+    ],
+    "description": "Match/switch expression"
+  },
+  "Async function": {
+    "prefix": "async",
+    "body": [
+      "async func ${1:name}(${2:params}) ${3:returnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Async function declaration"
+  },
+  "Try/catch/finally": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:ex}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Try/catch/finally block"
+  },
+  "Main entry point": {
+    "prefix": "main",
+    "body": [
+      "// Main entry point",
+      "$0"
+    ],
+    "description": "Entry point (top-level program)"
+  }
+}

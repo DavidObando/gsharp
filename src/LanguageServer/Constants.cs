@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-
 namespace GSharp.LanguageServer;
 
 /// <summary>
@@ -17,11 +15,7 @@ public static class Constants
     public static string LanguageIdentifier { get; } = "G#";
 
     /// <summary>
-    /// Gets the common <see cref="TextDocumentSelector"/> for all handlers.
+    /// Gets the GSharp language id advertised by the vscode client (used for document filters).
     /// </summary>
-    public static TextDocumentSelector DocumentSelector { get; } = new(
-        new TextDocumentFilter
-        {
-            Pattern = "**/*.gs",
-        });
+    public static string LanguageId { get; } = "gsharp";
 }

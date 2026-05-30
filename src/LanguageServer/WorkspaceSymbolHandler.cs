@@ -4,49 +4,19 @@
 
 using System;
 using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Syntax;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Workspace;
-using LspSymbolKind = OmniSharp.Extensions.LanguageServer.Protocol.Models.SymbolKind;
+using GSharp.LanguageServer.Protocol;
+using LspSymbolKind = GSharp.LanguageServer.Protocol.SymbolKind;
+using Range = GSharp.LanguageServer.Protocol.Range;
 
 namespace GSharp.LanguageServer;
 
 /// <summary>
-/// Workspace symbol handler — provides workspace-wide symbol search.
+/// Workspace symbol collection — provides workspace-wide symbol search.
 /// </summary>
-public class WorkspaceSymbolHandler : WorkspaceSymbolsHandlerBase
+public static class WorkspaceSymbolHandler
 {
-    private readonly DocumentContentService documentContentService;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="WorkspaceSymbolHandler"/> class.
-    /// </summary>
-    /// <param name="documentContentService"><see cref="DocumentContentService"/> instance.</param>
-    public WorkspaceSymbolHandler(DocumentContentService documentContentService)
-    {
-        this.documentContentService = documentContentService;
-    }
-
-    /// <inheritdoc/>
-    public override Task<Container<WorkspaceSymbol>> Handle(WorkspaceSymbolParams request, CancellationToken cancellationToken)
-    {
-        var query = request.Query ?? string.Empty;
-        var results = new List<WorkspaceSymbol>();
-
-        foreach (var pair in this.documentContentService.AllDocuments)
-        {
-            var uri = pair.Key;
-            var content = pair.Value;
-            CollectSymbols(results, uri, content, query);
-        }
-
-        return Task.FromResult(new Container<WorkspaceSymbol>(results));
-    }
-
-    internal static void CollectSymbols(List<WorkspaceSymbol> results, string uri, DocumentContent content, string query)
+    public static void CollectSymbols(List<WorkspaceSymbol> results, string uri, DocumentContent content, string query)
     {
         var text = content.SyntaxTree.Text;
 
@@ -83,13 +53,7 @@ public class WorkspaceSymbolHandler : WorkspaceSymbolsHandlerBase
         }
     }
 
-    /// <inheritdoc/>
-    protected override WorkspaceSymbolRegistrationOptions CreateRegistrationOptions(WorkspaceSymbolCapability capability, ClientCapabilities clientCapabilities)
-    {
-        return new WorkspaceSymbolRegistrationOptions();
-    }
-
-    private static void AddIfMatches(List<WorkspaceSymbol> results, string name, LspSymbolKind kind, string uri, OmniSharp.Extensions.LanguageServer.Protocol.Models.Range range, string query)
+    private static void AddIfMatches(List<WorkspaceSymbol> results, string name, LspSymbolKind kind, string uri, Range range, string query)
     {
         if (string.IsNullOrEmpty(query) || name.Contains(query, StringComparison.OrdinalIgnoreCase))
         {

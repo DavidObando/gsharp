@@ -14,7 +14,7 @@ using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.LanguageServer;
 
-internal static class SemanticLookup
+public static class SemanticLookup
 {
     public static SyntaxToken FindTokenAt(SyntaxTree tree, int position)
     {
@@ -28,7 +28,23 @@ internal static class SemanticLookup
 
             if (token.Span.Start <= position && position <= token.Span.End)
             {
-                if (best == null || token.Span.Length <= best.Span.Length)
+                if (best == null)
+                {
+                    best = token;
+                    continue;
+                }
+
+                // At a boundary the position is both the end of one token and the
+                // start of the next. Editors bind the caret to the token that starts
+                // there (right-biased, like Roslyn's FindToken), so prefer it; only
+                // then fall back to the smallest enclosing token.
+                var tokenStartsHere = token.Span.Start == position;
+                var bestStartsHere = best.Span.Start == position;
+                if (tokenStartsHere && !bestStartsHere)
+                {
+                    best = token;
+                }
+                else if (tokenStartsHere == bestStartsHere && token.Span.Length < best.Span.Length)
                 {
                     best = token;
                 }
@@ -47,6 +63,34 @@ internal static class SemanticLookup
 
         var model = BuildModel(compilation);
         return model.Resolve(identifierToken);
+    }
+
+    /// <summary>
+    /// Resolves a bare type name (e.g. <c>Console</c>) to a CLR <see cref="Type"/>
+    /// reachable through the document's <c>import</c> declarations, the implicit
+    /// <c>System</c> namespace, or a fully-qualified name.
+    /// </summary>
+    /// <param name="tree">The syntax tree providing import context.</param>
+    /// <param name="compilation">The compilation supplying the reference resolver.</param>
+    /// <param name="name">The simple or aliased type name to resolve.</param>
+    /// <returns>The resolved CLR type, or <c>null</c> when no match is found.</returns>
+    public static Type ResolveImportedClrType(SyntaxTree tree, Compilation compilation, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
+        var resolver = compilation.References ?? ReferenceResolver.Default();
+        foreach (var candidate in GetCandidateTypeNames(tree, name))
+        {
+            if (resolver.TryResolveType(candidate, out var type))
+            {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     public static IEnumerable<SyntaxToken> FindReferences(Compilation compilation, Symbol target)
@@ -107,7 +151,7 @@ internal static class SemanticLookup
         return EnumerateTokens(tree.Root).Where(t => t.Kind == SyntaxKind.IdentifierToken);
     }
 
-    public static int ToOffset(DocumentContent content, OmniSharp.Extensions.LanguageServer.Protocol.Models.Position position)
+    public static int ToOffset(DocumentContent content, GSharp.LanguageServer.Protocol.Position position)
     {
         if (position.Line < 0 || position.Line >= content.SyntaxTree.Text.Lines.Length)
         {
@@ -117,12 +161,12 @@ internal static class SemanticLookup
         return Math.Min(content.SyntaxTree.Text.Lines[position.Line].Start + position.Character, content.SyntaxTree.Text.Length);
     }
 
-    public static OmniSharp.Extensions.LanguageServer.Protocol.Models.Range ToRange(SyntaxToken token)
+    public static GSharp.LanguageServer.Protocol.Range ToRange(SyntaxToken token)
     {
         return ToRange(token.SyntaxTree.Text, token.Span);
     }
 
-    public static OmniSharp.Extensions.LanguageServer.Protocol.Models.Range ToRange(SourceText text, TextSpan span)
+    public static GSharp.LanguageServer.Protocol.Range ToRange(SourceText text, TextSpan span)
     {
         var startLine = text.GetLineIndex(span.Start);
         var endPosition = Math.Max(span.Start, span.End);
@@ -132,9 +176,49 @@ internal static class SemanticLookup
             endLine = text.Lines.Length - 1;
         }
 
-        return new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-            new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(startLine, span.Start - text.Lines[startLine].Start),
-            new OmniSharp.Extensions.LanguageServer.Protocol.Models.Position(endLine, span.End - text.Lines[endLine].Start));
+        return new GSharp.LanguageServer.Protocol.Range(
+            new GSharp.LanguageServer.Protocol.Position(startLine, span.Start - text.Lines[startLine].Start),
+            new GSharp.LanguageServer.Protocol.Position(endLine, span.End - text.Lines[endLine].Start));
+    }
+
+    private static IEnumerable<string> GetCandidateTypeNames(SyntaxTree tree, string name)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var import in tree.Root.Members.OfType<ImportSyntax>())
+        {
+            // `import alias = System.Console` makes `alias` refer to the dotted path.
+            if (import.AliasIdentifier != null && import.AliasIdentifier.Text == name)
+            {
+                var aliased = string.Join(".", import.Identifiers.Select(i => i.Text));
+                if (!string.IsNullOrEmpty(aliased) && seen.Add(aliased))
+                {
+                    yield return aliased;
+                }
+
+                continue;
+            }
+
+            // `import System` makes namespace `System` types reachable by simple name.
+            var ns = string.Join(".", import.Identifiers.Select(i => i.Text));
+            if (!string.IsNullOrEmpty(ns))
+            {
+                var qualified = ns + "." + name;
+                if (seen.Add(qualified))
+                {
+                    yield return qualified;
+                }
+            }
+        }
+
+        // Implicit System import and fully-qualified fallbacks.
+        foreach (var candidate in new[] { "System." + name, name })
+        {
+            if (seen.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
     }
 
     private static SemanticModel BuildModel(Compilation compilation)
@@ -342,6 +426,11 @@ internal static class SemanticLookup
             }
             else if (value is System.Collections.IEnumerable sequence and not string)
             {
+                if (IsDefaultImmutableArray(value))
+                {
+                    continue;
+                }
+
                 foreach (var item in sequence)
                 {
                     if (item is BoundNode sequenceChild)
@@ -354,6 +443,18 @@ internal static class SemanticLookup
                 }
             }
         }
+    }
+
+    private static bool IsDefaultImmutableArray(object value)
+    {
+        var type = value.GetType();
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(System.Collections.Immutable.ImmutableArray<>))
+        {
+            var isDefault = type.GetProperty("IsDefault");
+            return isDefault != null && (bool)isDefault.GetValue(value)!;
+        }
+
+        return false;
     }
 
     private static bool IsIdentifierStart(char c)

@@ -22,6 +22,17 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 {
     private readonly CancellationTokenSource cts = new();
 
+    /// <summary>
+    /// Matches gsc's canonical diagnostic header line
+    /// <c>file(startLine,startCol,endLine,endCol): error|warning|info CODE: message</c>
+    /// so it can be re-emitted through the MSBuild logger with structured
+    /// location, code, and severity. End line/column are optional.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex DiagnosticLine =
+        new(
+            @"^(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*(?<sev>error|warning|info)\s+(?<code>[^:]+):\s*(?<msg>.*)$",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>Gets or sets the full path to gsc.dll.</summary>
     [Required]
     public string GsharpCompilerFullPath { get; set; }
@@ -209,12 +220,25 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         {
             if (e.Data != null)
             {
-                this.Log.LogMessage(MessageImportance.Normal, e.Data);
+                this.LogCompilerLine(e.Data);
             }
         };
         proc.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data != null)
+            if (e.Data == null)
+            {
+                return;
+            }
+
+            // "Failed." is gsc's terminal exit sentinel, not a diagnostic; the
+            // real errors are surfaced from stdout via LogCompilerLine. Demote
+            // it to a low-importance message so the build error list shows the
+            // actual diagnostics instead of an opaque "Failed.".
+            if (string.Equals(e.Data.Trim(), "Failed.", StringComparison.Ordinal))
+            {
+                this.Log.LogMessage(MessageImportance.Low, e.Data);
+            }
+            else
             {
                 this.Log.LogError(e.Data);
             }
@@ -224,6 +248,45 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         proc.WaitForExit();
 
         return proc.ExitCode == 0 && !this.Log.HasLoggedErrors;
+    }
+
+    /// <summary>
+    /// Routes a single line of gsc stdout to the MSBuild logger. Diagnostic
+    /// header lines become structured errors/warnings (so they appear in the
+    /// build error list and editor problem panes); all other lines — including
+    /// the source snippets gsc prints under each diagnostic — are logged at low
+    /// importance to keep default-verbosity output clean.
+    /// </summary>
+    /// <param name="line">A line written by gsc to standard output.</param>
+    private void LogCompilerLine(string line)
+    {
+        var match = DiagnosticLine.Match(line);
+        if (!match.Success)
+        {
+            this.Log.LogMessage(MessageImportance.Low, line);
+            return;
+        }
+
+        var file = match.Groups["file"].Value.Trim();
+        var code = match.Groups["code"].Value.Trim();
+        var message = match.Groups["msg"].Value;
+        var startLine = int.Parse(match.Groups["l1"].Value);
+        var startColumn = int.Parse(match.Groups["c1"].Value);
+        var endLine = match.Groups["l2"].Success ? int.Parse(match.Groups["l2"].Value) : 0;
+        var endColumn = match.Groups["c2"].Success ? int.Parse(match.Groups["c2"].Value) : 0;
+
+        switch (match.Groups["sev"].Value)
+        {
+            case "error":
+                this.Log.LogError(null, code, null, file, startLine, startColumn, endLine, endColumn, message);
+                break;
+            case "warning":
+                this.Log.LogWarning(null, code, null, file, startLine, startColumn, endLine, endColumn, message);
+                break;
+            default:
+                this.Log.LogMessage(MessageImportance.Normal, line);
+                break;
+        }
     }
 
     /// <summary>

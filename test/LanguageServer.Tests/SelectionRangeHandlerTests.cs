@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using GSharp.LanguageServer.Protocol;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;
