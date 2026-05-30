@@ -204,6 +204,12 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
+        // Project the element CLR type onto the resolver's reference set before
+        // constructing Task`1. Under the SDK build path Task`1 is loaded via a
+        // MetadataLoadContext, and MakeGenericType requires the type argument to
+        // come from that same context (issue #290).
+        inner = references.MapClrTypeToReferences(inner);
+
         return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
             ? open.MakeGenericType(inner)
             : null;
