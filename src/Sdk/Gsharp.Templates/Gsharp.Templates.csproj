@@ -11,6 +11,8 @@
     <Title>GSharp project templates</Title>
     <Description>`dotnet new` templates for the GSharp language. After installation, `dotnet new gsharp-console` scaffolds a console application that builds with `Gsharp.NET.Sdk`.</Description>
     <PackageTags>gsharp;dotnet-new;templates;sdk</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
 
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <IsPackable>true</IsPackable>
@@ -25,6 +27,11 @@
          __GSHARP_SDK_VERSION__ placeholders replaced by the current SDK version. -->
     <GsharpTemplatesIntermediateContent>obj/$(Configuration)/templates-content</GsharpTemplatesIntermediateContent>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\TEMPLATES_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
 
   <!-- Inline MSBuild task that substitutes a placeholder token in template files at pack time. -->
   <UsingTask TaskName="SubstituteTokens"
