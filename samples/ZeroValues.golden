@@ -1,0 +1,2 @@
+x=0 flag=False text=[]
+x=42 flag=True text=[set]

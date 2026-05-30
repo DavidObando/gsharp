@@ -1966,6 +1966,17 @@ public sealed class Evaluator
         // Issue #148: the `await for` lowering uses `default(CancellationToken)`
         // for the `GetAsyncEnumerator` token; more generally, BoundDefaultExpression
         // should produce the type's default value when interpreted.
+        //
+        // Prefer the language's Go-style zero values (string -> "", structs and
+        // enums -> zeroed) so a bare `var x T` declaration matches the rest of
+        // the interpreter; fall back to CLR value-type instantiation for
+        // imported value types (e.g. CancellationToken) and null for references.
+        var known = DefaultValue(node.Type);
+        if (known != null)
+        {
+            return known;
+        }
+
         var clr = node.Type?.ClrType;
         if (clr == null || !clr.IsValueType)
         {

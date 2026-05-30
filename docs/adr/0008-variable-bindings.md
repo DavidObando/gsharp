@@ -22,6 +22,8 @@ Adding such a keyword without removing existing ones risks four overlapping conc
 
 Type annotations work on all four: `let x : int = 7`.
 
+A `var` declaration may omit its initializer when an explicit type clause is present (e.g. `var x int32`), in which case the variable takes that type's default (zero) value — `0` for numerics, `false` for `bool`, `""` for `string`, and the all-zero value for structs and enums. This mirrors Go's zero-value rule. `let` and `const` are immutable and therefore still require an initializer, and `var` without a type clause also still requires one (there is nothing to infer the type from).
+
 ## Consequences
 
 Positive:
