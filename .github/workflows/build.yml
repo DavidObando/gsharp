@@ -156,6 +156,17 @@ jobs:
       - name: Compile
         run: npm run compile
 
+      - name: Stamp version (Nerdbank.GitVersioning)
+        # The VS Code Marketplace requires a strict major.minor.patch version, so
+        # use nbgv's SimpleVersion (0.1.<git-height>) which is always clean across
+        # branches and tags. The change is workspace-only and never committed.
+        run: |
+          dotnet tool install --global nbgv || dotnet tool update --global nbgv
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          VERSION=$(nbgv get-version -v SimpleVersion)
+          echo "Extension version: $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
       - name: Package VSIX
         run: npx vsce package --no-dependencies -o vscode-gsharp.vsix
 
