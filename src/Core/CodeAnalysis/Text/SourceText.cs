@@ -98,7 +98,30 @@ public sealed class SourceText
     /// <param name="start">Start index.</param>
     /// <param name="length">Length.</param>
     /// <returns>A subset of the underlying document.</returns>
-    public string ToString(int start, int length) => text.Substring(start, length);
+    public string ToString(int start, int length)
+    {
+        if (start < 0)
+        {
+            start = 0;
+        }
+
+        if (start > text.Length)
+        {
+            start = text.Length;
+        }
+
+        if (length < 0)
+        {
+            length = 0;
+        }
+
+        if (start + length > text.Length)
+        {
+            length = text.Length - start;
+        }
+
+        return text.Substring(start, length);
+    }
 
     /// <summary>
     /// Returns a subset of the document represented by this source text.

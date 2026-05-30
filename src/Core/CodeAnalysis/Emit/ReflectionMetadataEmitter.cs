@@ -8730,6 +8730,43 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    /// <summary>
+    /// Issue #295: map an arbitrary CLR delegate type (named or generic, e.g.
+    /// <c>System.Predicate&lt;int&gt;</c>, <c>RequestDelegate</c>,
+    /// <c>System.EventHandler</c>) from the host runtime onto the emitter's
+    /// reference (MetadataLoadContext) types, reconstructing constructed
+    /// generics from a reference open definition so the produced TypeSpec /
+    /// MemberRef binds to the target framework assemblies. Falls back to the
+    /// host type when no reference mapping is available.
+    /// </summary>
+    private Type ResolveTargetDelegateClrType(Type hostDelegate)
+    {
+        if (hostDelegate == null)
+        {
+            return null;
+        }
+
+        if (hostDelegate.IsConstructedGenericType)
+        {
+            var openName = hostDelegate.GetGenericTypeDefinition().FullName;
+            if (openName != null && this.references.TryResolveType(openName, out var openRef))
+            {
+                var hostArgs = hostDelegate.GetGenericArguments();
+                var refArgs = new Type[hostArgs.Length];
+                for (var i = 0; i < hostArgs.Length; i++)
+                {
+                    refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i];
+                }
+
+                return openRef.MakeGenericType(refArgs);
+            }
+
+            return hostDelegate;
+        }
+
+        return this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
+    }
+
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses
     // host-runtime `typeof(Func<,>)` (which lives in System.Private.CoreLib);
@@ -9675,6 +9712,19 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitConversion(BoundConversionExpression conv)
         {
+            // Issue #295: GSharp function value → CLR delegate. This is the
+            // general materialization that previously only happened in
+            // argument position; routing it through EmitConversion makes
+            // assignment, return, and cast positions emit the same delegate
+            // instantiation IL.
+            if (conv.Expression.Type is FunctionTypeSymbol sourceFn
+                && conv.Type?.ClrType != null
+                && ClrTypeUtilities.IsDelegateType(conv.Type.ClrType))
+            {
+                this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, conv.Type.ClrType);
+                return;
+            }
+
             this.EmitExpression(conv.Expression);
             var from = conv.Expression.Type;
             var to = conv.Type;
@@ -9752,6 +9802,42 @@ internal sealed class ReflectionMetadataEmitter
 
             throw new NotSupportedException(
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+        }
+
+        // Issue #295: emit a GSharp function value materialized as a CLR
+        // delegate of the (possibly named / generic) target delegate type.
+        //
+        //  * For a `func` literal we reuse EmitFunctionLiteral with the target
+        //    delegate as the override type, so it emits the exact same
+        //    `ldnull / ldftn / newobj <Delegate>::.ctor` sequence the
+        //    argument-position path uses, but bound to the requested delegate.
+        //  * For any other function-typed value (a func-typed variable, call
+        //    result, etc.) the runtime value is already a delegate; adapt it
+        //    to the target delegate type via `dup / ldvirtftn Invoke / newobj`.
+        private void EmitFunctionToDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, Type targetDelegateHostType)
+        {
+            var targetDelegateType = this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
+
+            if (source is BoundFunctionLiteralExpression literal)
+            {
+                this.EmitFunctionLiteral(literal, overrideDelegateType: targetDelegateType);
+                return;
+            }
+
+            // Delegate-to-delegate adaptation: wrap the existing delegate's
+            // Invoke method in a new delegate of the target type.
+            var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
+            var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
+                ?? throw new InvalidOperationException(
+                    $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
+            var targetCtor = targetDelegateType.GetConstructors()[0];
+
+            this.EmitExpression(source);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.OpCode(ILOpCode.Ldvirtftn);
+            this.il.Token(this.outer.GetMethodReference(sourceInvoke));
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(targetCtor));
         }
 
         // ADR-0044 numeric conversions. Maps the from/to CLR pair to the

@@ -484,7 +484,9 @@ internal static class KnownAttributes
     /// §6 / issue #177: an <c>@AttributeUsage(...)</c> annotation on a
     /// user-declared <c>@Attribute</c> class supplies <c>ValidOn</c> and
     /// <c>AllowMultiple</c>; CLR-imported attribute types are read via
-    /// reflection. When the attribute carries no <c>AttributeUsage</c> the
+    /// <see cref="System.Reflection.CustomAttributeData"/> so they work for
+    /// types loaded through a <c>MetadataLoadContext</c>. When the attribute
+    /// carries no <c>AttributeUsage</c> the
     /// C# defaults apply: <see cref="AttributeTargets.All"/> /
     /// <c>AllowMultiple = false</c>.
     /// </summary>
@@ -518,12 +520,94 @@ internal static class KnownAttributes
             return;
         }
 
-        var usage = (AttributeUsageAttribute)Attribute.GetCustomAttribute(clr, typeof(AttributeUsageAttribute), inherit: true);
-        if (usage != null)
+        // Attribute types may be loaded through a MetadataLoadContext (reference
+        // assemblies), where runtime-reflection Attribute.GetCustomAttribute(s)
+        // throws InvalidOperationException. Read the [AttributeUsage] data via
+        // CustomAttributeData instead, which works for both runtime and
+        // metadata-loaded types. Walk the base-type chain to honour inherited
+        // usage, matching Attribute.GetCustomAttribute(..., inherit: true).
+        if (TryReadAttributeUsageFromClr(clr, out var clrValidOn, out var clrAllowMultiple))
         {
-            validOn = usage.ValidOn;
-            allowMultiple = usage.AllowMultiple;
+            validOn = clrValidOn;
+            allowMultiple = clrAllowMultiple;
         }
+    }
+
+    private static bool TryReadAttributeUsageFromClr(Type clr, out AttributeTargets validOn, out bool allowMultiple)
+    {
+        validOn = AttributeTargets.All;
+        allowMultiple = false;
+
+        var current = clr;
+        var isSelf = true;
+        while (current != null && current != typeof(object))
+        {
+            IList<System.Reflection.CustomAttributeData> data;
+            try
+            {
+                data = current.GetCustomAttributesData();
+            }
+            catch
+            {
+                return false;
+            }
+
+            foreach (var cad in data)
+            {
+                if (cad.AttributeType?.FullName != typeof(AttributeUsageAttribute).FullName)
+                {
+                    continue;
+                }
+
+                var inheritedForBase = true;
+                var localValidOn = AttributeTargets.All;
+                var localAllowMultiple = false;
+
+                if (cad.ConstructorArguments != null
+                    && cad.ConstructorArguments.Count >= 1
+                    && TryConvertToInt32(cad.ConstructorArguments[0].Value, out var raw))
+                {
+                    localValidOn = (AttributeTargets)raw;
+                }
+
+                if (cad.NamedArguments != null)
+                {
+                    foreach (var named in cad.NamedArguments)
+                    {
+                        if (named.MemberName == "AllowMultiple" && named.TypedValue.Value is bool b)
+                        {
+                            localAllowMultiple = b;
+                        }
+                        else if (named.MemberName == "Inherited" && named.TypedValue.Value is bool inh)
+                        {
+                            inheritedForBase = inh;
+                        }
+                    }
+                }
+
+                // For the attribute type itself any usage applies. For an
+                // ancestor the usage is only inherited when Inherited != false.
+                if (isSelf || inheritedForBase)
+                {
+                    validOn = localValidOn;
+                    allowMultiple = localAllowMultiple;
+                    return true;
+                }
+            }
+
+            try
+            {
+                current = current.BaseType;
+            }
+            catch
+            {
+                return false;
+            }
+
+            isSelf = false;
+        }
+
+        return false;
     }
 
     private static bool TryReadAttributeUsageFromBound(ImmutableArray<BoundAttribute> attributes, out AttributeTargets validOn, out bool allowMultiple)
