@@ -7269,6 +7269,25 @@ public sealed class Binder
             clrType = importedClass.ClassType;
         }
 
+        return TryBindClrConstructorFromType(clrType, syntax, out result);
+    }
+
+    /// <summary>
+    /// Binds a constructor invocation against an already-resolved CLR
+    /// <paramref name="clrType"/>. Shared by the simple-name constructor path
+    /// (<see cref="TryBindClrConstructorCall"/>) and the fully-qualified path
+    /// (<see cref="TryBindQualifiedClrConstructorCall"/>) so that imported-type
+    /// construction resolves identically regardless of how the type name was
+    /// written (issue #293).
+    /// </summary>
+    /// <param name="clrType">The closed CLR type to construct.</param>
+    /// <param name="syntax">The call syntax carrying the arguments and location.</param>
+    /// <param name="result">The bound constructor call on success.</param>
+    /// <returns>Whether a constructor was resolved and bound.</returns>
+    private bool TryBindClrConstructorFromType(System.Type clrType, CallExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+
         if (clrType.IsAbstract || clrType.IsInterface)
         {
             return false;
@@ -7309,7 +7328,7 @@ public sealed class Binder
                     bestCtor = resolution.Best;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(syntax.Location, name, resolution.Ambiguous.Length);
+                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length);
                     return false;
                 default:
                     break;
@@ -7338,6 +7357,174 @@ public sealed class Binder
         return true;
     }
 
+    /// <summary>
+    /// Binds a fully-qualified imported-type constructor written in expression
+    /// position, e.g. <c>System.Text.StringBuilder()</c> or
+    /// <c>System.Collections.Generic.List[int]()</c>. Such an expression parses
+    /// as an accessor chain whose terminal segment is the constructor call, so
+    /// it never reaches <see cref="TryBindClrConstructorCall"/> (which only sees
+    /// simple-name calls). This walks the dotted name, resolves the closed CLR
+    /// type via the active references/imports, and reuses the shared
+    /// constructor-binding core (issue #293).
+    /// </summary>
+    /// <param name="syntax">The accessor expression to bind.</param>
+    /// <param name="result">The bound constructor call on success.</param>
+    /// <returns>Whether the accessor was a fully-qualified constructor call that bound successfully.</returns>
+    private bool TryBindQualifiedClrConstructorCall(AccessorExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+
+        if (syntax.IsNullConditional)
+        {
+            return false;
+        }
+
+        // Flatten the accessor chain into the leading namespace/type segments
+        // and the terminal constructor call. Anything that isn't a pure
+        // dotted-name chain ending in a call is not a qualified constructor.
+        var segments = new List<string>();
+        ExpressionSyntax current = syntax;
+        CallExpressionSyntax terminalCall = null;
+        while (true)
+        {
+            if (current is AccessorExpressionSyntax accessor)
+            {
+                if (accessor.IsNullConditional || !(accessor.LeftPart is NameExpressionSyntax leftName))
+                {
+                    return false;
+                }
+
+                segments.Add(leftName.IdentifierToken.Text);
+                current = accessor.RightPart;
+                continue;
+            }
+
+            if (current is CallExpressionSyntax call)
+            {
+                terminalCall = call;
+                break;
+            }
+
+            // A bare trailing name (`System.Text.StringBuilder` with no call)
+            // is not a constructor invocation.
+            return false;
+        }
+
+        if (terminalCall == null || terminalCall.Identifier.IsMissing)
+        {
+            return false;
+        }
+
+        var typeSimpleName = terminalCall.Identifier.Text;
+        var namespacePrefix = string.Join(".", segments);
+
+        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall, out var clrType))
+        {
+            return false;
+        }
+
+        return TryBindClrConstructorFromType(clrType, terminalCall, out result);
+    }
+
+    /// <summary>
+    /// Resolves a closed CLR type from a fully-qualified dotted name written in
+    /// source. Tries the name as written, the name with the leading segment
+    /// expanded from a matching import alias/path, and the name prefixed by each
+    /// active import target. Generic type arguments on <paramref name="terminalCall"/>
+    /// are honoured by resolving the mangled open generic and closing it.
+    /// </summary>
+    /// <param name="namespacePrefix">The dotted segments preceding the type name (may be empty).</param>
+    /// <param name="typeSimpleName">The simple type name (the constructor call identifier).</param>
+    /// <param name="terminalCall">The terminal call, used for generic arity/arguments.</param>
+    /// <param name="clrType">The resolved closed CLR type on success.</param>
+    /// <returns>Whether a type was resolved.</returns>
+    private bool TryResolveQualifiedClrType(string namespacePrefix, string typeSimpleName, CallExpressionSyntax terminalCall, out System.Type clrType)
+    {
+        clrType = null;
+
+        var arity = terminalCall.TypeArgumentList?.Arguments.Count ?? 0;
+
+        // Build the candidate dotted prefixes (everything before the simple
+        // type name), most specific first.
+        var prefixCandidates = new List<string>();
+        if (!string.IsNullOrEmpty(namespacePrefix))
+        {
+            prefixCandidates.Add(namespacePrefix);
+        }
+
+        // If the leading segment is an import alias/path, expand it to the
+        // import target (`import t = System.Text` then `t.StringBuilder()`).
+        var firstSegment = namespacePrefix.Contains('.', System.StringComparison.Ordinal)
+            ? namespacePrefix.Substring(0, namespacePrefix.IndexOf('.', System.StringComparison.Ordinal))
+            : namespacePrefix;
+        if (!string.IsNullOrEmpty(firstSegment) && scope.TryLookupImport(firstSegment, out var matchedImport))
+        {
+            var rest = namespacePrefix.Length > firstSegment.Length
+                ? namespacePrefix.Substring(firstSegment.Length + 1)
+                : string.Empty;
+            var expanded = string.IsNullOrEmpty(rest) ? matchedImport.Target : matchedImport.Target + "." + rest;
+            prefixCandidates.Insert(0, expanded);
+        }
+
+        // Also try the name relative to each active import target, mirroring the
+        // simple-name lookup in BoundScope.TryLookupImportedClass.
+        foreach (var import in scope.GetDeclaredImports())
+        {
+            var prefixed = string.IsNullOrEmpty(namespacePrefix) ? import.Target : import.Target + "." + namespacePrefix;
+            prefixCandidates.Add(prefixed);
+        }
+
+        foreach (var prefix in prefixCandidates)
+        {
+            if (arity > 0)
+            {
+                var mangled = prefix + "." + typeSimpleName + "`" + arity;
+                if (scope.References.TryResolveType(mangled, out var openType))
+                {
+                    var clrArgs = new System.Type[arity];
+                    var argsResolved = true;
+                    for (var i = 0; i < arity; i++)
+                    {
+                        var ta = BindTypeClause(terminalCall.TypeArgumentList.Arguments[i]);
+                        if (ta?.ClrType == null)
+                        {
+                            argsResolved = false;
+                            break;
+                        }
+
+                        clrArgs[i] = ta.ClrType;
+                    }
+
+                    if (!argsResolved)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        clrType = openType.MakeGenericType(clrArgs);
+                        return true;
+                    }
+                    catch (System.ArgumentException)
+                    {
+                        continue;
+                    }
+                }
+            }
+            else
+            {
+                var fullName = prefix + "." + typeSimpleName;
+                if (scope.References.TryResolveType(fullName, out var resolved) && !resolved.IsGenericTypeDefinition)
+                {
+                    clrType = resolved;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private BoundExpression BindAccessorExpression(AccessorExpressionSyntax syntax)
     {
         // Phase 3.C.3b / ADR-0001: null-conditional access `lhs?.rhs`.
@@ -7348,6 +7535,18 @@ public sealed class Binder
         if (syntax.IsNullConditional)
         {
             return BindNullConditionalAccessExpression(syntax);
+        }
+
+        // Issue #293: a fully-qualified imported-type constructor
+        // (`System.Text.StringBuilder()`, `System.Collections.Generic.List[int]()`)
+        // parses as an accessor chain whose terminal segment is the call, so it
+        // never reaches the simple-name constructor path in BindCallExpression.
+        // Resolve it the same way here so construction works identically whether
+        // written as a simple name or a fully-qualified path, at top level and
+        // inside function/method bodies alike.
+        if (TryBindQualifiedClrConstructorCall(syntax, out var qualifiedCtorCall))
+        {
+            return qualifiedCtorCall;
         }
 
         // Determine what the left side of the accessor is: either an imported
