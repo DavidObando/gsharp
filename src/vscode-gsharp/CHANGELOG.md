@@ -7,6 +7,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 ### Added
 
 - Language registration for `.gs` files
+- `.gsproj` project files recognized and colorized as XML (like `.csproj`)
 - TextMate grammar for syntax highlighting (keywords, types, operators, literals, comments, strings)
 - Language configuration (brackets, comments, indentation, folding)
 - LSP client connecting to the GSharp Language Server (stdio transport)

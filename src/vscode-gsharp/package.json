@@ -49,6 +49,12 @@
           "light": "./images/gsharp-icon-light.png",
           "dark": "./images/gsharp-icon-dark.png"
         }
+      },
+      {
+        "id": "xml",
+        "extensions": [
+          ".gsproj"
+        ]
       }
     ],
     "grammars": [
