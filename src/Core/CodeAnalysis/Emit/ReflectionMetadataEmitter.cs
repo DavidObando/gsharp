@@ -6422,8 +6422,16 @@ internal sealed class ReflectionMetadataEmitter
 
             // When the go target is async (returns Task/Task<T>), the closure must
             // return Task so that Task.Run(Func<Task>) properly awaits completion.
-            var exprClr = go.Expression.Type?.ClrType;
-            var isAsync = exprClr != null && typeof(System.Threading.Tasks.Task).IsAssignableFrom(exprClr);
+            // Detection must be robust across assembly-load contexts: when the
+            // compilation is cross-targeting (explicit /reference paths loaded
+            // through a MetadataLoadContext), go.Expression.Type.ClrType is a
+            // reference-pack Type whose identity differs from the gsc host's
+            // System.Threading.Tasks.Task, so typeof(Task).IsAssignableFrom(...)
+            // returns false. That mis-detection emits an Action thunk that
+            // discards the spawned Task — breaking structured scope-join and
+            // producing invalid IL when the async target captures arguments.
+            // Compare by metadata name across the base-type chain instead.
+            var isAsync = IsTaskClrType(go.Expression.Type?.ClrType);
             var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
             BoundStatement bodyStatement = isAsync
                 ? new BoundReturnStatement(null, go.Expression)
@@ -6442,6 +6450,28 @@ internal sealed class ReflectionMetadataEmitter
 
             this.goClosureInfos[go] = info;
         }
+    }
+
+    /// <summary>
+    /// Determines whether a CLR type is <see cref="System.Threading.Tasks.Task"/>
+    /// or <c>Task&lt;T&gt;</c>, comparing by metadata name across the base-type
+    /// chain so the result is independent of the assembly-load context the type
+    /// originates from. <c>typeof(Task).IsAssignableFrom(t)</c> is unreliable
+    /// here because cross-targeting compilations surface types through a
+    /// <see cref="System.Reflection.MetadataLoadContext"/>, giving them a
+    /// distinct <see cref="Type"/> identity from the gsc host's BCL.
+    /// </summary>
+    private static bool IsTaskClrType(Type clrType)
+    {
+        for (var t = clrType; t != null; t = t.BaseType)
+        {
+            if (string.Equals(t.FullName, "System.Threading.Tasks.Task", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void SynthesizeIteratorStateMachines(PackageSymbol hostPackage)
@@ -12438,8 +12468,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitGoAction(node);
 
             var closure = this.outer.goClosureInfos[node];
-            var isAsync = closure.InvokeMethod.Type?.ClrType != null
-                && typeof(System.Threading.Tasks.Task).IsAssignableFrom(closure.InvokeMethod.Type.ClrType);
+            var isAsync = ReflectionMetadataEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
 
             MethodInfo run;
             if (isAsync)
@@ -12507,8 +12536,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.Token(fieldHandle);
             }
 
-            var isAsync = closure.InvokeMethod.Type?.ClrType != null
-                && typeof(System.Threading.Tasks.Task).IsAssignableFrom(closure.InvokeMethod.Type.ClrType);
+            var isAsync = ReflectionMetadataEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
 
             if (isAsync)
             {

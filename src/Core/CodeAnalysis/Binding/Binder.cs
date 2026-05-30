@@ -6921,7 +6921,8 @@ public sealed class Binder
             // Route the element CLR type through the SAME resolver as Task`1.
             // Under the SDK build path the references are loaded via a
             // MetadataLoadContext, and MakeGenericType requires the type
-            // argument to originate from that same context (issue #290).
+            // argument to originate from that same context (issues #290 and
+            // #291: value-returning async funcs and imported-Task<T> awaits).
             var elementClr = scope.References.MapClrTypeToReferences(clr);
             var closed = taskOpen.MakeGenericType(elementClr);
             return ImportedTypeSymbol.Get(closed);
