@@ -6912,7 +6912,20 @@ public sealed class Binder
 
         if (scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var taskOpen))
         {
-            var closed = taskOpen.MakeGenericType(clr);
+            // The type argument must originate from the same assembly-load
+            // context as Task`1. When the compilation is cross-targeting,
+            // taskOpen comes from a MetadataLoadContext while element.ClrType is
+            // the gsc host's type (e.g. System.Int32); passing them together to
+            // MakeGenericType throws "was not loaded by the MetadataLoadContext".
+            // Re-resolve the element type by name through the same resolver so
+            // value-returning async funcs (Task<T>) bind under references too.
+            var argument = clr;
+            if (clr.FullName != null && scope.References.TryResolveType(clr.FullName, out var elementInContext))
+            {
+                argument = elementInContext;
+            }
+
+            var closed = taskOpen.MakeGenericType(argument);
             return ImportedTypeSymbol.Get(closed);
         }
 

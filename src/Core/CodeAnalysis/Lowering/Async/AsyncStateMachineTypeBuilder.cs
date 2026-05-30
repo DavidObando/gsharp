@@ -204,9 +204,23 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
-        return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
-            ? open.MakeGenericType(inner)
-            : null;
+        if (!references.TryResolveType("System.Threading.Tasks.Task`1", out var open))
+        {
+            return null;
+        }
+
+        // The type argument must come from the same assembly-load context as
+        // Task`1. Under cross-targeting references, `open` is a
+        // MetadataLoadContext type while `inner` is the gsc host's type, so
+        // re-resolve the element type by name through the same resolver before
+        // closing the generic (otherwise MakeGenericType throws).
+        var argument = inner;
+        if (inner.FullName != null && references.TryResolveType(inner.FullName, out var innerInContext))
+        {
+            argument = innerInContext;
+        }
+
+        return open.MakeGenericType(argument);
     }
 
     private sealed class AwaiterTypeCollector : BoundTreeRewriter
