@@ -231,6 +231,7 @@ ClrConversionCallExpression
 ClrEventSubscriptionExpression
 ClrIndexAssignmentExpression
 ClrIndexExpression
+ClrMethodGroupExpression
 ClrPropertyAccessExpression
 ClrPropertyAssignmentExpression
 ClrStaticCallExpression

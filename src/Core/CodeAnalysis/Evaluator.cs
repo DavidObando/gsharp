@@ -490,6 +490,7 @@ public sealed class Evaluator
                 BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
                 BoundNodeKind.FunctionLiteralExpression => EvaluateFunctionLiteralExpression((BoundFunctionLiteralExpression)node),
                 BoundNodeKind.MethodGroupExpression => EvaluateMethodGroupExpression((BoundMethodGroupExpression)node),
+                BoundNodeKind.ClrMethodGroupExpression => EvaluateClrMethodGroupExpression((BoundClrMethodGroupExpression)node),
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
@@ -770,6 +771,24 @@ public sealed class Evaluator
         // the ClosureValue path.
         var body = program.Functions[node.Function];
         return new ClosureValue(node.Function, body, node.FunctionType, new Dictionary<VariableSymbol, object>());
+    }
+
+    private object EvaluateClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+    {
+        // Issue #337: materialize the selected CLR overload as a real delegate
+        // of the target type. Static groups bind no receiver; instance groups
+        // capture the evaluated receiver as the delegate target.
+        var delegateType = node.DelegateType?.ClrType
+            ?? throw new InvalidOperationException(
+                $"CLR method group '{node.MethodName}' was not resolved to a target delegate type.");
+
+        if (node.ResolvedMethod.IsStatic)
+        {
+            return Delegate.CreateDelegate(delegateType, node.ResolvedMethod);
+        }
+
+        var receiver = EvaluateExpression(node.Receiver);
+        return Delegate.CreateDelegate(delegateType, receiver, node.ResolvedMethod);
     }
 
     private object EvaluateIndirectCallExpression(BoundIndirectCallExpression node)

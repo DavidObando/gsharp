@@ -691,6 +691,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #337: reports that a CLR member method group cannot be converted to
+    /// the expected target type (it is not a compatible delegate type, or no
+    /// overload matches the delegate signature).
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="methodName">The method-group name.</param>
+    /// <param name="toType">The expected target type.</param>
+    public void ReportCannotConvertMethodGroup(TextLocation location, string methodName, TypeSymbol toType)
+    {
+        var message = $"Cannot convert method group '{methodName}' to '{toType}'. No overload matches the target delegate signature.";
+        Report(location, "GS0218", message);
+    }
+
+    /// <summary>
     /// Reports that we couldn't find the specified type.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

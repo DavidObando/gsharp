@@ -384,6 +384,8 @@ public abstract class BoundTreeRewriter
                 return RewriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node);
             case BoundNodeKind.MethodGroupExpression:
                 return RewriteMethodGroupExpression((BoundMethodGroupExpression)node);
+            case BoundNodeKind.ClrMethodGroupExpression:
+                return RewriteClrMethodGroupExpression((BoundClrMethodGroupExpression)node);
             case BoundNodeKind.IndirectCallExpression:
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
             case BoundNodeKind.ClrConstructorCallExpression:
@@ -1621,6 +1623,27 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
     {
         return node;
+    }
+
+    /// <summary>Rewrites a CLR method-group expression (issue #337).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+    {
+        if (node.Receiver == null)
+        {
+            return node;
+        }
+
+        var receiver = RewriteExpression(node.Receiver);
+        if (receiver == node.Receiver)
+        {
+            return node;
+        }
+
+        return node.ResolvedMethod != null
+            ? new BoundClrMethodGroupExpression(node.Syntax, receiver, node.ResolvedMethod, node.DelegateType)
+            : new BoundClrMethodGroupExpression(node.Syntax, receiver, node.DeclaringType, node.MethodName, node.Candidates);
     }
 
     /// <summary>Rewrites an indirect call (Phase 4.7).</summary>
