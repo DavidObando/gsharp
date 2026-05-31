@@ -36,9 +36,21 @@ cd "$WORKDIR"
 dotnet new gsharp-console -n MyApp >/dev/null
 cd MyApp
 
-# Side-load the freshly-packed SDK so the templated NuGet.config can resolve it.
+# Side-load the freshly-packed SDK and add a local NuGet source so the
+# scaffolded project can resolve it. The templates no longer ship a NuGet.config
+# (it is a dev-only artifact), so the e2e harness provides one here.
 mkdir -p packages
 cp "$ROOT/$SDK_NUPKG" packages/
+cat > NuGet.config <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="gsharp-local" value="./packages" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+EOF
 
 echo "==> dotnet build MyApp.gsproj"
 dotnet build --nologo -v:q
