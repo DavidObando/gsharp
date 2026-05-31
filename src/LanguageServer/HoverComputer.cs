@@ -945,7 +945,7 @@ public static class CompletionComputer
 
         var flags = BindingFlags.Public | (staticMembers ? BindingFlags.Static : BindingFlags.Instance);
 
-        foreach (var property in clrType.GetProperties(flags))
+        foreach (var property in ClrTypeUtilities.SafeGetProperties(clrType, flags))
         {
             if (property.GetIndexParameters().Length == 0)
             {
@@ -953,13 +953,13 @@ public static class CompletionComputer
             }
         }
 
-        foreach (var field in clrType.GetFields(flags))
+        foreach (var field in ClrTypeUtilities.SafeGetFields(clrType, flags))
         {
             var kind = field.IsLiteral ? CompletionItemKind.Constant : CompletionItemKind.Field;
             AddItem(items, seen, field.Name, kind, $"{field.Name}: {field.FieldType.Name}");
         }
 
-        foreach (var method in clrType.GetMethods(flags))
+        foreach (var method in ClrTypeUtilities.SafeGetMethods(clrType, flags))
         {
             if (method.IsSpecialName)
             {
@@ -969,7 +969,7 @@ public static class CompletionComputer
             AddItem(items, seen, method.Name, CompletionItemKind.Method, $"{method.Name}(...): {method.ReturnType.Name}");
         }
 
-        foreach (var evt in clrType.GetEvents(flags))
+        foreach (var evt in ClrTypeUtilities.SafeGetEvents(clrType, flags))
         {
             AddItem(items, seen, evt.Name, CompletionItemKind.Event, evt.Name);
         }

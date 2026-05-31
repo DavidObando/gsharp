@@ -5128,14 +5128,14 @@ public sealed class Binder
 
     private static bool TryGetClrCurrentMemberType(System.Type enumeratorType, out System.Type elementType)
     {
-        var currentProperty = enumeratorType.GetProperty("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        var currentProperty = ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
         if (currentProperty != null)
         {
             elementType = currentProperty.PropertyType;
             return true;
         }
 
-        var currentField = enumeratorType.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        var currentField = ClrTypeUtilities.SafeGetField(enumeratorType, "Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
         if (currentField != null)
         {
             elementType = currentField.FieldType;
@@ -6033,13 +6033,13 @@ public sealed class Binder
         {
             var clrReceiverType = variable.Type.ClrType;
             var fieldName = syntax.FieldIdentifier.Text;
-            MemberInfo instanceMember = clrReceiverType.GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo instanceMember = ClrTypeUtilities.SafeGetProperty(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= clrReceiverType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= ClrTypeUtilities.SafeGetField(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -6179,7 +6179,7 @@ public sealed class Binder
             flags = BindingFlags.Public | BindingFlags.Instance;
         }
 
-        var eventInfo = receiverClrType.GetEvent(eventName, flags);
+        var eventInfo = ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags);
         if (eventInfo == null)
         {
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
@@ -7821,7 +7821,7 @@ public sealed class Binder
         // "better function member" resolver. Ambiguity surfaces a hard
         // binder diagnostic and the call falls back to the surrounding
         // pipeline (which will diagnose a missing match).
-        var ctors = clrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
         var argTypes = new System.Type[boundArguments.Count];
         var argsAllTyped = true;
         for (var i = 0; i < boundArguments.Count; i++)
@@ -8539,13 +8539,13 @@ public sealed class Binder
                     if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
                     {
                         var memberName = ne.IdentifierToken.Text;
-                        var clrProp = inheritedBaseClr.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
+                        var clrProp = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
                         if (clrProp != null && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead)
                         {
                             return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
                         }
 
-                        var clrFld = inheritedBaseClr.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+                        var clrFld = ClrTypeUtilities.SafeGetField(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
                         if (clrFld != null)
                         {
                             return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
@@ -8577,13 +8577,13 @@ public sealed class Binder
                     // receivers must be narrowed or use `?.` before this path.
                     var clrReceiverType = receiver.Type.ClrType;
                     var memberName = ne.IdentifierToken.Text;
-                    var prop = clrReceiverType.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance);
+                    var prop = ClrTypeUtilities.SafeGetProperty(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
                         return new BoundClrPropertyAccessExpression(null, receiver, prop, TypeSymbol.FromClrType(prop.PropertyType));
                     }
 
-                    var fld = clrReceiverType.GetField(memberName, BindingFlags.Public | BindingFlags.Instance);
+                    var fld = ClrTypeUtilities.SafeGetField(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (fld != null)
                     {
                         return new BoundClrPropertyAccessExpression(null, receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
@@ -9630,7 +9630,8 @@ public sealed class Binder
         {
             try
             {
-                var openIndexer = openDefinition.GetProperty(
+                var openIndexer = ClrTypeUtilities.SafeGetProperty(
+                    openDefinition,
                     closedIndexer.Name,
                     BindingFlags.Public | BindingFlags.Instance);
                 if (openIndexer?.PropertyType is System.Type openElement && openElement.IsGenericParameter)
@@ -9662,7 +9663,7 @@ public sealed class Binder
             bound.Add(BindExpression(argSyntaxes[i]));
         }
 
-        foreach (var prop in clrTarget.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        foreach (var prop in ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance))
         {
             var ps = prop.GetIndexParameters();
             if (ps.Length != bound.Count)
@@ -10016,7 +10017,7 @@ public sealed class Binder
         ImmutableArray<BoundExpression>.Builder boundArguments,
         TextLocation location)
     {
-        var ctors = clrBase.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+        var ctors = ClrTypeUtilities.SafeGetConstructors(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
             .ToArray();
 
