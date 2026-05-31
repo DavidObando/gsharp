@@ -259,15 +259,40 @@ internal static class OverloadResolution
             }
 
             var parameters = candidate.GetParameters();
-            if (parameters.Length != argTypes.Count)
+
+            // Issue #327: a candidate is applicable when it has at least as many
+            // parameters as supplied arguments and every parameter beyond the
+            // supplied ones is optional (carries a default value). This lets a
+            // call omit trailing optional/default parameters — e.g.
+            // HttpResponse.WriteAsync(text) binding the overload
+            // WriteAsync(this HttpResponse, string, CancellationToken = default).
+            if (parameters.Length < argTypes.Count)
             {
                 continue;
             }
 
-            var conversions = new ImplicitConversionKind[parameters.Length];
-            var paramTypes = new Type[parameters.Length];
+            var trailingOptional = true;
+            for (var i = argTypes.Count; i < parameters.Length; i++)
+            {
+                if (!parameters[i].IsOptional)
+                {
+                    trailingOptional = false;
+                    break;
+                }
+            }
+
+            if (!trailingOptional)
+            {
+                continue;
+            }
+
+            // Conversions/paramTypes cover only the supplied arguments; the
+            // omitted trailing optionals are filled in by the binder with their
+            // default values and never participate in better-member ranking.
+            var conversions = new ImplicitConversionKind[argTypes.Count];
+            var paramTypes = new Type[argTypes.Count];
             var ok = true;
-            for (var i = 0; i < parameters.Length; i++)
+            for (var i = 0; i < argTypes.Count; i++)
             {
                 paramTypes[i] = parameters[i].ParameterType;
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
@@ -328,13 +353,18 @@ internal static class OverloadResolution
             return Result<T>.Single(winners[0].Method);
         }
 
+        // When the better-function-member pass produced no strict winner (e.g.
+        // overloads whose conversions are identical over the supplied
+        // arguments), fall back to the full applicable set for tie-breaking.
+        var pool = winners.Count > 0 ? winners : applicable;
+
         // Tie-break: prefer the candidate whose parameter types are
         // "more specific" (parameter-by-parameter assignability — a less
         // derived type is implicitly assignable from a more derived one).
-        if (winners.Count > 1)
+        if (pool.Count > 1)
         {
-            var mostSpecific = winners
-                .Where(w => winners.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
+            var mostSpecific = pool
+                .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
                 .ToList();
             if (mostSpecific.Count == 1)
             {
@@ -342,9 +372,24 @@ internal static class OverloadResolution
             }
         }
 
-        // If nothing dominated above, report the entire applicable set as
-        // ambiguous; otherwise report the surviving winners.
-        var ambiguous = (winners.Count > 0 ? winners : applicable)
+        // Issue #327: when candidates still tie, prefer the one that requires
+        // expanding the fewest optional/default parameters — i.e. the smallest
+        // parameter count. This matches C# §7.5.3.2's preference for the member
+        // that does not rely on omitted optional arguments.
+        if (pool.Count > 1)
+        {
+            var minParamCount = pool.Min(w => w.Method.GetParameters().Length);
+            var fewestParams = pool
+                .Where(w => w.Method.GetParameters().Length == minParamCount)
+                .ToList();
+            if (fewestParams.Count == 1)
+            {
+                return Result<T>.Single(fewestParams[0].Method);
+            }
+        }
+
+        // If nothing dominated above, report the surviving pool as ambiguous.
+        var ambiguous = pool
             .Select(c => c.Method)
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
@@ -432,14 +477,28 @@ internal static class OverloadResolution
         }
 
         var parameters = openMethod.GetParameters();
-        if (parameters.Length != argTypes.Count)
+
+        // Issue #327: allow the call to omit trailing optional parameters. We
+        // infer type arguments from the supplied positional arguments only; any
+        // omitted optional parameter must therefore not introduce a method type
+        // parameter that is otherwise un-inferable (the loop below still
+        // requires every type parameter to receive a bound).
+        if (parameters.Length < argTypes.Count)
         {
             return false;
         }
 
+        for (var i = argTypes.Count; i < parameters.Length; i++)
+        {
+            if (!parameters[i].IsOptional)
+            {
+                return false;
+            }
+        }
+
         var typeParams = openMethod.GetGenericArguments();
         var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
-        for (var i = 0; i < parameters.Length; i++)
+        for (var i = 0; i < argTypes.Count; i++)
         {
             var arg = argTypes[i];
             if (arg is null)
@@ -523,7 +582,13 @@ internal static class OverloadResolution
     {
         var pa = a.GetParameters();
         var pb = b.GetParameters();
-        for (var i = 0; i < pa.Length; i++)
+
+        // Issue #327: optional-parameter omission can leave two applicable
+        // candidates with different parameter counts. Compare only the shared
+        // leading positions (the supplied arguments live there); trailing
+        // optionals do not affect specificity.
+        var shared = Math.Min(pa.Length, pb.Length);
+        for (var i = 0; i < shared; i++)
         {
             // a is "at least as specific" parameter-wise when each of its
             // parameter types is assignable to b's (i.e. a's parameter is

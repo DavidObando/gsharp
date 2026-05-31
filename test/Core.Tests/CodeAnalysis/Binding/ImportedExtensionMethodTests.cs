@@ -135,6 +135,29 @@ var found = list.Contains(2)
         AssertCompilesWithoutErrors(source);
     }
 
+    [Fact]
+    public void CountBy_OmitsTrailingOptionalComparer_InstanceSyntax_Compiles()
+    {
+        // Issue #327: Enumerable.CountBy<TSource,TKey>(this IEnumerable<TSource>,
+        // Func<TSource,TKey>, IEqualityComparer<TKey> comparer = null) is an
+        // imported extension method with a trailing optional parameter. Calling
+        // it with only the key selector must resolve by omitting the optional
+        // comparer — the same shape as HttpResponse.WriteAsync(text) in #327.
+        var source = @"
+import System.Linq
+import System.Collections.Generic
+
+var list = List[int32]()
+list.Add(1)
+list.Add(2)
+list.Add(3)
+list.Add(4)
+
+var counts = list.CountBy(func(x int32) int32 { return x % 2 })
+";
+        AssertCompilesWithoutErrors(source);
+    }
+
     private static void AssertCompilesWithoutErrors(string source)
     {
         var diagnostics = EmitDiagnostics(source, out var success);
