@@ -187,8 +187,16 @@ internal static class OverloadResolution
     /// <typeparam name="T">Candidate kind (<see cref="MethodInfo"/> or <see cref="ConstructorInfo"/>).</typeparam>
     /// <param name="candidates">All candidate methods/ctors to consider.</param>
     /// <param name="argTypes">CLR types of the bound arguments in source order.</param>
+    /// <param name="explicitTypeArgs">
+    /// Issue #311: when non-<see langword="null"/>, the call site supplied an
+    /// explicit type-argument list (e.g. <c>Array.Empty[string]()</c>). Only
+    /// open generic method definitions whose arity matches are considered, and
+    /// they are closed with these exact type arguments instead of inference.
+    /// Non-generic and mismatched-arity candidates are dropped (matches C#'s
+    /// rule that explicit type arguments require a matching generic method).
+    /// </param>
     /// <returns>The resolution result.</returns>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
@@ -202,7 +210,34 @@ internal static class OverloadResolution
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             T candidate = rawCandidate;
-            if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+            if (explicitTypeArgs != null)
+            {
+                // Issue #311: explicit type-argument path. Only open generic
+                // method definitions of matching arity are applicable; close
+                // them with the supplied type arguments verbatim.
+                if (rawCandidate is MethodInfo gmi
+                    && gmi.IsGenericMethodDefinition
+                    && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
+                {
+                    MethodInfo closed;
+                    try
+                    {
+                        closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Generic constraints not satisfied — drop this candidate.
+                        continue;
+                    }
+
+                    candidate = (T)(MethodBase)closed;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+            else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
             {
                 if (!TryInferTypeArguments(mi, argTypes, out var typeArgs))
                 {
