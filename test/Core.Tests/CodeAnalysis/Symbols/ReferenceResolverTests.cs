@@ -115,6 +115,79 @@ public class ReferenceResolverTests
         Assert.Equal(typeof(int[]).FullName, projectedArray.FullName);
     }
 
+    [Fact]
+    public void MapClrTypeToReferences_Projects_ByRef_Types()
+    {
+        var resolver = BuildMetadataLoadContextResolver();
+
+        var projected = resolver.MapClrTypeToReferences(typeof(int).MakeByRefType());
+
+        Assert.True(projected.IsByRef);
+        var element = projected.GetElementType();
+        Assert.Equal(typeof(int).FullName, element.FullName);
+
+        // The projected element must share the load context, so an open generic
+        // resolved from the references accepts it.
+        Assert.True(resolver.TryResolveType("System.Threading.Tasks.Task`1", out var openTask));
+        var closed = openTask.MakeGenericType(element);
+        Assert.Equal(typeof(int).FullName, closed.GetGenericArguments()[0].FullName);
+    }
+
+    [Fact]
+    public void MapClrTypeToReferences_Projects_Pointer_Types()
+    {
+        var resolver = BuildMetadataLoadContextResolver();
+
+        var projected = resolver.MapClrTypeToReferences(typeof(int).MakePointerType());
+
+        Assert.True(projected.IsPointer);
+        Assert.Equal(typeof(int).FullName, projected.GetElementType().FullName);
+    }
+
+    [Fact]
+    public void MapClrTypeToReferences_Projects_Array_Of_ByRef_Element_Chain()
+    {
+        // Byref-to-array: the inner array element must also be projected.
+        var resolver = BuildMetadataLoadContextResolver();
+
+        var projected = resolver.MapClrTypeToReferences(typeof(int[]).MakeByRefType());
+
+        Assert.True(projected.IsByRef);
+        var arrayElement = projected.GetElementType();
+        Assert.True(arrayElement.IsArray);
+        Assert.Equal(typeof(int[]).FullName, arrayElement.FullName);
+    }
+
+    [Fact]
+    public void MapClrTypeToReferences_Passes_Through_Generic_Parameters()
+    {
+        var resolver = BuildMetadataLoadContextResolver();
+        Assert.True(resolver.TryResolveType("System.Collections.Generic.List`1", out var openList));
+
+        var genericParameter = openList.GetGenericArguments()[0];
+        Assert.True(genericParameter.IsGenericParameter);
+
+        // A generic parameter is meaningful only relative to its already-mapped
+        // declaring definition; projection passes it through unchanged.
+        var projected = resolver.MapClrTypeToReferences(genericParameter);
+        Assert.Same(genericParameter, projected);
+    }
+
+    [Fact]
+    public void MapClrTypeToReferences_Throws_Instead_Of_Silent_Host_Fallback()
+    {
+        // A type that cannot be resolved by name from the supplied references
+        // (it is defined only in the host's test assembly) must surface as an
+        // explicit error rather than silently returning the wrong-context host
+        // type, which would fail opaquely later inside MakeGenericType.
+        var resolver = BuildMetadataLoadContextResolver();
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => resolver.MapClrTypeToReferences(typeof(ReferenceResolverTests)));
+
+        Assert.Contains(typeof(ReferenceResolverTests).ToString(), ex.Message);
+    }
+
     private static ReferenceResolver BuildMetadataLoadContextResolver()
     {
         // Supplying explicit assembly paths forces ReferenceResolver to load
