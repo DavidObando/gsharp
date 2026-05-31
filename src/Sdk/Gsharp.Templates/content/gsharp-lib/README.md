@@ -10,7 +10,3 @@ dotnet pack -c Release
 ```
 
 The output assembly targets `net10.0` and can be referenced from any other GSharp, C#, or F# project that targets a compatible framework.
-
-## NuGet sources
-
-The generated `NuGet.config` adds a `./packages/` folder as a local NuGet source so this project can resolve `Gsharp.NET.Sdk` without modifying machine-wide configuration. Drop the matching `Gsharp.NET.Sdk.<version>.nupkg` into `./packages/` before the first build, or remove `NuGet.config` once GSharp packages are published to a public feed.

@@ -5,7 +5,7 @@
     "identity": "GSharp.Templates.XunitTests",
     "name": "GSharp Library with xUnit Test Project",
     "shortName": "gsharp-xunit",
-    "description": "A solution scaffold containing a GSharp class library and a C# xUnit test project that exercises it. Demonstrates the cross-language interop path described in ADR-0027.",
+    "description": "A solution scaffold containing a GSharp class library and a GSharp xUnit test project that exercises it. The tests are written in GSharp using @Fact/@Theory/@InlineData attributes and run through the standard `dotnet test` pipeline.",
     "tags": {
         "language": "GSharp",
         "type": "solution"

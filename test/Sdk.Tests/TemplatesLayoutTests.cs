@@ -111,14 +111,15 @@ public class TemplatesLayoutTests
     }
 
     [Fact]
-    public void Lib_Template_Source_Has_Package_And_Function()
+    public void Lib_Template_Source_Has_Package_And_Class()
     {
         var path = Path.Combine(LibContentRoot, "Greeter.gs");
         Assert.True(File.Exists(path), path);
 
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpLibrary", src, System.StringComparison.Ordinal);
-        Assert.Contains("func Greeting", src, System.StringComparison.Ordinal);
+        Assert.Contains("type Greeter class", src, System.StringComparison.Ordinal);
+        Assert.Contains("func Greet", src, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -148,18 +149,30 @@ public class TemplatesLayoutTests
 
         var text = File.ReadAllText(path);
         Assert.Contains("<OutputType>Exe</OutputType>", text, System.StringComparison.Ordinal);
+
+        // The web stack is pulled in through the shared ASP.NET Core framework.
+        Assert.Contains(
+            "<FrameworkReference Include=\"Microsoft.AspNetCore.App\" />",
+            text,
+            System.StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Web_Template_Program_Imports_System_Net_And_Uses_HttpListener()
+    public void Web_Template_Program_Uses_AspNetCore_WebApplication()
     {
         var path = Path.Combine(WebContentRoot, "Program.gs");
         Assert.True(File.Exists(path), path);
 
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpWebApp", src, System.StringComparison.Ordinal);
-        Assert.Contains("import System.Net", src, System.StringComparison.Ordinal);
-        Assert.Contains("HttpListener()", src, System.StringComparison.Ordinal);
+        Assert.Contains("import Microsoft.AspNetCore.Builder", src, System.StringComparison.Ordinal);
+        Assert.Contains("import Microsoft.AspNetCore.Http", src, System.StringComparison.Ordinal);
+
+        // The modern WebApplication host serves requests through a RequestDelegate.
+        Assert.Contains("WebApplication.CreateBuilder()", src, System.StringComparison.Ordinal);
+        Assert.Contains("RequestDelegate", src, System.StringComparison.Ordinal);
+        Assert.Contains("context.Response.WriteAsync", src, System.StringComparison.Ordinal);
+        Assert.Contains("app.Run(handler)", src, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -205,16 +218,39 @@ public class TemplatesLayoutTests
     [Fact]
     public void Xunit_Template_Test_Project_References_Library_And_Xunit()
     {
-        var path = Path.Combine(XunitContentRoot, "GsharpLibrary.Tests", "GsharpLibrary.Tests.csproj");
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary.Tests", "GsharpLibrary.Tests.gsproj");
         Assert.True(File.Exists(path), path);
 
         var doc = XDocument.Load(path);
-        Assert.Equal("Microsoft.NET.Sdk", (string)doc.Root.Attribute("Sdk"));
+        var sdkAttr = (string)doc.Root.Attribute("Sdk");
+        Assert.StartsWith("Gsharp.NET.Sdk", sdkAttr, System.StringComparison.Ordinal);
 
         var text = File.ReadAllText(path);
+        Assert.Contains("<IsTestProject>true</IsTestProject>", text, System.StringComparison.Ordinal);
         Assert.Contains("xunit", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.NET.Test.Sdk", text, System.StringComparison.Ordinal);
         Assert.Contains("GsharpLibrary.gsproj", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Xunit_Template_Tests_Are_Written_In_Gsharp()
+    {
+        var path = Path.Combine(XunitContentRoot, "GsharpLibrary.Tests", "GreeterTests.gs");
+        Assert.True(File.Exists(path), path);
+
+        var src = File.ReadAllText(path);
+        Assert.Contains("package GsharpLibrary.Tests", src, System.StringComparison.Ordinal);
+        Assert.Contains("import Xunit", src, System.StringComparison.Ordinal);
+        Assert.Contains("type GreeterTests class", src, System.StringComparison.Ordinal);
+        Assert.Contains("@Fact", src, System.StringComparison.Ordinal);
+        Assert.Contains("@Theory", src, System.StringComparison.Ordinal);
+        Assert.Contains("@InlineData", src, System.StringComparison.Ordinal);
+        Assert.Contains("Assert.Equal", src, System.StringComparison.Ordinal);
+
+        // The legacy C# test sources must be gone.
+        Assert.False(
+            File.Exists(Path.Combine(XunitContentRoot, "GsharpLibrary.Tests", "GreeterTests.cs")),
+            "C# test source should have been migrated to GSharp.");
     }
 
     [Fact]
@@ -225,6 +261,6 @@ public class TemplatesLayoutTests
 
         var text = File.ReadAllText(path);
         Assert.Contains("GsharpLibrary.gsproj", text, System.StringComparison.Ordinal);
-        Assert.Contains("GsharpLibrary.Tests.csproj", text, System.StringComparison.Ordinal);
+        Assert.Contains("GsharpLibrary.Tests.gsproj", text, System.StringComparison.Ordinal);
     }
 }

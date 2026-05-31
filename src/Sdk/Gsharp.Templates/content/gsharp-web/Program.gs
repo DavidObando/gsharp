@@ -1,31 +1,29 @@
 // file: Program.gs
 //
-// Minimal GSharp web application. Uses the BCL HttpListener to serve a single
-// "Hello from GSharp web!" response on http://localhost:5000/.
+// Minimal ASP.NET Core web application written in GSharp. It uses the modern
+// WebApplication host (Kestrel) and a terminal request handler that writes a
+// plain-text response for every request.
 //
-// Once GSharp grows attribute syntax and async/Task support, this template
-// will be upgraded to use Microsoft.AspNetCore.* directly.
+// The handler is declared as a `RequestDelegate` value so the function literal
+// converts cleanly to the delegate the ASP.NET pipeline expects, then it is
+// registered as terminal middleware with `app.Run(handler)`.
 
 package GsharpWebApp
 
-import System
-import System.Net
-import System.Text
+import Microsoft.AspNetCore.Builder
+import Microsoft.AspNetCore.Http
+import System.Threading
+import System.Threading.Tasks
 
-var prefix = "http://localhost:5000/"
+var builder = WebApplication.CreateBuilder()
+var app = builder.Build()
 
-var listener = HttpListener()
-listener.Prefixes.Add(prefix)
-listener.Start()
-
-Console.WriteLine("Listening on $prefix")
-Console.WriteLine("Press Ctrl+C to stop.")
-
-for true {
-    var context = listener.GetContext()
-    var response = context.Response
-    var body = Encoding.UTF8.GetBytes("Hello from GSharp web!")
-    response.ContentLength64 = body.Length
-    response.OutputStream.Write(body, 0, body.Length)
-    response.OutputStream.Close()
+var handler RequestDelegate = func(context HttpContext) Task {
+    return context.Response.WriteAsync("Hello from GSharp on ASP.NET Core!", CancellationToken.None)
 }
+
+// Register the handler as terminal middleware: it runs for every request.
+app.Run(handler)
+
+// Start Kestrel and block until the process is stopped.
+app.Run("http://localhost:5000")
