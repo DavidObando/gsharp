@@ -52,17 +52,37 @@ public sealed class ReferenceResolver
 
     private readonly ImmutableArray<Assembly> assemblies;
     private readonly MetadataLoadContext metadataContext;
+    private readonly ImmutableArray<string> missingTransitiveReferences;
 
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
+        : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
+    {
+    }
+
+    private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext, ImmutableArray<string> missingTransitiveReferences)
     {
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
+        this.missingTransitiveReferences = missingTransitiveReferences;
     }
 
     /// <summary>
     /// Gets the assemblies this resolver searches, in priority order.
     /// </summary>
     public ImmutableArray<Assembly> Assemblies => assemblies;
+
+    /// <summary>
+    /// Gets the simple names of assemblies that are referenced (transitively)
+    /// by the supplied reference set but could not be resolved from either that
+    /// set or the gsc host runtime. An empty array means the supplied references
+    /// form a complete transitive closure. A non-empty array indicates the
+    /// project is under-referenced: touching a member whose signature lives in
+    /// one of these assemblies would otherwise throw deep in member
+    /// enumeration, so the resolver degrades gracefully (the member is skipped)
+    /// and callers may surface a diagnostic naming the missing assemblies
+    /// (issue #340).
+    /// </summary>
+    public ImmutableArray<string> MissingTransitiveReferences => missingTransitiveReferences;
 
     /// <summary>
     /// Gets a resolver that searches the runtime's currently loaded
@@ -117,7 +137,7 @@ public sealed class ReferenceResolver
             }
         }
 
-        var resolver = new PathAssemblyResolver(resolverPaths);
+        var resolver = new FallbackMetadataAssemblyResolver(resolverPaths);
         var mlc = new MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths.ToArray()));
 
         var builder = ImmutableArray.CreateBuilder<Assembly>();
@@ -140,7 +160,10 @@ public sealed class ReferenceResolver
             }
         }
 
-        return new ReferenceResolver(builder.ToImmutable(), mlc);
+        var loaded = builder.ToImmutable();
+        var missing = ComputeMissingTransitiveReferences(loaded, mlc, resolver);
+
+        return new ReferenceResolver(loaded, mlc, missing);
     }
 
     /// <summary>
@@ -443,6 +466,142 @@ public sealed class ReferenceResolver
 
         return tpa.Split(Path.PathSeparator)
                   .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+    }
+
+    /// <summary>
+    /// Eagerly verifies that the supplied reference set forms a complete
+    /// transitive closure. For every primary reference, each assembly it names
+    /// (one hop) is probed against the load context's resolver; any name that
+    /// neither the supplied set nor the gsc host runtime can satisfy is
+    /// reported as missing. This converts a latent
+    /// <see cref="FileNotFoundException"/>/<see cref="TypeLoadException"/> that
+    /// would otherwise surface deep in member enumeration into an actionable,
+    /// up-front signal (issue #340).
+    /// </summary>
+    private static ImmutableArray<string> ComputeMissingTransitiveReferences(
+        ImmutableArray<Assembly> loaded,
+        MetadataLoadContext mlc,
+        FallbackMetadataAssemblyResolver resolver)
+    {
+        var missing = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var asm in loaded)
+        {
+            AssemblyName[] referenced;
+            try
+            {
+                referenced = asm.GetReferencedAssemblies();
+            }
+            catch (Exception)
+            {
+                // A malformed reference table must not abort closure analysis.
+                continue;
+            }
+
+            foreach (var refName in referenced)
+            {
+                if (string.IsNullOrEmpty(refName?.Name))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // LoadFromAssemblyName forces the resolver to locate the
+                    // dependency. Success means it is in the closure; a load
+                    // failure means it is genuinely missing.
+                    var dependency = mlc.LoadFromAssemblyName(refName);
+                    if (dependency == null)
+                    {
+                        missing.Add(refName.Name);
+                    }
+                }
+                catch (Exception ex) when (
+                    ex is FileNotFoundException
+                        or FileLoadException
+                        or BadImageFormatException
+                        or TypeLoadException)
+                {
+                    missing.Add(refName.Name);
+                }
+            }
+        }
+
+        // Fold in any names the resolver itself failed to satisfy while loading
+        // the primaries (e.g. a primary's core-assembly dependency).
+        foreach (var name in resolver.UnresolvedSimpleNames)
+        {
+            missing.Add(name);
+        }
+
+        return missing.Count == 0 ? ImmutableArray<string>.Empty : missing.ToImmutableArray();
+    }
+
+    /// <summary>
+    /// A <see cref="MetadataAssemblyResolver"/> that resolves from a supplied
+    /// set of paths (via an inner <see cref="PathAssemblyResolver"/>) and, when
+    /// that fails, degrades gracefully: instead of allowing the
+    /// <see cref="MetadataLoadContext"/> to surface an exception for an
+    /// unresolved transitive dependency, it records the offending simple name
+    /// and returns <see langword="null"/> so the caller can skip the affected
+    /// member (issue #340). The recorded names feed the
+    /// <see cref="MissingTransitiveReferences"/> diagnostic surface.
+    /// </summary>
+    private sealed class FallbackMetadataAssemblyResolver : MetadataAssemblyResolver
+    {
+        private readonly PathAssemblyResolver inner;
+        private readonly HashSet<string> unresolved = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object gate = new();
+
+        public FallbackMetadataAssemblyResolver(IEnumerable<string> paths)
+        {
+            inner = new PathAssemblyResolver(paths);
+        }
+
+        public IEnumerable<string> UnresolvedSimpleNames
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return unresolved.ToArray();
+                }
+            }
+        }
+
+        public override Assembly Resolve(MetadataLoadContext context, AssemblyName assemblyName)
+        {
+            try
+            {
+                var resolved = inner.Resolve(context, assemblyName);
+                if (resolved != null)
+                {
+                    return resolved;
+                }
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException
+                    or FileLoadException
+                    or BadImageFormatException)
+            {
+                // Fall through to record-and-degrade below.
+            }
+
+            var name = assemblyName?.Name;
+            if (!string.IsNullOrEmpty(name))
+            {
+                lock (gate)
+                {
+                    unresolved.Add(name);
+                }
+            }
+
+            // Returning null lets MetadataLoadContext raise a load failure only
+            // if a member actually depends on this assembly; the per-member
+            // tolerance in OverloadResolution then skips that member rather than
+            // aborting the whole lookup.
+            return null;
+        }
     }
 }
 
