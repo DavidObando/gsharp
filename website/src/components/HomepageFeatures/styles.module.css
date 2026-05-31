@@ -1,0 +1,56 @@
+.features {
+  display: flex;
+  align-items: center;
+  padding: 3rem 0;
+  width: 100%;
+}
+
+.featureCol {
+  margin-bottom: 1.5rem;
+}
+
+.featureLink {
+  display: block;
+  height: 100%;
+  text-decoration: none;
+  color: inherit;
+}
+
+.featureLink:hover {
+  text-decoration: none;
+  color: inherit;
+}
+
+.featureCard {
+  height: 100%;
+  padding: 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: var(--ifm-card-border-radius, 0.6rem);
+  background: var(--ifm-background-surface-color);
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.featureLink:hover .featureCard {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-3px);
+  box-shadow: var(--ifm-global-shadow-lw);
+}
+
+.featureIcon {
+  font-size: 2rem;
+  line-height: 1;
+  margin-bottom: 0.75rem;
+}
+
+.featureTitle {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
+}
+
+.featureDescription {
+  margin-bottom: 0;
+  color: var(--ifm-color-emphasis-700);
+}
