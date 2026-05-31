@@ -1,0 +1,42 @@
+/**
+ * Global styles for the G# documentation site.
+ * Infima variables overridden with a Go-inspired teal/blue palette.
+ */
+
+:root {
+  --ifm-color-primary: #0a7c8c;
+  --ifm-color-primary-dark: #097082;
+  --ifm-color-primary-darker: #086a7a;
+  --ifm-color-primary-darkest: #075764;
+  --ifm-color-primary-light: #0b889a;
+  --ifm-color-primary-lighter: #0c8ea1;
+  --ifm-color-primary-lightest: #0fa3b8;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #29c5d6;
+  --ifm-color-primary-dark: #21b6c7;
+  --ifm-color-primary-darker: #1fabbc;
+  --ifm-color-primary-darkest: #1a8d9b;
+  --ifm-color-primary-light: #41cddc;
+  --ifm-color-primary-lighter: #51d2e0;
+  --ifm-color-primary-lightest: #79dde8;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Custom G# Prism token colors. The grammar emits a few extra token
+   classes (builtin-type, nil-literal, contextual-keyword). */
+.token.builtin-type {
+  color: #0a7c8c;
+  font-weight: 600;
+}
+
+[data-theme='dark'] .token.builtin-type {
+  color: #4fd6e6;
+}
+
+.token.nil-literal {
+  font-style: italic;
+}

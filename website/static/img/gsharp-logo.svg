@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="285" height="285" viewBox="0 0 285 285">
+<desc>G# Programming Language Logo</desc>
+<defs>
+</defs>
+<g transform="matrix(1 0 0 1 142.5 142.64542)">
+<linearGradient id="SVGID_5" gradientUnits="objectBoundingBox" gradientTransform="matrix(1 0 0 1 0 0)" x1="0.17420000000000002" y1="0.2186" x2="0.56516" y2="0.97437">
+<stop offset="0%" style="stop-color:rgba(255,179,71,1);"/>
+<stop offset="100%" style="stop-color:rgba(192,57,43,1);"/>
+</linearGradient>
+<path transform=" translate(-128, -142.14687)" style="stroke: rgb(255,255,255); stroke-opacity: 0; fill: url(#SVGID_5)" stroke-linecap="round" d="M 0 89.355 L 0 194.931 C 0 207.991 6.967 220.071 18.286 226.597 L 109.715 279.391 C 121.0295 285.92605 134.9715 285.92605 146.286 279.391 L 237.715 226.597 C 249.03021 220.06654 256.0008 207.99449 256 194.93 L 256 89.356 C 256.00258 76.28973 249.03176 64.21535 237.715 57.684 L 146.285 4.904 C 134.97131 -1.63273 121.02869 -1.63273 109.715 4.904 L 18.285 57.684 C 6.96975 64.21686 -0.00052 76.29028 0 89.356"/>
+</g>
+<text transform="matrix(4.1452 0 0 4.1452 139.8422 149.0448)" style="fill: rgb(255,255,255); fill-opacity: 0.5; text-decoration-thickness: 27.63509%; white-space: pre" x="-23.34473" y="10.9949" font-family="Arial, Helvetica, sans-serif" font-size="35" font-style="normal" font-weight="normal"><tspan x="-23.34473" y="10.9949">G#</tspan></text>
+</svg>

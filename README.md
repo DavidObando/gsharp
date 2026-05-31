@@ -4,6 +4,8 @@ A modern, simple, and accessible programming language for .NET.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
 
+📖 **Documentation:** https://davidobando.github.io/gsharp/ — language tour, tutorials, specification, and tooling reference. The site source lives in [`website/`](website/).
+
 ![](assets/gsharp-icon.svg?raw=true)
 
 ## Getting started
