@@ -184,6 +184,26 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #323: any delegate-typed value widens implicitly to
+        // System.Delegate (and System.MulticastDelegate), since every CLR
+        // delegate derives from those base types. This covers both a GSharp
+        // `func` literal (FunctionTypeSymbol, which materializes as a delegate
+        // instance) and a named/generic CLR delegate value such as
+        // `Func[string]`. At the IL level this is a plain reference upcast,
+        // so EMIT needs no conversion opcode.
+        if (to?.ClrType != null && IsSystemDelegateBaseType(to.ClrType))
+        {
+            if (from is FunctionTypeSymbol)
+            {
+                return Conversion.Implicit;
+            }
+
+            if (from?.ClrType != null && ClrTypeUtilities.IsDelegateType(from.ClrType))
+            {
+                return Conversion.Implicit;
+            }
+        }
+
         // ADR-0044 numeric lattice. Both operands must be CLR primitives in
         // the numeric set; the widening map decides implicit vs. explicit.
         // Decimal narrowings (decimal → int etc.) and signed/unsigned
@@ -328,5 +348,17 @@ public sealed class Conversion
 
         var fnReturnClr = fn.ReturnType.ClrType;
         return fnReturnClr != null && ClrTypeUtilities.IsAssignableByName(invoke.ReturnType, fnReturnClr);
+    }
+
+    /// <summary>
+    /// Determines whether a CLR type is the System.Delegate or
+    /// System.MulticastDelegate base type (the common bases of every delegate),
+    /// using name-based checks so it works under a MetadataLoadContext.
+    /// </summary>
+    private static bool IsSystemDelegateBaseType(Type type)
+    {
+        var fullName = type.FullName;
+        return string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
+            || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
     }
 }

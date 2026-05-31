@@ -489,6 +489,7 @@ public sealed class Evaluator
                 BoundNodeKind.TupleLiteralExpression => EvaluateTupleLiteralExpression((BoundTupleLiteralExpression)node),
                 BoundNodeKind.TupleElementAccessExpression => EvaluateTupleElementAccessExpression((BoundTupleElementAccessExpression)node),
                 BoundNodeKind.FunctionLiteralExpression => EvaluateFunctionLiteralExpression((BoundFunctionLiteralExpression)node),
+                BoundNodeKind.MethodGroupExpression => EvaluateMethodGroupExpression((BoundMethodGroupExpression)node),
                 BoundNodeKind.IndirectCallExpression => EvaluateIndirectCallExpression((BoundIndirectCallExpression)node),
                 BoundNodeKind.ClrConstructorCallExpression => EvaluateClrConstructorCallExpression((BoundClrConstructorCallExpression)node),
                 BoundNodeKind.ClrPropertyAccessExpression => EvaluateClrPropertyAccessExpression((BoundClrPropertyAccessExpression)node),
@@ -760,6 +761,15 @@ public sealed class Evaluator
         }
 
         return new ClosureValue(node.Function, node.Body, node.FunctionType, captured);
+    }
+
+    private object EvaluateMethodGroupExpression(BoundMethodGroupExpression node)
+    {
+        // Issue #324: a named-function method group behaves like a no-capture
+        // closure over the function's own body, so indirect invocation reuses
+        // the ClosureValue path.
+        var body = program.Functions[node.Function];
+        return new ClosureValue(node.Function, body, node.FunctionType, new Dictionary<VariableSymbol, object>());
     }
 
     private object EvaluateIndirectCallExpression(BoundIndirectCallExpression node)

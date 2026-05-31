@@ -5511,9 +5511,27 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
-        var variable = BindVariableReference(name, syntax.IdentifierToken.Location);
+        var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true);
         if (variable == null)
         {
+            // Issue #324: a bare identifier naming a free (package-level)
+            // function is a method group. In a value context — e.g. assigning
+            // to a `func(...)` or `Func[...]` slot — it converts to a delegate
+            // over that function. We only synthesize the group here; the
+            // conversion classifier decides whether the surrounding context
+            // actually accepts it (otherwise a cannot-convert is reported).
+            if (TryBindMethodGroup(name, out var methodGroup))
+            {
+                return methodGroup;
+            }
+
+            // Not a method group: surface the suppressed GS0126 (or the
+            // undefined-variable diagnostic already reported).
+            if (scope.TryLookupSymbol(name) is not null and not VariableSymbol)
+            {
+                Diagnostics.ReportNotAVariable(syntax.IdentifierToken.Location, name);
+            }
+
             return new BoundErrorExpression(null);
         }
 
@@ -6430,30 +6448,29 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #321: pads a bound argument list with the compile-time default
-    /// values of any trailing optional parameters the call site omitted.
-    /// Overload resolution may select a CLR method or constructor that declares
-    /// more parameters than arguments were supplied (e.g.
-    /// <c>JsonSerializer.Serialize&lt;TValue&gt;(TValue, JsonSerializerOptions? = null)</c>).
-    /// Because the emitter pushes one IL value per declared parameter, the bound
-    /// argument list must match the target signature exactly.
+    /// Issue #327/#321: appends synthesized default-value arguments for any
+    /// trailing optional parameters the call site omitted. <paramref name="parameters"/>
+    /// is the full parameter list of the resolved CLR method/constructor;
+    /// <paramref name="suppliedArguments"/> are the arguments already bound for
+    /// the leading parameters (for instance/extension calls this includes the
+    /// receiver mapped onto the first parameter). When no parameters are
+    /// omitted, the supplied array is returned unchanged.
     /// </summary>
-    /// <param name="method">The resolved CLR method or constructor.</param>
-    /// <param name="arguments">The arguments supplied at the call site.</param>
-    /// <returns>The argument list extended to the method's full arity.</returns>
-    private static ImmutableArray<BoundExpression> AppendOptionalDefaultArguments(
-        System.Reflection.MethodBase method,
-        ImmutableArray<BoundExpression> arguments)
+    /// <param name="suppliedArguments">Bound arguments mapped to the leading parameters.</param>
+    /// <param name="parameters">The resolved method's full parameter list.</param>
+    /// <returns>The argument array padded to the parameter count with defaults.</returns>
+    private static ImmutableArray<BoundExpression> AppendOmittedOptionalArguments(
+        ImmutableArray<BoundExpression> suppliedArguments,
+        System.Reflection.ParameterInfo[] parameters)
     {
-        var parameters = method.GetParameters();
-        if (parameters.Length <= arguments.Length)
+        if (suppliedArguments.Length >= parameters.Length)
         {
-            return arguments;
+            return suppliedArguments;
         }
 
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
-        builder.AddRange(arguments);
-        for (var i = arguments.Length; i < parameters.Length; i++)
+        builder.AddRange(suppliedArguments);
+        for (var i = suppliedArguments.Length; i < parameters.Length; i++)
         {
             builder.Add(CreateOptionalDefaultArgument(parameters[i]));
         }
@@ -6462,38 +6479,77 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #321: produces the bound expression for an omitted optional
-    /// parameter. A non-null primitive/string compile-time default is emitted
-    /// as a literal of that exact type; every other case (a <c>null</c> default,
-    /// a defaulted value type, or an enum) maps to <c>default(T)</c>, which the
-    /// emitter lowers to the correct zero/null value.
+    /// Issue #327/#321: builds the bound expression for an omitted optional
+    /// parameter. An explicit constant default (e.g. <c>int x = 5</c>) becomes
+    /// the corresponding literal; <c>= default</c>/<c>= null</c> and
+    /// constant-less <c>[Optional]</c> parameters (e.g.
+    /// <c>CancellationToken cancellationToken = default</c>) become the zero
+    /// value of the parameter type.
     /// </summary>
     /// <param name="parameter">The omitted optional parameter.</param>
-    /// <returns>A bound expression producing the parameter's default value.</returns>
+    /// <returns>The bound default-value argument.</returns>
     private static BoundExpression CreateOptionalDefaultArgument(System.Reflection.ParameterInfo parameter)
     {
-        var parameterType = parameter.ParameterType;
-        var typeSymbol = TypeSymbol.FromClrType(parameterType);
+        var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
 
-        object defaultValue = null;
-        if (parameter.HasDefaultValue)
+        if (TryGetConstantParameterDefault(parameter, out var constant))
         {
-            try
-            {
-                defaultValue = parameter.RawDefaultValue;
-            }
-            catch
-            {
-                defaultValue = null;
-            }
-        }
-
-        if (defaultValue != null && defaultValue.GetType() == parameterType)
-        {
-            return new BoundLiteralExpression(null, defaultValue, typeSymbol);
+            return new BoundLiteralExpression(null, constant);
         }
 
         return new BoundDefaultExpression(null, typeSymbol);
+    }
+
+    /// <summary>
+    /// Issue #327: reads a primitive/string constant default from an optional
+    /// parameter's metadata, when present. Returns <c>false</c> for
+    /// <c>= default</c>, <c>= null</c>, or non-primitive constants so the caller
+    /// falls back to <see cref="BoundDefaultExpression"/>.
+    /// </summary>
+    /// <param name="parameter">The optional parameter to inspect.</param>
+    /// <param name="value">The constant default value, when present.</param>
+    /// <returns>Whether a usable primitive/string constant default exists.</returns>
+    private static bool TryGetConstantParameterDefault(System.Reflection.ParameterInfo parameter, out object value)
+    {
+        value = null;
+        object raw;
+        try
+        {
+            raw = parameter.RawDefaultValue;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (raw == null || raw is System.DBNull)
+        {
+            return false;
+        }
+
+        // Only primitive/string constants flow through BoundLiteralExpression's
+        // known value kinds; the constant's CLR type is also the IL form for an
+        // enum parameter (whose default is encoded as its underlying integral).
+        switch (raw)
+        {
+            case bool:
+            case sbyte:
+            case byte:
+            case short:
+            case ushort:
+            case int:
+            case uint:
+            case long:
+            case ulong:
+            case float:
+            case double:
+            case char:
+            case string:
+                value = raw;
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>ADR-0039: Validates that ref/out arguments are wrapped in <c>BoundAddressOfExpression</c>.</summary>
@@ -6931,6 +6987,33 @@ public sealed class Binder
             }
 
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
+        }
+
+        // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,
+        // int32]`, `RequestDelegate`) is callable with call syntax `f(x)`,
+        // mirroring native func-typed variables. Lower the call to an
+        // invocation of the delegate's `Invoke` method, identical in behavior
+        // to the explicit `f.Invoke(x)` form.
+        if (symbol is VariableSymbol delegateVar
+            && delegateVar.Type?.ClrType is System.Type delegateClrType
+            && ClrTypeUtilities.IsDelegateType(delegateClrType))
+        {
+            var receiver = new BoundVariableExpression(null, delegateVar);
+            if (TryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall))
+            {
+                return invokeCall;
+            }
+
+            var invoke = delegateClrType.GetMethod("Invoke");
+            var expectedArity = invoke?.GetParameters().Length ?? 0;
+            if (syntax.Arguments.Count != expectedArity)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, delegateVar.Name, expectedArity, syntax.Arguments.Count);
+                return new BoundErrorExpression(null);
+            }
+
+            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+            return new BoundErrorExpression(null);
         }
 
         var function = symbol as FunctionSymbol;
@@ -7775,8 +7858,9 @@ public sealed class Binder
             return false;
         }
 
-        var ctorRefKinds = ComputeArgumentRefKinds(bestCtor.GetParameters());
-        var ctorArgs = AppendOptionalDefaultArguments(bestCtor, boundArguments.MoveToImmutable());
+        var ctorParameters = bestCtor.GetParameters();
+        var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
+        var ctorArgs = AppendOmittedOptionalArguments(boundArguments.MoveToImmutable(), ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -8529,36 +8613,88 @@ public sealed class Binder
     /// </summary>
     /// <param name="typeArgumentList">The call site's explicit type-argument list, or <c>null</c>.</param>
     /// <param name="explicitTypeArgs">On success, the resolved (mapped) CLR type arguments; <c>null</c> when the list is absent.</param>
+    /// <param name="typeArgSymbols">
+    /// Issue #320: on success, the resolved type-argument <see cref="TypeSymbol"/>s
+    /// in source order; default when the list is absent. These carry user-defined
+    /// types (which have no reference-context CLR type and are closed with an
+    /// <see cref="object"/> placeholder in <paramref name="explicitTypeArgs"/>) so
+    /// later stages can recover and emit the real type argument.
+    /// </param>
     /// <returns>
     /// <see langword="true"/> when there is no list (no explicit type args) or
     /// every argument resolved; <see langword="false"/> when a type argument
     /// could not be resolved.
     /// </returns>
-    private bool TryResolveExplicitMethodTypeArgs(TypeArgumentListSyntax typeArgumentList, out System.Type[] explicitTypeArgs)
+    private bool TryResolveExplicitMethodTypeArgs(TypeArgumentListSyntax typeArgumentList, out System.Type[] explicitTypeArgs, out ImmutableArray<TypeSymbol> typeArgSymbols)
     {
         explicitTypeArgs = null;
+        typeArgSymbols = default;
         if (typeArgumentList == null)
         {
             return true;
         }
 
         var resolved = new System.Type[typeArgumentList.Arguments.Count];
+        var symbols = ImmutableArray.CreateBuilder<TypeSymbol>(typeArgumentList.Arguments.Count);
         for (var i = 0; i < typeArgumentList.Arguments.Count; i++)
         {
             var ta = BindTypeClause(typeArgumentList.Arguments[i]);
-            if (ta?.ClrType == null)
+            if (ta == null)
             {
                 return false;
             }
 
-            // Project each argument onto the resolver's reference set so it
-            // shares the open generic method's load context, exactly as the
-            // generic-construction path does before MakeGenericType.
-            resolved[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            symbols.Add(ta);
+
+            if (ta.ClrType != null)
+            {
+                // BCL / imported type argument. Project onto the resolver's
+                // reference set so it shares the open generic method's load
+                // context, exactly as the generic-construction path does before
+                // MakeGenericType / MakeGenericMethod.
+                resolved[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            }
+            else
+            {
+                // Issue #320: a user-defined type (or an in-scope type parameter)
+                // has no reference-context CLR type, so it cannot be handed to
+                // MakeGenericMethod directly. Close the open method with a
+                // reference-context System.Object placeholder so resolution and
+                // applicability still run; the real type-argument symbol is
+                // preserved in typeArgSymbols and re-emitted as its own TypeDef
+                // token in the generic method specification.
+                resolved[i] = scope.References.GetCoreType("System.Object");
+            }
         }
 
         explicitTypeArgs = resolved;
+        typeArgSymbols = symbols.MoveToImmutable();
         return true;
+    }
+
+    /// <summary>
+    /// Issue #320: computes a return-type override for an imported generic method
+    /// closed over explicit type arguments. When the method's open return type is
+    /// exactly one of its method type parameters, the real return type is the
+    /// corresponding explicit type-argument symbol (recovering a user-defined type
+    /// that was closed with an <see cref="object"/> placeholder). Returns
+    /// <see langword="null"/> when no override is needed, so callers keep their
+    /// existing return-type derivation.
+    /// </summary>
+    /// <param name="closed">The closed generic method selected by overload resolution.</param>
+    /// <param name="typeArgSymbols">The explicit type-argument symbols, or default.</param>
+    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
+    private static TypeSymbol ResolveImportedGenericReturnType(System.Reflection.MethodInfo closed, ImmutableArray<TypeSymbol> typeArgSymbols)
+    {
+        if (!typeArgSymbols.IsDefaultOrEmpty
+            && OverloadResolution.TryGetGenericMethodParameterReturnPosition(closed, out var position)
+            && position >= 0
+            && position < typeArgSymbols.Length)
+        {
+            return typeArgSymbols[position];
+        }
+
+        return null;
     }
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
@@ -8593,7 +8729,7 @@ public sealed class Binder
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
-        if (!TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs))
+        if (!TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs, out var typeArgSymbols))
         {
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
@@ -8601,12 +8737,13 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, scope.References.MapClrTypeToReferences))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences))
             {
-                var paddedArgs = AppendOptionalDefaultArguments(staticFn.Method, arguments);
-                var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
-                ValidateRefArguments(paddedArgs, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(null, staticFn, paddedArgs, refKinds);
+                var staticParameters = staticFn.Method.GetParameters();
+                var staticArguments = AppendOmittedOptionalArguments(arguments, staticParameters);
+                var refKinds = ComputeArgumentRefKinds(staticParameters);
+                ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
+                return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
             }
 
             if (staticAmbiguous)
@@ -8659,7 +8796,7 @@ public sealed class Binder
             // imported extension methods.
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
                 && inheritedDerived.ImportedBaseType?.ClrType is System.Type inheritedBaseClr
-                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs))
+                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols))
             {
                 return inheritedCall;
             }
@@ -8667,7 +8804,7 @@ public sealed class Binder
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
-            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs))
+            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs, typeArgSymbols))
             {
                 return userPathExt;
             }
@@ -8710,11 +8847,12 @@ public sealed class Binder
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
-                        var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
-                        var paddedInstArgs = AppendOptionalDefaultArguments(resolution.Best, arguments);
-                        var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                        ValidateRefArguments(paddedInstArgs, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, paddedInstArgs, instRefKinds);
+                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                        var instParameters = resolution.Best.GetParameters();
+                        var instArguments = AppendOmittedOptionalArguments(arguments, instParameters);
+                        var instRefKinds = ComputeArgumentRefKinds(instParameters);
+                        ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
+                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression(null);
@@ -8735,7 +8873,7 @@ public sealed class Binder
         // (receiver) syntax. After instance members and user extension
         // functions fail, fall back to imported static [Extension] methods
         // whose first parameter is compatible with the receiver type.
-        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs))
+        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs, typeArgSymbols))
         {
             return importedExt;
         }
@@ -8758,7 +8896,8 @@ public sealed class Binder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         out BoundExpression result,
-        System.Type[] explicitTypeArgs = null)
+        System.Type[] explicitTypeArgs = null,
+        ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         result = null;
 
@@ -8787,11 +8926,12 @@ public sealed class Binder
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
-                var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
-                var paddedArgs = AppendOptionalDefaultArguments(resolution.Best, arguments);
-                var refKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                ValidateRefArguments(paddedArgs, refKinds, methodName, ce.Location);
-                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, paddedArgs, refKinds);
+                var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                var inheritedParameters = resolution.Best.GetParameters();
+                var inheritedArguments = AppendOmittedOptionalArguments(arguments, inheritedParameters);
+                var refKinds = ComputeArgumentRefKinds(inheritedParameters);
+                ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
+                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
@@ -8813,11 +8953,104 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #326: a generic extension function
+        // `func (r R) Name[T](item T) T` resolves its type parameters either
+        // from an explicit `[T1, T2]` type-argument list at the call site or by
+        // left-to-right inference from the receiver and argument types matched
+        // against the declared parameter types. Mirrors the free-function
+        // generic path (Phase 4.1 / ADR-0020).
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        if (extension.IsGeneric)
+        {
+            substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            if (ce.TypeArgumentList != null)
+            {
+                var explicitArgs = ce.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != extension.TypeParameters.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(ce.TypeArgumentList.Location, extension.Name, extension.TypeParameters.Length, explicitArgs.Count);
+                    return new BoundErrorExpression(null);
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    substitution[extension.TypeParameters[i]] = ta;
+                }
+            }
+            else
+            {
+                // The receiver lines up against parameters[0]; user arguments
+                // against parameters[1..]. Inferring from the receiver too lets
+                // a generic receiver type (e.g. `func (s []T) ...`) bind T.
+                if (receiver?.Type != null)
+                {
+                    InferTypeArguments(extension.Parameters[0].Type, receiver.Type, substitution);
+                }
+
+                for (var i = 0; i < arguments.Length; i++)
+                {
+                    if (arguments[i].Type != null)
+                    {
+                        InferTypeArguments(extension.Parameters[i + 1].Type, arguments[i].Type, substitution);
+                    }
+                }
+
+                foreach (var tp in extension.TypeParameters)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(ce.Identifier.Location, extension.Name, tp.Name);
+                        return new BoundErrorExpression(null);
+                    }
+                }
+            }
+
+            // Phase 4.2 / ADR-0020: each substituted type argument must satisfy
+            // its type parameter's declared constraint.
+            var constraintLocation = ce.TypeArgumentList != null
+                ? ce.TypeArgumentList.Location
+                : ce.Identifier.Location;
+            foreach (var tp in extension.TypeParameters)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                    return new BoundErrorExpression(null);
+                }
+            }
+        }
+
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
-        convertedArgs.Add(BindConversion(ce.Location, receiver, extension.Parameters[0].Type));
+        var receiverParamType = substitution != null ? SubstituteType(extension.Parameters[0].Type, substitution) : extension.Parameters[0].Type;
+        convertedArgs.Add(BindConversion(ce.Location, receiver, receiverParamType));
         for (var i = 0; i < arguments.Length; i++)
         {
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], extension.Parameters[i + 1].Type));
+            var paramType = extension.Parameters[i + 1].Type;
+            if (substitution != null && TypeSymbol.ContainsTypeParameter(paramType))
+            {
+                // A parameter typed as an open T is encoded as System.Object in
+                // the emitted signature; pass the argument unconverted so the
+                // emitter inserts box / unbox.any around the erased boundary.
+                convertedArgs.Add(arguments[i]);
+            }
+            else
+            {
+                var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+            }
+        }
+
+        if (substitution != null)
+        {
+            var returnType = SubstituteType(extension.Type, substitution);
+            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType);
         }
 
         return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
@@ -8839,8 +9072,9 @@ public sealed class Binder
     /// <param name="ce">The originating call expression.</param>
     /// <param name="result">The bound call when resolution succeeds (or a bound error on ambiguity).</param>
     /// <param name="explicitTypeArgs">Issue #311: resolved explicit type arguments from a <c>[T1, T2]</c> list, or <c>null</c> for inference.</param>
+    /// <param name="typeArgSymbols">Issue #320: explicit type-argument symbols in source order (carrying user-defined types), or default.</param>
     /// <returns>True when an imported extension method was matched (success or ambiguity); false to let the caller report GS0159.</returns>
-    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null)
+    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         result = null;
 
@@ -8900,16 +9134,22 @@ public sealed class Binder
         }
 
         var importedClass = new ImportedClassSymbol(declaringType, ce);
-        var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce);
+        var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols);
+        var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce, returnOverride);
 
         var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
         allArguments.Add(receiver);
         allArguments.AddRange(arguments);
-        var bound = AppendOptionalDefaultArguments(best, allArguments.MoveToImmutable());
+        var bound = allArguments.MoveToImmutable();
 
-        var refKinds = ComputeArgumentRefKinds(best.GetParameters());
+        // Issue #327: fill in any trailing optional parameters the call omitted
+        // (e.g. the CancellationToken on HttpResponse.WriteAsync(text)).
+        var parameters = best.GetParameters();
+        bound = AppendOmittedOptionalArguments(bound, parameters);
+
+        var refKinds = ComputeArgumentRefKinds(parameters);
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = new BoundImportedCallExpression(null, function, bound, refKinds);
+        result = new BoundImportedCallExpression(null, function, bound, refKinds, typeArgSymbols);
         return true;
     }
 
@@ -9527,6 +9767,11 @@ public sealed class Binder
 
     private VariableSymbol BindVariableReference(string name, TextLocation location)
     {
+        return BindVariableReference(name, location, suppressNotAVariable: false);
+    }
+
+    private VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable)
+    {
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
@@ -9538,9 +9783,52 @@ public sealed class Binder
                 return null;
 
             default:
-                Diagnostics.ReportNotAVariable(location, name);
+                if (!suppressNotAVariable)
+                {
+                    Diagnostics.ReportNotAVariable(location, name);
+                }
+
                 return null;
         }
+    }
+
+    // Issue #324: build a method-group expression for a bare identifier that
+    // names a free (package-level) function. Returns false for anything that
+    // cannot be materialized as a simple `ldftn` over a static method def:
+    // instance methods, generics, variadics, and class statics are excluded.
+    private bool TryBindMethodGroup(string name, out BoundExpression methodGroup)
+    {
+        methodGroup = null;
+
+        if (scope.TryLookupSymbol(name) is not FunctionSymbol function)
+        {
+            return false;
+        }
+
+        if (function.IsInstanceMethod
+            || function.IsGeneric
+            || function.IsExtension
+            || function.IsStatic
+            || function.StaticOwnerType != null
+            || function.Package == null)
+        {
+            return false;
+        }
+
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
+        foreach (var parameter in function.Parameters)
+        {
+            if (parameter.IsVariadic)
+            {
+                return false;
+            }
+
+            parameterTypes.Add(parameter.Type);
+        }
+
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), function.Type ?? TypeSymbol.Void);
+        methodGroup = new BoundMethodGroupExpression(null, function, fnType);
+        return true;
     }
 
     // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an

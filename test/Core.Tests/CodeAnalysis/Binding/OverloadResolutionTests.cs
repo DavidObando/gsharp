@@ -187,18 +187,6 @@ public class OverloadResolutionTests
     }
 
     [Fact]
-    public void Resolve_AppliesWhenTrailingParameterOptional_AndArgumentOmitted()
-    {
-        // Issue #321: F_Optional(string s, int count = 0) has arity 2 but the
-        // trailing parameter is optional, so a single (string) argument must
-        // resolve it. Previously GSharp required exact arity and rejected it.
-        var open = typeof(Fixture).GetMethod(nameof(Fixture.F_Optional), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
-        Assert.Equal(nameof(Fixture.F_Optional), result.Best.Name);
-    }
-
-    [Fact]
     public void Resolve_ClosesGenericMethodWithOptionalTrailingParameter_FromInference()
     {
         // Issue #321: this mirrors JsonSerializer.Serialize<TValue>(TValue value,
@@ -231,6 +219,69 @@ public class OverloadResolutionTests
         Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
         Assert.Contains(typeof(string), seen);
+    }
+
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter()
+    {
+        // Issue #327: O_OneOptional(int, CancellationToken = default) is
+        // applicable when called with a single int argument; the optional
+        // trailing parameter is omitted. Mirrors HttpResponse.WriteAsync(text).
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter_StillAppliesWithAllArgs()
+    {
+        // The same candidate is still applicable when the optional argument is
+        // supplied explicitly.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int), typeof(System.Threading.CancellationToken) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_RejectsCandidateWithNonOptionalMissingParameter()
+    {
+        // O_Required(int, int) has no optional parameters; calling with a single
+        // argument leaves a non-optional parameter unfilled and is not applicable.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_Required), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_PrefersFewerParametersWhenOptionalsTie()
+    {
+        // Issue #327: O_OneOptional(int, CancellationToken = default) and
+        // O_TwoOptional(int, CancellationToken = default, CancellationToken =
+        // default) both apply to a single int argument. The overload requiring
+        // fewer omitted optionals wins (C# §7.5.3.2).
+        var oneOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var twoOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_TwoOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { oneOpt, twoOpt }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter_OnOpenGenericMethod()
+    {
+        // Issue #327: Enumerable.CountBy<TSource,TKey>(IEnumerable<TSource>,
+        // Func<TSource,TKey>, IEqualityComparer<TKey> = null) is open generic
+        // with a trailing optional. Inference must succeed from the first two
+        // arguments while the optional comparer is omitted.
+        var open = typeof(System.Linq.Enumerable)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(System.Linq.Enumerable.CountBy) && m.IsGenericMethodDefinition);
+        var result = OverloadResolution.Resolve(
+            new[] { open },
+            new[] { typeof(System.Collections.Generic.IEnumerable<int>), typeof(Func<int, int>) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethodDefinition);
     }
 
     private static MethodInfo Resolve(string a, string b, Type[] argTypes)
@@ -277,10 +328,15 @@ public class OverloadResolutionTests
 
         public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
 
-        // Issue #321 fixtures: optional trailing parameters on both a
-        // non-generic and an open generic method (mirrors JsonSerializer.Serialize).
-        public static void F_Optional(string s, int count = 0) { _ = s; _ = count; }
-
+        // Issue #321 fixture: optional trailing parameter on an open generic
+        // method (mirrors JsonSerializer.Serialize<TValue>(TValue, options = null)).
         public static string G_SerializeLike<TValue>(TValue value, object options = null) => value?.ToString();
+
+        // Issue #327: optional-parameter fixtures.
+        public static void O_OneOptional(int a, System.Threading.CancellationToken token = default) { _ = a; _ = token; }
+
+        public static void O_TwoOptional(int a, System.Threading.CancellationToken first = default, System.Threading.CancellationToken second = default) { _ = a; _ = first; _ = second; }
+
+        public static void O_Required(int a, int b) { _ = a; _ = b; }
     }
 }

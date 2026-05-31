@@ -155,6 +155,20 @@ internal static class OverloadResolution
             return ImplicitConversionKind.NullableWrap;
         }
 
+        // Issue #322: any delegate type (Func<...>/Action<...> or a named
+        // delegate) is implicitly convertible to System.Delegate /
+        // System.MulticastDelegate, mirroring C#'s natural-delegate-type
+        // conversion. This must work across reflection contexts: a lambda
+        // literal in argument position carries a *live runtime* Func<> type,
+        // while the target Delegate parameter (e.g. ASP.NET Core MapGet) is
+        // loaded through a MetadataLoadContext, so the comparison is by name.
+        if ((string.Equals(target.FullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(target.FullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            && ClrTypeUtilities.IsDelegateType(source))
+        {
+            return ImplicitConversionKind.Reference;
+        }
+
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
         {
             try
@@ -247,6 +261,38 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #320: determines whether a closed generic method's open definition
+    /// returns exactly one of its own method type parameters (e.g.
+    /// <c>T GetService&lt;T&gt;()</c>, <c>T GetRequiredService&lt;T&gt;()</c>,
+    /// <c>T CreateInstance&lt;T&gt;()</c>). When it does, the caller can recover the
+    /// real return type from the explicit type-argument symbol at the reported
+    /// position, which is necessary when the method was closed with a placeholder
+    /// CLR type because the type argument is a user-defined type with no
+    /// reference-context CLR type.
+    /// </summary>
+    /// <param name="closed">The closed generic method.</param>
+    /// <param name="position">The method type-parameter position of the return type, when matched.</param>
+    /// <returns><see langword="true"/> when the return type is a bare method type parameter.</returns>
+    public static bool TryGetGenericMethodParameterReturnPosition(MethodInfo closed, out int position)
+    {
+        position = -1;
+        if (closed == null || !closed.IsGenericMethod)
+        {
+            return false;
+        }
+
+        var open = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var ret = open.ReturnType;
+        if (ret != null && ret.IsGenericParameter && ret.DeclaringMethod != null)
+        {
+            position = ret.GenericParameterPosition;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// <paramref name="t1"/> is the better target, a positive value when
@@ -329,15 +375,22 @@ internal static class OverloadResolution
 
         var parameters = openMethod.GetParameters();
 
-        // Issue #321: a generic overload may declare trailing optional
-        // parameters (e.g. Serialize<TValue>(TValue value, JsonSerializerOptions?
-        // options = null)). When fewer arguments are supplied than the method
-        // declares, inference still applies as long as the omitted trailing
-        // parameters are optional and every method type parameter is inferable
-        // from the supplied arguments.
-        if (argTypes.Count > parameters.Length || !TrailingParametersOptional(parameters, argTypes.Count))
+        // Issue #327/#321: allow the call to omit trailing optional parameters.
+        // We infer type arguments from the supplied positional arguments only;
+        // any omitted optional parameter must therefore not introduce a method
+        // type parameter that is otherwise un-inferable (the loop below still
+        // requires every type parameter to receive a bound).
+        if (parameters.Length < argTypes.Count)
         {
             return false;
+        }
+
+        for (var i = argTypes.Count; i < parameters.Length; i++)
+        {
+            if (!parameters[i].IsOptional)
+            {
+                return false;
+            }
         }
 
         var typeParams = openMethod.GetGenericArguments();
@@ -571,13 +624,18 @@ internal static class OverloadResolution
             return Result<T>.Single(winners[0].Method);
         }
 
+        // When the better-function-member pass produced no strict winner (e.g.
+        // overloads whose conversions are identical over the supplied
+        // arguments), fall back to the full applicable set for tie-breaking.
+        var pool = winners.Count > 0 ? winners : applicable;
+
         // Tie-break: prefer the candidate whose parameter types are
         // "more specific" (parameter-by-parameter assignability — a less
         // derived type is implicitly assignable from a more derived one).
-        if (winners.Count > 1)
+        if (pool.Count > 1)
         {
-            var mostSpecific = winners
-                .Where(w => winners.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
+            var mostSpecific = pool
+                .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
                 .ToList();
             if (mostSpecific.Count == 1)
             {
@@ -585,9 +643,24 @@ internal static class OverloadResolution
             }
         }
 
-        // If nothing dominated above, report the entire applicable set as
-        // ambiguous; otherwise report the surviving winners.
-        var ambiguous = (winners.Count > 0 ? winners : applicable)
+        // Issue #327: when candidates still tie, prefer the one that requires
+        // expanding the fewest optional/default parameters — i.e. the smallest
+        // parameter count. This matches C# §7.5.3.2's preference for the member
+        // that does not rely on omitted optional arguments.
+        if (pool.Count > 1)
+        {
+            var minParamCount = pool.Min(w => w.Method.GetParameters().Length);
+            var fewestParams = pool
+                .Where(w => w.Method.GetParameters().Length == minParamCount)
+                .ToList();
+            if (fewestParams.Count == 1)
+            {
+                return Result<T>.Single(fewestParams[0].Method);
+            }
+        }
+
+        // If nothing dominated above, report the surviving pool as ambiguous.
+        var ambiguous = pool
             .Select(c => c.Method)
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
@@ -646,10 +719,10 @@ internal static class OverloadResolution
         var pa = a.GetParameters();
         var pb = b.GetParameters();
 
-        // Issue #321: candidates may differ in parameter count once trailing
-        // optional parameters are allowed. Compare only the positions both
-        // signatures share; the omitted optionals do not affect specificity of
-        // the supplied arguments.
+        // Issue #327/#321: optional-parameter omission can leave two applicable
+        // candidates with different parameter counts. Compare only the shared
+        // leading positions (the supplied arguments live there); trailing
+        // optionals do not affect specificity.
         var shared = Math.Min(pa.Length, pb.Length);
         for (var i = 0; i < shared; i++)
         {
