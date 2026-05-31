@@ -7,11 +7,18 @@ draft: false
 
 # A Tour of G#
 
-:::note Draft scaffold
-This page is a scaffold awaiting authored content. It is part of the G#
-documentation site created for [issue #276](https://github.com/DavidObando/gsharp/issues/276).
+Welcome to a quick tour of G#. Like the Go Tour, this section is meant to be read in order. Each chapter introduces one small part of the language with short examples drawn from the repository's checked-in samples.
 
-**Source material for the author:** godev.md: Go Tour structure. Landing for the static tour; link out to chapters. Keep short.
-:::
+G# combines Go-inspired syntax with the .NET runtime. You will see packages, imports, `func`, top-level statements, structs, slices, maps, channels, `go`, `select`, and direct calls into CLR libraries.
 
-Content coming soon.
+## Chapters
+
+1. [Basics](/docs/tour/basics) — variables, constants, functions, printing, and primitive types.
+2. [Types and values](/docs/tour/types) — structs, data structs, records, classes, arrays, slices, maps, and zero values.
+3. [Control flow](/docs/tour/control-flow) — `if`, `switch`, `for`, `for in`, and pattern matching.
+4. [Concurrency](/docs/tour/concurrency) — `go`, `scope`, channels, and `select`.
+5. [.NET interop](/docs/tour/dotnet-interop) — imports, CLR types, extension functions, LINQ, and events.
+
+If you have not installed the tools yet, start with [Install G#](/docs/getting-started/install). If you want the shortest possible first program, use [Quickstart: Hello, G#](/docs/getting-started/quickstart).
+
+Next: [Tour: Basics](/docs/tour/basics).

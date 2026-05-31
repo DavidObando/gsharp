@@ -6,11 +6,29 @@ draft: false
 
 # Introduction to G#
 
-:::note Draft scaffold
-This page is a scaffold awaiting authored content. It is part of the G#
-documentation site created for [issue #276](https://github.com/DavidObando/gsharp/issues/276).
+G# is a modern, simple, and accessible programming language for .NET. It borrows the approachable shape of Go — packages, imports, `func`, `struct`, slices, maps, channels, `go`, `select`, and concise top-level programs — while targeting the .NET CLR and the libraries that already exist there.
 
-**Source material for the author:** godev.md: Home/landing + intro framing. gsharplang.md §1 Overview. README.md. ADRs overview.
-:::
+If you know Go, much of the surface syntax will feel familiar. If you know .NET, G# gives you another way to build managed assemblies, call CLR APIs, use classes, interfaces, properties, events, delegates, exceptions, async workflows, and run under the normal `dotnet` toolchain.
 
-Content coming soon.
+## How G# runs
+
+G# currently has two execution paths:
+
+- The production compiler, `gsc`, parses, binds, lowers, and emits managed PE assemblies directly. SDK projects use this path through MSBuild, so `dotnet build` and `dotnet run` work for `.gsproj` projects.
+- The interpreter path executes the same parsed and bound program in-process. `gsc` uses this compatibility mode when you pass source files but do not pass `/out`. It is useful for quick experiments, but some CLR interop features are emit-only. In particular, the interpreter cannot marshal G# function literals into CLR delegates in every place the emitted assembly can.
+
+The default emitted target framework is `net10.0`; the compiler also recognizes `net8.0` and `net9.0` target framework mappings.
+
+## Who G# is for
+
+G# is for people who want a small language with Go-inspired clarity and access to .NET libraries. It is especially useful if you want to learn or teach .NET without starting from C#, or if you like Go's direct style but need CLR interop, MSBuild projects, Portable PDBs, and the broader .NET ecosystem.
+
+The language is still growing. The documentation highlights what works today and calls out differences between the compiler and interpreter where they matter.
+
+## Where to start
+
+- [Install G#](/docs/getting-started/install) to set up the SDK, templates, or a source-built compiler.
+- [Quickstart: Hello, G#](/docs/getting-started/quickstart) to compile and run your first program.
+- [A Tour of G#](/docs/tour) for a short guided walk through syntax, types, control flow, concurrency, and .NET interop.
+- [Tutorials](/docs/tutorials/getting-started) for task-oriented walkthroughs.
+- [Language specification](/docs/ref/spec) when you need the reference details.
