@@ -69,7 +69,13 @@ public class Program
                 return Error;
             }
 
-            syntaxTrees.Add(SyntaxTree.Load(path));
+            // Resolve to an absolute path so the document name recorded in the
+            // PDB is rooted. Debuggers (vsdbg/coreclr) match on-disk breakpoints
+            // against the PDB document name; a relative name leaves source
+            // unresolvable, which surfaces as a phantom tab with
+            // "Could not load source ...: Incorrect format of 'source' message."
+            var fullPath = Path.GetFullPath(path);
+            syntaxTrees.Add(SyntaxTree.Load(fullPath));
         }
 
         var references = parsed.References.Count > 0

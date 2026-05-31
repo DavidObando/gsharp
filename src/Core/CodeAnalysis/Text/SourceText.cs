@@ -13,12 +13,22 @@ public sealed class SourceText
 {
     private readonly string text;
 
-    private SourceText(string text, string fileName)
+    private SourceText(string text, string fileName, byte[] rawBytes)
     {
         this.text = text;
         FileName = fileName;
+        RawBytes = rawBytes;
         Lines = ParseLines(this, text);
     }
+
+    /// <summary>
+    /// Gets the exact bytes this document was loaded from on disk, when it was
+    /// loaded from a file; otherwise <c>null</c>. Debuggers compute the source
+    /// checksum over these raw bytes (including any byte-order mark), so the PDB
+    /// document hash must be derived from them — not from a re-encoded copy of
+    /// the decoded text — for on-disk source resolution to succeed.
+    /// </summary>
+    public byte[] RawBytes { get; }
 
     /// <summary>
     /// Gets the set of lines contained by this document.
@@ -47,10 +57,15 @@ public sealed class SourceText
     /// </summary>
     /// <param name="text">The string to wrap with a source text.</param>
     /// <param name="fileName">Optional. The file name associated to this source text.</param>
+    /// <param name="rawBytes">
+    /// Optional. The exact on-disk bytes the text was decoded from. Supplied when
+    /// the document originates from a file so the PDB source checksum matches the
+    /// bytes a debugger hashes.
+    /// </param>
     /// <returns>A hydrated source text instance.</returns>
-    public static SourceText From(string text, string fileName = "")
+    public static SourceText From(string text, string fileName = "", byte[] rawBytes = null)
     {
-        return new SourceText(text, fileName);
+        return new SourceText(text, fileName, rawBytes);
     }
 
     /// <summary>
