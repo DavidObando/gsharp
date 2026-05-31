@@ -429,22 +429,15 @@ internal static class OverloadResolution
 
     /// <summary>
     /// Determines whether an exception thrown while reflecting over a candidate's
-    /// signature is a metadata/assembly load failure (issue #321). Such failures
-    /// arise when a parameter type cannot be projected under the reference
-    /// <c>MetadataLoadContext</c> — for example a ref-struct type or a type that
-    /// lives in a transitive assembly that was not supplied via <c>/r:</c>. These
-    /// candidates are treated as not applicable rather than aborting the whole
-    /// lookup; any other exception is left to propagate.
+    /// signature is a metadata/assembly load failure (issue #321, generalized in
+    /// issue #338). Delegates to the single shared predicate in
+    /// <see cref="ClrTypeUtilities.IsMetadataLoadFailure(Exception)"/> so every
+    /// CLR member enumeration site classifies load failures identically.
     /// </summary>
     /// <param name="ex">The exception observed while evaluating a candidate.</param>
     /// <returns>Whether the exception represents a tolerable load failure.</returns>
     private static bool IsMetadataLoadFailure(Exception ex) =>
-        ex is System.IO.FileNotFoundException
-            or System.IO.FileLoadException
-            or TypeLoadException
-            or BadImageFormatException
-            or MissingMethodException
-            or NotSupportedException;
+        ClrTypeUtilities.IsMetadataLoadFailure(ex);
 
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied

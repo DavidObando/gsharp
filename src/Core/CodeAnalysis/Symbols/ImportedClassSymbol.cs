@@ -53,14 +53,14 @@ public sealed class ImportedClassSymbol : Symbol
     public bool TryLookupMember(string text, NameExpressionSyntax ne, out MemberInfo member)
     {
         _ = ne;
-        var property = ClassType.GetProperty(text, BindingFlags.Public | BindingFlags.Static);
+        var property = ClrTypeUtilities.SafeGetProperty(ClassType, text, BindingFlags.Public | BindingFlags.Static);
         if (property != null && property.GetIndexParameters().Length == 0)
         {
             member = property;
             return true;
         }
 
-        var field = ClassType.GetField(text, BindingFlags.Public | BindingFlags.Static);
+        var field = ClrTypeUtilities.SafeGetField(ClassType, text, BindingFlags.Public | BindingFlags.Static);
         if (field != null)
         {
             member = field;
@@ -99,7 +99,7 @@ public sealed class ImportedClassSymbol : Symbol
     {
         function = null;
         isAmbiguous = false;
-        var methods = ClassType.GetMethods(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
+        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
         var nameMatches = methods.Where(m => m.Name == text).ToList();
         if (nameMatches.Count == 0)
         {
