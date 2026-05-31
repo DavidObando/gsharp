@@ -238,6 +238,9 @@ public enum SyntaxKind
 
     // ADR-0053: static (shared) members
     SharedBlock,
+
+    // Issue #306: standalone user-defined constructor declarations (`init(...)`)
+    ConstructorDeclaration,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

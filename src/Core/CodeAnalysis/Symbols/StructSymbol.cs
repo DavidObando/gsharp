@@ -244,11 +244,42 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public TypeSymbol ImportedBaseType { get; private set; }
 
+    /// <summary>
+    /// Gets the explicit base-constructor initializer (<c>: Base(args)</c>) declared
+    /// on this class (issue #306), or <c>null</c> when the class chains to a
+    /// parameterless base constructor. When non-null the emitter forwards the
+    /// bound arguments to the resolved base <c>.ctor</c> and suppresses the
+    /// auto-generated parameterless constructor.
+    /// </summary>
+    public BaseConstructorInitializer BaseConstructorInitializer { get; private set; }
+
+    /// <summary>
+    /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
+    /// this class (issue #306), or <c>null</c> when the class has none. When non-null
+    /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
+    /// suppresses the auto-generated parameterless / primary constructor.
+    /// </summary>
+    public ConstructorSymbol ExplicitConstructor { get; private set; }
+
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
     public void SetImportedBaseType(TypeSymbol importedBaseType)
     {
         ImportedBaseType = importedBaseType;
+    }
+
+    /// <summary>Sets <see cref="BaseConstructorInitializer"/> after binding the base-constructor argument list (issue #306).</summary>
+    /// <param name="initializer">The resolved base-constructor initializer.</param>
+    public void SetBaseConstructorInitializer(BaseConstructorInitializer initializer)
+    {
+        BaseConstructorInitializer = initializer;
+    }
+
+    /// <summary>Sets <see cref="ExplicitConstructor"/> after binding the class body (issue #306).</summary>
+    /// <param name="constructor">The resolved standalone constructor.</param>
+    public void SetExplicitConstructor(ConstructorSymbol constructor)
+    {
+        ExplicitConstructor = constructor;
     }
 
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>

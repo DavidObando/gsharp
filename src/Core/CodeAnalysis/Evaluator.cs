@@ -822,10 +822,82 @@ public sealed class Evaluator
             }
         }
 
+        // Issue #306: a class declaring an explicit `init(...)` constructor runs
+        // its bound body with `this`, the constructor parameters, and the class
+        // fields in scope. The base initializer (when GSharp) is forwarded first,
+        // mirroring `ldarg.0; <base args>; call base..ctor` in the emitter.
+        if (node.StructType.ExplicitConstructor is ConstructorSymbol explicitCtor)
+        {
+            var ctorFunction = explicitCtor.Function;
+            var frame = new Dictionary<VariableSymbol, object>
+            {
+                [ctorFunction.ThisParameter] = sv,
+            };
+
+            for (var i = 0; i < ctorFunction.Parameters.Length; i++)
+            {
+                frame[ctorFunction.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
+            }
+
+            locals.Push(frame);
+            try
+            {
+                // Forward the GSharp base initializer. CLR base initializers are a
+                // no-op when interpreted because the interpreter models classes as
+                // field dictionaries rather than real CLR objects (see issue #319).
+                if (explicitCtor.BaseInitializer is BaseConstructorInitializer ctorBaseInit
+                    && ctorBaseInit.GSharpBaseType is StructSymbol ctorGsharpBase)
+                {
+                    var baseParams = ctorGsharpBase.PrimaryConstructorParameters;
+                    for (var i = 0; i < baseParams.Length && i < ctorBaseInit.Arguments.Length; i++)
+                    {
+                        sv.Fields[baseParams[i].Name] = EvaluateExpression(ctorBaseInit.Arguments[i]);
+                    }
+                }
+
+                var body = program.Functions[ctorFunction];
+                EvaluateStatement(body);
+            }
+            finally
+            {
+                locals.Pop();
+            }
+
+            return sv;
+        }
+
         var parameters = node.StructType.PrimaryConstructorParameters;
         for (var i = 0; i < parameters.Length; i++)
         {
             sv.Fields[parameters[i].Name] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        // Issue #306: forward an explicit base-constructor initializer to a GSharp
+        // base class's primary constructor. The base-ctor arguments may reference
+        // this class's primary-constructor parameters, so evaluate them in a frame
+        // where those parameters are bound to the just-assigned values.
+        var baseInit = node.StructType.BaseConstructorInitializer;
+        if (baseInit != null && baseInit.GSharpBaseType is StructSymbol gsharpBase)
+        {
+            var frame = new Dictionary<VariableSymbol, object>();
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                frame[parameters[i]] = sv.Fields[parameters[i].Name];
+            }
+
+            locals.Push(frame);
+            try
+            {
+                var baseParams = gsharpBase.PrimaryConstructorParameters;
+                for (var i = 0; i < baseParams.Length && i < baseInit.Arguments.Length; i++)
+                {
+                    sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInit.Arguments[i]);
+                }
+            }
+            finally
+            {
+                locals.Pop();
+            }
         }
 
         return sv;

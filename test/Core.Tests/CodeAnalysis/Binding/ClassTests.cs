@@ -445,6 +445,215 @@ b.Hello()
         Assert.Equal(7, result.Value);
     }
 
+    [Fact]
+    public void BaseConstructorInitializer_GSharpBase_ForwardsArgument()
+    {
+        // Issue #306: `: Base(args)` chains to the base primary constructor.
+        var source = @"
+type Animal open class(Name string) {
+    func Speak() string { return Name }
+}
+type Dog class(Pet string) : Animal(Pet) {}
+var d = Dog(""Rex"")
+d.Speak()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Rex", result.Value);
+    }
+
+    [Fact]
+    public void BaseConstructorInitializer_NoMatchingBaseConstructor_Diagnoses()
+    {
+        // Issue #306: GS0214 when no base ctor matches the supplied arguments.
+        var source = @"
+type Animal open class(Name string) {}
+type Dog class(Pet string) : Animal(Pet, Pet) {}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("no accessible constructor that takes"));
+    }
+
+    [Fact]
+    public void BaseConstructorInitializer_ArgumentsOnInterface_Diagnoses()
+    {
+        // Issue #306: GS0213 when base-ctor args are given but there is no base class.
+        var source = @"
+type IShape interface {
+    func Area() int32
+}
+type Square class(Side int32) : IShape(Side) {
+    func Area() int32 { return Side * Side }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("requires an explicit base class"));
+    }
+
+    [Fact]
+    public void ExplicitConstructor_BodyAssignsAndComputesFields()
+    {
+        // Issue #306: an `init(...)` constructor body runs arbitrary statements
+        // with `this`, its parameters, and the class fields in scope.
+        var source = @"
+type Rect class {
+    Width int32
+    Height int32
+    Area int32
+    init(w int32, h int32) {
+        Width = w
+        Height = h
+        Area = w * h
+    }
+}
+var r = Rect(3, 4)
+r.Area
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_ControlFlowInBody()
+    {
+        // The constructor body may contain control flow.
+        var source = @"
+type Clamped class {
+    Value int32
+    init(v int32) {
+        if v < 0 {
+            Value = 0
+        } else {
+            Value = v
+        }
+    }
+}
+Clamped(-5).Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_GSharpBase_ForwardsAndRunsBody()
+    {
+        // Issue #306: an `init` may chain to a GSharp base class's primary
+        // constructor via `: base(args)` and then run its own body.
+        var source = @"
+type Animal open class(Name string) {
+    func Speak() string { return Name }
+}
+type Dog class : Animal {
+    Tricks int32
+    init(name string, tricks int32) : base(name) {
+        Tricks = tricks
+    }
+}
+var d = Dog(""Rex"", 3)
+d.Speak()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Rex", result.Value);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_GSharpBase_BodyFieldIsSet()
+    {
+        var source = @"
+type Animal open class(Name string) {
+    func Speak() string { return Name }
+}
+type Dog class : Animal {
+    Tricks int32
+    init(name string, tricks int32) : base(name) {
+        Tricks = tricks
+    }
+}
+var d = Dog(""Rex"", 3)
+d.Tricks
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_WrongArgumentCount_Diagnoses()
+    {
+        var source = @"
+type Rect class {
+    Width int32
+    init(w int32, h int32) {
+        Width = w
+    }
+}
+var r = Rect(3)
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_WrongArgumentType_Diagnoses()
+    {
+        var source = @"
+type Rect class {
+    Width int32
+    init(w int32) {
+        Width = w
+    }
+}
+var r = Rect(true)
+0
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ExplicitConstructor_PrimaryAndExplicit_Diagnoses()
+    {
+        // Issue #306: GS0215 — a class cannot declare both a primary constructor
+        // and an explicit `init` constructor.
+        var source = @"
+type Bad class(X int32) {
+    init(y int32) {
+        X = y
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("both a primary constructor and an explicit 'init' constructor"));
+    }
+
+    [Fact]
+    public void ExplicitConstructor_MultipleInit_Diagnoses()
+    {
+        // Issue #306: GS0216 — only a single explicit `init` constructor is
+        // supported today.
+        var source = @"
+type Bad class {
+    X int32
+    init(a int32) {
+        X = a
+    }
+    init(a int32, b int32) {
+        X = a
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("multiple 'init' constructors"));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

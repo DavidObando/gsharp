@@ -45,6 +45,7 @@ CommentToken
 CompilationUnit
 ConstKeyword
 ConstantPattern
+ConstructorDeclaration
 ContinueKeyword
 ContinueStatement
 DefaultKeyword
