@@ -258,14 +258,22 @@ public sealed class ReferenceResolver
     /// <remarks>
     /// For the <see cref="Default"/> resolver (no
     /// <see cref="MetadataLoadContext"/>) the host type is already the right
-    /// identity and is returned unchanged. Arrays and constructed generics are
-    /// projected element-by-element so nested type arguments (e.g.
-    /// <c>List[int]</c>) are mapped too. When a leaf type cannot be resolved by
-    /// name from the references, the original host type is returned as a
-    /// best-effort fallback.
+    /// identity and is returned unchanged. Arrays, byref types, pointer types
+    /// and constructed generics are projected element-by-element so nested
+    /// types (e.g. <c>List[int]</c>) are mapped too. Open generic type/method
+    /// parameters are passed through, as they are only meaningful relative to
+    /// their already-projected declaring definition. When a leaf type cannot be
+    /// resolved by name from the references, an
+    /// <see cref="InvalidOperationException"/> is thrown so the cross-context
+    /// mismatch surfaces here rather than deep inside a later reflection call.
     /// </remarks>
     /// <param name="hostType">The CLR type to project; may be <c>null</c>.</param>
     /// <returns>The projected type, or <c>null</c> when <paramref name="hostType"/> is <c>null</c>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a non-null leaf type cannot be projected into the reference
+    /// set's <see cref="MetadataLoadContext"/> (it is not resolvable by name and
+    /// is not a recognised array/byref/pointer/generic shape).
+    /// </exception>
     public Type MapClrTypeToReferences(Type hostType)
     {
         if (hostType == null)
@@ -288,11 +296,36 @@ public sealed class ReferenceResolver
             return rank == 1 ? mappedElement.MakeArrayType() : mappedElement.MakeArrayType(rank);
         }
 
+        // Byref (T&) and pointer (T*) types have no resolvable FullName, so they
+        // must be projected element-wise and re-wrapped. Handle them before the
+        // name-resolution fallback. The element itself may be an array, generic,
+        // or another shape, so recurse to keep the whole chain in the same
+        // context.
+        if (hostType.IsByRef)
+        {
+            return MapClrTypeToReferences(hostType.GetElementType()).MakeByRefType();
+        }
+
+        if (hostType.IsPointer)
+        {
+            return MapClrTypeToReferences(hostType.GetElementType()).MakePointerType();
+        }
+
         if (hostType.IsGenericType && !hostType.IsGenericTypeDefinition)
         {
             var mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition());
             var mappedArgs = hostType.GetGenericArguments().Select(MapClrTypeToReferences).ToArray();
             return mappedDefinition.MakeGenericType(mappedArgs);
+        }
+
+        // Open generic type/method parameters (e.g. the T of List`1 or of a
+        // generic method) carry no FullName and cannot be name-resolved. They
+        // are meaningful only relative to the generic definition that declares
+        // them, which is itself projected through this method, so the parameter
+        // is already in the correct context. Pass it through unchanged.
+        if (hostType.IsGenericParameter)
+        {
+            return hostType;
         }
 
         var fullName = hostType.FullName;
@@ -301,7 +334,17 @@ public sealed class ReferenceResolver
             return mapped;
         }
 
-        return hostType;
+        // No projection was possible. Returning the host type here would yield a
+        // cross-context identity mismatch that fails much later inside
+        // MakeGenericType/MakeGenericMethod with an opaque ArgumentException
+        // ("was not loaded by the MetadataLoadContext that loaded the generic
+        // type or method"). Surface the failure at the projection site instead,
+        // where the offending type is known.
+        throw new InvalidOperationException(
+            $"Unable to project CLR type '{hostType}' (assembly '{hostType.Assembly?.GetName().Name}') " +
+            "into the reference set's MetadataLoadContext. The type could not be resolved by name from the " +
+            "supplied references and is not a recognised array/byref/pointer/generic shape. Returning the host " +
+            "type would cause a cross-context identity mismatch in later reflection calls.");
     }
 
     /// <summary>
