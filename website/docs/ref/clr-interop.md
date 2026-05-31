@@ -114,13 +114,13 @@ Event accessors on user types are declared with the G# `event` member form; impo
 Imported CLR operator overloads and conversion operators participate in binding. User-defined G# operator declarations use receiver syntax and map to CLR `op_*` names for emit and interop.
 
 ```gsharp
-type Vec struct {
+type Vec class {
     X int32
     Y int32
+}
 
-    func (v Vec) operator +(other Vec) Vec {
-        return Vec{X: v.X + other.X, Y: v.Y + other.Y}
-    }
+func (v Vec) operator +(other Vec) Vec {
+    return Vec{X: v.X + other.X, Y: v.Y + other.Y}
 }
 ```
 
