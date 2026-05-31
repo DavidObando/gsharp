@@ -14,7 +14,7 @@ const heroSample = `package Hello
 import System
 
 func greet(name string) string {
-\treturn $"Hello, \${name}!"
+\treturn "Hello, \${name}!"
 }
 
 Console.WriteLine(greet("world"))`;

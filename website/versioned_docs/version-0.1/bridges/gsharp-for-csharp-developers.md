@@ -14,23 +14,23 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | --- | --- | --- |
 | `namespace MyApp;` | `package MyApp` | A package becomes the emitted CLR namespace. |
 | `using System;` | `import System` | Imports bring CLR namespaces and G# packages into scope. |
-| `static void Main()` | top-level statements or `func main()` | SDK projects synthesize an entry point. |
+| `static void Main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point; an explicit entry point is named `Main`. |
 | `void M()` | `func M()` | Functions can be package-level or members. |
 | method declaration in a class | `func (r Receiver) M()` or class member syntax | G# supports receiver-style and class-shaped members. |
 | `int` | `int32` | G# source names numeric widths explicitly. |
 | `long` | `int64` | CLR signatures stay obvious in source. |
-| `var x = ...;` | `let x := ...` or `var x := ...` | `let` is immutable; `var` is mutable. |
-| object initializer | constructor plus assignments or data copy | Data structs use structural copy/update ergonomics. |
+| `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. A keyword-less `x := ...` short declaration is also mutable. |
+| object initializer `new T { F = v }` | brace initializer `T{F: v}` | Data structs also offer `.copy(F = v)` and `with` copy/update. |
 | `record struct` | `data struct` or `record` | `record` is an alias for `data struct`. |
-| `readonly struct CustomerId` | `inline struct CustomerId(string)` | Inline structs are nominal single-field wrappers. |
+| `readonly struct CustomerId` | `type CustomerId inline struct(value string)` | Inline structs are nominal single-field wrappers. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
 | `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds Go-shaped structured concurrency. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
 | optional parameter defaults | imported CLR optional args only | G# user functions do not define default parameter values. |
-| lambda `x => x + 1` | `x -> x + 1` | Trailing-arrow lambdas are the canonical expression form. |
-| extension method | `extension func` | G# emits CLR-visible extension methods. |
+| lambda `x => x + 1` | `func(x int32) int32 { return x + 1 }` | Func literals are the lambda form; parameters and return type are explicit. |
+| extension method | `func (r Receiver) M()` | A receiver clause declares a CLR-visible extension method. |
 
 ## Packages replace namespaces in source
 
@@ -69,9 +69,15 @@ G# user-defined functions do not declare default parameter values. Imported CLR 
 Use `class` for reference identity and inheritance. Use `struct` for value aggregates. Use `data struct` or `record` for structural equality, copy/update, and deconstruction. Use `inline struct` when you want a nominal wrapper over one value.
 
 ```gsharp
-data struct Point { X int32; Y int32 }
-let p := Point(1, 2)
-let q := p with { X: 3 }
+type Point data struct {
+    X int32
+    Y int32
+}
+
+let p = Point{X: 1, Y: 2}
+let q = p with { X = 3 }
+let moved = p.copy(X = 3)
+let (px, py) = p
 ```
 
 ## Concurrency is Go-shaped and .NET-backed
@@ -79,22 +85,24 @@ let q := p with { X: 3 }
 G# adds `go`, `chan T`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
 
 ```gsharp
-let ch := make(chan string, 1)
+let ch = make(chan string, 1)
 ch <- "ready"
 select {
-case msg := <-ch:
+case msg := <-ch {
     Console.WriteLine(msg)
-default:
+}
+default {
     Console.WriteLine("idle")
+}
 }
 ```
 
-## Lambdas use trailing arrows
+## Lambdas are func literals
 
-Expression lambdas use `->`, including delegate conversions on the emit path:
+Lambdas are written as `func` literals with explicit parameter and return types, including delegate conversions on the emit path:
 
 ```gsharp
-let twice := (x int32) -> x * 2
+let twice = func(x int32) int32 { return x * 2 }
 ```
 
 Passing G# func literals to imported CLR methods is supported when you build through the SDK or `gsc /out`. The interpreter path does not support that conversion.
