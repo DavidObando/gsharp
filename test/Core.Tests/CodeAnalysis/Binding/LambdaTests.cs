@@ -94,6 +94,33 @@ add(1)
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void MethodGroup_NamedFunction_ConvertsToNativeFuncType()
+    {
+        // Issue #324: a bare function name in a value context expecting a
+        // compatible delegate converts to a method group — no lambda wrapper.
+        var result = Evaluate(@"
+func inc(x int32) int32 { return x + 1 }
+let f func(int32) int32 = inc
+f(41)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void MethodGroup_NamedFunction_PassedAsCallbackArgument()
+    {
+        // Issue #324: a method group flows into a `func(...)`-typed parameter.
+        var result = Evaluate(@"
+func twice(x int32) int32 { return x * 2 }
+func apply(g func(int32) int32, v int32) int32 { return g(v) }
+apply(twice, 21)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

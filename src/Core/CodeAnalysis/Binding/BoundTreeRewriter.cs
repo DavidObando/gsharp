@@ -382,6 +382,8 @@ public abstract class BoundTreeRewriter
                 return RewriteTupleElementAccessExpression((BoundTupleElementAccessExpression)node);
             case BoundNodeKind.FunctionLiteralExpression:
                 return RewriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node);
+            case BoundNodeKind.MethodGroupExpression:
+                return RewriteMethodGroupExpression((BoundMethodGroupExpression)node);
             case BoundNodeKind.IndirectCallExpression:
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
             case BoundNodeKind.ClrConstructorCallExpression:
@@ -1609,6 +1611,14 @@ public abstract class BoundTreeRewriter
     /// <param name="node">The node to rewrite.</param>
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+    {
+        return node;
+    }
+
+    /// <summary>Rewrites a method-group expression (issue #324).</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
     {
         return node;
     }

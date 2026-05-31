@@ -265,6 +265,7 @@ LiteralExpression
 MakeChannelExpression
 MapDeleteExpression
 MapLiteralExpression
+MethodGroupExpression
 NullConditionalAccessExpression
 PatternSwitchArm
 PatternSwitchStatement

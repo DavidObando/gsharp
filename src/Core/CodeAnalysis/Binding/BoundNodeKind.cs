@@ -60,6 +60,7 @@ public enum BoundNodeKind
     TupleLiteralExpression,
     TupleElementAccessExpression,
     FunctionLiteralExpression,
+    MethodGroupExpression,
     IndirectCallExpression,
     ClrConstructorCallExpression,
     ClrPropertyAccessExpression,

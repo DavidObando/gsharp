@@ -10377,6 +10377,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundFunctionLiteralExpression literal:
                     this.EmitFunctionLiteral(literal);
                     break;
+                case BoundMethodGroupExpression methodGroup:
+                    this.EmitMethodGroup(methodGroup, overrideDelegateType: null);
+                    break;
                 case BoundIndirectCallExpression indirect:
                     this.EmitIndirectCall(indirect);
                     break;
@@ -10513,6 +10516,16 @@ internal sealed class ReflectionMetadataEmitter
             if (source is BoundFunctionLiteralExpression literal)
             {
                 this.EmitFunctionLiteral(literal, overrideDelegateType: targetDelegateType);
+                return;
+            }
+
+            // Issue #324: a method group materializes the same `ldnull / ldftn /
+            // newobj <Delegate>` sequence as a no-capture lambda, but over the
+            // existing named function's MethodDef and bound to the requested
+            // target delegate type.
+            if (source is BoundMethodGroupExpression methodGroup)
+            {
+                this.EmitMethodGroup(methodGroup, overrideDelegateType: targetDelegateType);
                 return;
             }
 
@@ -12970,6 +12983,30 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
+            var delegateCtor = delegateType.GetConstructors()[0];
+
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ldftn);
+            this.il.Token(methodHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
+
+        // Issue #324: emit a named-function method group as a delegate. The
+        // function already has a static MethodDef row in functionHandles, so we
+        // reuse the no-capture lambda sequence: `ldnull; ldftn <method>; newobj
+        // <Delegate>::.ctor(object, IntPtr)`. The delegate type is the target
+        // when one is supplied (a `Func[...]`/`Action[...]` conversion target),
+        // otherwise the native delegate for the function's own signature.
+        private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type overrideDelegateType)
+        {
+            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var methodHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
+            }
+
+            var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
             var delegateCtor = delegateType.GetConstructors()[0];
 
             this.il.OpCode(ILOpCode.Ldnull);
