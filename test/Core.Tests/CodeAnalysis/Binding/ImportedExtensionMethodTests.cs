@@ -3,10 +3,13 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -133,6 +136,66 @@ list.Add(2)
 var found = list.Contains(2)
 ";
         AssertCompilesWithoutErrors(source);
+    }
+
+    [Fact]
+    public void ExtensionMethod_DelegateParameter_LambdaLiteralArgument_Binds()
+    {
+        // Issue #322: a function literal (lambda) passed directly as an argument
+        // when resolving an extension-method overload whose parameter type is
+        // System.Delegate must bind, just as the var-bound form already does.
+        // The fixture assembly is supplied as an explicit reference, so the
+        // binder loads `Handle`'s System.Delegate parameter through a
+        // MetadataLoadContext while the lambda carries a *live runtime* Func<>
+        // type. The delegate→Delegate conversion must therefore be classified by
+        // name across reflection contexts. Mirrors the ASP.NET Core minimal-API
+        // MapGet(this ..., string, Delegate) shape.
+        var source = @"
+package Demo
+import GSharp.Core.Tests.Fixtures
+
+func Run() string {
+    var prefix = ""hi""
+    return prefix.Handle(func() string { return ""ok"" })
+}
+";
+        AssertBindsWithoutErrors(source);
+    }
+
+    [Fact]
+    public void ExtensionMethod_DelegateParameter_VarBoundArgument_Binds()
+    {
+        // Companion to the lambda-literal case: the documented workaround
+        // (bind to a typed func var first) already bound before issue #322;
+        // this guards that the fix does not regress it. A native `func()
+        // string` annotation is used (rather than `Func[string]`) so the test
+        // does not depend on importing System under the fixture-only resolver.
+        var source = @"
+package Demo
+import GSharp.Core.Tests.Fixtures
+
+func Run() string {
+    var handler func() string = func() string { return ""ok"" }
+    var prefix = ""hi""
+    return prefix.Handle(handler)
+}
+";
+        AssertBindsWithoutErrors(source);
+    }
+
+    private static void AssertBindsWithoutErrors(string source)
+    {
+        // Use an explicit reference to the test (fixture) assembly so its types
+        // are loaded through a MetadataLoadContext — the cross-reflection-context
+        // configuration that reproduces issue #322. The Default resolver loads
+        // host runtime assemblies and would not exercise that path.
+        var fixturePath = typeof(Fixtures.Handler322Extensions).Assembly.Location;
+        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), resolver);
+        var program = Binder.BindProgram(globalScope, resolver);
+        var diagnostics = globalScope.Diagnostics.AddRange(program.Diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     private static void AssertCompilesWithoutErrors(string source)
