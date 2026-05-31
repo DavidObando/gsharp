@@ -29,7 +29,7 @@ The extension activates when you open a G# file, when a workspace contains `.gs`
 
 Rich language features come from the G# Language Server over LSP. In current source, the extension is a thin client and the server advertises diagnostics, hover, definition, type definition, implementation, references, document highlights, document symbols, workspace symbols, formatting, range formatting, on-type formatting, folding, selection ranges, linked editing, completion, signature help, rename, code actions, code lenses, semantic tokens, and inlay hints.
 
-The extension also contributes snippets and two themes, `GSharp Dark` and `GSharp Light`.
+The extension also contributes snippets and six color themes inspired by the G# logo's amber-to-red palette: `GSharp Ember`, `GSharp Magma`, and `GSharp Synthwave`, each in a Dark and a Light variant. Dark variants use neon-on-dark accents while light variants use deep, high-contrast hues, and all of them theme the editor, explorer/sidebar, tab bar, activity bar, and status bar for a cohesive look.
 
 ## Settings
 
