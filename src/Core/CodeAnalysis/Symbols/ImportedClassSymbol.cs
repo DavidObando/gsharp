@@ -85,8 +85,12 @@ public sealed class ImportedClassSymbol : Symbol
     /// projected onto the reference load context; <c>null</c> when the call has
     /// no explicit type arguments.
     /// </param>
+    /// <param name="typeArgSymbols">
+    /// Issue #320: explicit type-argument symbols in source order (carrying
+    /// user-defined types that were closed with a placeholder CLR type), or default.
+    /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         function = null;
         isAmbiguous = false;
@@ -113,7 +117,20 @@ public sealed class ImportedClassSymbol : Symbol
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
-                function = new ImportedFunctionSymbol(text, this, result.Best, callExpression);
+                // Issue #320: when an imported generic method returns exactly one
+                // of its method type parameters and was closed over a user-defined
+                // type argument (placeholder CLR type), recover the real return
+                // type from the explicit type-argument symbol.
+                TypeSymbol returnOverride = null;
+                if (!typeArgSymbols.IsDefaultOrEmpty
+                    && OverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
+                    && position >= 0
+                    && position < typeArgSymbols.Length)
+                {
+                    returnOverride = typeArgSymbols[position];
+                }
+
+                function = new ImportedFunctionSymbol(text, this, result.Best, callExpression, returnOverride);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 isAmbiguous = true;
