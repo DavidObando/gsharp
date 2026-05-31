@@ -2,7 +2,7 @@
 
 `Gsharp.NET.Sdk` is the MSBuild SDK that teaches `dotnet build` how to compile `.gs` source files into managed .NET assemblies. With it, a GSharp project is just a regular .NET project that happens to declare `Sdk="Gsharp.NET.Sdk"`.
 
-This document walks through the three supported authoring styles, the target frameworks the SDK supports, and how to side-load the SDK for local development before it is published to a public NuGet feed.
+This document walks through the three supported authoring styles, the target frameworks the SDK supports, and how to side-load a locally built SDK package for development of the SDK itself. The published [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) and [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) packages are available on NuGet, so most users do not need the side-loading workflow.
 
 ## Scaffolding with `dotnet new`
 
@@ -23,8 +23,8 @@ The template scaffolds a four-file project:
 | --- | --- |
 | `MyApp.gsproj` | Project file referencing `Gsharp.NET.Sdk/<version>` and declaring `OutputType=Exe` + `TargetFramework=net10.0`. |
 | `Program.gs` | A one-line GSharp Hello World. |
-| `NuGet.config` | Adds `./packages/` as a local NuGet source so the SDK can be side-loaded without modifying machine-wide config. |
-| `README.md` | Build/run instructions and notes on the side-load workflow. |
+| `NuGet.config` | Adds `./packages/` as a local NuGet source so a locally built SDK can be side-loaded without modifying machine-wide config. |
+| `README.md` | Build/run instructions and notes on the optional side-load workflow. |
 
 The template engine substitutes the project name everywhere `GsharpConsoleApp` appears, including the directory, project file name, and `RootNamespace`. The exact `Gsharp.NET.Sdk` version is pinned at template-pack time, so a scaffolded project always references the SDK version it was generated against.
 
@@ -60,9 +60,9 @@ The SDK supports any modern .NET target framework. The end-to-end test sweep in 
 
 The SDK's MSBuild task DLL is published as `netstandard2.0` so it loads in any MSBuild host (full-framework MSBuild, `dotnet build`, IDEs). The bundled `gsc.dll` compiler is `net10.0` and is invoked via `dotnet gsc.dll`, so it runs on any host that has the .NET 10 runtime installed.
 
-## Side-loading the SDK during local development
+## Side-loading a locally built SDK
 
-Until `Gsharp.NET.Sdk` is published to a public NuGet feed, projects must resolve it from a local `.nupkg`. The scaffolded `NuGet.config` adds `./packages/` to the project's source list, so the recommended workflow is:
+`Gsharp.NET.Sdk` and `Gsharp.Templates` are published on NuGet, so a normal `dotnet build` resolves the SDK from the public feed without any extra configuration. The side-loading workflow below is only needed when you are developing the SDK itself and want a project to resolve a locally built `.nupkg`. The scaffolded `NuGet.config` adds `./packages/` to the project's source list, so the workflow is:
 
 ```sh
 mkdir -p packages
@@ -70,7 +70,7 @@ cp /path/to/Gsharp.NET.Sdk.<version>.nupkg packages/
 dotnet build
 ```
 
-Once a public feed is available, delete the project's `NuGet.config` (or remove the `./packages/` entry) and the SDK will resolve normally.
+To resolve only published packages instead, delete the project's `NuGet.config` (or remove the `./packages/` entry) and the SDK will resolve from NuGet normally.
 
 ## Reference projects
 

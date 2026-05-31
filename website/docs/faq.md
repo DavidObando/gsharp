@@ -25,7 +25,7 @@ G# targets the .NET CLR. The compiler can emit executables or libraries with man
 
 ## How do I install G#?
 
-Start with the [installation guide](/docs/getting-started/install). The current project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK.
+Start with the [installation guide](/docs/getting-started/install). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
 
 ## Where is the language specification?
 
@@ -85,4 +85,4 @@ Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K]V`, and sequence
 
 ## What editor and debugging support exists?
 
-The repository includes a language server and a VS Code extension for `.gs` files, plus Portable PDB support for normal .NET/CoreCLR debugging of emitted assemblies. See [VS Code support](/docs/tooling/vscode), [LSP support](/docs/tooling/lsp), and [Debugging](/docs/tooling/debugging).
+A language server and a VS Code extension support `.gs` files, plus Portable PDB support enables normal .NET/CoreCLR debugging of emitted assemblies. The VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). See [VS Code support](/docs/tooling/vscode), [LSP support](/docs/tooling/lsp), and [Debugging](/docs/tooling/debugging).

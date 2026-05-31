@@ -10,7 +10,7 @@ A modern, simple, and accessible programming language for .NET.
 
 ## Getting started
 
-GSharp ships an MSBuild SDK (`Gsharp.NET.Sdk`) and a `dotnet new` template (`Gsharp.Templates`) so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
+GSharp ships an MSBuild SDK ([`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/)) and a `dotnet new` template package ([`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/)), both available on NuGet, so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
 
 ```sh
 dotnet new install Gsharp.Templates
@@ -31,7 +31,15 @@ A minimal `.gsproj` looks like any other modern .NET project:
 </Project>
 ```
 
-The SDK is validated against `net8.0` and `net10.0`; adding additional target frameworks is a one-line change in [`build/multitarget-e2e.sh`](build/multitarget-e2e.sh). See [`docs/sdk-usage.md`](docs/sdk-usage.md) for the full SDK + templates walkthrough (including how to side-load the SDK locally before it is published to a public NuGet feed) and [`docs/emit-pipeline.md`](docs/emit-pipeline.md) for the compiler architecture.
+The SDK is validated against `net8.0` and `net10.0`; adding additional target frameworks is a one-line change in [`build/multitarget-e2e.sh`](build/multitarget-e2e.sh). See [`docs/sdk-usage.md`](docs/sdk-usage.md) for the full SDK + templates walkthrough and [`docs/emit-pipeline.md`](docs/emit-pipeline.md) for the compiler architecture.
+
+## Editor support
+
+The **G# VS Code extension** is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). It provides syntax highlighting, language-server features (completion, hover, diagnostics, formatting, and more), build/run commands, and debugger configuration for `.gs` and `.gsproj` files. Install it from within VS Code (search for "G#") or from the command line:
+
+```sh
+code --install-extension gsharplang.vscode-gsharp
+```
 
 ## Documentation
 

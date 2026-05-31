@@ -8,6 +8,14 @@ draft: false
 
 The G# VS Code extension provides language registration, syntax highlighting, snippets, themes, language-server integration, build/run commands, task definitions, and debugger configuration for `.gs` and `.gsproj` files.
 
+## Install
+
+The extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). Install it from the Extensions view in VS Code (search for "G#"), or from the command line:
+
+```bash
+code --install-extension gsharplang.vscode-gsharp
+```
+
 ## Activation and file types
 
 The extension activates when you open a G# file, when a workspace contains `.gs` or `.gsproj` files, when G# debug configuration is resolved, or when the restart-server command is invoked. It registers:

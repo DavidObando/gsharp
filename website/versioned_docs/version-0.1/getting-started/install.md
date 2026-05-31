@@ -6,7 +6,9 @@ draft: false
 
 # Install G#
 
-G# projects build with the normal .NET tools. The recommended path is to use the MSBuild SDK and project template; compiler developers can also build `gsc` from source.
+G# projects build with the normal .NET tools. The recommended path is to use the MSBuild SDK and project template, both published on NuGet; compiler developers can also build `gsc` from source.
+
+The published packages are [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) (the MSBuild SDK) and [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) (the `dotnet new` templates). They resolve from the public NuGet feed, so no extra feed configuration is required.
 
 ## Prerequisites
 
@@ -31,7 +33,7 @@ cd MyApp && dotnet build && dotnet run
 # -> Hello from GSharp!
 ```
 
-The generated project includes a `.gsproj`, a starter `Program.gs`, a `NuGet.config` for local SDK side-loading while packages are not yet on a public feed, and a README.
+The generated project includes a `.gsproj`, a starter `Program.gs`, a `NuGet.config` that enables optional local SDK side-loading, and a README.
 
 ## Author a project by hand
 
@@ -54,7 +56,7 @@ dotnet build
 dotnet run
 ```
 
-If you need to side-load a locally packed SDK, copy the package into the project's configured package source before building:
+If you are developing the SDK itself and want to side-load a locally packed build, copy the package into the project's configured package source before building:
 
 ```bash
 mkdir -p packages
@@ -63,6 +65,16 @@ dotnet build
 ```
 
 See [SDK projects](/docs/tooling/sdk-projects) for the full project-system walkthrough.
+
+## Install the VS Code extension
+
+The G# VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). It adds syntax highlighting, language-server features, build/run commands, and debugger configuration for `.gs` and `.gsproj` files. Install it from within VS Code (search for "G#" in the Extensions view) or from the command line:
+
+```bash
+code --install-extension gsharplang.vscode-gsharp
+```
+
+See [the VS Code extension reference](/docs/tooling/vscode) for the full feature list and settings.
 
 ## Build the compiler from source
 
