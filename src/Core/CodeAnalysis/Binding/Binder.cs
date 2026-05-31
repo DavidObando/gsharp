@@ -6866,6 +6866,33 @@ public sealed class Binder
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
         }
 
+        // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,
+        // int32]`, `RequestDelegate`) is callable with call syntax `f(x)`,
+        // mirroring native func-typed variables. Lower the call to an
+        // invocation of the delegate's `Invoke` method, identical in behavior
+        // to the explicit `f.Invoke(x)` form.
+        if (symbol is VariableSymbol delegateVar
+            && delegateVar.Type?.ClrType is System.Type delegateClrType
+            && ClrTypeUtilities.IsDelegateType(delegateClrType))
+        {
+            var receiver = new BoundVariableExpression(null, delegateVar);
+            if (TryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall))
+            {
+                return invokeCall;
+            }
+
+            var invoke = delegateClrType.GetMethod("Invoke");
+            var expectedArity = invoke?.GetParameters().Length ?? 0;
+            if (syntax.Arguments.Count != expectedArity)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, delegateVar.Name, expectedArity, syntax.Arguments.Count);
+                return new BoundErrorExpression(null);
+            }
+
+            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
         var function = symbol as FunctionSymbol;
         if (function == null)
         {
