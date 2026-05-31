@@ -46,8 +46,8 @@
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./images/gsharp-icon-light.png",
-          "dark": "./images/gsharp-icon-dark.png"
+          "light": "./images/gsharp-icon-128.png",
+          "dark": "./images/gsharp-icon-128.png"
         }
       },
       {
