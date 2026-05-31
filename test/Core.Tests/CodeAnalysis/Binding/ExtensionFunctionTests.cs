@@ -125,6 +125,69 @@ n.Foo()
         Assert.Equal(5, result.Value);
     }
 
+    [Fact]
+    public void Extension_Generic_InfersTypeArgument_FromArgument()
+    {
+        var source = @"
+func (value int32) Echo[T](item T) T {
+    return item
+}
+
+var n = 5
+n.Echo(42)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void Extension_Generic_ExplicitTypeArgument_Binds()
+    {
+        var source = @"
+func (value int32) Echo[T](item T) T {
+    return item
+}
+
+var n = 5
+n.Echo[string](""hello"")
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("hello", result.Value);
+    }
+
+    [Fact]
+    public void Extension_Generic_MultipleTypeParameters_Bind()
+    {
+        var source = @"
+func (value int32) PickFirst[T, U](a T, b U) T {
+    return a
+}
+
+var n = 5
+n.PickFirst(99, ""ignored"")
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void Extension_Generic_WrongExplicitTypeArgumentCount_Diagnoses()
+    {
+        var source = @"
+func (value int32) Echo[T](item T) T {
+    return item
+}
+
+var n = 5
+n.Echo[int32, string](42)
+";
+        var result = Evaluate(source);
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));

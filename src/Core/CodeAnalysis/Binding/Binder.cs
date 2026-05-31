@@ -8770,11 +8770,104 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #326: a generic extension function
+        // `func (r R) Name[T](item T) T` resolves its type parameters either
+        // from an explicit `[T1, T2]` type-argument list at the call site or by
+        // left-to-right inference from the receiver and argument types matched
+        // against the declared parameter types. Mirrors the free-function
+        // generic path (Phase 4.1 / ADR-0020).
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        if (extension.IsGeneric)
+        {
+            substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            if (ce.TypeArgumentList != null)
+            {
+                var explicitArgs = ce.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != extension.TypeParameters.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(ce.TypeArgumentList.Location, extension.Name, extension.TypeParameters.Length, explicitArgs.Count);
+                    return new BoundErrorExpression(null);
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    substitution[extension.TypeParameters[i]] = ta;
+                }
+            }
+            else
+            {
+                // The receiver lines up against parameters[0]; user arguments
+                // against parameters[1..]. Inferring from the receiver too lets
+                // a generic receiver type (e.g. `func (s []T) ...`) bind T.
+                if (receiver?.Type != null)
+                {
+                    InferTypeArguments(extension.Parameters[0].Type, receiver.Type, substitution);
+                }
+
+                for (var i = 0; i < arguments.Length; i++)
+                {
+                    if (arguments[i].Type != null)
+                    {
+                        InferTypeArguments(extension.Parameters[i + 1].Type, arguments[i].Type, substitution);
+                    }
+                }
+
+                foreach (var tp in extension.TypeParameters)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(ce.Identifier.Location, extension.Name, tp.Name);
+                        return new BoundErrorExpression(null);
+                    }
+                }
+            }
+
+            // Phase 4.2 / ADR-0020: each substituted type argument must satisfy
+            // its type parameter's declared constraint.
+            var constraintLocation = ce.TypeArgumentList != null
+                ? ce.TypeArgumentList.Location
+                : ce.Identifier.Location;
+            foreach (var tp in extension.TypeParameters)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                    return new BoundErrorExpression(null);
+                }
+            }
+        }
+
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
-        convertedArgs.Add(BindConversion(ce.Location, receiver, extension.Parameters[0].Type));
+        var receiverParamType = substitution != null ? SubstituteType(extension.Parameters[0].Type, substitution) : extension.Parameters[0].Type;
+        convertedArgs.Add(BindConversion(ce.Location, receiver, receiverParamType));
         for (var i = 0; i < arguments.Length; i++)
         {
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], extension.Parameters[i + 1].Type));
+            var paramType = extension.Parameters[i + 1].Type;
+            if (substitution != null && TypeSymbol.ContainsTypeParameter(paramType))
+            {
+                // A parameter typed as an open T is encoded as System.Object in
+                // the emitted signature; pass the argument unconverted so the
+                // emitter inserts box / unbox.any around the erased boundary.
+                convertedArgs.Add(arguments[i]);
+            }
+            else
+            {
+                var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+            }
+        }
+
+        if (substitution != null)
+        {
+            var returnType = SubstituteType(extension.Type, substitution);
+            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType);
         }
 
         return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
