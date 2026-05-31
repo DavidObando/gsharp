@@ -186,6 +186,69 @@ public class OverloadResolutionTests
         Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter()
+    {
+        // Issue #327: O_OneOptional(int, CancellationToken = default) is
+        // applicable when called with a single int argument; the optional
+        // trailing parameter is omitted. Mirrors HttpResponse.WriteAsync(text).
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter_StillAppliesWithAllArgs()
+    {
+        // The same candidate is still applicable when the optional argument is
+        // supplied explicitly.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int), typeof(System.Threading.CancellationToken) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_RejectsCandidateWithNonOptionalMissingParameter()
+    {
+        // O_Required(int, int) has no optional parameters; calling with a single
+        // argument leaves a non-optional parameter unfilled and is not applicable.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.O_Required), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_PrefersFewerParametersWhenOptionalsTie()
+    {
+        // Issue #327: O_OneOptional(int, CancellationToken = default) and
+        // O_TwoOptional(int, CancellationToken = default, CancellationToken =
+        // default) both apply to a single int argument. The overload requiring
+        // fewer omitted optionals wins (C# §7.5.3.2).
+        var oneOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
+        var twoOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_TwoOptional), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { oneOpt, twoOpt }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_OmitsTrailingOptionalParameter_OnOpenGenericMethod()
+    {
+        // Issue #327: Enumerable.CountBy<TSource,TKey>(IEnumerable<TSource>,
+        // Func<TSource,TKey>, IEqualityComparer<TKey> = null) is open generic
+        // with a trailing optional. Inference must succeed from the first two
+        // arguments while the optional comparer is omitted.
+        var open = typeof(System.Linq.Enumerable)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == nameof(System.Linq.Enumerable.CountBy) && m.IsGenericMethodDefinition);
+        var result = OverloadResolution.Resolve(
+            new[] { open },
+            new[] { typeof(System.Collections.Generic.IEnumerable<int>), typeof(Func<int, int>) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethodDefinition);
+    }
+
     private static MethodInfo Resolve(string a, string b, Type[] argTypes)
     {
         var first = typeof(Fixture).GetMethod(a, BindingFlags.Public | BindingFlags.Static);
@@ -229,5 +292,12 @@ public class OverloadResolutionTests
         public static void G_Enumerable<T>(System.Collections.Generic.IEnumerable<T> xs) { _ = xs; }
 
         public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
+
+        // Issue #327: optional-parameter fixtures.
+        public static void O_OneOptional(int a, System.Threading.CancellationToken token = default) { _ = a; _ = token; }
+
+        public static void O_TwoOptional(int a, System.Threading.CancellationToken first = default, System.Threading.CancellationToken second = default) { _ = a; _ = first; _ = second; }
+
+        public static void O_Required(int a, int b) { _ = a; _ = b; }
     }
 }

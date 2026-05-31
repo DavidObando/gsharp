@@ -6429,6 +6429,111 @@ public sealed class Binder
         return builder.MoveToImmutable();
     }
 
+    /// <summary>
+    /// Issue #327: appends synthesized default-value arguments for any trailing
+    /// optional parameters the call site omitted. <paramref name="parameters"/>
+    /// is the full parameter list of the resolved CLR method/constructor;
+    /// <paramref name="suppliedArguments"/> are the arguments already bound for
+    /// the leading parameters (for instance/extension calls this includes the
+    /// receiver mapped onto the first parameter). When no parameters are
+    /// omitted, the supplied array is returned unchanged.
+    /// </summary>
+    /// <param name="suppliedArguments">Bound arguments mapped to the leading parameters.</param>
+    /// <param name="parameters">The resolved method's full parameter list.</param>
+    /// <returns>The argument array padded to the parameter count with defaults.</returns>
+    private static ImmutableArray<BoundExpression> AppendOmittedOptionalArguments(
+        ImmutableArray<BoundExpression> suppliedArguments,
+        System.Reflection.ParameterInfo[] parameters)
+    {
+        if (suppliedArguments.Length >= parameters.Length)
+        {
+            return suppliedArguments;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+        builder.AddRange(suppliedArguments);
+        for (var i = suppliedArguments.Length; i < parameters.Length; i++)
+        {
+            builder.Add(CreateOptionalDefaultArgument(parameters[i]));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #327: builds the bound expression for an omitted optional
+    /// parameter. An explicit constant default (e.g. <c>int x = 5</c>) becomes
+    /// the corresponding literal; <c>= default</c>/<c>= null</c> and
+    /// constant-less <c>[Optional]</c> parameters (e.g.
+    /// <c>CancellationToken cancellationToken = default</c>) become the zero
+    /// value of the parameter type.
+    /// </summary>
+    /// <param name="parameter">The omitted optional parameter.</param>
+    /// <returns>The bound default-value argument.</returns>
+    private static BoundExpression CreateOptionalDefaultArgument(System.Reflection.ParameterInfo parameter)
+    {
+        var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
+
+        if (TryGetConstantParameterDefault(parameter, out var constant))
+        {
+            return new BoundLiteralExpression(null, constant);
+        }
+
+        return new BoundDefaultExpression(null, typeSymbol);
+    }
+
+    /// <summary>
+    /// Issue #327: reads a primitive/string constant default from an optional
+    /// parameter's metadata, when present. Returns <c>false</c> for
+    /// <c>= default</c>, <c>= null</c>, or non-primitive constants so the caller
+    /// falls back to <see cref="BoundDefaultExpression"/>.
+    /// </summary>
+    /// <param name="parameter">The optional parameter to inspect.</param>
+    /// <param name="value">The constant default value, when present.</param>
+    /// <returns>Whether a usable primitive/string constant default exists.</returns>
+    private static bool TryGetConstantParameterDefault(System.Reflection.ParameterInfo parameter, out object value)
+    {
+        value = null;
+        object raw;
+        try
+        {
+            raw = parameter.RawDefaultValue;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (raw == null || raw is System.DBNull)
+        {
+            return false;
+        }
+
+        // Only primitive/string constants flow through BoundLiteralExpression's
+        // known value kinds; the constant's CLR type is also the IL form for an
+        // enum parameter (whose default is encoded as its underlying integral).
+        switch (raw)
+        {
+            case bool:
+            case sbyte:
+            case byte:
+            case short:
+            case ushort:
+            case int:
+            case uint:
+            case long:
+            case ulong:
+            case float:
+            case double:
+            case char:
+            case string:
+                value = raw;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     /// <summary>ADR-0039: Validates that ref/out arguments are wrapped in <c>BoundAddressOfExpression</c>.</summary>
     private ImmutableArray<BoundExpression> ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,
@@ -7735,8 +7840,9 @@ public sealed class Binder
             return false;
         }
 
-        var ctorRefKinds = ComputeArgumentRefKinds(bestCtor.GetParameters());
-        var ctorArgs = boundArguments.MoveToImmutable();
+        var ctorParameters = bestCtor.GetParameters();
+        var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
+        var ctorArgs = AppendOmittedOptionalArguments(boundArguments.MoveToImmutable(), ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -8615,9 +8721,11 @@ public sealed class Binder
         {
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols))
             {
-                var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
-                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(null, staticFn, arguments, refKinds, typeArgSymbols);
+                var staticParameters = staticFn.Method.GetParameters();
+                var staticArguments = AppendOmittedOptionalArguments(arguments, staticParameters);
+                var refKinds = ComputeArgumentRefKinds(staticParameters);
+                ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
+                return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
             }
 
             if (staticAmbiguous)
@@ -8722,9 +8830,11 @@ public sealed class Binder
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
-                        var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                        ValidateRefArguments(arguments, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, instRefKinds, typeArgSymbols);
+                        var instParameters = resolution.Best.GetParameters();
+                        var instArguments = AppendOmittedOptionalArguments(arguments, instParameters);
+                        var instRefKinds = ComputeArgumentRefKinds(instParameters);
+                        ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
+                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression(null);
@@ -8799,9 +8909,11 @@ public sealed class Binder
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
-                var refKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, refKinds, typeArgSymbols);
+                var inheritedParameters = resolution.Best.GetParameters();
+                var inheritedArguments = AppendOmittedOptionalArguments(arguments, inheritedParameters);
+                var refKinds = ComputeArgumentRefKinds(inheritedParameters);
+                ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
+                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
@@ -9012,7 +9124,12 @@ public sealed class Binder
         allArguments.AddRange(arguments);
         var bound = allArguments.MoveToImmutable();
 
-        var refKinds = ComputeArgumentRefKinds(best.GetParameters());
+        // Issue #327: fill in any trailing optional parameters the call omitted
+        // (e.g. the CancellationToken on HttpResponse.WriteAsync(text)).
+        var parameters = best.GetParameters();
+        bound = AppendOmittedOptionalArguments(bound, parameters);
+
+        var refKinds = ComputeArgumentRefKinds(parameters);
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
         result = new BoundImportedCallExpression(null, function, bound, refKinds, typeArgSymbols);
         return true;
