@@ -3295,7 +3295,11 @@ public sealed class Binder
                     return null;
                 }
 
-                clrArgs[i] = ta.ClrType;
+                // Project host CLR type arguments onto the resolver's reference
+                // set so they share clrOpenType's load context (its
+                // MetadataLoadContext when references are supplied via /r:),
+                // which MakeGenericType requires.
+                clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
             }
 
             try
@@ -7284,7 +7288,11 @@ public sealed class Binder
                     return false;
                 }
 
-                clrArgs[i] = ta.ClrType;
+                // Project host CLR type arguments onto the resolver's reference
+                // set so they share openType's load context (its
+                // MetadataLoadContext when references are supplied via /r:),
+                // which MakeGenericType requires.
+                clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
             }
 
             try
@@ -7535,7 +7543,13 @@ public sealed class Binder
                             break;
                         }
 
-                        clrArgs[i] = ta.ClrType;
+                        // Type arguments resolve to gsc-host CLR types (e.g.
+                        // primitives map to host typeof(...)), but openType may
+                        // come from the resolver's isolated MetadataLoadContext.
+                        // MakeGenericType requires every argument to share the
+                        // open generic's load context, so project each argument
+                        // onto the resolver's reference set first.
+                        clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
                     }
 
                     if (!argsResolved)
