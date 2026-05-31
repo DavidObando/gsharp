@@ -199,6 +199,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.FunctionLiteralExpression:
                 WriteFunctionLiteralExpression((BoundFunctionLiteralExpression)node, writer);
                 break;
+            case BoundNodeKind.MethodGroupExpression:
+                WriteMethodGroupExpression((BoundMethodGroupExpression)node, writer);
+                break;
             case BoundNodeKind.IndirectCallExpression:
                 WriteIndirectCallExpression((BoundIndirectCallExpression)node, writer);
                 break;
@@ -1398,6 +1401,11 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
         writer.WriteSpace();
         node.Body.WriteTo(writer);
+    }
+
+    private static void WriteMethodGroupExpression(BoundMethodGroupExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier(node.Function.Name);
     }
 
     private static void WriteIndirectCallExpression(BoundIndirectCallExpression node, IndentedTextWriter writer)

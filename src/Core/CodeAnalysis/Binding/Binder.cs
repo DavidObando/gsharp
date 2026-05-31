@@ -5511,9 +5511,27 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
-        var variable = BindVariableReference(name, syntax.IdentifierToken.Location);
+        var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true);
         if (variable == null)
         {
+            // Issue #324: a bare identifier naming a free (package-level)
+            // function is a method group. In a value context — e.g. assigning
+            // to a `func(...)` or `Func[...]` slot — it converts to a delegate
+            // over that function. We only synthesize the group here; the
+            // conversion classifier decides whether the surrounding context
+            // actually accepts it (otherwise a cannot-convert is reported).
+            if (TryBindMethodGroup(name, out var methodGroup))
+            {
+                return methodGroup;
+            }
+
+            // Not a method group: surface the suppressed GS0126 (or the
+            // undefined-variable diagnostic already reported).
+            if (scope.TryLookupSymbol(name) is not null and not VariableSymbol)
+            {
+                Diagnostics.ReportNotAVariable(syntax.IdentifierToken.Location, name);
+            }
+
             return new BoundErrorExpression(null);
         }
 
@@ -9457,6 +9475,11 @@ public sealed class Binder
 
     private VariableSymbol BindVariableReference(string name, TextLocation location)
     {
+        return BindVariableReference(name, location, suppressNotAVariable: false);
+    }
+
+    private VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable)
+    {
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
@@ -9468,9 +9491,52 @@ public sealed class Binder
                 return null;
 
             default:
-                Diagnostics.ReportNotAVariable(location, name);
+                if (!suppressNotAVariable)
+                {
+                    Diagnostics.ReportNotAVariable(location, name);
+                }
+
                 return null;
         }
+    }
+
+    // Issue #324: build a method-group expression for a bare identifier that
+    // names a free (package-level) function. Returns false for anything that
+    // cannot be materialized as a simple `ldftn` over a static method def:
+    // instance methods, generics, variadics, and class statics are excluded.
+    private bool TryBindMethodGroup(string name, out BoundExpression methodGroup)
+    {
+        methodGroup = null;
+
+        if (scope.TryLookupSymbol(name) is not FunctionSymbol function)
+        {
+            return false;
+        }
+
+        if (function.IsInstanceMethod
+            || function.IsGeneric
+            || function.IsExtension
+            || function.IsStatic
+            || function.StaticOwnerType != null
+            || function.Package == null)
+        {
+            return false;
+        }
+
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
+        foreach (var parameter in function.Parameters)
+        {
+            if (parameter.IsVariadic)
+            {
+                return false;
+            }
+
+            parameterTypes.Add(parameter.Type);
+        }
+
+        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), function.Type ?? TypeSymbol.Void);
+        methodGroup = new BoundMethodGroupExpression(null, function, fnType);
+        return true;
     }
 
     // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an
