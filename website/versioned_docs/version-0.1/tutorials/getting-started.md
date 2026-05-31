@@ -12,7 +12,7 @@ In this tutorial, you will create a G# console project, replace the template bod
 
 - The .NET SDK that can target `net10.0`.
 - A terminal in a directory where you can create a project.
-- The `Gsharp.Templates` package. Until the SDK is published publicly, follow the side-loading notes in [SDK projects](/docs/tooling/sdk-projects) if your machine cannot resolve `Gsharp.NET.Sdk`.
+- The [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) package, available on NuGet. It installs the [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) used by the generated project, both resolved from the public NuGet feed.
 
 ## 1. Scaffold a console app
 

@@ -26,7 +26,7 @@ Expected output from the template is:
 Hello from GSharp!
 ```
 
-The template pins the `Gsharp.NET.Sdk` version into the generated project, sets `OutputType` to `Exe`, targets `net10.0`, and includes local package-feed setup for side-loaded SDK packages before public NuGet publication.
+The template pins the `Gsharp.NET.Sdk` version into the generated project, sets `OutputType` to `Exe`, targets `net10.0`, and includes a `NuGet.config` that enables optional local SDK side-loading.
 
 ## Minimal project file
 
@@ -152,7 +152,7 @@ Top-level statements choose the entry-point package. The single-package case rem
 
 ## Local SDK side-loading
 
-Until the SDK and templates are available from a public feed, projects can resolve packed `.nupkg` files from a local feed. The template scaffolds a `NuGet.config` for this workflow.
+`Gsharp.NET.Sdk` and `Gsharp.Templates` are published on NuGet, so projects resolve the SDK from the public feed by default. When you are developing the SDK itself, projects can instead resolve packed `.nupkg` files from a local feed. The template scaffolds a `NuGet.config` for this workflow.
 
 ```bash
 mkdir -p packages
