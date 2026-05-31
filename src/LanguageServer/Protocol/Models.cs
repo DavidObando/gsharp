@@ -385,6 +385,9 @@ public sealed class Command
 
     [JsonPropertyName("command")]
     public string Name { get; set; }
+
+    [JsonPropertyName("arguments")]
+    public object[] Arguments { get; set; }
 }
 
 public readonly struct CodeActionKind : IEquatable<CodeActionKind>

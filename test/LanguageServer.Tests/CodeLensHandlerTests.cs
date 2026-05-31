@@ -55,4 +55,20 @@ public class CodeLensHandlerTests
 
         Assert.Equal(2, lenses.Count);
     }
+
+    [Fact]
+    public void ComputeLenses_PopulatesShowReferencesCommandWithArguments()
+    {
+        const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = add(1, 2)\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content, "file:///test.gs");
+
+        var command = Assert.Single(lenses).Command;
+        Assert.Equal("gsharp.showReferences", command.Name);
+        Assert.NotNull(command.Arguments);
+        Assert.Equal(2, command.Arguments.Length);
+        Assert.Equal("file:///test.gs", command.Arguments[0]);
+        Assert.IsType<GSharp.LanguageServer.Protocol.Position>(command.Arguments[1]);
+    }
 }

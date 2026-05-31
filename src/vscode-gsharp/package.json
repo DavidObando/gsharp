@@ -189,14 +189,6 @@
         "title": "GSharp: Generate Build & Debug Assets"
       },
       {
-        "command": "gsharp.fixAll.document",
-        "title": "GSharp: Fix All (Document)"
-      },
-      {
-        "command": "gsharp.fixAll.project",
-        "title": "GSharp: Fix All (Project)"
-      },
-      {
         "command": "gsharp.reportIssue",
         "title": "GSharp: Report Issue"
       }

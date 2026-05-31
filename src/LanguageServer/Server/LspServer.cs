@@ -273,8 +273,21 @@ public sealed class LspServer
     [JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)]
     public Task<CodeLens[]> CodeLensAsync(CodeLensParams request)
         => this.GuardAsync(() => this.TryGet(request.TextDocument, out var content)
-            ? CodeLensComputer.ComputeLenses(content).ToArray()
+            ? CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString()).ToArray()
             : Array.Empty<CodeLens>());
+
+    [JsonRpcMethod("gsharp/discoverTests")]
+    public Task<TestDiscoveryItem[]> DiscoverTestsAsync()
+        => this.GuardAsync(() =>
+        {
+            var results = new List<TestDiscoveryItem>();
+            foreach (var pair in this.documentContentService.AllDocuments)
+            {
+                results.AddRange(TestDiscoveryComputer.ComputeTests(pair.Key, pair.Value));
+            }
+
+            return results.ToArray();
+        });
 
     [JsonRpcMethod("textDocument/inlayHint", UseSingleObjectParameterDeserialization = true)]
     public Task<InlayHint[]> InlayHintAsync(InlayHintParams request)

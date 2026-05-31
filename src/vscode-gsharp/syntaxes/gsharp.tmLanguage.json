@@ -19,6 +19,11 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.block.gsharp",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
           "name": "comment.line.double-slash.gsharp",
           "match": "//.*$"
         }
@@ -96,7 +101,7 @@
       "patterns": [
         {
           "name": "keyword.control.gsharp",
-          "match": "\\b(if|else|for|while|switch|case|default|break|continue|return|goto|fallthrough|range|select)\\b"
+          "match": "\\b(if|else|for|switch|case|default|break|continue|return|goto|fallthrough|range|select)\\b"
         },
         {
           "name": "keyword.control.flow.gsharp",
@@ -112,7 +117,7 @@
         },
         {
           "name": "keyword.modifier.gsharp",
-          "match": "\\b(public|private|internal|open|sealed|override|const|static)\\b"
+          "match": "\\b(public|private|internal|open|sealed|override|const|shared)\\b"
         },
         {
           "name": "keyword.other.gsharp",
@@ -168,7 +173,7 @@
         },
         {
           "name": "keyword.operator.arrow.gsharp",
-          "match": "(=>|->)"
+          "match": "(->)"
         }
       ]
     },

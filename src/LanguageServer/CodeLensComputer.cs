@@ -15,7 +15,7 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class CodeLensComputer
 {
-    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content)
+    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null)
     {
         var tree = content.SyntaxTree;
         var text = tree.Text;
@@ -42,7 +42,7 @@ public static class CodeLensComputer
                     {
                         var refCount = SemanticLookup.FindReferences(compilation, funcSymbol).Count() - 1; // exclude declaration
                         var range = SemanticLookup.ToRange(func.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount));
+                        lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
                     break;
@@ -52,7 +52,7 @@ public static class CodeLensComputer
                     {
                         var refCount = SemanticLookup.FindReferences(compilation, structSymbol).Count() - 1;
                         var range = SemanticLookup.ToRange(structDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount));
+                        lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
                     break;
@@ -62,7 +62,7 @@ public static class CodeLensComputer
                     {
                         var refCount = SemanticLookup.FindReferences(compilation, enumSymbol).Count() - 1;
                         var range = SemanticLookup.ToRange(enumDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount));
+                        lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
                     break;
@@ -72,7 +72,7 @@ public static class CodeLensComputer
                     {
                         var refCount = SemanticLookup.FindReferences(compilation, ifaceSymbol).Count() - 1;
                         var range = SemanticLookup.ToRange(ifaceDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount));
+                        lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
                     break;
@@ -82,13 +82,18 @@ public static class CodeLensComputer
         return lenses;
     }
 
-    private static CodeLens CreateReferenceLens(Range range, int refCount)
+    private static CodeLens CreateReferenceLens(Range range, int refCount, string uri)
     {
         var title = refCount == 1 ? "1 reference" : $"{refCount} references";
         return new CodeLens
         {
             Range = range,
-            Command = new Command { Title = title, Name = "gsharp.showReferences" },
+            Command = new Command
+            {
+                Title = title,
+                Name = "gsharp.showReferences",
+                Arguments = new object[] { uri, range.Start },
+            },
         };
     }
 }

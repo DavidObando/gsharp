@@ -5,6 +5,8 @@ import { DiagnosticsManager } from './features/diagnostics';
 import { registerBuildCommands } from './commands/buildCommands';
 import { registerProjectCommands } from './commands/projectCommands';
 import { registerDebugger } from './debugger/configProvider';
+import { registerReferenceFeatures } from './features/references';
+import { registerTestingFeatures } from './features/testing';
 import { ProjectContext } from './status/projectContext';
 
 let serverManager: ServerManager | undefined;
@@ -38,6 +40,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
   registerBuildCommands(context, diagnosticsManager, logger);
   registerProjectCommands(context);
+  registerReferenceFeatures(context);
+  registerTestingFeatures(context, () => serverManager?.getClient(), logger);
 
   // Register debugger
   registerDebugger(context);
