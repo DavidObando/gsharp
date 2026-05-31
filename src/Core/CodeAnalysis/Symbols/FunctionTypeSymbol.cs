@@ -17,6 +17,10 @@ public sealed class FunctionTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<string, FunctionTypeSymbol> Cache = new ConcurrentDictionary<string, FunctionTypeSymbol>();
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object> TypeParameterIds = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, object>();
+
+    private static long typeParameterIdSeed;
+
     private FunctionTypeSymbol(string name, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
         : base(name, BuildClrType(parameterTypes, returnType))
     {
@@ -59,7 +63,67 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         }
 
         var name = sb.ToString();
-        return Cache.GetOrAdd(name, n => new FunctionTypeSymbol(n, parameterTypes, returnType ?? TypeSymbol.Void));
+
+        // The display name uses the type-parameter *names* (e.g. "func(T) U"),
+        // but two distinct generic declarations can reuse the same letters for
+        // different type parameters. Caching purely by name would alias them
+        // and break substitution/inference, which compare TypeParameterSymbol
+        // identity. Build the cache key from each component's *identity* so an
+        // open delegate type is shared only when its type parameters are the
+        // same symbol instances, while concrete delegate types (keyed by their
+        // stable type names) stay shared across the whole program.
+        var keyBuilder = new System.Text.StringBuilder();
+        keyBuilder.Append("func(");
+        for (var i = 0; i < parameterTypes.Length; i++)
+        {
+            if (i > 0)
+            {
+                keyBuilder.Append(',');
+            }
+
+            AppendIdentityKey(keyBuilder, parameterTypes[i]);
+        }
+
+        keyBuilder.Append(')');
+        AppendIdentityKey(keyBuilder, returnType ?? TypeSymbol.Void);
+
+        var cacheKey = keyBuilder.ToString();
+        return Cache.GetOrAdd(cacheKey, _ => new FunctionTypeSymbol(name, parameterTypes, returnType ?? TypeSymbol.Void));
+    }
+
+    private static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    {
+        switch (type)
+        {
+            case TypeParameterSymbol tp:
+                // A boxed, process-unique id keyed off the symbol instance.
+                var id = (long)TypeParameterIds.GetValue(tp, _ => NextTypeParameterId());
+                builder.Append("!tp").Append(id);
+                break;
+            case FunctionTypeSymbol fn:
+                builder.Append("func(");
+                for (var i = 0; i < fn.ParameterTypes.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, fn.ParameterTypes[i]);
+                }
+
+                builder.Append(')');
+                AppendIdentityKey(builder, fn.ReturnType);
+                break;
+            default:
+                builder.Append(type?.Name ?? "void");
+                break;
+        }
+    }
+
+    private static object NextTypeParameterId()
+    {
+        return System.Threading.Interlocked.Increment(ref typeParameterIdSeed);
     }
 
     private static System.Type BuildClrType(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
