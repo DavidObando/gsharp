@@ -27,3 +27,21 @@ public sealed class ImportedMarkerAttribute : Attribute
 public sealed class ImportedDefaultAttribute : Attribute
 {
 }
+
+/// <summary>
+/// A plain reference-assembly class used to verify that imports of non-System
+/// namespaces resolve inside function and method bodies — not just in top-level
+/// statements. Constructing this type or calling its members from within a
+/// <c>func</c> body forces the function-body binder scope to use the
+/// compilation's <see cref="System.Reflection.Assembly"/> references rather than
+/// falling back to the core-only default resolver.
+/// </summary>
+public sealed class ImportedGreeter
+{
+    /// <summary>
+    /// Greets the supplied name.
+    /// </summary>
+    /// <param name="name">The name to greet.</param>
+    /// <returns>A greeting string.</returns>
+    public string Greet(string name) => $"Hello, {name}!";
+}

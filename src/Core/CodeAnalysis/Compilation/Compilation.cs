@@ -157,7 +157,7 @@ public class Compilation
             return new EvaluationResult(diagnostics, null);
         }
 
-        var program = Binder.BindProgram(GlobalScope);
+        var program = Binder.BindProgram(GlobalScope, References);
 
         var appPath = Environment.GetCommandLineArgs()[0];
         var appDirectory = Path.GetDirectoryName(appPath);
@@ -208,7 +208,7 @@ public class Compilation
     /// <param name="writer">The writer.</param>
     public void EmitTree(TextWriter writer)
     {
-        var program = Binder.BindProgram(GlobalScope);
+        var program = Binder.BindProgram(GlobalScope, References);
 
         if (program.Statement.Statements.Any())
         {
@@ -244,7 +244,7 @@ public class Compilation
             return new EmitResult(success: false, syntaxDiagnostics);
         }
 
-        var program = Binder.BindProgram(GlobalScope);
+        var program = Binder.BindProgram(GlobalScope, References);
         if (program.Diagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
@@ -308,7 +308,7 @@ public class Compilation
             return new EmitResult(success: false, syntaxDiagnostics);
         }
 
-        var program = Binder.BindProgram(GlobalScope);
+        var program = Binder.BindProgram(GlobalScope, References);
         if (program.Diagnostics.Any(d => d.IsError))
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
