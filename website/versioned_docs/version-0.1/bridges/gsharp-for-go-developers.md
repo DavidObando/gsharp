@@ -14,7 +14,7 @@ G# is a Go-inspired language for .NET. You will recognize packages, `func`, `def
 | --- | --- | --- |
 | `package main` | `package MyApp.Cli` | Packages map to CLR namespaces rather than import paths. |
 | `import "fmt"` | `import System` | Imports bind CLR namespaces, G# packages, and aliases. |
-| `func main()` | top-level statements or `func main()` | SDK projects synthesize an entry point from top-level statements. |
+| `func main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point from top-level statements. |
 | `fmt.Println(x)` | `Console.WriteLine(x)` | Use .NET library types directly. |
 | `var x int` | `var x int32` or `var x int64` | G# uses width-bearing numeric names. |
 | `:=` | `:=` | Short declarations are available where inference is possible. |
@@ -56,7 +56,7 @@ Go exports identifiers by capitalization. G# uses explicit modifiers:
 
 ```gsharp
 public class Customer {
-    private var id string
+    private id string
     internal func DebugId() string { return id }
 }
 ```
