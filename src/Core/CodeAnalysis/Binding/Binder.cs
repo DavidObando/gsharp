@@ -6429,6 +6429,73 @@ public sealed class Binder
         return builder.MoveToImmutable();
     }
 
+    /// <summary>
+    /// Issue #321: pads a bound argument list with the compile-time default
+    /// values of any trailing optional parameters the call site omitted.
+    /// Overload resolution may select a CLR method or constructor that declares
+    /// more parameters than arguments were supplied (e.g.
+    /// <c>JsonSerializer.Serialize&lt;TValue&gt;(TValue, JsonSerializerOptions? = null)</c>).
+    /// Because the emitter pushes one IL value per declared parameter, the bound
+    /// argument list must match the target signature exactly.
+    /// </summary>
+    /// <param name="method">The resolved CLR method or constructor.</param>
+    /// <param name="arguments">The arguments supplied at the call site.</param>
+    /// <returns>The argument list extended to the method's full arity.</returns>
+    private static ImmutableArray<BoundExpression> AppendOptionalDefaultArguments(
+        System.Reflection.MethodBase method,
+        ImmutableArray<BoundExpression> arguments)
+    {
+        var parameters = method.GetParameters();
+        if (parameters.Length <= arguments.Length)
+        {
+            return arguments;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+        builder.AddRange(arguments);
+        for (var i = arguments.Length; i < parameters.Length; i++)
+        {
+            builder.Add(CreateOptionalDefaultArgument(parameters[i]));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #321: produces the bound expression for an omitted optional
+    /// parameter. A non-null primitive/string compile-time default is emitted
+    /// as a literal of that exact type; every other case (a <c>null</c> default,
+    /// a defaulted value type, or an enum) maps to <c>default(T)</c>, which the
+    /// emitter lowers to the correct zero/null value.
+    /// </summary>
+    /// <param name="parameter">The omitted optional parameter.</param>
+    /// <returns>A bound expression producing the parameter's default value.</returns>
+    private static BoundExpression CreateOptionalDefaultArgument(System.Reflection.ParameterInfo parameter)
+    {
+        var parameterType = parameter.ParameterType;
+        var typeSymbol = TypeSymbol.FromClrType(parameterType);
+
+        object defaultValue = null;
+        if (parameter.HasDefaultValue)
+        {
+            try
+            {
+                defaultValue = parameter.RawDefaultValue;
+            }
+            catch
+            {
+                defaultValue = null;
+            }
+        }
+
+        if (defaultValue != null && defaultValue.GetType() == parameterType)
+        {
+            return new BoundLiteralExpression(null, defaultValue, typeSymbol);
+        }
+
+        return new BoundDefaultExpression(null, typeSymbol);
+    }
+
     /// <summary>ADR-0039: Validates that ref/out arguments are wrapped in <c>BoundAddressOfExpression</c>.</summary>
     private ImmutableArray<BoundExpression> ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,
@@ -7709,7 +7776,7 @@ public sealed class Binder
         }
 
         var ctorRefKinds = ComputeArgumentRefKinds(bestCtor.GetParameters());
-        var ctorArgs = boundArguments.MoveToImmutable();
+        var ctorArgs = AppendOptionalDefaultArguments(bestCtor, boundArguments.MoveToImmutable());
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -8534,11 +8601,12 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, scope.References.MapClrTypeToReferences))
             {
+                var paddedArgs = AppendOptionalDefaultArguments(staticFn.Method, arguments);
                 var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
-                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(null, staticFn, arguments, refKinds);
+                ValidateRefArguments(paddedArgs, refKinds, methodName, ce.Location);
+                return new BoundImportedCallExpression(null, staticFn, paddedArgs, refKinds);
             }
 
             if (staticAmbiguous)
@@ -8638,14 +8706,15 @@ public sealed class Binder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                        var paddedInstArgs = AppendOptionalDefaultArguments(resolution.Best, arguments);
                         var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                        ValidateRefArguments(arguments, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, instRefKinds);
+                        ValidateRefArguments(paddedInstArgs, instRefKinds, methodName, ce.Location);
+                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, paddedInstArgs, instRefKinds);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression(null);
@@ -8714,14 +8783,15 @@ public sealed class Binder
             argTypes[i] = t;
         }
 
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
                 var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                var paddedArgs = AppendOptionalDefaultArguments(resolution.Best, arguments);
                 var refKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
-                ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, refKinds);
+                ValidateRefArguments(paddedArgs, refKinds, methodName, ce.Location);
+                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, paddedArgs, refKinds);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
@@ -8809,7 +8879,7 @@ public sealed class Binder
         // when the call site supplied explicit type arguments (e.g.
         // services.AddSingleton[IService, Service]()), those are used to close
         // the generic method instead of inference.
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -8835,7 +8905,7 @@ public sealed class Binder
         var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
         allArguments.Add(receiver);
         allArguments.AddRange(arguments);
-        var bound = allArguments.MoveToImmutable();
+        var bound = AppendOptionalDefaultArguments(best, allArguments.MoveToImmutable());
 
         var refKinds = ComputeArgumentRefKinds(best.GetParameters());
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);

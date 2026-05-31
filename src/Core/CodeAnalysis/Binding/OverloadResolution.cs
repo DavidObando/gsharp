@@ -195,94 +195,41 @@ internal static class OverloadResolution
     /// Non-generic and mismatched-arity candidates are dropped (matches C#'s
     /// rule that explicit type arguments require a matching generic method).
     /// </param>
+    /// <param name="projectTypeArgument">
+    /// Issue #321: projects an inferred type argument (a live host-runtime
+    /// <see cref="Type"/> taken from a bound argument) onto the reference load
+    /// context that loaded the candidate methods, so
+    /// <see cref="MethodInfo.MakeGenericMethod"/> accepts it. Without this
+    /// projection, closing a generic method such as
+    /// <c>JsonSerializer.Serialize&lt;TValue&gt;</c> with an inferred
+    /// <c>System.String</c> throws "was not loaded by the MetadataLoadContext".
+    /// When <see langword="null"/> the inferred arguments are used as-is.
+    /// Explicit type arguments are assumed to be pre-projected by the caller.
+    /// </param>
     /// <returns>The resolution result.</returns>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
         foreach (var rawCandidate in candidates)
         {
-            // Stream F follow-up: when the candidate is an open generic method
-            // definition, attempt to infer its type arguments from the supplied
-            // arg types. A successful inference yields a closed MethodInfo that
-            // then participates in the same applicability + ranking pass as a
-            // non-generic candidate. Inference failures or constraint
-            // violations drop the candidate silently (matches C# §7.5.2 "if
-            // type inference fails, the method is not applicable").
-            T candidate = rawCandidate;
-            if (explicitTypeArgs != null)
+            // Issue #321: an overload's signature may reference types that cannot
+            // be loaded or projected under the MetadataLoadContext used for
+            // reference assemblies (e.g. the ref-struct Utf8JsonWriter, or types
+            // living in transitive assemblies that were not supplied via /r:).
+            // Reflecting over such a parameter (GetParameters / ParameterType)
+            // throws a load exception. A single unloadable overload must not sink
+            // the entire candidate set, otherwise an otherwise-resolvable method
+            // such as JsonSerializer.Serialize(string) appears "not found". Treat
+            // these candidates as simply not applicable and keep evaluating the
+            // rest.
+            try
             {
-                // Issue #311: explicit type-argument path. Only open generic
-                // method definitions of matching arity are applicable; close
-                // them with the supplied type arguments verbatim.
-                if (rawCandidate is MethodInfo gmi
-                    && gmi.IsGenericMethodDefinition
-                    && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
-                {
-                    MethodInfo closed;
-                    try
-                    {
-                        closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
-                    }
-                    catch (ArgumentException)
-                    {
-                        // Generic constraints not satisfied — drop this candidate.
-                        continue;
-                    }
-
-                    candidate = (T)(MethodBase)closed;
-                }
-                else
-                {
-                    continue;
-                }
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable);
             }
-            else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
-            {
-                if (!TryInferTypeArguments(mi, argTypes, out var typeArgs))
-                {
-                    continue;
-                }
-
-                MethodInfo closed;
-                try
-                {
-                    closed = mi.MakeGenericMethod(typeArgs);
-                }
-                catch (ArgumentException)
-                {
-                    // Generic constraints not satisfied — drop this candidate.
-                    continue;
-                }
-
-                candidate = (T)(MethodBase)closed;
-            }
-
-            var parameters = candidate.GetParameters();
-            if (parameters.Length != argTypes.Count)
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
                 continue;
-            }
-
-            var conversions = new ImplicitConversionKind[parameters.Length];
-            var paramTypes = new Type[parameters.Length];
-            var ok = true;
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                paramTypes[i] = parameters[i].ParameterType;
-                var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
-                if (conv == ImplicitConversionKind.None)
-                {
-                    ok = false;
-                    break;
-                }
-
-                conversions[i] = conv;
-            }
-
-            if (ok)
-            {
-                applicable.Add((candidate, conversions, paramTypes));
             }
         }
 
@@ -296,58 +243,7 @@ internal static class OverloadResolution
             return Result<T>.Single(applicable[0].Method);
         }
 
-        // Better-function-member pass: a candidate wins iff for all arguments
-        // its conversion is no worse than every other applicable candidate's,
-        // and for at least one argument it is strictly better.
-        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
-        foreach (var c in applicable)
-        {
-            var isWinner = true;
-            foreach (var other in applicable)
-            {
-                if (ReferenceEquals(c.Method, other.Method))
-                {
-                    continue;
-                }
-
-                if (!IsAtLeastAsGoodAs(c.Conversions, c.ParamTypes, other.Conversions, other.ParamTypes, argTypes))
-                {
-                    isWinner = false;
-                    break;
-                }
-            }
-
-            if (isWinner)
-            {
-                winners.Add(c);
-            }
-        }
-
-        if (winners.Count == 1)
-        {
-            return Result<T>.Single(winners[0].Method);
-        }
-
-        // Tie-break: prefer the candidate whose parameter types are
-        // "more specific" (parameter-by-parameter assignability — a less
-        // derived type is implicitly assignable from a more derived one).
-        if (winners.Count > 1)
-        {
-            var mostSpecific = winners
-                .Where(w => winners.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
-                .ToList();
-            if (mostSpecific.Count == 1)
-            {
-                return Result<T>.Single(mostSpecific[0].Method);
-            }
-        }
-
-        // If nothing dominated above, report the entire applicable set as
-        // ambiguous; otherwise report the surviving winners.
-        var ambiguous = (winners.Count > 0 ? winners : applicable)
-            .Select(c => c.Method)
-            .ToImmutableArray();
-        return Result<T>.AmbiguousResult(ambiguous);
+        return RankApplicable(applicable, argTypes);
     }
 
     /// <summary>
@@ -432,14 +328,21 @@ internal static class OverloadResolution
         }
 
         var parameters = openMethod.GetParameters();
-        if (parameters.Length != argTypes.Count)
+
+        // Issue #321: a generic overload may declare trailing optional
+        // parameters (e.g. Serialize<TValue>(TValue value, JsonSerializerOptions?
+        // options = null)). When fewer arguments are supplied than the method
+        // declares, inference still applies as long as the omitted trailing
+        // parameters are optional and every method type parameter is inferable
+        // from the supplied arguments.
+        if (argTypes.Count > parameters.Length || !TrailingParametersOptional(parameters, argTypes.Count))
         {
             return false;
         }
 
         var typeParams = openMethod.GetGenericArguments();
         var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
-        for (var i = 0; i < parameters.Length; i++)
+        for (var i = 0; i < argTypes.Count; i++)
         {
             var arg = argTypes[i];
             if (arg is null)
@@ -469,6 +372,225 @@ internal static class OverloadResolution
 
         typeArgs = result;
         return true;
+    }
+
+    /// <summary>
+    /// Determines whether an exception thrown while reflecting over a candidate's
+    /// signature is a metadata/assembly load failure (issue #321). Such failures
+    /// arise when a parameter type cannot be projected under the reference
+    /// <c>MetadataLoadContext</c> — for example a ref-struct type or a type that
+    /// lives in a transitive assembly that was not supplied via <c>/r:</c>. These
+    /// candidates are treated as not applicable rather than aborting the whole
+    /// lookup; any other exception is left to propagate.
+    /// </summary>
+    /// <param name="ex">The exception observed while evaluating a candidate.</param>
+    /// <returns>Whether the exception represents a tolerable load failure.</returns>
+    private static bool IsMetadataLoadFailure(Exception ex) =>
+        ex is System.IO.FileNotFoundException
+            or System.IO.FileLoadException
+            or TypeLoadException
+            or BadImageFormatException
+            or MissingMethodException
+            or NotSupportedException;
+
+    /// <summary>
+    /// Evaluates a single candidate for applicability against the supplied
+    /// argument types, appending it to <paramref name="applicable"/> when it
+    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type})"/>
+    /// so the per-candidate work can be guarded against reflection load
+    /// failures (issue #321) without disturbing the surrounding control flow.
+    /// </summary>
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable)
+        where T : MethodBase
+    {
+        {
+            // Stream F follow-up: when the candidate is an open generic method
+            // definition, attempt to infer its type arguments from the supplied
+            // arg types. A successful inference yields a closed MethodInfo that
+            // then participates in the same applicability + ranking pass as a
+            // non-generic candidate. Inference failures or constraint
+            // violations drop the candidate silently (matches C# §7.5.2 "if
+            // type inference fails, the method is not applicable").
+            T candidate = rawCandidate;
+            if (explicitTypeArgs != null)
+            {
+                // Issue #311: explicit type-argument path. Only open generic
+                // method definitions of matching arity are applicable; close
+                // them with the supplied type arguments verbatim.
+                if (rawCandidate is MethodInfo gmi
+                    && gmi.IsGenericMethodDefinition
+                    && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
+                {
+                    MethodInfo closed;
+                    try
+                    {
+                        closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Generic constraints not satisfied — drop this candidate.
+                        return;
+                    }
+
+                    candidate = (T)(MethodBase)closed;
+                }
+                else
+                {
+                    return;
+                }
+            }
+            else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+            {
+                if (!TryInferTypeArguments(mi, argTypes, out var typeArgs))
+                {
+                    return;
+                }
+
+                // Issue #321: inferred type arguments are live host-runtime types
+                // pulled from the bound arguments. Project them onto the same load
+                // context that loaded the open method so MakeGenericMethod accepts
+                // them; otherwise it throws "was not loaded by the
+                // MetadataLoadContext that loaded the generic type or method".
+                if (projectTypeArgument != null)
+                {
+                    for (var t = 0; t < typeArgs.Length; t++)
+                    {
+                        typeArgs[t] = projectTypeArgument(typeArgs[t]) ?? typeArgs[t];
+                    }
+                }
+
+                MethodInfo closed;
+                try
+                {
+                    closed = mi.MakeGenericMethod(typeArgs);
+                }
+                catch (ArgumentException)
+                {
+                    // Generic constraints not satisfied — drop this candidate.
+                    return;
+                }
+
+                candidate = (T)(MethodBase)closed;
+            }
+
+            var parameters = candidate.GetParameters();
+
+            // Issue #321: a candidate applies when it has at least as many
+            // parameters as arguments and every parameter beyond the supplied
+            // arguments is optional (has a compile-time default). Only the
+            // supplied arguments participate in applicability and ranking; the
+            // omitted trailing optionals are materialized to their defaults by
+            // the binder before emit.
+            if (argTypes.Count > parameters.Length || !TrailingParametersOptional(parameters, argTypes.Count))
+            {
+                return;
+            }
+
+            var conversions = new ImplicitConversionKind[argTypes.Count];
+            var paramTypes = new Type[argTypes.Count];
+            var ok = true;
+            for (var i = 0; i < argTypes.Count; i++)
+            {
+                paramTypes[i] = parameters[i].ParameterType;
+                var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
+                if (conv == ImplicitConversionKind.None)
+                {
+                    ok = false;
+                    break;
+                }
+
+                conversions[i] = conv;
+            }
+
+            if (ok)
+            {
+                applicable.Add((candidate, conversions, paramTypes));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Determines whether every parameter from <paramref name="suppliedCount"/>
+    /// onward is optional (issue #321). Used to decide whether an overload with
+    /// more parameters than supplied arguments can still apply by relying on the
+    /// trailing parameters' compile-time default values.
+    /// </summary>
+    /// <param name="parameters">The candidate's parameter list.</param>
+    /// <param name="suppliedCount">The number of arguments supplied at the call site.</param>
+    /// <returns>Whether all parameters past the supplied arguments are optional.</returns>
+    private static bool TrailingParametersOptional(ParameterInfo[] parameters, int suppliedCount)
+    {
+        for (var i = suppliedCount; i < parameters.Length; i++)
+        {
+            if (!parameters[i].IsOptional)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies the C# "better function member" ranking pass to the applicable
+    /// candidate set, returning the unique best, an ambiguity, or "none".
+    /// Always called with at least two applicable candidates.
+    /// </summary>
+    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable, IReadOnlyList<Type> argTypes)
+        where T : MethodBase
+    {
+        // Better-function-member pass: a candidate wins iff for all arguments
+        // its conversion is no worse than every other applicable candidate's,
+        // and for at least one argument it is strictly better.
+        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
+        foreach (var c in applicable)
+        {
+            var isWinner = true;
+            foreach (var other in applicable)
+            {
+                if (ReferenceEquals(c.Method, other.Method))
+                {
+                    continue;
+                }
+
+                if (!IsAtLeastAsGoodAs(c.Conversions, c.ParamTypes, other.Conversions, other.ParamTypes, argTypes))
+                {
+                    isWinner = false;
+                    break;
+                }
+            }
+
+            if (isWinner)
+            {
+                winners.Add(c);
+            }
+        }
+
+        if (winners.Count == 1)
+        {
+            return Result<T>.Single(winners[0].Method);
+        }
+
+        // Tie-break: prefer the candidate whose parameter types are
+        // "more specific" (parameter-by-parameter assignability — a less
+        // derived type is implicitly assignable from a more derived one).
+        if (winners.Count > 1)
+        {
+            var mostSpecific = winners
+                .Where(w => winners.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
+                .ToList();
+            if (mostSpecific.Count == 1)
+            {
+                return Result<T>.Single(mostSpecific[0].Method);
+            }
+        }
+
+        // If nothing dominated above, report the entire applicable set as
+        // ambiguous; otherwise report the surviving winners.
+        var ambiguous = (winners.Count > 0 ? winners : applicable)
+            .Select(c => c.Method)
+            .ToImmutableArray();
+        return Result<T>.AmbiguousResult(ambiguous);
     }
 
     private static bool IsAtLeastAsGoodAs(
@@ -523,7 +645,13 @@ internal static class OverloadResolution
     {
         var pa = a.GetParameters();
         var pb = b.GetParameters();
-        for (var i = 0; i < pa.Length; i++)
+
+        // Issue #321: candidates may differ in parameter count once trailing
+        // optional parameters are allowed. Compare only the positions both
+        // signatures share; the omitted optionals do not affect specificity of
+        // the supplied arguments.
+        var shared = Math.Min(pa.Length, pb.Length);
+        for (var i = 0; i < shared; i++)
         {
             // a is "at least as specific" parameter-wise when each of its
             // parameter types is assignable to b's (i.e. a's parameter is
