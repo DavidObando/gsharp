@@ -89,8 +89,13 @@ public sealed class ImportedClassSymbol : Symbol
     /// Issue #320: explicit type-argument symbols in source order (carrying
     /// user-defined types that were closed with a placeholder CLR type), or default.
     /// </param>
+    /// <param name="projectTypeArgument">
+    /// Issue #321: projects an inferred type argument onto the reference load
+    /// context so a generic method (e.g. <c>JsonSerializer.Serialize&lt;T&gt;</c>)
+    /// can be closed via <c>MakeGenericMethod</c>. <c>null</c> disables projection.
+    /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null)
     {
         function = null;
         isAmbiguous = false;
@@ -113,7 +118,7 @@ public sealed class ImportedClassSymbol : Symbol
             argTypes[i] = t;
         }
 
-        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs);
+        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument);
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:

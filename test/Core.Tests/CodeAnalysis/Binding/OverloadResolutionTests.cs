@@ -187,6 +187,41 @@ public class OverloadResolutionTests
     }
 
     [Fact]
+    public void Resolve_ClosesGenericMethodWithOptionalTrailingParameter_FromInference()
+    {
+        // Issue #321: this mirrors JsonSerializer.Serialize<TValue>(TValue value,
+        // JsonSerializerOptions? options = null). Passing a single (string)
+        // argument must infer TValue = string and close the method even though
+        // the declared arity is 2 with a trailing optional parameter.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_SerializeLike), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethodDefinition);
+        Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsInferredTypeArgument_BeforeClosingGenericMethod()
+    {
+        // Issue #321: inferred type arguments are live host-runtime Type objects.
+        // When the candidate was loaded under a different context, they must be
+        // projected before MakeGenericMethod. Verify the projection callback is
+        // invoked for the inferred argument and that its result is honored.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var seen = new System.Collections.Generic.List<Type>();
+        Type Project(Type t)
+        {
+            seen.Add(t);
+            return t;
+        }
+
+        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) }, explicitTypeArgs: null, projectTypeArgument: Project);
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
+        Assert.Contains(typeof(string), seen);
+    }
+
+    [Fact]
     public void Resolve_OmitsTrailingOptionalParameter()
     {
         // Issue #327: O_OneOptional(int, CancellationToken = default) is
@@ -292,6 +327,10 @@ public class OverloadResolutionTests
         public static void G_Enumerable<T>(System.Collections.Generic.IEnumerable<T> xs) { _ = xs; }
 
         public static void G_DictionaryFromValues<TK, TV>(System.Collections.Generic.Dictionary<TK, TV> map) { _ = map; }
+
+        // Issue #321 fixture: optional trailing parameter on an open generic
+        // method (mirrors JsonSerializer.Serialize<TValue>(TValue, options = null)).
+        public static string G_SerializeLike<TValue>(TValue value, object options = null) => value?.ToString();
 
         // Issue #327: optional-parameter fixtures.
         public static void O_OneOptional(int a, System.Threading.CancellationToken token = default) { _ = a; _ = token; }

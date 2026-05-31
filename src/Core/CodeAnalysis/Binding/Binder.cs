@@ -6448,8 +6448,8 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #327: appends synthesized default-value arguments for any trailing
-    /// optional parameters the call site omitted. <paramref name="parameters"/>
+    /// Issue #327/#321: appends synthesized default-value arguments for any
+    /// trailing optional parameters the call site omitted. <paramref name="parameters"/>
     /// is the full parameter list of the resolved CLR method/constructor;
     /// <paramref name="suppliedArguments"/> are the arguments already bound for
     /// the leading parameters (for instance/extension calls this includes the
@@ -6479,7 +6479,7 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #327: builds the bound expression for an omitted optional
+    /// Issue #327/#321: builds the bound expression for an omitted optional
     /// parameter. An explicit constant default (e.g. <c>int x = 5</c>) becomes
     /// the corresponding literal; <c>= default</c>/<c>= null</c> and
     /// constant-less <c>[Optional]</c> parameters (e.g.
@@ -8737,7 +8737,7 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences))
             {
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticArguments = AppendOmittedOptionalArguments(arguments, staticParameters);
@@ -8843,7 +8843,7 @@ public sealed class Binder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
@@ -8922,7 +8922,7 @@ public sealed class Binder
             argTypes[i] = t;
         }
 
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -9113,7 +9113,7 @@ public sealed class Binder
         // when the call site supplied explicit type arguments (e.g.
         // services.AddSingleton[IService, Service]()), those are used to close
         // the generic method instead of inference.
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
