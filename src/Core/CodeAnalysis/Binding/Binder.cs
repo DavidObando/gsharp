@@ -3281,12 +3281,31 @@ public sealed class Binder
             scope.TryLookupImportedGenericClass(syntax.Identifier.Text, syntax.TypeArguments.Count, out var clrOpenType))
         {
             var clrArgs = new System.Type[syntax.TypeArguments.Count];
+            var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
+            var hasTypeParameterArg = false;
             for (var i = 0; i < syntax.TypeArguments.Count; i++)
             {
                 var ta = BindTypeClause(syntax.TypeArguments[i]);
                 if (ta == null)
                 {
                     return null;
+                }
+
+                symbolicArgs.Add(ta);
+
+                // #313: an in-scope generic type parameter used as a type
+                // argument (e.g. `List[T]` inside `func First[T](...)`) is a
+                // valid type in any position. Under the type-erased generic
+                // model (ADR-0004; type parameters encode as System.Object at
+                // emit) the type argument projects onto `object` for the closed
+                // CLR shape so member / index / conversion resolution keeps
+                // working, while the symbolic `[T]` is preserved on the result
+                // for inference, substitution, and erased emit.
+                if (TypeSymbol.ContainsTypeParameter(ta))
+                {
+                    hasTypeParameterArg = true;
+                    clrArgs[i] = typeof(object);
+                    continue;
                 }
 
                 if (ta.ClrType == null)
@@ -3305,6 +3324,14 @@ public sealed class Binder
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
+                if (hasTypeParameterArg)
+                {
+                    // #313: keep the symbolic `[T]` arguments alongside the
+                    // type-erased closed CLR shape so call-site inference and
+                    // return-type substitution can recover the type parameter.
+                    return ImportedTypeSymbol.GetConstructed(closed, clrOpenType, symbolicArgs.MoveToImmutable());
+                }
+
                 return TypeSymbol.FromClrType(closed);
             }
             catch (System.ArgumentException)
@@ -6801,7 +6828,7 @@ public sealed class Binder
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
 
             if (argument.Type != expectedType
-                && !(substitution != null && parameter.Type is TypeParameterSymbol)
+                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
                 if (argument.Type != TypeSymbol.Error)
@@ -6924,6 +6951,48 @@ public sealed class Binder
         {
             InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
         }
+        else if (parameterType is ImportedTypeSymbol pit && pit.HasTypeParameterArgument)
+        {
+            // #313: infer from a generic type parameterized by an in-scope type
+            // parameter (e.g. parameter `List[T]` matched against argument
+            // `List<int32>`). Unify the symbolic type arguments positionally
+            // against the argument's CLR generic arguments.
+            var argClrArgs = GetClrGenericArguments(argumentType);
+            if (!argClrArgs.IsDefaultOrEmpty && argClrArgs.Length == pit.TypeArguments.Length)
+            {
+                for (var i = 0; i < pit.TypeArguments.Length; i++)
+                {
+                    InferTypeArguments(pit.TypeArguments[i], argClrArgs[i], substitution);
+                }
+            }
+        }
+    }
+
+    // #313: surface the CLR generic arguments of an argument type (e.g. the
+    // `int32` of a `List<int32>` argument) as GSharp type symbols, so they can
+    // be unified positionally against the symbolic arguments of a `List[T]`
+    // parameter during type-argument inference.
+    private static ImmutableArray<TypeSymbol> GetClrGenericArguments(TypeSymbol type)
+    {
+        if (type is ImportedTypeSymbol it && !it.TypeArguments.IsDefaultOrEmpty)
+        {
+            return it.TypeArguments;
+        }
+
+        var clr = type?.ClrType;
+        if (clr == null || !clr.IsGenericType)
+        {
+            return ImmutableArray<TypeSymbol>.Empty;
+        }
+
+        var args = clr.GetGenericArguments();
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(args.Length);
+        foreach (var a in args)
+        {
+            builder.Add(TypeSymbol.FromClrType(a));
+        }
+
+        return builder.MoveToImmutable();
     }
 
     private TypeSymbol WrapAsTask(TypeSymbol element)
@@ -7043,6 +7112,70 @@ public sealed class Binder
         {
             var inner = SubstituteType(a.ElementType, substitution);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        if (type is ImportedTypeSymbol it && it.HasTypeParameterArgument)
+        {
+            // #313: substitute a generic type parameterized by an in-scope type
+            // parameter (e.g. `List[T]` with {T: int32} → `List<int32>`). When
+            // every argument becomes concrete, reconstruct the real closed CLR
+            // type so downstream member/index/conversion resolution sees the
+            // substituted form; otherwise keep an erased constructed symbol.
+            var newArgs = ImmutableArray.CreateBuilder<TypeSymbol>(it.TypeArguments.Length);
+            var changed = false;
+            var anyFree = false;
+            foreach (var arg in it.TypeArguments)
+            {
+                var substituted = SubstituteType(arg, substitution);
+                if (!ReferenceEquals(substituted, arg))
+                {
+                    changed = true;
+                }
+
+                if (TypeSymbol.ContainsTypeParameter(substituted))
+                {
+                    anyFree = true;
+                }
+
+                newArgs.Add(substituted);
+            }
+
+            if (!changed)
+            {
+                return type;
+            }
+
+            var substitutedArgs = newArgs.MoveToImmutable();
+            if (!anyFree && it.OpenDefinition != null)
+            {
+                var clrArgs = new System.Type[substitutedArgs.Length];
+                var allClr = true;
+                for (var i = 0; i < substitutedArgs.Length; i++)
+                {
+                    var clr = substitutedArgs[i].ClrType;
+                    if (clr == null)
+                    {
+                        allClr = false;
+                        break;
+                    }
+
+                    clrArgs[i] = clr;
+                }
+
+                if (allClr)
+                {
+                    try
+                    {
+                        return TypeSymbol.FromClrType(it.OpenDefinition.MakeGenericType(clrArgs));
+                    }
+                    catch (System.ArgumentException)
+                    {
+                        // Fall through to the erased constructed form below.
+                    }
+                }
+            }
+
+            return ImportedTypeSymbol.GetConstructed(it.ClrType, it.OpenDefinition, substitutedArgs);
         }
 
         return type;
@@ -8764,7 +8897,8 @@ public sealed class Binder
 
         if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
-            return new BoundClrIndexExpression(null, target, idxProp, idxArgs, TypeSymbol.FromClrType(idxProp.PropertyType));
+            var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
+            return new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType);
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -8836,6 +8970,41 @@ public sealed class Binder
         }
 
         return new BoundErrorExpression(null);
+    }
+
+    // #313: for an erased generic indexed in a generic body (e.g. `items[0]`
+    // where `items: List[T]`), the closed CLR indexer reports its element type
+    // as `object` because the symbol is erased to `List<object>`. Recover the
+    // symbolic element type by resolving the indexer on the open definition: if
+    // its property type is a generic parameter, map it back to the matching
+    // symbolic argument so the result binds as `T` rather than `object`.
+    private static TypeSymbol MapErasedIndexerElementType(ImportedTypeSymbol target, PropertyInfo closedIndexer)
+    {
+        if (target.HasTypeParameterArgument
+            && target.OpenDefinition is System.Type openDefinition
+            && !target.TypeArguments.IsDefaultOrEmpty)
+        {
+            try
+            {
+                var openIndexer = openDefinition.GetProperty(
+                    closedIndexer.Name,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (openIndexer?.PropertyType is System.Type openElement && openElement.IsGenericParameter)
+                {
+                    var position = openElement.GenericParameterPosition;
+                    if (position >= 0 && position < target.TypeArguments.Length)
+                    {
+                        return target.TypeArguments[position];
+                    }
+                }
+            }
+            catch (System.Reflection.AmbiguousMatchException)
+            {
+                // Fall back to the erased element type below.
+            }
+        }
+
+        return TypeSymbol.FromClrType(closedIndexer.PropertyType);
     }
 
     private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)

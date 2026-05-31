@@ -200,4 +200,44 @@ public class TypeSymbol : Symbol
 
         return ImportedTypeSymbol.Get(clrType);
     }
+
+    /// <summary>
+    /// #313: returns <c>true</c> if <paramref name="type"/> is, or structurally
+    /// contains, an in-scope generic <see cref="TypeParameterSymbol"/> (e.g.
+    /// <c>T</c>, <c>T?</c>, <c>[]T</c>, or <c>List[T]</c>). Such a type is an
+    /// open/partially-constructed generic whose emit form is type-erased to
+    /// <c>System.Object</c> under the type-erased generic model (ADR-0004).
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> if the type references an in-scope type parameter.</returns>
+    public static bool ContainsTypeParameter(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+            case TypeParameterSymbol:
+                return true;
+            case NullableTypeSymbol n:
+                return ContainsTypeParameter(n.UnderlyingType);
+            case SliceTypeSymbol s:
+                return ContainsTypeParameter(s.ElementType);
+            case ArrayTypeSymbol a:
+                return ContainsTypeParameter(a.ElementType);
+            case MapTypeSymbol m:
+                return ContainsTypeParameter(m.KeyType) || ContainsTypeParameter(m.ValueType);
+            case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in it.TypeArguments)
+                {
+                    if (ContainsTypeParameter(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return false;
+        }
+    }
 }
