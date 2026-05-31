@@ -6983,6 +6983,19 @@ public sealed class Binder
         {
             InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
         }
+        else if (parameterType is FunctionTypeSymbol pf && argumentType is FunctionTypeSymbol af
+            && pf.ParameterTypes.Length == af.ParameterTypes.Length)
+        {
+            // Infer type parameters that appear inside a delegate parameter,
+            // e.g. `f func(T) U` matched against `func(int32) bool` yields
+            // T -> int32, U -> bool.
+            for (var i = 0; i < pf.ParameterTypes.Length; i++)
+            {
+                InferTypeArguments(pf.ParameterTypes[i], af.ParameterTypes[i], substitution);
+            }
+
+            InferTypeArguments(pf.ReturnType, af.ReturnType, substitution);
+        }
     }
 
     private TypeSymbol WrapAsTask(TypeSymbol element)
@@ -7102,6 +7115,22 @@ public sealed class Binder
         {
             var inner = SubstituteType(a.ElementType, substitution);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        if (type is FunctionTypeSymbol fn)
+        {
+            var changed = false;
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(fn.ParameterTypes.Length);
+            foreach (var paramType in fn.ParameterTypes)
+            {
+                var substituted = SubstituteType(paramType, substitution);
+                changed |= !ReferenceEquals(substituted, paramType);
+                builder.Add(substituted);
+            }
+
+            var substitutedReturn = SubstituteType(fn.ReturnType, substitution);
+            changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
+            return changed ? FunctionTypeSymbol.Get(builder.MoveToImmutable(), substitutedReturn) : type;
         }
 
         return type;

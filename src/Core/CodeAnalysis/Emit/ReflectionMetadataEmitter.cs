@@ -8744,6 +8744,15 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.EncodeClrType(encoder, type.ClrType);
         }
+        else if (type is FunctionTypeSymbol openFn)
+        {
+            // Phase 4 emit parity (F1, type-erased): a delegate type whose
+            // parameter or return types reference open type parameters (e.g.
+            // func(T) U) has no precomputed ClrType. Erase the type-parameter
+            // arguments to System.Object and encode the constructed
+            // System.Func / System.Action shape so signatures resolve.
+            this.EncodeClrType(encoder, this.ResolveDelegateClrType(openFn));
+        }
         else
         {
             throw new NotSupportedException($"Cannot encode signature for type '{type?.Name}' yet.");
@@ -8993,15 +9002,32 @@ internal sealed class ReflectionMetadataEmitter
         var args = new Type[arity + (isVoid ? 0 : 1)];
         for (int i = 0; i < arity; i++)
         {
-            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType);
+            args[i] = this.ResolveDelegateArgClrType(fnType.ParameterTypes[i]);
         }
 
         if (!isVoid)
         {
-            args[arity] = this.MapToReferenceClrType(fnType.ReturnType.ClrType);
+            args[arity] = this.ResolveDelegateArgClrType(fnType.ReturnType);
         }
 
         return openDef.MakeGenericType(args);
+    }
+
+    // Resolve the CLR type used as a System.Func/System.Action type argument
+    // for one delegate parameter or return TypeSymbol. Under the type-erased
+    // generic model (Phase 4 emit parity, F1) an open type parameter has no
+    // ClrType; it erases to System.Object so the constructed open delegate
+    // (e.g. func(T) U -> System.Func<object, object>) resolves cleanly. Call
+    // sites already box / unbox.any value-type arguments and returns around
+    // the erased boundary.
+    private Type ResolveDelegateArgClrType(TypeSymbol type)
+    {
+        if (type is TypeParameterSymbol)
+        {
+            return this.coreObjectType;
+        }
+
+        return this.MapToReferenceClrType(type.ClrType) ?? this.coreObjectType;
     }
 
     /// <summary>
@@ -10423,11 +10449,30 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Phase 4 emit parity (F1, type-erased generics): `==` / `!=` over
+            // open type parameters (e.g. `a == b` in `Eq[T comparable]`). Both
+            // operands are erased to System.Object, so a raw `Ceq` would test
+            // reference equality and return false for equal boxed value types.
+            // Dispatch through static Object.Equals(object, object) — which
+            // routes to the boxed value's Equals override — for correct value
+            // semantics. Operands already sit on the stack as boxed objects.
+            if (b.Left.Type is TypeParameterSymbol && b.Right.Type is TypeParameterSymbol &&
+                (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+            {
+                this.EmitExpression(b.Left);
+                this.EmitExpression(b.Right);
+                this.il.Call(this.outer.GetObjectStaticEqualsReference());
+                if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+                {
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                }
+
+                return;
+            }
+
             this.EmitExpression(b.Left);
             this.EmitExpression(b.Right);
-
-            // ADR-0044: decimal arithmetic and comparison route through
-            // System.Decimal's operator methods.
             if (b.Left.Type == TypeSymbol.Decimal && b.Right.Type == TypeSymbol.Decimal)
             {
                 if (this.TryEmitDecimalBinary(b.Op.Kind))
@@ -12428,6 +12473,21 @@ internal sealed class ReflectionMetadataEmitter
         // `callvirt`.
         private void EmitIndirectCall(BoundIndirectCallExpression call)
         {
+            // Phase 4 emit parity (F1, type-erased generics): a delegate whose
+            // parameter or return types reference open type parameters (e.g.
+            // `func(T) U`) is encoded as `System.Func<object, object>`, but the
+            // runtime instance is a concrete delegate (e.g. `Func<int, int>`).
+            // Invoking it through `Func<object, object>.Invoke` would feed the
+            // concrete target boxed objects it cannot unbox, corrupting memory.
+            // Route the call through `System.Delegate.DynamicInvoke`, which
+            // marshals boxing / unboxing of value-type arguments and the return
+            // value correctly across the erased boundary.
+            if (call.FunctionType.ClrType == null)
+            {
+                this.EmitOpenDelegateDynamicInvoke(call);
+                return;
+            }
+
             this.EmitExpression(call.Target);
             foreach (var arg in call.Arguments)
             {
@@ -12442,6 +12502,46 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(invoke));
+        }
+
+        // Invoke a type-erased open delegate (func(T) U over open type
+        // parameters) via System.Delegate.DynamicInvoke(object[]). Builds a
+        // boxed-argument array, calls DynamicInvoke, and leaves the boxed
+        // result (System.Object) on the stack; the caller's existing erased
+        // return handling unboxes when the substituted return is a value type.
+        private void EmitOpenDelegateDynamicInvoke(BoundIndirectCallExpression call)
+        {
+            this.EmitExpression(call.Target);
+
+            this.il.LoadConstantI4(call.Arguments.Length);
+            this.il.OpCode(ILOpCode.Newarr);
+            this.il.Token(this.outer.objectTypeRef);
+
+            for (int i = 0; i < call.Arguments.Length; i++)
+            {
+                var arg = call.Arguments[i];
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.LoadConstantI4(i);
+                this.EmitExpression(arg);
+
+                // Value-type arguments must be boxed into the object[] slot.
+                // Open type-parameter arguments already flow as System.Object.
+                if (arg.Type is not TypeParameterSymbol && IsValueTypeSymbol(arg.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(arg.Type));
+                }
+
+                this.il.OpCode(ILOpCode.Stelem_ref);
+            }
+
+            var delegateClrType = this.outer.references.GetCoreType("System.Delegate");
+            var dynamicInvoke = delegateClrType.GetMethod("DynamicInvoke")
+                ?? throw new InvalidOperationException(
+                    "System.Delegate has no DynamicInvoke method.");
+
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.GetMethodReference(dynamicInvoke));
         }
 
         private void EmitInstanceReceiver(BoundExpression receiver)
