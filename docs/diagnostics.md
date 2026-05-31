@@ -186,6 +186,12 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS9005 | Error | Cannot take the address of a constant. | `&myConst` where `myConst` is declared `const`. |
 | GS9006 | Error | Pointer type cannot be a field type. | A `struct` field declared with a pointer or `ref` type. |
 
+### Reference closure diagnostics (GS9100)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
+
 ### Internal / emit diagnostics (GS9998–GS9999)
 
 These diagnostics indicate an internal compiler problem. If you encounter them, please file an issue.

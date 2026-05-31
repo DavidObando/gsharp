@@ -29,6 +29,16 @@
       <_GsharpRefAssemblyPath Condition=" '$(ProduceReferenceAssembly)' == 'true' ">@(IntermediateRefAssembly)</_GsharpRefAssemblyPath>
     </PropertyGroup>
 
+    <!-- Reference set forwarded to gsc via /r:. We pass
+         @(ReferencePathWithRefAssemblies) — the same complete, transitively
+         closed item csc consumes — rather than @(ReferencePath). MSBuild's
+         ResolveAssemblyReference populates this with the full transitive
+         closure of reference assemblies (direct references plus their
+         dependencies, substituting ref-assemblies where available). Passing
+         the closure guarantees gsc's MetadataLoadContext can resolve every
+         transitive dependency a referenced member touches; an incomplete set
+         otherwise surfaces as a FileNotFoundException/TypeLoadException deep in
+         member enumeration (issue #340). -->
     <BuildTask
         GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
         OutputPath="$(IntermediateOutputPath)"
@@ -49,7 +59,7 @@
         TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
         WarningsAsErrors="$(WarningsAsErrors)"
         Compile="@(Compile)"
-        References="@(ReferencePath)"
+        References="@(ReferencePathWithRefAssemblies)"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
 
     <ItemGroup>

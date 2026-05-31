@@ -95,7 +95,10 @@ public class SdkLayoutTests
         var attrs = buildTask!.Attributes().ToDictionary(a => a.Name.LocalName, a => a.Value);
         Assert.Equal("$(GsharpCompilerFullPath)", attrs["GsharpCompilerFullPath"]);
         Assert.Equal("@(Compile)", attrs["Compile"]);
-        Assert.Equal("@(ReferencePath)", attrs["References"]);
+        // gsc must receive the full transitive closure of references — the same
+        // complete item csc consumes — so the MetadataLoadContext can resolve
+        // every transitive dependency a referenced member touches (issue #340).
+        Assert.Equal("@(ReferencePathWithRefAssemblies)", attrs["References"]);
         Assert.Equal("$(OutputType)", attrs["OutputType"]);
         Assert.Equal("$(TargetFramework)", attrs["TargetFramework"]);
 

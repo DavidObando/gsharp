@@ -5,6 +5,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -414,5 +416,99 @@ public class ProgramTests
             try { Directory.Delete(tempDir, recursive: true); } catch { }
             try { File.Delete(sample); } catch { }
         }
+    }
+
+    [Fact]
+    public void Main_UnderReferencedClosure_EmitsGs9100Warning()
+    {
+        // Issue #340: when a /r: reference depends on an assembly that was not
+        // also supplied, gsc must not crash; it emits an advisory GS9100 naming
+        // the missing assembly while the resolver degrades gracefully.
+        var refDir = Directory.CreateTempSubdirectory("gsc_ref340_").FullName;
+        var libPath = BuildLibraryWithMissingDependency(refDir);
+
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n\nfunc Main() {\n}\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_out340_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+
+        using var outWriter = new StringWriter();
+        var prevOut = Console.Out;
+        Console.SetOut(outWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/r:" + libPath, sample });
+            Assert.Equal(0, exit);
+
+            var output = outWriter.ToString();
+            Assert.Contains("warning GS9100", output);
+            Assert.Contains("DepAsmB", output);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { Directory.Delete(refDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_UnderReferencedClosure_NoWarnSuppressesGs9100()
+    {
+        var refDir = Directory.CreateTempSubdirectory("gsc_ref340n_").FullName;
+        var libPath = BuildLibraryWithMissingDependency(refDir);
+
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n\nfunc Main() {\n}\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_outn340_").FullName;
+        var outPath = Path.Combine(tempDir, "P.dll");
+
+        using var outWriter = new StringWriter();
+        var prevOut = Console.Out;
+        Console.SetOut(outWriter);
+        try
+        {
+            var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/nowarn:GS9100", "/r:" + libPath, sample });
+            Assert.Equal(0, exit);
+            Assert.DoesNotContain("GS9100", outWriter.ToString());
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { Directory.Delete(refDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    private static string BuildLibraryWithMissingDependency(string dir)
+    {
+        var coreAssembly = typeof(object).Assembly;
+
+        var depName = new AssemblyName("DepAsmB") { Version = new Version(1, 0, 0, 0) };
+        var depBuilder = new PersistedAssemblyBuilder(depName, coreAssembly);
+        var depModule = depBuilder.DefineDynamicModule("DepAsmB");
+        var marker = depModule.DefineType("Dep.Marker", TypeAttributes.Public | TypeAttributes.Class);
+        marker.CreateType();
+        depBuilder.Save(Path.Combine(dir, "DepAsmB.dll"));
+
+        var libName = new AssemblyName("LibAsmA") { Version = new Version(1, 0, 0, 0) };
+        var libBuilder = new PersistedAssemblyBuilder(libName, coreAssembly);
+        var libModule = libBuilder.DefineDynamicModule("LibAsmA");
+        var widget = libModule.DefineType("Lib.Widget", TypeAttributes.Public | TypeAttributes.Class);
+        var method = widget.DefineMethod(
+            "M",
+            MethodAttributes.Public | MethodAttributes.Static,
+            typeof(void),
+            new[] { marker });
+        method.GetILGenerator().Emit(OpCodes.Ret);
+        widget.CreateType();
+        var libPath = Path.Combine(dir, "LibAsmA.dll");
+        libBuilder.Save(libPath);
+
+        // The DepAsmB.dll is deliberately left in 'dir' but NOT passed via /r:,
+        // so the closure handed to gsc is incomplete.
+        return libPath;
     }
 }

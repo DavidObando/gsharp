@@ -81,6 +81,9 @@ public class Program
         var references = parsed.References.Count > 0
             ? ReferenceResolver.WithReferences(parsed.References)
             : null;
+
+        ReportMissingTransitiveReferences(references, parsed);
+
         var compilation = new Compilation(references, syntaxTrees.ToArray())
         {
             ImplicitSystemImport = parsed.ImplicitSystemImport,
@@ -101,6 +104,34 @@ public class Program
         }
 
         return Emit(compilation, parsed);
+    }
+
+    private static void ReportMissingTransitiveReferences(ReferenceResolver references, CommandLineArgs args)
+    {
+        if (references is null || references.MissingTransitiveReferences.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        // GS9100 is advisory: the resolver already degrades gracefully (the
+        // affected members are skipped), but a genuinely under-referenced
+        // project benefits from naming the missing assemblies (issue #340).
+        const string code = "GS9100";
+        if (args.NoWarnIds.Contains(code))
+        {
+            return;
+        }
+
+        // Anchor the diagnostic at the first source file so the SDK BuildTask's
+        // diagnostic regex surfaces it as a structured MSBuild warning.
+        var file = args.SourceFiles.Count > 0
+            ? Path.GetFullPath(args.SourceFiles[0])
+            : "gsc";
+
+        var names = string.Join(", ", references.MissingTransitiveReferences);
+        Console.Out.WriteLine(
+            $"{file}(1,1,1,1): warning {code}: One or more referenced assemblies depend on assemblies that were not supplied via /r: ({names}). " +
+            "Members that reference these assemblies will be skipped. Ensure the full transitive closure of references is passed (e.g. add the missing package or project reference).");
     }
 
     private static int Interpret(Compilation compilation, CommandLineArgs args)
