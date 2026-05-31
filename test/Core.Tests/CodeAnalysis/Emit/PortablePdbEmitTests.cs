@@ -113,6 +113,53 @@ func main() {
     }
 
     [Fact]
+    public void Document_HashMatchesRawFileBytes_IncludingBom()
+    {
+        // A debugger computes the source checksum over the exact on-disk bytes
+        // (BOM included). The PDB document hash must match those raw bytes — not
+        // a re-encoded copy of the decoded text — or on-disk source resolution
+        // fails and breakpoints never bind. Use a UTF-8 BOM, which File.ReadAllText
+        // strips from the decoded text, to guard the regression.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_pdbhash_{Guid.NewGuid():N}.gs");
+        var rawBytes = Encoding.UTF8.GetPreamble()
+            .Concat(Encoding.UTF8.GetBytes("package main\n\nfunc main() {\n    let x = 1\n}\n"))
+            .ToArray();
+        File.WriteAllBytes(sample, rawBytes);
+
+        try
+        {
+            using var peStream = new MemoryStream();
+            using var pdbStream = new MemoryStream();
+
+            var compilation = new Compilation(SyntaxTree.Load(sample))
+            {
+                DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+            };
+            var result = compilation.Emit(peStream, pdbStream, null);
+            Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+            pdbStream.Position = 0;
+            using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+            var reader = provider.GetMetadataReader();
+
+            var doc = reader.GetDocument(reader.Documents.Single());
+            var pdbHash = reader.GetBlobBytes(doc.Hash);
+
+            byte[] expected;
+            using (var sha = SHA256.Create())
+            {
+                expected = sha.ComputeHash(File.ReadAllBytes(sample));
+            }
+
+            Assert.Equal(expected, pdbHash);
+        }
+        finally
+        {
+            File.Delete(sample);
+        }
+    }
+
+    [Fact]
     public void MethodDebugInformation_RowCount_MatchesMethodDef()
     {
         using var peStream = new MemoryStream();

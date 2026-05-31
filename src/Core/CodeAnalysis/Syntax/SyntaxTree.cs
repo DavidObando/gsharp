@@ -49,8 +49,9 @@ public class SyntaxTree
     /// <returns>A parsed syntax tree.</returns>
     public static SyntaxTree Load(string filePath)
     {
+        var rawBytes = File.ReadAllBytes(filePath);
         var text = File.ReadAllText(filePath);
-        var sourceText = SourceText.From(text, filePath);
+        var sourceText = SourceText.From(text, filePath, rawBytes);
         return Parse(sourceText);
     }
 

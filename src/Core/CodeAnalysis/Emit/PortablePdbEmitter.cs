@@ -111,7 +111,15 @@ internal sealed class PortablePdbEmitter
         }
 
         var path = tree.Text?.FileName ?? string.Empty;
-        var sourceBytes = Encoding.UTF8.GetBytes(tree.Text?.ToString() ?? string.Empty);
+
+        // Prefer the exact on-disk bytes for both the checksum and embedded
+        // source. Debuggers (vsdbg/coreclr) compute the document checksum over
+        // the raw file bytes — including any byte-order mark — and refuse to
+        // bind breakpoints in an on-disk file whose hash does not match,
+        // falling back to a source request that surfaces as a phantom tab.
+        // Re-encoding the decoded text would drop the BOM and mismatch.
+        var sourceBytes = tree.Text?.RawBytes
+            ?? Encoding.UTF8.GetBytes(tree.Text?.ToString() ?? string.Empty);
 
         byte[] hash;
         using (var sha = SHA256.Create())
