@@ -655,6 +655,9 @@ public class Parser
         // (at most one, must come first) or an implemented interface.
         SyntaxToken baseColon = null;
         SyntaxToken baseTypeIdentifier = null;
+        SyntaxToken baseCtorOpenParen = null;
+        SeparatedSyntaxList<ExpressionSyntax> baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SyntaxToken baseCtorCloseParen = null;
         var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
         if (Current.Kind == SyntaxKind.ColonToken)
         {
@@ -665,6 +668,18 @@ public class Parser
 
             baseColon = MatchToken(SyntaxKind.ColonToken);
             baseTypeIdentifier = MatchQualifiedTypeName();
+
+            // Issue #306: optional base-constructor argument list immediately
+            // after the base-class name, e.g. `: Exception(message)`. Only the
+            // base class (the first identifier) may carry constructor arguments;
+            // interfaces never do. The arguments are bound against the base
+            // class's constructors and forwarded by the derived ctor.
+            if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                baseCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+                baseCtorArguments = ParseArguments();
+                baseCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+            }
 
             while (Current.Kind == SyntaxKind.CommaToken)
             {
@@ -849,6 +864,9 @@ public class Parser
             methods.ToImmutable(),
             closeBrace);
         structDecl.SharedBlock = structDecl_sharedBlock;
+        structDecl.BaseConstructorOpenParenthesisToken = baseCtorOpenParen;
+        structDecl.BaseConstructorArguments = baseCtorArguments;
+        structDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
         return structDecl;
     }
 

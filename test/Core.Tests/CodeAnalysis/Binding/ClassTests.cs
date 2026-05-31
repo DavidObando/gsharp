@@ -445,6 +445,53 @@ b.Hello()
         Assert.Equal(7, result.Value);
     }
 
+    [Fact]
+    public void BaseConstructorInitializer_GSharpBase_ForwardsArgument()
+    {
+        // Issue #306: `: Base(args)` chains to the base primary constructor.
+        var source = @"
+type Animal open class(Name string) {
+    func Speak() string { return Name }
+}
+type Dog class(Pet string) : Animal(Pet) {}
+var d = Dog(""Rex"")
+d.Speak()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Rex", result.Value);
+    }
+
+    [Fact]
+    public void BaseConstructorInitializer_NoMatchingBaseConstructor_Diagnoses()
+    {
+        // Issue #306: GS0214 when no base ctor matches the supplied arguments.
+        var source = @"
+type Animal open class(Name string) {}
+type Dog class(Pet string) : Animal(Pet, Pet) {}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("no accessible constructor that takes"));
+    }
+
+    [Fact]
+    public void BaseConstructorInitializer_ArgumentsOnInterface_Diagnoses()
+    {
+        // Issue #306: GS0213 when base-ctor args are given but there is no base class.
+        var source = @"
+type IShape interface {
+    func Area() int32
+}
+type Square class(Side int32) : IShape(Side) {
+    func Area() int32 { return Side * Side }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("requires an explicit base class"));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

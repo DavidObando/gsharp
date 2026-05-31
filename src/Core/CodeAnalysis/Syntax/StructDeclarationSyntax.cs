@@ -429,4 +429,16 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets or sets the optional <c>shared { … }</c> block (ADR-0053) grouping static member declarations. Null when the type has no shared block.</summary>
     public SharedBlockSyntax SharedBlock { get; set; }
+
+    /// <summary>Gets or sets the optional opening paren of a base-constructor argument list (issue #306), e.g. the <c>(</c> in <c>: Exception(message)</c>. Null when the base clause supplies no constructor arguments. Assigned by the parser.</summary>
+    public SyntaxToken BaseConstructorOpenParenthesisToken { get; set; }
+
+    /// <summary>Gets or sets the base-constructor argument expressions (issue #306). Empty/default when no base-constructor argument list was declared.</summary>
+    public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments { get; set; }
+
+    /// <summary>Gets or sets the optional closing paren of the base-constructor argument list (issue #306). Null when none was declared.</summary>
+    public SyntaxToken BaseConstructorCloseParenthesisToken { get; set; }
+
+    /// <summary>Gets a value indicating whether this declaration carries an explicit base-constructor argument list (issue #306).</summary>
+    public bool HasBaseConstructorArguments => BaseConstructorOpenParenthesisToken != null;
 }

@@ -654,7 +654,11 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var c in nonSmClasses)
         {
             classCtorRows[c] = methodRow++;
-            if (c.HasPrimaryConstructor)
+
+            // Issue #306: a class with an explicit base-constructor initializer
+            // emits a single forwarding constructor (no separate parameterless
+            // ctor), so reserve only one ctor row in that case.
+            if (c.HasPrimaryConstructor && c.BaseConstructorInitializer == null)
             {
                 classPrimaryCtorRows[c] = methodRow++;
             }
@@ -1151,13 +1155,31 @@ internal sealed class ReflectionMetadataEmitter
         // B2. Non-SM class ctors + instance methods.
         foreach (var c in nonSmClasses)
         {
-            var ctorHandle = this.EmitClassDefaultConstructor(c);
-            this.classCtorHandles[c] = ctorHandle;
-
-            if (c.HasPrimaryConstructor)
+            if (c.BaseConstructorInitializer != null)
             {
-                var primaryHandle = this.EmitClassPrimaryConstructor(c);
-                this.classPrimaryCtorHandles[c] = primaryHandle;
+                // Issue #306: emit a single constructor that forwards arguments
+                // to the resolved base ctor. When a primary constructor is
+                // present its parameters drive both the forwarded arguments and
+                // the field initialization; otherwise the forwarding ctor is
+                // parameterless (constant base arguments). No separate
+                // parameterless ctor is emitted because the base may lack one.
+                var ctorParams = c.HasPrimaryConstructor
+                    ? c.PrimaryConstructorParameters
+                    : ImmutableArray<ParameterSymbol>.Empty;
+                var forwardingHandle = this.EmitClassConstructorWithBaseInitializer(c, ctorParams);
+                this.classCtorHandles[c] = forwardingHandle;
+                this.classPrimaryCtorHandles[c] = forwardingHandle;
+            }
+            else
+            {
+                var ctorHandle = this.EmitClassDefaultConstructor(c);
+                this.classCtorHandles[c] = ctorHandle;
+
+                if (c.HasPrimaryConstructor)
+                {
+                    var primaryHandle = this.EmitClassPrimaryConstructor(c);
+                    this.classPrimaryCtorHandles[c] = primaryHandle;
+                }
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -4825,6 +4847,195 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #306: emits a constructor that forwards arguments to an explicit
+    /// base constructor (<c>: Base(args)</c>) before initializing the class's
+    /// own fields from the primary-constructor parameters. The base arguments
+    /// are evaluated via a <see cref="BodyEmitter"/> so they may reference the
+    /// primary-constructor parameters; the resolved base ctor token comes from
+    /// the bound <see cref="BaseConstructorInitializer"/>.
+    /// </summary>
+    /// <param name="classSym">The class whose forwarding constructor is being emitted.</param>
+    /// <param name="parameters">The constructor parameters (the primary-constructor parameters, or empty when the base arguments are constant).</param>
+    private MethodDefinitionHandle EmitClassConstructorWithBaseInitializer(StructSymbol classSym, ImmutableArray<ParameterSymbol> parameters)
+    {
+        var init = classSym.BaseConstructorInitializer;
+        var baseCtorToken = this.GetBaseInitializerCtorToken(classSym, init);
+
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+            var locals = new Dictionary<VariableSymbol, int>();
+            var labels = new Dictionary<BoundLabel, LabelHandle>();
+            var localTypes = new List<TypeSymbol>();
+            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            var constValues = new Dictionary<VariableSymbol, object>();
+
+            // Pre-scan the base arguments so any scratch slots they require are
+            // allocated and registered in the locals signature.
+            if (!init.Arguments.IsDefaultOrEmpty)
+            {
+                var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
+                foreach (var arg in init.Arguments)
+                {
+                    synth.Add(new BoundExpressionStatement(null, arg));
+                }
+
+                CollectLocalsAndLabels(
+                    new BoundBlockStatement(null, synth.ToImmutable()),
+                    null,
+                    locals,
+                    localTypes,
+                    labels,
+                    appendSlots,
+                    structLiteralSlots,
+                    defaultExpressionSlots,
+                    mapIndexSlots,
+                    patternSwitchSlots,
+                    typePatternScratchSlots,
+                    switchExpressionSlots,
+                    channelOpSlots,
+                    scopeFrameSlots,
+                    selectStatementSlots,
+                    goEnclosingScopes,
+                    il);
+            }
+
+            var paramSlots = new Dictionary<ParameterSymbol, int>();
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                paramSlots[parameters[i]] = i + 1;
+            }
+
+            StandaloneSignatureHandle localsSignature = default;
+            if (localTypes.Count > 0)
+            {
+                var localsSigBlob = new BlobBuilder();
+                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+                foreach (var t in localTypes)
+                {
+                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                }
+
+                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+            }
+
+            var emitter = new BodyEmitter(
+                this,
+                il,
+                locals,
+                paramSlots,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                constValues: constValues);
+
+            // base(args)
+            il.LoadArgument(0);
+            if (!init.Arguments.IsDefaultOrEmpty)
+            {
+                foreach (var arg in init.Arguments)
+                {
+                    emitter.EmitValue(arg);
+                }
+            }
+
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+
+            // this.<field> = arg; positional 1:1 with same-named fields.
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var param = parameters[i];
+                if (!classSym.TryGetField(param.Name, out var field))
+                {
+                    throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                }
+
+                if (!this.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                {
+                    throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
+                }
+
+                il.LoadArgument(0);
+                il.LoadArgument(i + 1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(fieldHandle);
+            }
+
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        }
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameters.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in parameters)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>Issue #306: resolves the metadata token of the base constructor targeted by a <see cref="BaseConstructorInitializer"/>.</summary>
+    private EntityHandle GetBaseInitializerCtorToken(StructSymbol classSym, BaseConstructorInitializer init)
+    {
+        if (init.IsClrBase)
+        {
+            return this.GetCtorReference(init.ClrConstructor);
+        }
+
+        var gsharpBase = init.GSharpBaseType;
+        if (init.Arguments.Length > 0
+            && gsharpBase.HasPrimaryConstructor
+            && this.classPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
+        {
+            return primaryHandle;
+        }
+
+        if (this.classCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
+        {
+            return defaultHandle;
+        }
+
+        // Fall back to the conventional resolution (parameterless chain).
+        return this.GetBaseCtorToken(classSym);
     }
 
     private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
@@ -9510,6 +9721,10 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
+
+        /// <summary>Issue #306: emits a single value expression onto the IL stack. Used by the constructor emitter to evaluate base-constructor argument expressions.</summary>
+        /// <param name="expression">The bound value expression to emit.</param>
+        public void EmitValue(BoundExpression expression) => this.EmitExpression(expression);
 
         public void EmitBlock(BoundBlockStatement block)
         {

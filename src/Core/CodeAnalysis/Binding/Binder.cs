@@ -1118,6 +1118,11 @@ public sealed class Binder
             structSymbol.SetImportedBaseType(importedBaseType);
         }
 
+        // Issue #306: bind and resolve an explicit base-constructor initializer
+        // (`: Base(args)`). The arguments are bound in a scope that exposes the
+        // primary-constructor parameters so they can be forwarded to the base.
+        BindBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
@@ -9010,6 +9015,174 @@ public sealed class Binder
 
         importedBaseType = TypeSymbol.FromClrType(candidate);
         return importedBaseType?.ClrType != null;
+    }
+
+    /// <summary>
+    /// Issue #306: binds the explicit base-constructor argument list
+    /// (<c>: Base(args)</c>) of a class declaration and resolves it against the
+    /// base class's constructors. The arguments are bound in a scope that
+    /// exposes the primary-constructor parameters so they can be forwarded to
+    /// the base. On success the resolved <see cref="BaseConstructorInitializer"/>
+    /// is recorded on <paramref name="structSymbol"/> for the emitter; failures
+    /// surface a diagnostic.
+    /// </summary>
+    private void BindBaseConstructorInitializer(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructSymbol baseClassSymbol,
+        TypeSymbol importedBaseType,
+        ImmutableArray<ParameterSymbol> primaryCtorParameters)
+    {
+        if (!syntax.HasBaseConstructorArguments)
+        {
+            return;
+        }
+
+        var location = syntax.BaseConstructorOpenParenthesisToken.Location;
+
+        if (baseClassSymbol == null && importedBaseType == null)
+        {
+            Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
+            return;
+        }
+
+        // Bind the argument expressions with the primary-constructor parameters
+        // in scope (they are the typical source of forwarded values).
+        var savedScope = scope;
+        scope = new BoundScope(savedScope);
+        if (!primaryCtorParameters.IsDefaultOrEmpty)
+        {
+            foreach (var p in primaryCtorParameters)
+            {
+                scope.TryDeclareVariable(p);
+            }
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.BaseConstructorArguments.Count);
+        for (var i = 0; i < syntax.BaseConstructorArguments.Count; i++)
+        {
+            boundArguments.Add(BindExpression(syntax.BaseConstructorArguments[i]));
+        }
+
+        scope = savedScope;
+
+        if (importedBaseType?.ClrType is System.Type clrBase)
+        {
+            BindClrBaseConstructor(syntax, structSymbol, clrBase, boundArguments, location);
+            return;
+        }
+
+        BindGSharpBaseConstructor(syntax, structSymbol, baseClassSymbol, boundArguments, location);
+    }
+
+    /// <summary>Resolves a base-constructor initializer against an imported CLR base type's constructors (issue #306).</summary>
+    private void BindClrBaseConstructor(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        System.Type clrBase,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        TextLocation location)
+    {
+        var ctors = clrBase.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
+            .ToArray();
+
+        var argTypes = new System.Type[boundArguments.Count];
+        var argsAllTyped = true;
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            var t = boundArguments[i].Type?.ClrType;
+            if (t == null)
+            {
+                argsAllTyped = false;
+                break;
+            }
+
+            argTypes[i] = t;
+        }
+
+        ConstructorInfo bestCtor = null;
+        if (argsAllTyped)
+        {
+            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            switch (resolution.Outcome)
+            {
+                case OverloadResolution.ResolutionOutcome.Resolved:
+                    bestCtor = resolution.Best as ConstructorInfo;
+                    break;
+                case OverloadResolution.ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length);
+                    return;
+                default:
+                    break;
+            }
+        }
+
+        if (bestCtor == null)
+        {
+            Diagnostics.ReportNoMatchingBaseConstructor(location, clrBase.Name, boundArguments.Count);
+            return;
+        }
+
+        var ctorParams = bestCtor.GetParameters();
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            var targetType = TypeSymbol.FromClrType(ctorParams[i].ParameterType);
+            convertedArgs.Add(BindConversion(syntax.BaseConstructorArguments[i].Location, boundArguments[i], targetType));
+        }
+
+        structSymbol.SetBaseConstructorInitializer(new BaseConstructorInitializer(convertedArgs.ToImmutable(), bestCtor));
+    }
+
+    /// <summary>Resolves a base-constructor initializer against a GSharp base class's primary constructor (issue #306).</summary>
+    private void BindGSharpBaseConstructor(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructSymbol baseClassSymbol,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        TextLocation location)
+    {
+        if (baseClassSymbol == null)
+        {
+            Diagnostics.ReportNoMatchingBaseConstructor(location, structSymbol.Name, boundArguments.Count);
+            return;
+        }
+
+        var baseParams = baseClassSymbol.PrimaryConstructorParameters;
+        if (boundArguments.Count != baseParams.Length)
+        {
+            Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count);
+            return;
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
+        var hasErrors = false;
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            var argument = boundArguments[i];
+            var parameter = baseParams[i];
+            if (argument.Type != parameter.Type
+                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
+            {
+                if (argument.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count);
+                }
+
+                hasErrors = true;
+                break;
+            }
+
+            convertedArgs.Add(BindConversion(syntax.BaseConstructorArguments[i].Location, argument, parameter.Type));
+        }
+
+        if (hasErrors)
+        {
+            return;
+        }
+
+        structSymbol.SetBaseConstructorInitializer(new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol));
     }
 
     /// <summary>

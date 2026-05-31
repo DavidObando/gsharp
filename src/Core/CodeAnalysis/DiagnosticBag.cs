@@ -950,6 +950,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0181", $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
     }
 
+    /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
+    /// <param name="location">The text location of the base-constructor argument list.</param>
+    public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)
+    {
+        Report(location, "GS0213", "A base-constructor argument list requires an explicit base class.");
+    }
+
+    /// <summary>Reports that no accessible base constructor matches the supplied base-constructor arguments (issue #306).</summary>
+    /// <param name="location">The text location of the base-constructor argument list.</param>
+    /// <param name="baseTypeName">The base type name.</param>
+    /// <param name="argumentCount">The number of supplied arguments.</param>
+    public void ReportNoMatchingBaseConstructor(TextLocation location, string baseTypeName, int argumentCount)
+    {
+        Report(location, "GS0214", $"Class '{baseTypeName}' has no accessible constructor that takes {argumentCount} argument(s).");
+    }
+
     /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="baseTypeName">The base type name.</param>

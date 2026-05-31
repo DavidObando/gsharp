@@ -828,6 +828,34 @@ public sealed class Evaluator
             sv.Fields[parameters[i].Name] = EvaluateExpression(node.Arguments[i]);
         }
 
+        // Issue #306: forward an explicit base-constructor initializer to a GSharp
+        // base class's primary constructor. The base-ctor arguments may reference
+        // this class's primary-constructor parameters, so evaluate them in a frame
+        // where those parameters are bound to the just-assigned values.
+        var baseInit = node.StructType.BaseConstructorInitializer;
+        if (baseInit != null && baseInit.GSharpBaseType is StructSymbol gsharpBase)
+        {
+            var frame = new Dictionary<VariableSymbol, object>();
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                frame[parameters[i]] = sv.Fields[parameters[i].Name];
+            }
+
+            locals.Push(frame);
+            try
+            {
+                var baseParams = gsharpBase.PrimaryConstructorParameters;
+                for (var i = 0; i < baseParams.Length && i < baseInit.Arguments.Length; i++)
+                {
+                    sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInit.Arguments[i]);
+                }
+            }
+            finally
+            {
+                locals.Pop();
+            }
+        }
+
         return sv;
     }
 
