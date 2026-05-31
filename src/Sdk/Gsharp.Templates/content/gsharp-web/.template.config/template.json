@@ -5,7 +5,7 @@
     "identity": "GSharp.Templates.Web",
     "name": "GSharp Web Application",
     "shortName": "gsharp-web",
-    "description": "A minimal GSharp web application that serves HTTP requests using the BCL HttpListener and builds with Gsharp.NET.Sdk.",
+    "description": "A minimal GSharp web application that serves HTTP requests with ASP.NET Core (Kestrel) and builds with Gsharp.NET.Sdk.",
     "tags": {
         "language": "GSharp",
         "type": "project"

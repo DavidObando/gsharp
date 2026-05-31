@@ -69,6 +69,8 @@
           BeforeTargets="AssignTargetPaths;_GetPackageFiles;GenerateNuspec;CoreCompile"
           Inputs="@(_TemplateSourceFile)"
           Outputs="$(GsharpTemplatesIntermediateContent)/.stamp">
+    <!-- Clean stale staging so files removed from content/ are not packed. -->
+    <RemoveDir Directories="$(GsharpTemplatesIntermediateContent)" />
     <MakeDir Directories="$(GsharpTemplatesIntermediateContent)" />
 
     <Copy SourceFiles="@(_TemplateSourceFile)"
