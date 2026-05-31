@@ -441,4 +441,8 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this declaration carries an explicit base-constructor argument list (issue #306).</summary>
     public bool HasBaseConstructorArguments => BaseConstructorOpenParenthesisToken != null;
+
+    /// <summary>Gets or sets the standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
+    public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors { get; set; }
+        = System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax>.Empty;
 }

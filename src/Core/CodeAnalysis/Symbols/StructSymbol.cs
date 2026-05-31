@@ -253,6 +253,14 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public BaseConstructorInitializer BaseConstructorInitializer { get; private set; }
 
+    /// <summary>
+    /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
+    /// this class (issue #306), or <c>null</c> when the class has none. When non-null
+    /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
+    /// suppresses the auto-generated parameterless / primary constructor.
+    /// </summary>
+    public ConstructorSymbol ExplicitConstructor { get; private set; }
+
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
     public void SetImportedBaseType(TypeSymbol importedBaseType)
@@ -265,6 +273,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetBaseConstructorInitializer(BaseConstructorInitializer initializer)
     {
         BaseConstructorInitializer = initializer;
+    }
+
+    /// <summary>Sets <see cref="ExplicitConstructor"/> after binding the class body (issue #306).</summary>
+    /// <param name="constructor">The resolved standalone constructor.</param>
+    public void SetExplicitConstructor(ConstructorSymbol constructor)
+    {
+        ExplicitConstructor = constructor;
     }
 
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>

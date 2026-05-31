@@ -1155,7 +1155,16 @@ internal sealed class ReflectionMetadataEmitter
         // B2. Non-SM class ctors + instance methods.
         foreach (var c in nonSmClasses)
         {
-            if (c.BaseConstructorInitializer != null)
+            if (c.ExplicitConstructor != null)
+            {
+                // Issue #306: a class with an explicit `init(...)` constructor
+                // emits exactly one `.ctor` (the user constructor). It serves as
+                // both the base-chain target and the `newobj` target.
+                var explicitHandle = this.EmitClassConstructorWithBody(c);
+                this.classCtorHandles[c] = explicitHandle;
+                this.classPrimaryCtorHandles[c] = explicitHandle;
+            }
+            else if (c.BaseConstructorInitializer != null)
             {
                 // Issue #306: emit a single constructor that forwards arguments
                 // to the resolved base ctor. When a primary constructor is
@@ -4998,6 +5007,178 @@ internal sealed class ReflectionMetadataEmitter
                 ps =>
                 {
                     foreach (var p in parameters)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #306: emits a class constructor materialized from an explicit
+    /// <c>init(...)</c> declaration. The body first chains to the resolved base
+    /// constructor (either the explicit <c>: base(args)</c> initializer or the
+    /// conventional parameterless chain) and then runs the bound constructor
+    /// body, which sees <c>this</c>, the constructor parameters, and the class's
+    /// fields (as bare names).
+    /// </summary>
+    /// <param name="classSym">The class whose explicit constructor is being emitted.</param>
+    private MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym)
+    {
+        var ctor = classSym.ExplicitConstructor;
+        var function = ctor.Function;
+        var body = this.program.Functions[function];
+        var init = ctor.BaseInitializer;
+        var baseCtorToken = init != null
+            ? this.GetBaseInitializerCtorToken(classSym, init)
+            : this.GetBaseCtorToken(classSym);
+
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+            var locals = new Dictionary<VariableSymbol, int>();
+            var labels = new Dictionary<BoundLabel, LabelHandle>();
+            var localTypes = new List<TypeSymbol>();
+            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            var constValues = new Dictionary<VariableSymbol, object>();
+
+            // Pre-scan the base arguments so any scratch slots they require are
+            // allocated and registered in the locals signature.
+            if (init != null && !init.Arguments.IsDefaultOrEmpty)
+            {
+                var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
+                foreach (var arg in init.Arguments)
+                {
+                    synth.Add(new BoundExpressionStatement(null, arg));
+                }
+
+                CollectLocalsAndLabels(
+                    new BoundBlockStatement(null, synth.ToImmutable()),
+                    null,
+                    locals,
+                    localTypes,
+                    labels,
+                    appendSlots,
+                    structLiteralSlots,
+                    defaultExpressionSlots,
+                    mapIndexSlots,
+                    patternSwitchSlots,
+                    typePatternScratchSlots,
+                    switchExpressionSlots,
+                    channelOpSlots,
+                    scopeFrameSlots,
+                    selectStatementSlots,
+                    goEnclosingScopes,
+                    il);
+            }
+
+            CollectConstValues(body, constValues);
+            CollectLocalsAndLabels(
+                body,
+                function,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                il);
+
+            // Slot 0 is the implicit `this`; user parameters shift up by one.
+            var paramSlots = new Dictionary<ParameterSymbol, int>
+            {
+                [function.ThisParameter] = 0,
+            };
+            for (var i = 0; i < function.Parameters.Length; i++)
+            {
+                paramSlots[function.Parameters[i]] = i + 1;
+            }
+
+            StandaloneSignatureHandle localsSignature = default;
+            if (localTypes.Count > 0)
+            {
+                var localsSigBlob = new BlobBuilder();
+                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+                foreach (var t in localTypes)
+                {
+                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                }
+
+                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+            }
+
+            var emitter = new BodyEmitter(
+                this,
+                il,
+                locals,
+                paramSlots,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                goEnclosingScopes,
+                constValues: constValues);
+
+            // base(args) — `this` followed by the (ref-kind aware) base arguments.
+            il.LoadArgument(0);
+            if (init != null && !init.Arguments.IsDefaultOrEmpty)
+            {
+                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
+            }
+
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+
+            // Run the user-authored constructor body.
+            emitter.EmitBlock(body);
+
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        }
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                function.Parameters.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
                     {
                         this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
                     }
@@ -9725,6 +9906,12 @@ internal sealed class ReflectionMetadataEmitter
         /// <summary>Issue #306: emits a single value expression onto the IL stack. Used by the constructor emitter to evaluate base-constructor argument expressions.</summary>
         /// <param name="expression">The bound value expression to emit.</param>
         public void EmitValue(BoundExpression expression) => this.EmitExpression(expression);
+
+        /// <summary>Issue #306: emits base-constructor arguments, respecting <see cref="RefKind"/> for by-ref base parameters.</summary>
+        /// <param name="arguments">The bound base-constructor argument expressions.</param>
+        /// <param name="refKinds">The per-argument by-reference passing modes.</param>
+        public void EmitBaseConstructorArguments(ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> refKinds)
+            => this.EmitImportedCallArguments(arguments, refKinds);
 
         public void EmitBlock(BoundBlockStatement block)
         {

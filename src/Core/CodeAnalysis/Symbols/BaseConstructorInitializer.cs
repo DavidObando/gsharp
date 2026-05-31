@@ -21,10 +21,20 @@ public sealed class BaseConstructorInitializer
     /// <param name="arguments">The bound, conversion-applied argument expressions.</param>
     /// <param name="clrConstructor">The resolved imported CLR base constructor.</param>
     public BaseConstructorInitializer(ImmutableArray<BoundExpression> arguments, ConstructorInfo clrConstructor)
+        : this(arguments, clrConstructor, ImmutableArray<RefKind>.Empty)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BaseConstructorInitializer"/> class targeting an imported CLR base constructor, with per-argument by-reference passing modes.</summary>
+    /// <param name="arguments">The bound, conversion-applied argument expressions.</param>
+    /// <param name="clrConstructor">The resolved imported CLR base constructor.</param>
+    /// <param name="argumentRefKinds">The by-reference passing mode of each argument (issue #306, item 2: <c>ref</c>/<c>out</c>/<c>in</c> base-constructor parameters).</param>
+    public BaseConstructorInitializer(ImmutableArray<BoundExpression> arguments, ConstructorInfo clrConstructor, ImmutableArray<RefKind> argumentRefKinds)
     {
         Arguments = arguments;
         ClrConstructor = clrConstructor;
         GSharpBaseType = null;
+        ArgumentRefKinds = argumentRefKinds.IsDefault ? ImmutableArray<RefKind>.Empty : argumentRefKinds;
     }
 
     /// <summary>Initializes a new instance of the <see cref="BaseConstructorInitializer"/> class targeting a GSharp base class constructor.</summary>
@@ -35,7 +45,11 @@ public sealed class BaseConstructorInitializer
         Arguments = arguments;
         ClrConstructor = null;
         GSharpBaseType = gsharpBaseType;
+        ArgumentRefKinds = ImmutableArray<RefKind>.Empty;
     }
+
+    /// <summary>Gets the by-reference passing mode of each forwarded argument (issue #306, item 2). Empty when every argument is passed by value.</summary>
+    public ImmutableArray<RefKind> ArgumentRefKinds { get; }
 
     /// <summary>Gets the bound argument expressions forwarded to the base constructor (already converted to the target parameter types).</summary>
     public ImmutableArray<BoundExpression> Arguments { get; }

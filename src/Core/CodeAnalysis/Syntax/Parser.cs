@@ -694,6 +694,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
         SharedBlockSyntax structDecl_sharedBlock = null;
         if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -753,7 +754,8 @@ public class Parser
 
                 if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
-                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event") ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken))
                 {
                     memberAccessibility = NextToken();
                 }
@@ -781,7 +783,26 @@ public class Parser
                 }
             }
 
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                // Issue #306: standalone user-defined constructor
+                // `init(params) [: base(args)] { body }`. Only valid for classes.
+                if (memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.OpenParenthesisToken);
+                }
+
+                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                var constructor = ParseConstructorDeclaration(memberAccessibility);
+                constructor.WithAnnotations(memberAnnotations);
+                constructors.Add(constructor);
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 // ADR-0051: property declaration inside struct/class body.
                 var property = ParsePropertyDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
@@ -867,7 +888,50 @@ public class Parser
         structDecl.BaseConstructorOpenParenthesisToken = baseCtorOpenParen;
         structDecl.BaseConstructorArguments = baseCtorArguments;
         structDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
+        structDecl.Constructors = constructors.ToImmutable();
         return structDecl;
+    }
+
+    /// <summary>
+    /// Issue #306: parses a standalone user-defined constructor
+    /// <c>init(params) [: base(args)] { body }</c> inside a class body.
+    /// </summary>
+    private ConstructorDeclarationSyntax ParseConstructorDeclaration(SyntaxToken accessibilityModifier)
+    {
+        var initKeyword = NextToken(); // consume the contextual "init" identifier
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        SyntaxToken baseColon = null;
+        SyntaxToken baseKeyword = null;
+        SyntaxToken baseOpenParen = null;
+        SeparatedSyntaxList<ExpressionSyntax> baseArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SyntaxToken baseCloseParen = null;
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            baseColon = MatchToken(SyntaxKind.ColonToken);
+            baseKeyword = MatchToken(SyntaxKind.IdentifierToken);
+            baseOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+            baseArguments = ParseArguments();
+            baseCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
+        var body = ParseBlockStatement();
+
+        return new ConstructorDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            initKeyword,
+            openParen,
+            parameters,
+            closeParen,
+            baseColon,
+            baseKeyword,
+            baseOpenParen,
+            baseArguments,
+            baseCloseParen,
+            body);
     }
 
     private SharedBlockSyntax ParseSharedBlock()

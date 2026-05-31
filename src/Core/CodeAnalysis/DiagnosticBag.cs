@@ -966,6 +966,30 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0214", $"Class '{baseTypeName}' has no accessible constructor that takes {argumentCount} argument(s).");
     }
 
+    /// <summary>Reports a class that declares both a Kotlin-style primary constructor and an explicit <c>init(...)</c> constructor (issue #306).</summary>
+    /// <param name="location">The text location of the offending <c>init</c> declaration.</param>
+    /// <param name="className">The class name.</param>
+    public void ReportPrimaryAndExplicitConstructors(TextLocation location, string className)
+    {
+        Report(location, "GS0215", $"Class '{className}' cannot declare both a primary constructor and an explicit 'init' constructor.");
+    }
+
+    /// <summary>Reports a class that declares more than one explicit <c>init(...)</c> constructor, which is not yet supported (issue #306).</summary>
+    /// <param name="location">The text location of the offending <c>init</c> declaration.</param>
+    /// <param name="className">The class name.</param>
+    public void ReportMultipleConstructorsUnsupported(TextLocation location, string className)
+    {
+        Report(location, "GS0216", $"Class '{className}' declares multiple 'init' constructors; only a single explicit constructor is supported.");
+    }
+
+    /// <summary>Reports construction of a generic class that declares an explicit <c>init(...)</c> constructor, which is not yet supported (issue #306).</summary>
+    /// <param name="location">The text location of the construction call.</param>
+    /// <param name="className">The class name.</param>
+    public void ReportGenericExplicitConstructorUnsupported(TextLocation location, string className)
+    {
+        Report(location, "GS0217", $"Generic class '{className}' with an explicit 'init' constructor cannot be constructed; generic explicit constructors are not supported.");
+    }
+
     /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="baseTypeName">The base type name.</param>
