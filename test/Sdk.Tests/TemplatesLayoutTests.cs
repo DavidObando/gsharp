@@ -166,13 +166,13 @@ public class TemplatesLayoutTests
         var src = File.ReadAllText(path);
         Assert.Contains("package GsharpWebApp", src, System.StringComparison.Ordinal);
         Assert.Contains("import Microsoft.AspNetCore.Builder", src, System.StringComparison.Ordinal);
-        Assert.Contains("import Microsoft.AspNetCore.Http", src, System.StringComparison.Ordinal);
+        Assert.Contains("import Microsoft.AspNetCore.Routing", src, System.StringComparison.Ordinal);
 
-        // The modern WebApplication host serves requests through a RequestDelegate.
+        // The modern WebApplication host serves requests through minimal-API routing.
         Assert.Contains("WebApplication.CreateBuilder()", src, System.StringComparison.Ordinal);
-        Assert.Contains("RequestDelegate", src, System.StringComparison.Ordinal);
-        Assert.Contains("context.Response.WriteAsync", src, System.StringComparison.Ordinal);
-        Assert.Contains("app.Run(handler)", src, System.StringComparison.Ordinal);
+        Assert.Contains("Func[string]", src, System.StringComparison.Ordinal);
+        Assert.Contains("app.MapGet(", src, System.StringComparison.Ordinal);
+        Assert.Contains("app.Run(", src, System.StringComparison.Ordinal);
     }
 
     [Fact]
