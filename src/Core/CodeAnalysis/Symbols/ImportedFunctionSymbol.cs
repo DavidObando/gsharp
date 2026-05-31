@@ -19,17 +19,26 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <param name="importedClass">The imported class that holds this imported function.</param>
     /// <param name="method">The method.</param>
     /// <param name="declaration">The declaration.</param>
+    /// <param name="returnTypeOverride">
+    /// Issue #320: explicit return type to use instead of the one derived from
+    /// <paramref name="method"/>. Supplied when an imported generic method is closed
+    /// over a user-defined type argument: the method is closed with a placeholder
+    /// CLR type (user types have no reference-context CLR type), so its reflected
+    /// return type would be the placeholder rather than the real type argument.
+    /// <c>null</c> to derive the return type from the method as usual.
+    /// </param>
     public ImportedFunctionSymbol(
         string name,
         ImportedClassSymbol importedClass,
         MethodInfo method,
-        ExpressionSyntax declaration)
+        ExpressionSyntax declaration,
+        TypeSymbol returnTypeOverride = null)
         : base(name)
     {
         ImportedClass = importedClass;
         Method = method;
         Declaration = declaration;
-        Type = GetMethodType(Method);
+        Type = returnTypeOverride ?? GetMethodType(Method);
     }
 
     /// <inheritdoc/>

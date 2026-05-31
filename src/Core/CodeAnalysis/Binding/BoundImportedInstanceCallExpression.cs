@@ -24,13 +24,22 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// <param name="returnType">The bound return type.</param>
     /// <param name="arguments">The provided arguments.</param>
     /// <param name="argumentRefKinds">Per-argument ref-kind annotations (default all-None).</param>
+    /// <param name="typeArgumentSymbols">
+    /// Issue #320: when the call site supplied an explicit generic type-argument
+    /// list (e.g. <c>provider.GetService[Clock]()</c>), the resolved type-argument
+    /// <see cref="TypeSymbol"/>s in source order. Used by the emitter to encode the
+    /// generic method specification so user-defined type arguments (which have no
+    /// reference-context CLR type) are written as their own TypeDef token. Default
+    /// when there are no explicit type arguments.
+    /// </param>
     public BoundImportedInstanceCallExpression(
         SyntaxNode syntax,
         BoundExpression receiver,
         MethodInfo method,
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
-        ImmutableArray<RefKind> argumentRefKinds = default)
+        ImmutableArray<RefKind> argumentRefKinds = default,
+        ImmutableArray<TypeSymbol> typeArgumentSymbols = default)
         : base(syntax)
     {
         Receiver = receiver;
@@ -38,6 +47,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         Type = returnType;
         Arguments = arguments;
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
+        TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
     }
 
     /// <inheritdoc/>
@@ -65,4 +75,11 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// Gets the per-argument ref-kind annotations. May be default (all-None).
     /// </summary>
     public ImmutableArray<RefKind> ArgumentRefKinds { get; }
+
+    /// <summary>
+    /// Gets the explicit generic type-argument symbols, in source order, when the
+    /// call site supplied a <c>[T1, T2]</c> list closing an imported generic
+    /// method (issue #320). Default when there are no explicit type arguments.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
 }

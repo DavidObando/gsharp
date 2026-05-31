@@ -351,6 +351,38 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #320: determines whether a closed generic method's open definition
+    /// returns exactly one of its own method type parameters (e.g.
+    /// <c>T GetService&lt;T&gt;()</c>, <c>T GetRequiredService&lt;T&gt;()</c>,
+    /// <c>T CreateInstance&lt;T&gt;()</c>). When it does, the caller can recover the
+    /// real return type from the explicit type-argument symbol at the reported
+    /// position, which is necessary when the method was closed with a placeholder
+    /// CLR type because the type argument is a user-defined type with no
+    /// reference-context CLR type.
+    /// </summary>
+    /// <param name="closed">The closed generic method.</param>
+    /// <param name="position">The method type-parameter position of the return type, when matched.</param>
+    /// <returns><see langword="true"/> when the return type is a bare method type parameter.</returns>
+    public static bool TryGetGenericMethodParameterReturnPosition(MethodInfo closed, out int position)
+    {
+        position = -1;
+        if (closed == null || !closed.IsGenericMethod)
+        {
+            return false;
+        }
+
+        var open = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var ret = open.ReturnType;
+        if (ret != null && ret.IsGenericParameter && ret.DeclaringMethod != null)
+        {
+            position = ret.GenericParameterPosition;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// <paramref name="t1"/> is the better target, a positive value when

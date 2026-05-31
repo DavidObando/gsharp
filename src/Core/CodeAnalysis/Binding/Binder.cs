@@ -8489,36 +8489,88 @@ public sealed class Binder
     /// </summary>
     /// <param name="typeArgumentList">The call site's explicit type-argument list, or <c>null</c>.</param>
     /// <param name="explicitTypeArgs">On success, the resolved (mapped) CLR type arguments; <c>null</c> when the list is absent.</param>
+    /// <param name="typeArgSymbols">
+    /// Issue #320: on success, the resolved type-argument <see cref="TypeSymbol"/>s
+    /// in source order; default when the list is absent. These carry user-defined
+    /// types (which have no reference-context CLR type and are closed with an
+    /// <see cref="object"/> placeholder in <paramref name="explicitTypeArgs"/>) so
+    /// later stages can recover and emit the real type argument.
+    /// </param>
     /// <returns>
     /// <see langword="true"/> when there is no list (no explicit type args) or
     /// every argument resolved; <see langword="false"/> when a type argument
     /// could not be resolved.
     /// </returns>
-    private bool TryResolveExplicitMethodTypeArgs(TypeArgumentListSyntax typeArgumentList, out System.Type[] explicitTypeArgs)
+    private bool TryResolveExplicitMethodTypeArgs(TypeArgumentListSyntax typeArgumentList, out System.Type[] explicitTypeArgs, out ImmutableArray<TypeSymbol> typeArgSymbols)
     {
         explicitTypeArgs = null;
+        typeArgSymbols = default;
         if (typeArgumentList == null)
         {
             return true;
         }
 
         var resolved = new System.Type[typeArgumentList.Arguments.Count];
+        var symbols = ImmutableArray.CreateBuilder<TypeSymbol>(typeArgumentList.Arguments.Count);
         for (var i = 0; i < typeArgumentList.Arguments.Count; i++)
         {
             var ta = BindTypeClause(typeArgumentList.Arguments[i]);
-            if (ta?.ClrType == null)
+            if (ta == null)
             {
                 return false;
             }
 
-            // Project each argument onto the resolver's reference set so it
-            // shares the open generic method's load context, exactly as the
-            // generic-construction path does before MakeGenericType.
-            resolved[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            symbols.Add(ta);
+
+            if (ta.ClrType != null)
+            {
+                // BCL / imported type argument. Project onto the resolver's
+                // reference set so it shares the open generic method's load
+                // context, exactly as the generic-construction path does before
+                // MakeGenericType / MakeGenericMethod.
+                resolved[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            }
+            else
+            {
+                // Issue #320: a user-defined type (or an in-scope type parameter)
+                // has no reference-context CLR type, so it cannot be handed to
+                // MakeGenericMethod directly. Close the open method with a
+                // reference-context System.Object placeholder so resolution and
+                // applicability still run; the real type-argument symbol is
+                // preserved in typeArgSymbols and re-emitted as its own TypeDef
+                // token in the generic method specification.
+                resolved[i] = scope.References.GetCoreType("System.Object");
+            }
         }
 
         explicitTypeArgs = resolved;
+        typeArgSymbols = symbols.MoveToImmutable();
         return true;
+    }
+
+    /// <summary>
+    /// Issue #320: computes a return-type override for an imported generic method
+    /// closed over explicit type arguments. When the method's open return type is
+    /// exactly one of its method type parameters, the real return type is the
+    /// corresponding explicit type-argument symbol (recovering a user-defined type
+    /// that was closed with an <see cref="object"/> placeholder). Returns
+    /// <see langword="null"/> when no override is needed, so callers keep their
+    /// existing return-type derivation.
+    /// </summary>
+    /// <param name="closed">The closed generic method selected by overload resolution.</param>
+    /// <param name="typeArgSymbols">The explicit type-argument symbols, or default.</param>
+    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
+    private static TypeSymbol ResolveImportedGenericReturnType(System.Reflection.MethodInfo closed, ImmutableArray<TypeSymbol> typeArgSymbols)
+    {
+        if (!typeArgSymbols.IsDefaultOrEmpty
+            && OverloadResolution.TryGetGenericMethodParameterReturnPosition(closed, out var position)
+            && position >= 0
+            && position < typeArgSymbols.Length)
+        {
+            return typeArgSymbols[position];
+        }
+
+        return null;
     }
 
     private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
@@ -8553,7 +8605,7 @@ public sealed class Binder
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
-        if (!TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs))
+        if (!TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs, out var typeArgSymbols))
         {
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
@@ -8561,11 +8613,11 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols))
             {
                 var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
                 ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(null, staticFn, arguments, refKinds);
+                return new BoundImportedCallExpression(null, staticFn, arguments, refKinds, typeArgSymbols);
             }
 
             if (staticAmbiguous)
@@ -8618,7 +8670,7 @@ public sealed class Binder
             // imported extension methods.
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
                 && inheritedDerived.ImportedBaseType?.ClrType is System.Type inheritedBaseClr
-                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs))
+                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols))
             {
                 return inheritedCall;
             }
@@ -8626,7 +8678,7 @@ public sealed class Binder
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
-            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs))
+            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs, typeArgSymbols))
             {
                 return userPathExt;
             }
@@ -8669,10 +8721,10 @@ public sealed class Binder
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
-                        var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                         var instRefKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
                         ValidateRefArguments(arguments, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, instRefKinds);
+                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, instRefKinds, typeArgSymbols);
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression(null);
@@ -8693,7 +8745,7 @@ public sealed class Binder
         // (receiver) syntax. After instance members and user extension
         // functions fail, fall back to imported static [Extension] methods
         // whose first parameter is compatible with the receiver type.
-        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs))
+        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs, typeArgSymbols))
         {
             return importedExt;
         }
@@ -8716,7 +8768,8 @@ public sealed class Binder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         out BoundExpression result,
-        System.Type[] explicitTypeArgs = null)
+        System.Type[] explicitTypeArgs = null,
+        ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         result = null;
 
@@ -8745,10 +8798,10 @@ public sealed class Binder
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
-                var returnType = TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var refKinds = ComputeArgumentRefKinds(resolution.Best.GetParameters());
                 ValidateRefArguments(arguments, refKinds, methodName, ce.Location);
-                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, refKinds);
+                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, arguments, refKinds, typeArgSymbols);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
@@ -8889,8 +8942,9 @@ public sealed class Binder
     /// <param name="ce">The originating call expression.</param>
     /// <param name="result">The bound call when resolution succeeds (or a bound error on ambiguity).</param>
     /// <param name="explicitTypeArgs">Issue #311: resolved explicit type arguments from a <c>[T1, T2]</c> list, or <c>null</c> for inference.</param>
+    /// <param name="typeArgSymbols">Issue #320: explicit type-argument symbols in source order (carrying user-defined types), or default.</param>
     /// <returns>True when an imported extension method was matched (success or ambiguity); false to let the caller report GS0159.</returns>
-    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null)
+    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default)
     {
         result = null;
 
@@ -8950,7 +9004,8 @@ public sealed class Binder
         }
 
         var importedClass = new ImportedClassSymbol(declaringType, ce);
-        var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce);
+        var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols);
+        var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce, returnOverride);
 
         var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
         allArguments.Add(receiver);
@@ -8959,7 +9014,7 @@ public sealed class Binder
 
         var refKinds = ComputeArgumentRefKinds(best.GetParameters());
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = new BoundImportedCallExpression(null, function, bound, refKinds);
+        result = new BoundImportedCallExpression(null, function, bound, refKinds, typeArgSymbols);
         return true;
     }
 
