@@ -31,16 +31,6 @@ Rich language features come from the G# Language Server over LSP. In current sou
 
 The extension also contributes snippets and two themes, `GSharp Dark` and `GSharp Light`.
 
-## Syntax highlighting caveats
-
-The TextMate grammar is useful for highlighting but is not the compiler. Current grammar drift to know about:
-
-- it highlights `while` and `static`, but the compiler keyword set does not reserve those words; G# uses `shared` for static member blocks;
-- it recognizes only `//` line comments, while the compiler lexer also supports `/* ... */` block comments;
-- it highlights `=>` as an arrow operator, while current compiler tokenization includes `->` but not `=>` as a language operator.
-
-When highlighting and compiler behavior disagree, the compiler is authoritative.
-
 ## Settings
 
 The extension contributes these settings:

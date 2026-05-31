@@ -103,6 +103,10 @@ export class ServerManager {
     await this.start();
   }
 
+  getClient(): LanguageClient | undefined {
+    return this.client;
+  }
+
   private async doStart(): Promise<void> {
     let client: LanguageClient | undefined;
 
