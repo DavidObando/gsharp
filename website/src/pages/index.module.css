@@ -3,8 +3,9 @@
   overflow: hidden;
   background: linear-gradient(
     135deg,
-    var(--ifm-color-primary-darkest) 0%,
-    var(--ifm-color-primary) 100%
+    #9a2e23 0%,
+    #c0392b 55%,
+    #e0552b 100%
   );
   color: #fff;
 }
