@@ -394,10 +394,17 @@ public sealed class Binder
     /// Produces a bound program from the specified global scope.
     /// </summary>
     /// <param name="globalScope">The global scope.</param>
+    /// <param name="references">
+    /// The reference resolver used to resolve imported CLR types inside function and
+    /// method bodies. When omitted, function-body scopes fall back to
+    /// <see cref="ReferenceResolver.Default"/>, which only carries core/System
+    /// assemblies — causing imports of non-System namespaces (e.g. types from
+    /// referenced libraries or third-party packages) to fail inside bodies.
+    /// </param>
     /// <returns>A bound program.</returns>
-    public static BoundProgram BindProgram(BoundGlobalScope globalScope)
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references = null)
     {
-        var parentScope = CreateParentScope(globalScope, references: null, preprocessorSymbols: globalScope?.PreprocessorSymbols);
+        var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols);
 
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
