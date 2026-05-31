@@ -10380,6 +10380,9 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundMethodGroupExpression methodGroup:
                     this.EmitMethodGroup(methodGroup, overrideDelegateType: null);
                     break;
+                case BoundClrMethodGroupExpression clrMethodGroup:
+                    this.EmitClrMethodGroup(clrMethodGroup);
+                    break;
                 case BoundIndirectCallExpression indirect:
                     this.EmitIndirectCall(indirect);
                     break;
@@ -13012,6 +13015,54 @@ internal sealed class ReflectionMetadataEmitter
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(methodHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(delegateCtor));
+        }
+
+        // Issue #337: emit a resolved CLR member method group as a delegate over
+        // the selected overload. Static groups load a null target and the method
+        // address (`ldnull; ldftn`); instance groups evaluate the receiver and
+        // load its (virtual) address (`<recv>; [dup; ldvirtftn] / ldftn`),
+        // capturing the receiver as the delegate target. The constructed
+        // delegate is the resolved target type (`Func[...]`/`Action[...]` or a
+        // named delegate), resolved onto the emitter's reference context.
+        private void EmitClrMethodGroup(BoundClrMethodGroupExpression methodGroup)
+        {
+            var method = methodGroup.ResolvedMethod
+                ?? throw new InvalidOperationException(
+                    $"CLR method group '{methodGroup.MethodName}' reached emit without overload resolution.");
+
+            var hostDelegate = methodGroup.DelegateType?.ClrType
+                ?? throw new InvalidOperationException(
+                    $"CLR method group '{methodGroup.MethodName}' has no resolved target delegate type.");
+
+            var delegateType = this.outer.ResolveTargetDelegateClrType(hostDelegate);
+            var delegateCtor = delegateType.GetConstructors()[0];
+            var methodRef = this.outer.GetMethodReference(method);
+
+            if (method.IsStatic)
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(methodRef);
+            }
+            else
+            {
+                this.EmitExpression(methodGroup.Receiver);
+
+                if (method.IsVirtual && !method.IsFinal)
+                {
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.il.OpCode(ILOpCode.Ldvirtftn);
+                    this.il.Token(methodRef);
+                }
+                else
+                {
+                    this.il.OpCode(ILOpCode.Ldftn);
+                    this.il.Token(methodRef);
+                }
+            }
+
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(delegateCtor));
         }

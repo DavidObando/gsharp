@@ -8486,6 +8486,16 @@ public sealed class Binder
                     var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out var staticMember);
                     if (!foundMember)
                     {
+                        // Issue #337: a static member name that resolves to a
+                        // method (not a field/property) is a method group. In a
+                        // delegate-conversion context it materializes as a
+                        // delegate over the selected overload; the conversion
+                        // classifier decides which overload (if any) applies.
+                        if (TryBindClrMethodGroup(receiver: null, classSymbol.ClassType, wantStatic: true, ne.IdentifierToken.Text, out var staticGroup))
+                        {
+                            return staticGroup;
+                        }
+
                         Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
                         return new BoundErrorExpression(null);
                     }
@@ -8587,6 +8597,16 @@ public sealed class Binder
                     if (fld != null)
                     {
                         return new BoundClrPropertyAccessExpression(null, receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
+                    }
+
+                    // Issue #337: an instance member name that resolves to a
+                    // method (not a field/property) is a method group bound to
+                    // this receiver. In a delegate-conversion context it captures
+                    // the receiver as the delegate target over the selected
+                    // overload.
+                    if (TryBindClrMethodGroup(receiver, clrReceiverType, wantStatic: false, memberName, out var instanceGroup))
+                    {
+                        return instanceGroup;
                     }
 
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
@@ -9710,6 +9730,14 @@ public sealed class Binder
 
     private BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
     {
+        // Issue #337: a CLR member method group has no fixed type until the
+        // target delegate signature drives overload selection. Resolve it here,
+        // where the expected type is known, before classifying conversions.
+        if (expression is BoundClrMethodGroupExpression { ResolvedMethod: null } clrMethodGroup)
+        {
+            return BindClrMethodGroupConversion(diagnosticLocation, clrMethodGroup, type);
+        }
+
         var conversion = Conversion.Classify(expression.Type, type);
 
         if (!conversion.Exists)
@@ -9829,6 +9857,137 @@ public sealed class Binder
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), function.Type ?? TypeSymbol.Void);
         methodGroup = new BoundMethodGroupExpression(null, function, fnType);
         return true;
+    }
+
+    // Issue #337: build an (unresolved) CLR member method-group expression for a
+    // member name that resolves to a method on an imported static type or a CLR
+    // instance receiver. Collects every accessible name-matching overload of the
+    // requested static-ness; overload selection happens later in BindConversion
+    // once the target delegate signature is known. Returns false when the type
+    // exposes no method of that name (so the caller surfaces the member
+    // diagnostic).
+    private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
+    {
+        methodGroup = null;
+
+        if (declaringType == null)
+        {
+            return false;
+        }
+
+        var flags = BindingFlags.Public | (wantStatic ? BindingFlags.Static : BindingFlags.Instance);
+        var candidates = ImmutableArray.CreateBuilder<MethodInfo>();
+        foreach (var method in declaringType.GetMethods(flags))
+        {
+            if (!string.Equals(method.Name, name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Open generic methods and special-name accessors (property/event
+            // get_/set_/add_/remove_) are not directly convertible method-group
+            // members.
+            if (method.IsGenericMethodDefinition || method.IsSpecialName)
+            {
+                continue;
+            }
+
+            candidates.Add(method);
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        methodGroup = new BoundClrMethodGroupExpression(null, receiver, declaringType, name, candidates.ToImmutable());
+        return true;
+    }
+
+    // Issue #337: resolve an unresolved CLR method group against an expected
+    // target type. The target must be a CLR delegate type; the group's overloads
+    // are filtered by signature compatibility with the delegate's Invoke method
+    // (arity + return-type compatibility), then C#-style overload resolution
+    // picks the single best candidate using the delegate's parameter types as
+    // the "argument" types. On success the resolved method-group node carries the
+    // selected MethodInfo and target delegate type; on failure a GS0218 is
+    // reported.
+    private BoundExpression BindClrMethodGroupConversion(TextLocation diagnosticLocation, BoundClrMethodGroupExpression group, TypeSymbol targetType)
+    {
+        var delegateClr = targetType?.ClrType;
+        if (delegateClr == null || !ClrTypeUtilities.IsDelegateType(delegateClr))
+        {
+            // A non-delegate target (e.g. `var x int32 = Console.WriteLine`) or
+            // an already-errored target: report unless the target itself is an
+            // error type (which already produced a diagnostic).
+            if (targetType != null && targetType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        var invoke = delegateClr.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        var invokeParams = invoke.GetParameters();
+        var argTypes = new Type[invokeParams.Length];
+        for (var i = 0; i < invokeParams.Length; i++)
+        {
+            argTypes[i] = invokeParams[i].ParameterType;
+        }
+
+        var applicable = new List<MethodInfo>();
+        foreach (var candidate in group.Candidates)
+        {
+            if (candidate.GetParameters().Length != invokeParams.Length)
+            {
+                continue;
+            }
+
+            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
+            {
+                continue;
+            }
+
+            applicable.Add(candidate);
+        }
+
+        if (applicable.Count > 0)
+        {
+            var resolution = OverloadResolution.Resolve(applicable, argTypes);
+            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                return new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
+            }
+        }
+
+        Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+        return new BoundErrorExpression(null);
+    }
+
+    // Issue #337: a method-group overload's return type is compatible with a
+    // delegate's Invoke return type when both are void, or when the method's
+    // (non-void) return is identity / implicitly reference- or value-convertible
+    // (by name, MetadataLoadContext-safe) to the delegate's (non-void) return.
+    private static bool IsMethodGroupReturnCompatible(Type methodReturn, Type invokeReturn)
+    {
+        var invokeVoid = invokeReturn == null
+            || string.Equals(invokeReturn.FullName, "System.Void", StringComparison.Ordinal);
+        var methodVoid = methodReturn == null
+            || string.Equals(methodReturn.FullName, "System.Void", StringComparison.Ordinal);
+
+        if (invokeVoid || methodVoid)
+        {
+            return invokeVoid && methodVoid;
+        }
+
+        return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
     }
 
     // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an

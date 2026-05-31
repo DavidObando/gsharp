@@ -202,6 +202,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.MethodGroupExpression:
                 WriteMethodGroupExpression((BoundMethodGroupExpression)node, writer);
                 break;
+            case BoundNodeKind.ClrMethodGroupExpression:
+                WriteClrMethodGroupExpression((BoundClrMethodGroupExpression)node, writer);
+                break;
             case BoundNodeKind.IndirectCallExpression:
                 WriteIndirectCallExpression((BoundIndirectCallExpression)node, writer);
                 break;
@@ -1406,6 +1409,17 @@ public static class BoundNodePrinter
     private static void WriteMethodGroupExpression(BoundMethodGroupExpression node, IndentedTextWriter writer)
     {
         writer.WriteIdentifier(node.Function.Name);
+    }
+
+    private static void WriteClrMethodGroupExpression(BoundClrMethodGroupExpression node, IndentedTextWriter writer)
+    {
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+            writer.WritePunctuation(".");
+        }
+
+        writer.WriteIdentifier(node.MethodName);
     }
 
     private static void WriteIndirectCallExpression(BoundIndirectCallExpression node, IndentedTextWriter writer)
