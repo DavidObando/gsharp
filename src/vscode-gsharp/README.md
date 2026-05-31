@@ -17,7 +17,7 @@ Rich language support for the [GSharp programming language](https://github.com/D
 - **Test Explorer** — Discover, run, and debug tests
 - **Build Integration** — Build, run, and clean commands with error reporting
 - **Snippets** — Common code patterns (functions, classes, loops, etc.)
-- **Themes** — GSharp Dark and GSharp Light color themes
+- **Themes** — Six color themes inspired by the G# logo's amber-to-red palette: Ember, Magma, and Synthwave, each in Dark and Light variants
 
 ## Requirements
 
