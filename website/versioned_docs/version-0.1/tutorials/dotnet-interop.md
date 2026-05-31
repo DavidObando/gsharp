@@ -120,7 +120,7 @@ GSharp.Example.ImportedBaseClass.Args
 
 ## 3. Add extension functions
 
-An `extension` function lowers to a CLR extension method. Static extension containers are generated so C# and LINQ-style consumers can see the method:
+An extension function lowers to a CLR extension method. Static extension containers are generated so C# and LINQ-style consumers can see the method:
 
 ```gsharp title="ExtensionFunctions.gs"
 // file: ExtensionFunctions.gs
