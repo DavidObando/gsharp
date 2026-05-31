@@ -1,29 +1,25 @@
 // file: Program.gs
 //
 // Minimal ASP.NET Core web application written in GSharp. It uses the modern
-// WebApplication host (Kestrel) and a terminal request handler that writes a
-// plain-text response for every request.
+// WebApplication host (Kestrel) and minimal-API endpoint routing to map an
+// HTTP GET endpoint that returns a plain-text response.
 //
-// The handler is declared as a `RequestDelegate` value so the function literal
-// converts cleanly to the delegate the ASP.NET pipeline expects, then it is
-// registered as terminal middleware with `app.Run(handler)`.
+// The endpoint handler is declared as a `Func[string]` value first so it binds
+// cleanly to the delegate `MapGet` expects, then it is registered for the "/"
+// route. `app.Run(url)` starts Kestrel and blocks until the process stops.
 
 package GsharpWebApp
 
+import System
 import Microsoft.AspNetCore.Builder
-import Microsoft.AspNetCore.Http
-import System.Threading
-import System.Threading.Tasks
+import Microsoft.AspNetCore.Routing
+import Microsoft.Extensions.Hosting
 
 var builder = WebApplication.CreateBuilder()
 var app = builder.Build()
 
-var handler RequestDelegate = func(context HttpContext) Task {
-    return context.Response.WriteAsync("Hello from GSharp on ASP.NET Core!", CancellationToken.None)
-}
-
-// Register the handler as terminal middleware: it runs for every request.
-app.Run(handler)
+var hello Func[string] = func() string { return "Hello from GSharp on ASP.NET Core!" }
+app.MapGet("/", hello)
 
 // Start Kestrel and block until the process is stopped.
-app.Run("http://localhost:5000")
+app.Run("http://localhost:5117")
