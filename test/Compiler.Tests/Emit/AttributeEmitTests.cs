@@ -409,6 +409,39 @@ public class AttributeEmitTests
             d => d.AttributeType.FullName == "System.ObsoleteAttribute");
     }
 
+    [Fact]
+    public void Emits_ParamsArray_Attribute_Expanding_Trailing_Args()
+    {
+        // Issue: attributes whose constructor ends in a params-array (e.g.
+        // xUnit's InlineData(params object[])) were silently dropped because the
+        // emitter required exact arity. The compiler must now collapse the
+        // trailing positional arguments into a synthesized array argument.
+        // MemberNotNull(params string[]) is the framework analogue used here.
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+
+            type Box class {
+                @MemberNotNull("A", "B")
+                func Setup() {
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var box = assembly.GetTypes().Single(t => t.Name == "Box");
+        var setup = box.GetMethod("Setup", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+        Assert.NotNull(setup);
+
+        var data = setup.GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+        Assert.Equal(typeof(string[]), arg.ArgumentType);
+
+        var elements = Assert.IsAssignableFrom<System.Collections.ObjectModel.ReadOnlyCollection<CustomAttributeTypedArgument>>(arg.Value);
+        Assert.Equal(new[] { "A", "B" }, elements.Select(e => (string)e.Value));
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_attr_emit_").FullName;

@@ -3693,11 +3693,20 @@ internal sealed class ReflectionMetadataEmitter
             this.metadata.GetOrAddString(".ctor"),
             this.metadata.GetOrAddBlob(ctorSig));
 
+        // Map the supplied positional arguments onto the constructor parameters,
+        // collapsing a trailing params-array (e.g. InlineData(params object[]))
+        // into a single synthesized array argument.
+        var effective = BuildCtorArgumentValues(ctorParams, positional);
+
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
         for (int i = 0; i < ctorParams.Length; i++)
         {
-            WriteCustomAttributeFixedArg(valueBlob, ctorParams[i].ParameterType, positional[i].Value);
+            // Normalize to the executing runtime's Type so the reference-equality
+            // checks in the value-blob writer succeed even when the attribute was
+            // resolved through a MetadataLoadContext (e.g. third-party packages).
+            var writeType = NormalizeWellKnownType(ctorParams[i].ParameterType);
+            WriteCustomAttributeFixedArg(valueBlob, writeType, effective[i]);
         }
 
         var named = attr.NamedArguments;
@@ -3716,6 +3725,8 @@ internal sealed class ReflectionMetadataEmitter
     private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
     {
         var ctors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+        // First pass: exact-arity match (the common case).
         foreach (var ctor in ctors)
         {
             var pars = ctor.GetParameters();
@@ -3724,38 +3735,167 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
-            bool match = true;
-            for (int i = 0; i < pars.Length; i++)
+            if (ParametersMatch(pars, positional, expandLast: false))
             {
-                var supplied = positional[i].Value;
-                var paramType = pars[i].ParameterType;
-                if (supplied == null)
-                {
-                    if (paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == null)
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                else if (!paramType.IsInstanceOfType(supplied))
-                {
-                    // Allow numeric widening (int → long, etc.), char → int,
-                    // and source-array → target-array element widening.
-                    if (!IsTriviallyConvertible(supplied.GetType(), paramType))
-                    {
-                        match = false;
-                        break;
-                    }
-                }
+                return ctor;
+            }
+        }
+
+        // Second pass: params-array expansion. A constructor whose last
+        // parameter is a single-dimensional array can absorb zero or more
+        // trailing positional arguments, each assignable to the element type —
+        // e.g. xUnit's InlineData(params object[] data). The exact-arity pass
+        // above already handles passing the array directly.
+        foreach (var ctor in ctors)
+        {
+            var pars = ctor.GetParameters();
+            if (pars.Length == 0)
+            {
+                continue;
             }
 
-            if (match)
+            var lastType = pars[pars.Length - 1].ParameterType;
+            if (!lastType.IsArray || lastType.GetArrayRank() != 1)
+            {
+                continue;
+            }
+
+            if (positional.Length < pars.Length - 1)
+            {
+                continue;
+            }
+
+            if (ParametersMatch(pars, positional, expandLast: true))
             {
                 return ctor;
             }
         }
 
         return null;
+    }
+
+    private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
+    {
+        var fixedCount = expandLast ? pars.Length - 1 : pars.Length;
+        for (int i = 0; i < fixedCount; i++)
+        {
+            if (!ArgAssignable(positional[i].Value, pars[i].ParameterType))
+            {
+                return false;
+            }
+        }
+
+        if (expandLast)
+        {
+            var elementType = pars[pars.Length - 1].ParameterType.GetElementType()!;
+            for (int i = fixedCount; i < positional.Length; i++)
+            {
+                if (!ArgAssignable(positional[i].Value, elementType))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ArgAssignable(object supplied, Type paramType)
+    {
+        // Everything is assignable to System.Object. Compared by name so the
+        // check holds for attribute types resolved through a MetadataLoadContext.
+        if (paramType.FullName == "System.Object")
+        {
+            return true;
+        }
+
+        if (supplied == null)
+        {
+            return !(paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == null);
+        }
+
+        if (paramType.IsInstanceOfType(supplied))
+        {
+            return true;
+        }
+
+        return IsTriviallyConvertible(supplied.GetType(), paramType);
+    }
+
+    /// <summary>
+    /// Maps the supplied positional arguments onto the constructor parameters,
+    /// collapsing a trailing params-array into a single synthesized
+    /// <see cref="object"/>[] when the call site supplied the elements inline
+    /// (params expansion). Returns one value per constructor parameter.
+    /// </summary>
+    private static object[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
+    {
+        var lastIsArray = ctorParams.Length > 0
+            && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
+            && ctorParams[ctorParams.Length - 1].ParameterType.GetArrayRank() == 1;
+
+        // Direct (non-expanded) form: arity matches and the final argument is
+        // itself assignable to the array parameter (or there is no array tail).
+        var lastSupplied = positional.Length == ctorParams.Length && positional.Length > 0
+            ? positional[positional.Length - 1].Value
+            : null;
+        var direct = !lastIsArray
+            || (positional.Length == ctorParams.Length
+                && (lastSupplied == null
+                    || ctorParams[ctorParams.Length - 1].ParameterType.IsInstanceOfType(lastSupplied)
+                    || lastSupplied.GetType().IsArray));
+
+        if (direct)
+        {
+            var values = new object[ctorParams.Length];
+            for (int i = 0; i < ctorParams.Length; i++)
+            {
+                values[i] = positional[i].Value;
+            }
+
+            return values;
+        }
+
+        var result = new object[ctorParams.Length];
+        for (int i = 0; i < ctorParams.Length - 1; i++)
+        {
+            result[i] = positional[i].Value;
+        }
+
+        var tail = positional.Length - (ctorParams.Length - 1);
+        var array = new object[tail];
+        for (int i = 0; i < tail; i++)
+        {
+            array[i] = positional[ctorParams.Length - 1 + i].Value;
+        }
+
+        result[ctorParams.Length - 1] = array;
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the executing runtime's <see cref="Type"/> for well-known
+    /// core-library types (primitives, string, object, Type, and single-rank
+    /// arrays thereof) so that the reference-equality dispatch in
+    /// <see cref="WriteCustomAttributeFixedArg"/> works even when the attribute
+    /// was resolved through a <see cref="MetadataLoadContext"/>. Unknown types
+    /// are returned unchanged.
+    /// </summary>
+    private static Type NormalizeWellKnownType(Type t)
+    {
+        if (t == null)
+        {
+            return null;
+        }
+
+        if (t.IsArray && t.GetArrayRank() == 1)
+        {
+            var element = NormalizeWellKnownType(t.GetElementType()!);
+            return element.MakeArrayType();
+        }
+
+        var byName = Type.GetType(t.FullName ?? string.Empty);
+        return byName ?? t;
     }
 
     private static bool IsTriviallyConvertible(Type from, Type to)
