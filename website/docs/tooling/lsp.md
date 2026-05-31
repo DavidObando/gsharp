@@ -19,7 +19,7 @@ dotnet build src/LanguageServer
 By default, the server reads LSP messages from standard input and writes responses and notifications to standard output.
 
 ```bash
-dotnet src/LanguageServer/bin/Debug/net10.0/GSharp.LanguageServer.dll
+dotnet out/bin/Debug/LanguageServer/GSharp.LanguageServer.dll
 ```
 
 Recognized command-line arguments are:
