@@ -128,8 +128,4 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Reference assemblies | Supported | N/A | SDK can produce reference assemblies. |
 | SDK `.gsproj` build/run/pack | Supported | N/A | `Gsharp.NET.Sdk` integrates with MSBuild and `dotnet`. |
 | REPL | N/A | Supported | Interpreter executable starts a REPL with no file argument. |
-| Language server and VS Code extension | N/A | N/A | Tooling uses parser/binder services and has richer capabilities than older docs may list. |
-
-## Known documentation/source consistency notes
-
-The generated `docs/coverage-matrix.md` is a symbol snapshot, not a prose support matrix. It lists nodes such as `MapDeleteExpression`, `ClrEventSubscriptionExpression`, `StateMachineAwaitOnCompleted`, and `AddressOfExpression`; those confirm syntax/bound-node coverage but do not by themselves prove complete runtime parity. Current source also supports block comments while an older VS Code grammar note says it does not, and source advertises more LSP capabilities than older `docs/lsp.md` text. The primary feature matrix above follows the implementation snapshot and uses `docs/coverage-matrix.md` as corroboration where the snapshot exposes bound-node differences.
+| Language server and VS Code extension | N/A | N/A | Tooling uses parser/binder services and provides rich editor capabilities. |

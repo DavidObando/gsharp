@@ -34,7 +34,7 @@ VS Code exposes logging through `gsharp.server.log` and `gsharp.server.logPath`.
 
 ## Advertised capabilities
 
-Current source advertises more than the older `docs/lsp.md` table. The server capability factory currently enables:
+The server capability factory enables the following:
 
 | Capability | LSP surface |
 | --- | --- |
