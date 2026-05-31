@@ -155,6 +155,20 @@ internal static class OverloadResolution
             return ImplicitConversionKind.NullableWrap;
         }
 
+        // Issue #322: any delegate type (Func<...>/Action<...> or a named
+        // delegate) is implicitly convertible to System.Delegate /
+        // System.MulticastDelegate, mirroring C#'s natural-delegate-type
+        // conversion. This must work across reflection contexts: a lambda
+        // literal in argument position carries a *live runtime* Func<> type,
+        // while the target Delegate parameter (e.g. ASP.NET Core MapGet) is
+        // loaded through a MetadataLoadContext, so the comparison is by name.
+        if ((string.Equals(target.FullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(target.FullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            && ClrTypeUtilities.IsDelegateType(source))
+        {
+            return ImplicitConversionKind.Reference;
+        }
+
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
         {
             try
