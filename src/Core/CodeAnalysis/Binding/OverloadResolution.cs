@@ -155,6 +155,20 @@ internal static class OverloadResolution
             return ImplicitConversionKind.NullableWrap;
         }
 
+        // Issue #322: any delegate type (Func<...>/Action<...> or a named
+        // delegate) is implicitly convertible to System.Delegate /
+        // System.MulticastDelegate, mirroring C#'s natural-delegate-type
+        // conversion. This must work across reflection contexts: a lambda
+        // literal in argument position carries a *live runtime* Func<> type,
+        // while the target Delegate parameter (e.g. ASP.NET Core MapGet) is
+        // loaded through a MetadataLoadContext, so the comparison is by name.
+        if ((string.Equals(target.FullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(target.FullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            && ClrTypeUtilities.IsDelegateType(source))
+        {
+            return ImplicitConversionKind.Reference;
+        }
+
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
         {
             try
@@ -393,6 +407,38 @@ internal static class OverloadResolution
             .Select(c => c.Method)
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
+    }
+
+    /// <summary>
+    /// Issue #320: determines whether a closed generic method's open definition
+    /// returns exactly one of its own method type parameters (e.g.
+    /// <c>T GetService&lt;T&gt;()</c>, <c>T GetRequiredService&lt;T&gt;()</c>,
+    /// <c>T CreateInstance&lt;T&gt;()</c>). When it does, the caller can recover the
+    /// real return type from the explicit type-argument symbol at the reported
+    /// position, which is necessary when the method was closed with a placeholder
+    /// CLR type because the type argument is a user-defined type with no
+    /// reference-context CLR type.
+    /// </summary>
+    /// <param name="closed">The closed generic method.</param>
+    /// <param name="position">The method type-parameter position of the return type, when matched.</param>
+    /// <returns><see langword="true"/> when the return type is a bare method type parameter.</returns>
+    public static bool TryGetGenericMethodParameterReturnPosition(MethodInfo closed, out int position)
+    {
+        position = -1;
+        if (closed == null || !closed.IsGenericMethod)
+        {
+            return false;
+        }
+
+        var open = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        var ret = open.ReturnType;
+        if (ret != null && ret.IsGenericParameter && ret.DeclaringMethod != null)
+        {
+            position = ret.GenericParameterPosition;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

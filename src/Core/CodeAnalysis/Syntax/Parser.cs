@@ -1549,7 +1549,10 @@ public class Parser
                 && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken;
         }
 
-        return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken;
+        // The parameter list opens with `(`, or — for a generic extension
+        // function — a type-parameter list `[T]` precedes it (Phase 4.1).
+        return Peek(ahead).Kind == SyntaxKind.OpenParenthesisToken
+            || Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken;
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()

@@ -980,7 +980,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundImportedCallExpression(null, node.Function, builder.MoveToImmutable());
+        return new BoundImportedCallExpression(null, node.Function, builder.MoveToImmutable(), node.ArgumentRefKinds, node.TypeArgumentSymbols);
     }
 
     /// <summary>
@@ -1022,7 +1022,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundImportedInstanceCallExpression(null, newReceiver, node.Method, node.Type, args);
+        return new BoundImportedInstanceCallExpression(null, newReceiver, node.Method, node.Type, args, node.ArgumentRefKinds, node.TypeArgumentSymbols);
     }
 
     /// <summary>Rewrites an array creation expression.</summary>

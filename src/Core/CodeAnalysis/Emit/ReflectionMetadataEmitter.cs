@@ -8806,12 +8806,29 @@ internal sealed class ReflectionMetadataEmitter
     // constructed generic methods in a MethodSpecification per ECMA-335 II.23.2.15.
     private EntityHandle GetMethodEntityHandle(MethodInfo method)
     {
+        return this.GetMethodEntityHandle(method, default);
+    }
+
+    // Issue #320: callable EntityHandle for a constructed generic method whose
+    // explicit type arguments may include user-defined types. User-defined type
+    // arguments have no reference-context CLR type, so the method was closed with
+    // a System.Object placeholder; the real type-argument symbols are encoded into
+    // the method specification here (as their own TypeDef tokens) instead of the
+    // placeholder. When typeArgSymbols is default the placeholder CLR arguments are
+    // encoded, preserving the BCL-only behavior.
+    private EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols)
+    {
         if (!method.IsGenericMethod || method.IsGenericMethodDefinition)
         {
             return this.GetMethodReference(method);
         }
 
-        if (this.methodSpecs.TryGetValue(method, out var existing))
+        // The placeholder-closed MethodInfo is identical across distinct
+        // user-type arguments (all close to <object>), so the cache must be keyed
+        // by the symbol arguments too. Only cache the plain (symbol-free) case.
+        var hasSymbolArgs = !typeArgSymbols.IsDefaultOrEmpty
+            && typeArgSymbols.Any(s => s is StructSymbol or InterfaceSymbol or EnumSymbol);
+        if (!hasSymbolArgs && this.methodSpecs.TryGetValue(method, out var existing))
         {
             return existing;
         }
@@ -8819,15 +8836,31 @@ internal sealed class ReflectionMetadataEmitter
         var openDef = method.GetGenericMethodDefinition();
         var openRef = this.GetMethodReference(openDef);
 
+        var closedArgs = method.GetGenericArguments();
         var sigBlob = new BlobBuilder();
-        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(method.GetGenericArguments().Length);
-        foreach (var typeArg in method.GetGenericArguments())
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(closedArgs.Length);
+        for (var i = 0; i < closedArgs.Length; i++)
         {
-            this.EncodeClrType(argsEncoder.AddArgument(), typeArg);
+            // Issue #320: encode a user-defined type argument via its symbol so it
+            // resolves to the emitted TypeDef; BCL arguments use the closed CLR type.
+            if (!typeArgSymbols.IsDefaultOrEmpty
+                && i < typeArgSymbols.Length
+                && typeArgSymbols[i] is StructSymbol or InterfaceSymbol or EnumSymbol)
+            {
+                this.EncodeTypeSymbol(argsEncoder.AddArgument(), typeArgSymbols[i]);
+            }
+            else
+            {
+                this.EncodeClrType(argsEncoder.AddArgument(), closedArgs[i]);
+            }
         }
 
         var spec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
-        this.methodSpecs[method] = spec;
+        if (!hasSymbolArgs)
+        {
+            this.methodSpecs[method] = spec;
+        }
+
         return spec;
     }
 
@@ -10188,7 +10221,7 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundImportedCallExpression impCall:
                     this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
-                    this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method));
+                    this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
                     break;
                 case BoundClrStaticCallExpression staticCall:
                     this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
@@ -10198,7 +10231,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitInstanceReceiver(instCall.Receiver);
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
                     var receiverIsValueType = instCall.Receiver.Type?.ClrType?.IsValueType == true;
-                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method);
+                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols);
                     this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
                     break;
@@ -10468,7 +10501,14 @@ internal sealed class ReflectionMetadataEmitter
         //    to the target delegate type via `dup / ldvirtftn Invoke / newobj`.
         private void EmitFunctionToDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, Type targetDelegateHostType)
         {
-            var targetDelegateType = this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
+            // Issue #323: when the target is the abstract System.Delegate /
+            // System.MulticastDelegate base type, there is no concrete delegate
+            // to instantiate. Materialize the function value as its natural
+            // delegate type (Func/Action) instead; the resulting reference is
+            // already a System.Delegate, so the widening is a no-op upcast.
+            var targetDelegateType = IsSystemDelegateHostType(targetDelegateHostType)
+                ? this.outer.ResolveDelegateClrType(sourceFn)
+                : this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
 
             if (source is BoundFunctionLiteralExpression literal)
             {
@@ -10701,7 +10741,28 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // Issue #323: any delegate-typed value (named/generic CLR delegate
+            // such as Func[string]) widens to System.Delegate /
+            // System.MulticastDelegate as a no-op reference upcast.
+            if (b?.ClrType != null && IsSystemDelegateHostType(b.ClrType)
+                && a?.ClrType != null && ClrTypeUtilities.IsDelegateType(a.ClrType))
+            {
+                return true;
+            }
+
             return false;
+        }
+
+        private static bool IsSystemDelegateHostType(Type type)
+        {
+            if (type == null)
+            {
+                return false;
+            }
+
+            var fullName = type.FullName;
+            return string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
         }
 
         private void EmitUnary(BoundUnaryExpression u)
