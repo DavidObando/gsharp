@@ -79,8 +79,14 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="arguments">The bound arguments.</param>
     /// <param name="function">The resulting function, if one is found.</param>
     /// <param name="isAmbiguous">Set to true when two or more candidates tied under "better function member" rules.</param>
+    /// <param name="explicitTypeArgs">
+    /// Issue #311: resolved CLR type arguments from an explicit <c>[T1, T2]</c>
+    /// list at the call site (e.g. <c>Array.Empty[string]()</c>), already
+    /// projected onto the reference load context; <c>null</c> when the call has
+    /// no explicit type arguments.
+    /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null)
     {
         function = null;
         isAmbiguous = false;
@@ -103,7 +109,7 @@ public sealed class ImportedClassSymbol : Symbol
             argTypes[i] = t;
         }
 
-        var result = OverloadResolution.Resolve(nameMatches, argTypes);
+        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs);
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
