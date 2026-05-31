@@ -182,10 +182,23 @@ public sealed class Binder
 
             // Phase 4.1 / ADR-0020: expose declared generic type parameters
             // when binding the function body so that `T` resolves inside the
-            // body to the TypeParameterSymbol.
-            if (function.IsGeneric)
+            // body to the TypeParameterSymbol. Issue #312: a method may carry
+            // both the enclosing type's type parameters (when it is a member of
+            // a generic class) and its own method-level type parameters; seed
+            // the enclosing type's first, then the method's own so the latter
+            // shadow on name collision.
+            var enclosingGenericOwner = (function.ReceiverType ?? function.StaticOwnerType) as StructSymbol;
+            var enclosingTypeParams = enclosingGenericOwner?.Definition?.TypeParameters
+                ?? enclosingGenericOwner?.TypeParameters
+                ?? ImmutableArray<TypeParameterSymbol>.Empty;
+            if (!enclosingTypeParams.IsDefaultOrEmpty || function.IsGeneric)
             {
-                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>(function.TypeParameters.Length);
+                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                foreach (var tp in enclosingTypeParams)
+                {
+                    currentTypeParameters[tp.Name] = tp;
+                }
+
                 foreach (var tp in function.TypeParameters)
                 {
                     currentTypeParameters[tp.Name] = tp;
@@ -1148,85 +1161,113 @@ public sealed class Binder
                     continue;
                 }
 
-                var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
-                var seenParameterNames = new HashSet<string>();
-                foreach (var parameterSyntax in methodSyntax.Parameters)
+                // Issue #312 / ADR-0020: a method may declare its own generic
+                // type-parameter list (`func M[T](...) T`). Bind it first and
+                // seed it into the binding scope — merged with any enclosing
+                // class type parameters — so the method's parameter types,
+                // return type, and (later) body can reference `T`. The seeding
+                // is unwound at the end of each iteration so one method's type
+                // parameters never leak into the next or the surrounding type.
+                var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
+                var enclosingTypeParameters = currentTypeParameters;
+                if (!methodTypeParameters.IsDefaultOrEmpty)
                 {
-                    var parameterName = parameterSyntax.Identifier.Text;
-                    var parameterType = BindTypeClause(parameterSyntax.Type);
-                    if (parameterSyntax.IsVariadic)
+                    currentTypeParameters = enclosingTypeParameters == null
+                        ? new Dictionary<string, TypeParameterSymbol>()
+                        : new Dictionary<string, TypeParameterSymbol>(enclosingTypeParameters);
+                    foreach (var tp in methodTypeParameters)
                     {
-                        Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
-                    }
-
-                    if (!seenParameterNames.Add(parameterName))
-                    {
-                        Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
-                    }
-                    else
-                    {
-                        parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                        currentTypeParameters[tp.Name] = tp;
                     }
                 }
 
-                var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
-                var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
-                var methodParameters = parameters.ToImmutable();
-
-                // Phase 3.B.3 sub-step 3: open/override validation against
-                // base class chain per ADR-0017.
-                FunctionSymbol overriddenMethod = null;
-                if (methodSyntax.IsOverride)
+                try
                 {
-                    if (structSymbol.BaseClass == null || !structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var baseMethod))
+                    var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                    var seenParameterNames = new HashSet<string>();
+                    foreach (var parameterSyntax in methodSyntax.Parameters)
                     {
-                        Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                        var parameterName = parameterSyntax.Identifier.Text;
+                        var parameterType = BindTypeClause(parameterSyntax.Type);
+                        if (parameterSyntax.IsVariadic)
+                        {
+                            Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                        }
+
+                        if (!seenParameterNames.Add(parameterName))
+                        {
+                            Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                        }
+                        else
+                        {
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                        }
                     }
-                    else if (!baseMethod.IsOpen)
+
+                    var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+                    var methodParameters = parameters.ToImmutable();
+
+                    // Phase 3.B.3 sub-step 3: open/override validation against
+                    // base class chain per ADR-0017.
+                    FunctionSymbol overriddenMethod = null;
+                    if (methodSyntax.IsOverride)
                     {
-                        Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                        if (structSymbol.BaseClass == null || !structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var baseMethod))
+                        {
+                            Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                        }
+                        else if (!baseMethod.IsOpen)
+                        {
+                            Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                        }
+                        else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                        }
+                        else
+                        {
+                            overriddenMethod = baseMethod;
+                        }
                     }
-                    else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
+                    else if (structSymbol.BaseClass != null
+                        && structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var shadowed)
+                        && shadowed.IsOpen)
                     {
-                        Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                        // Method shadows an overridable base method without `override`.
+                        Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
                     }
-                    else
+
+                    var methodSymbol = new FunctionSymbol(
+                        methodName,
+                        methodParameters,
+                        returnType,
+                        methodSyntax,
+                        package,
+                        methodAccessibility,
+                        receiverType: structSymbol,
+                        isOpen: methodSyntax.IsOpen,
+                        isOverride: methodSyntax.IsOverride);
+                    methodSymbol.OverriddenMethod = overriddenMethod;
+                    methodSymbol.TypeParameters = methodTypeParameters;
+
+                    if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
-                        overriddenMethod = baseMethod;
+                        var methodAttributes = BindAttributes(
+                            methodSyntax.Annotations,
+                            AttributeTargetKind.Method,
+                            FunctionDeclarationAllowedTargets,
+                            "a method declaration",
+                            System.AttributeTargets.Method);
+                        methodSymbol.SetAttributes(methodAttributes);
                     }
+
+                    methodsBuilder.Add(methodSymbol);
                 }
-                else if (structSymbol.BaseClass != null
-                    && structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var shadowed)
-                    && shadowed.IsOpen)
+                finally
                 {
-                    // Method shadows an overridable base method without `override`.
-                    Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                    currentTypeParameters = enclosingTypeParameters;
                 }
-
-                var methodSymbol = new FunctionSymbol(
-                    methodName,
-                    methodParameters,
-                    returnType,
-                    methodSyntax,
-                    package,
-                    methodAccessibility,
-                    receiverType: structSymbol,
-                    isOpen: methodSyntax.IsOpen,
-                    isOverride: methodSyntax.IsOverride);
-                methodSymbol.OverriddenMethod = overriddenMethod;
-
-                if (!methodSyntax.Annotations.IsDefaultOrEmpty)
-                {
-                    var methodAttributes = BindAttributes(
-                        methodSyntax.Annotations,
-                        AttributeTargetKind.Method,
-                        FunctionDeclarationAllowedTargets,
-                        "a method declaration",
-                        System.AttributeTargets.Method);
-                    methodSymbol.SetAttributes(methodAttributes);
-                }
-
-                methodsBuilder.Add(methodSymbol);
             }
 
             structSymbol.SetMethods(methodsBuilder.ToImmutable());
@@ -1601,53 +1642,75 @@ public sealed class Binder
                     continue;
                 }
 
-                var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
-                var seenParameterNames = new HashSet<string>();
-                foreach (var parameterSyntax in methodSyntax.Parameters)
+                // Issue #312 / ADR-0020: support generic static methods too.
+                var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
+                var enclosingTypeParameters = currentTypeParameters;
+                if (!methodTypeParameters.IsDefaultOrEmpty)
                 {
-                    var parameterName = parameterSyntax.Identifier.Text;
-                    var parameterType = BindTypeClause(parameterSyntax.Type);
-                    if (parameterSyntax.IsVariadic)
+                    currentTypeParameters = enclosingTypeParameters == null
+                        ? new Dictionary<string, TypeParameterSymbol>()
+                        : new Dictionary<string, TypeParameterSymbol>(enclosingTypeParameters);
+                    foreach (var tp in methodTypeParameters)
                     {
-                        Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
-                    }
-
-                    if (!seenParameterNames.Add(parameterName))
-                    {
-                        Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
-                    }
-                    else
-                    {
-                        parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                        currentTypeParameters[tp.Name] = tp;
                     }
                 }
 
-                var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
-                var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
-
-                var methodSymbol = new FunctionSymbol(
-                    methodName,
-                    parameters.ToImmutable(),
-                    returnType,
-                    methodSyntax,
-                    package,
-                    methodAccessibility,
-                    receiverType: null);
-                methodSymbol.IsStatic = true;
-                methodSymbol.StaticOwnerType = structSymbol;
-
-                if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+                try
                 {
-                    var methodAttributes = BindAttributes(
-                        methodSyntax.Annotations,
-                        AttributeTargetKind.Method,
-                        FunctionDeclarationAllowedTargets,
-                        "a method declaration",
-                        System.AttributeTargets.Method);
-                    methodSymbol.SetAttributes(methodAttributes);
-                }
+                    var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+                    var seenParameterNames = new HashSet<string>();
+                    foreach (var parameterSyntax in methodSyntax.Parameters)
+                    {
+                        var parameterName = parameterSyntax.Identifier.Text;
+                        var parameterType = BindTypeClause(parameterSyntax.Type);
+                        if (parameterSyntax.IsVariadic)
+                        {
+                            Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
+                        }
 
-                staticMethodsBuilder.Add(methodSymbol);
+                        if (!seenParameterNames.Add(parameterName))
+                        {
+                            Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                        }
+                        else
+                        {
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                        }
+                    }
+
+                    var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+
+                    var methodSymbol = new FunctionSymbol(
+                        methodName,
+                        parameters.ToImmutable(),
+                        returnType,
+                        methodSyntax,
+                        package,
+                        methodAccessibility,
+                        receiverType: null);
+                    methodSymbol.IsStatic = true;
+                    methodSymbol.StaticOwnerType = structSymbol;
+                    methodSymbol.TypeParameters = methodTypeParameters;
+
+                    if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+                    {
+                        var methodAttributes = BindAttributes(
+                            methodSyntax.Annotations,
+                            AttributeTargetKind.Method,
+                            FunctionDeclarationAllowedTargets,
+                            "a method declaration",
+                            System.AttributeTargets.Method);
+                        methodSymbol.SetAttributes(methodAttributes);
+                    }
+
+                    staticMethodsBuilder.Add(methodSymbol);
+                }
+                finally
+                {
+                    currentTypeParameters = enclosingTypeParameters;
+                }
             }
 
             structSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
@@ -7884,10 +7947,85 @@ public sealed class Binder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #312 / ADR-0020: resolve a generic static method's own type
+            // arguments from an explicit `[T1, T2]` list at the call site or by
+            // left-to-right inference from argument types.
+            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+            if (method.IsGeneric)
+            {
+                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                if (ce.TypeArgumentList != null)
+                {
+                    var explicitArgs = ce.TypeArgumentList.Arguments;
+                    if (explicitArgs.Count != method.TypeParameters.Length)
+                    {
+                        Diagnostics.ReportWrongTypeArgumentCount(ce.TypeArgumentList.Location, method.Name, method.TypeParameters.Length, explicitArgs.Count);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    for (var i = 0; i < explicitArgs.Count; i++)
+                    {
+                        var ta = BindTypeClause(explicitArgs[i]);
+                        if (ta == null)
+                        {
+                            return new BoundErrorExpression(null);
+                        }
+
+                        substitution[method.TypeParameters[i]] = ta;
+                    }
+                }
+                else
+                {
+                    for (var i = 0; i < arguments.Length; i++)
+                    {
+                        InferTypeArguments(method.Parameters[i].Type, arguments[i].Type, substitution);
+                    }
+
+                    foreach (var tp in method.TypeParameters)
+                    {
+                        if (!substitution.ContainsKey(tp))
+                        {
+                            Diagnostics.ReportTypeArgumentInferenceFailed(ce.Identifier.Location, method.Name, tp.Name);
+                            return new BoundErrorExpression(null);
+                        }
+                    }
+                }
+
+                var constraintLocation = ce.TypeArgumentList != null
+                    ? ce.TypeArgumentList.Location
+                    : ce.Identifier.Location;
+                foreach (var tp in method.TypeParameters)
+                {
+                    var typeArg = substitution[tp];
+                    if (!SatisfiesConstraint(typeArg, tp))
+                    {
+                        Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                        return new BoundErrorExpression(null);
+                    }
+                }
+            }
+
             var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
             for (var i = 0; i < arguments.Length; i++)
             {
-                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], method.Parameters[i].Type));
+                var paramType = method.Parameters[i].Type;
+                if (paramType is TypeParameterSymbol)
+                {
+                    convertedArgs.Add(arguments[i]);
+                    continue;
+                }
+
+                var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+            }
+
+            if (substitution != null)
+            {
+                var substitutedReturn = SubstituteType(method.Type, substitution);
+                if (!ReferenceEquals(substitutedReturn, method.Type))
+                {
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
+                }
             }
 
             return new BoundCallExpression(null, method, convertedArgs.ToImmutable());
@@ -8556,10 +8694,85 @@ public sealed class Binder
         // through program.Functions[method] continues to work.
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution = TryBuildReceiverSubstitution(receiver.Type);
 
+        // Issue #312 / ADR-0020: the method may declare its own generic
+        // type-parameter list (`func M[T](...) T`). Resolve those type
+        // arguments from an explicit `[T1, T2]` list at the call site or by
+        // left-to-right inference from argument types, then fold them into the
+        // same substitution map used for the receiver's type arguments.
+        if (method.IsGeneric)
+        {
+            if (substitution == null)
+            {
+                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            }
+
+            if (ce.TypeArgumentList != null)
+            {
+                var explicitArgs = ce.TypeArgumentList.Arguments;
+                if (explicitArgs.Count != method.TypeParameters.Length)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(ce.TypeArgumentList.Location, method.Name, method.TypeParameters.Length, explicitArgs.Count);
+                    return new BoundErrorExpression(null);
+                }
+
+                for (var i = 0; i < explicitArgs.Count; i++)
+                {
+                    var ta = BindTypeClause(explicitArgs[i]);
+                    if (ta == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    substitution[method.TypeParameters[i]] = ta;
+                }
+            }
+            else
+            {
+                for (var i = 0; i < arguments.Length; i++)
+                {
+                    InferTypeArguments(method.Parameters[i + parameterOffset].Type, arguments[i].Type, substitution);
+                }
+
+                foreach (var tp in method.TypeParameters)
+                {
+                    if (!substitution.ContainsKey(tp))
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(ce.Identifier.Location, method.Name, tp.Name);
+                        return new BoundErrorExpression(null);
+                    }
+                }
+            }
+
+            // Phase 4.2 / ADR-0020: each substituted type argument must satisfy
+            // its type parameter's declared constraint.
+            var constraintLocation = ce.TypeArgumentList != null
+                ? ce.TypeArgumentList.Location
+                : ce.Identifier.Location;
+            foreach (var tp in method.TypeParameters)
+            {
+                var typeArg = substitution[tp];
+                if (!SatisfiesConstraint(typeArg, tp))
+                {
+                    Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, DescribeConstraint(tp));
+                    return new BoundErrorExpression(null);
+                }
+            }
+        }
+
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramType = method.Parameters[i + parameterOffset].Type;
+
+            // An argument bound to an open type parameter is left untouched —
+            // the emitter boxes value types at the call boundary (the parameter
+            // is encoded as System.Object under the type-erased model).
+            if (paramType is TypeParameterSymbol)
+            {
+                convertedArgs.Add(arguments[i]);
+                continue;
+            }
+
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
             convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
         }

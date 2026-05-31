@@ -11179,14 +11179,41 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.EmitInstanceReceiver(call.Receiver);
-            foreach (var arg in call.Arguments)
+            var calleeParameterOffset = call.Method.ExplicitReceiverParameter == null ? 0 : 1;
+            for (var i = 0; i < call.Arguments.Length; i++)
             {
+                var arg = call.Arguments[i];
                 this.EmitExpression(arg);
+
+                // Issue #312 (emit parity, type-erased generics): a parameter
+                // typed as an open type parameter is encoded as System.Object,
+                // so value-type arguments must be boxed at the call boundary to
+                // match the emitted signature.
+                var paramType = call.Method.Parameters[i + calleeParameterOffset].Type;
+                if (paramType is TypeParameterSymbol
+                    && arg.Type is not TypeParameterSymbol
+                    && IsValueTypeSymbol(arg.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(arg.Type));
+                }
             }
 
             var receiverIsValueType = call.Method.ReceiverType is StructSymbol receiverStruct && !receiverStruct.IsClass;
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(methodHandle);
+
+            // Issue #312 (emit parity, type-erased generics): a return typed as
+            // an open type parameter is encoded as System.Object. When the
+            // call's substituted return type is a value type, unbox the result
+            // so the rest of the IL sees the expected primitive on the stack.
+            if (call.Method.Type is TypeParameterSymbol
+                && call.Type is not TypeParameterSymbol
+                && IsValueTypeSymbol(call.Type))
+            {
+                this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.GetElementTypeToken(call.Type));
+            }
         }
 
         private void EmitMapLiteral(BoundMapLiteralExpression literal)
