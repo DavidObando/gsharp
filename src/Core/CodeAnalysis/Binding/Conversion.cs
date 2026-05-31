@@ -117,6 +117,32 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // #313: two erased generics constructed over the same open definition
+        // with structurally-equivalent symbolic arguments (e.g. the `List[T]`
+        // parameter type and the `List[T]` declared return type) are distinct
+        // symbol instances but denote the same type. Treat them as identity so
+        // `return items` inside a generic function binds.
+        if (from is ImportedTypeSymbol fromGeneric && fromGeneric.HasTypeParameterArgument
+            && to is ImportedTypeSymbol toGeneric && toGeneric.HasTypeParameterArgument
+            && ReferenceEquals(fromGeneric.OpenDefinition, toGeneric.OpenDefinition)
+            && fromGeneric.TypeArguments.Length == toGeneric.TypeArguments.Length)
+        {
+            var equivalent = true;
+            for (var i = 0; i < fromGeneric.TypeArguments.Length; i++)
+            {
+                if (!ReferenceEquals(fromGeneric.TypeArguments[i], toGeneric.TypeArguments[i]))
+                {
+                    equivalent = false;
+                    break;
+                }
+            }
+
+            if (equivalent)
+            {
+                return Conversion.Identity;
+            }
+        }
+
         // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
         // when underlyings match is identity. T? → T requires the bang
         // operator (Phase 3.C.3) and is not implicit here.

@@ -8690,6 +8690,15 @@ internal sealed class ReflectionMetadataEmitter
             // a follow-up will add GenericParam rows and MVAR/VAR encoding.
             encoder.Object();
         }
+        else if (type is ImportedTypeSymbol erasedGeneric && erasedGeneric.HasTypeParameterArgument)
+        {
+            // #313: a generic type constructed over an in-scope type parameter
+            // (e.g. `List[T]`) is type-erased to System.Object at emit, exactly
+            // like a bare type parameter. The actual runtime object is a closed
+            // generic (e.g. `List<int32>`); call sites insert castclass around
+            // the boundary when the substituted type is recovered.
+            encoder.Object();
+        }
         else if (type is ArrayTypeSymbol arr)
         {
             EncodeTypeSymbol(encoder.SZArray(), arr.ElementType);
@@ -9757,6 +9766,20 @@ internal sealed class ReflectionMetadataEmitter
                         && IsValueTypeSymbol(call.Type))
                     {
                         this.il.OpCode(ILOpCode.Unbox_any);
+                        this.il.Token(this.outer.GetElementTypeToken(call.Type));
+                    }
+                    else if (TypeSymbol.ContainsTypeParameter(call.Function.Type)
+                        && !TypeSymbol.ContainsTypeParameter(call.Type)
+                        && call.Type?.ClrType != null
+                        && !IsValueTypeSymbol(call.Type))
+                    {
+                        // #313: a return typed as an erased generic over a type
+                        // parameter (e.g. `func GetAll[T]() List[T]`) is encoded
+                        // as System.Object. When the substituted return type is
+                        // a concrete reference type (e.g. `List<int32>`), cast
+                        // the boxed-free reference back so the rest of the IL —
+                        // and any subsequent indexing/member access — sees it.
+                        this.il.OpCode(ILOpCode.Castclass);
                         this.il.Token(this.outer.GetElementTypeToken(call.Type));
                     }
 
@@ -12224,6 +12247,55 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitClrIndex(BoundClrIndexExpression idx)
         {
+            // #313: indexing an erased generic over a type parameter (e.g.
+            // `items[0]` where `items: List[T]`, or `map["k"]` where
+            // `map: Dictionary[string, T]`). At runtime the receiver is a closed
+            // generic (e.g. `List<int32>`) but is typed as the erased
+            // `List<object>`; a `callvirt List<object>::get_Item` would fail.
+            // Route the read through the non-generic System.Collections.IList /
+            // IDictionary interfaces, which return the element as System.Object —
+            // exactly the erased shape of the type parameter.
+            if (idx.Target.Type is ImportedTypeSymbol erasedGen
+                && erasedGen.HasTypeParameterArgument
+                && idx.Target.Type.ClrType is System.Type erasedClr
+                && idx.Arguments.Length == 1)
+            {
+                if (typeof(System.Collections.IList).IsAssignableFrom(erasedClr)
+                    && idx.Arguments[0].Type == TypeSymbol.Int32)
+                {
+                    this.EmitInstanceReceiver(idx.Target);
+                    this.il.OpCode(ILOpCode.Castclass);
+                    this.il.Token((EntityHandle)this.outer.GetTypeReference(typeof(System.Collections.IList)));
+                    this.EmitExpression(idx.Arguments[0]);
+                    var iListGetter = typeof(System.Collections.IList)
+                        .GetProperty("Item")
+                        .GetGetMethod();
+                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.Token(this.outer.GetMethodReference(iListGetter));
+                    return;
+                }
+
+                if (typeof(System.Collections.IDictionary).IsAssignableFrom(erasedClr))
+                {
+                    this.EmitInstanceReceiver(idx.Target);
+                    this.il.OpCode(ILOpCode.Castclass);
+                    this.il.Token((EntityHandle)this.outer.GetTypeReference(typeof(System.Collections.IDictionary)));
+                    this.EmitExpression(idx.Arguments[0]);
+                    if (IsValueTypeSymbol(idx.Arguments[0].Type))
+                    {
+                        this.il.OpCode(ILOpCode.Box);
+                        this.il.Token(this.outer.GetElementTypeToken(idx.Arguments[0].Type));
+                    }
+
+                    var iDictGetter = typeof(System.Collections.IDictionary)
+                        .GetProperty("Item")
+                        .GetGetMethod();
+                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.Token(this.outer.GetMethodReference(iDictGetter));
+                    return;
+                }
+            }
+
             // Phase 4 emit parity: indexer read. `d[k]` -> `callvirt get_Item(k)`.
             this.EmitInstanceReceiver(idx.Target);
             foreach (var arg in idx.Arguments)
