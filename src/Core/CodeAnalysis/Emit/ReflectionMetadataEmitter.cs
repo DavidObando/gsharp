@@ -10468,7 +10468,14 @@ internal sealed class ReflectionMetadataEmitter
         //    to the target delegate type via `dup / ldvirtftn Invoke / newobj`.
         private void EmitFunctionToDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, Type targetDelegateHostType)
         {
-            var targetDelegateType = this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
+            // Issue #323: when the target is the abstract System.Delegate /
+            // System.MulticastDelegate base type, there is no concrete delegate
+            // to instantiate. Materialize the function value as its natural
+            // delegate type (Func/Action) instead; the resulting reference is
+            // already a System.Delegate, so the widening is a no-op upcast.
+            var targetDelegateType = IsSystemDelegateHostType(targetDelegateHostType)
+                ? this.outer.ResolveDelegateClrType(sourceFn)
+                : this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
 
             if (source is BoundFunctionLiteralExpression literal)
             {
@@ -10701,7 +10708,28 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
+            // Issue #323: any delegate-typed value (named/generic CLR delegate
+            // such as Func[string]) widens to System.Delegate /
+            // System.MulticastDelegate as a no-op reference upcast.
+            if (b?.ClrType != null && IsSystemDelegateHostType(b.ClrType)
+                && a?.ClrType != null && ClrTypeUtilities.IsDelegateType(a.ClrType))
+            {
+                return true;
+            }
+
             return false;
+        }
+
+        private static bool IsSystemDelegateHostType(Type type)
+        {
+            if (type == null)
+            {
+                return false;
+            }
+
+            var fullName = type.FullName;
+            return string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
         }
 
         private void EmitUnary(BoundUnaryExpression u)
