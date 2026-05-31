@@ -27,7 +27,7 @@ All notable changes to the GSharp VS Code extension will be documented in this f
 - Test explorer integration
 - Build/run commands with task integration
 - Build diagnostics from dotnet build output
-- GSharp Dark and GSharp Light color themes
+- Color themes inspired by the G# logo: Ember, Magma, and Synthwave (Dark + Light each)
 - Server crash recovery with exponential backoff
 - Language status bar item (Starting → Ready → Error)
 - Project context status bar item

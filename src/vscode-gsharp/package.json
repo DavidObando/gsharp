@@ -72,14 +72,34 @@
     ],
     "themes": [
       {
-        "label": "GSharp Dark",
+        "label": "GSharp Ember Dark",
         "uiTheme": "vs-dark",
-        "path": "./themes/gsharp-dark.json"
+        "path": "./themes/gsharp-ember-dark.json"
       },
       {
-        "label": "GSharp Light",
+        "label": "GSharp Ember Light",
         "uiTheme": "vs",
-        "path": "./themes/gsharp-light.json"
+        "path": "./themes/gsharp-ember-light.json"
+      },
+      {
+        "label": "GSharp Magma Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/gsharp-magma-dark.json"
+      },
+      {
+        "label": "GSharp Magma Light",
+        "uiTheme": "vs",
+        "path": "./themes/gsharp-magma-light.json"
+      },
+      {
+        "label": "GSharp Synthwave Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/gsharp-synthwave-dark.json"
+      },
+      {
+        "label": "GSharp Synthwave Light",
+        "uiTheme": "vs",
+        "path": "./themes/gsharp-synthwave-light.json"
       }
     ],
     "configuration": [
