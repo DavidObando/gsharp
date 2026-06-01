@@ -94,6 +94,18 @@ public sealed class InlayHintOptions
     public bool ResolveProvider { get; set; }
 }
 
+public sealed class DiagnosticOptions
+{
+    [JsonPropertyName("identifier")]
+    public string Identifier { get; set; }
+
+    [JsonPropertyName("interFileDependencies")]
+    public bool InterFileDependencies { get; set; }
+
+    [JsonPropertyName("workspaceDiagnostics")]
+    public bool WorkspaceDiagnostics { get; set; }
+}
+
 public sealed class ServerCapabilities
 {
     [JsonPropertyName("textDocumentSync")]
@@ -161,4 +173,7 @@ public sealed class ServerCapabilities
 
     [JsonPropertyName("linkedEditingRangeProvider")]
     public bool LinkedEditingRangeProvider { get; set; }
+
+    [JsonPropertyName("diagnosticProvider")]
+    public DiagnosticOptions DiagnosticProvider { get; set; }
 }

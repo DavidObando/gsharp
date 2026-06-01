@@ -218,6 +218,18 @@ public sealed class DidCloseTextDocumentParams
     public TextDocumentIdentifier TextDocument { get; set; }
 }
 
+public sealed class DocumentDiagnosticParams
+{
+    [JsonPropertyName("textDocument")]
+    public TextDocumentIdentifier TextDocument { get; set; }
+
+    [JsonPropertyName("identifier")]
+    public string Identifier { get; set; }
+
+    [JsonPropertyName("previousResultId")]
+    public string PreviousResultId { get; set; }
+}
+
 public enum FileChangeType
 {
     Created = 1,

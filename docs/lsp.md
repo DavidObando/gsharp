@@ -6,7 +6,7 @@ The GSharp Language Server provides rich IDE features for `.gs` files via the [L
 
 | Feature | LSP Method | Description |
 |---------|-----------|-------------|
-| Diagnostics | `textDocument/publishDiagnostics` | Syntax, semantic, and binding errors streamed on open/change/save |
+| Diagnostics | `textDocument/diagnostic` | Live syntax, semantic, and binding errors pulled as you type (with `workspace/diagnostic/refresh` for cross-file edits) |
 | Hover | `textDocument/hover` | Type signature and symbol kind for the token under the cursor |
 | Go-to-definition | `textDocument/declaration` | Jump from a symbol usage to its declaration |
 | Find references | `textDocument/references` | Find all usages of a symbol within the document |
@@ -77,10 +77,10 @@ Logging is **opt-in**: when `--log` is not supplied, no log file is created. Fro
 
 ## Diagnostics
 
-Diagnostics are published on every document open/change (syntax + global-scope errors) and additionally on save (full binding pass). The diagnostic `code` field currently reports the pipeline stage (`Syntax`, `Semantic`, `Binding`). Stable `GS####` diagnostic IDs are planned for a future milestone.
+Diagnostics use the LSP **pull model** (`textDocument/diagnostic`): the editor requests diagnostics as the user types and on save, and the server runs the full pipeline — syntax parse, global-scope semantic analysis, and the binding pass — on every pull, so binding errors (e.g. unreachable code, missing return values, type mismatches inside function bodies) surface live rather than only on save. Results carry a `resultId`; when nothing relevant changed the server returns an `unchanged` report so the client reuses the prior squiggles. The expensive binding pass runs off the request gate and honors cancellation, so a slow analysis does not block interactive requests (hover, completion). For multi-file projects, edits that can affect other open documents trigger a debounced `workspace/diagnostic/refresh` so the client re-pulls them. Clients that do not advertise pull-diagnostic support fall back to push (`textDocument/publishDiagnostics`) on open/change/save. The diagnostic `code` field currently reports the pipeline stage (`Syntax`, `Semantic`, `Binding`). Stable `GS####` diagnostic IDs are planned for a future milestone.
 
 ## Limitations
 
 - **Single-file scope** — cross-file navigation and completion are not yet supported; the server analyzes one document at a time.
-- **No incremental re-binding** — each edit triggers a full re-parse and re-bind of the active document.
+- **No incremental re-binding** — each pull triggers a full re-parse and re-bind of the active document.
 - **Completion is keyword/scope-aware** but does not yet offer member completions on struct instances (dot-triggered completion is registered but scoped to globals).

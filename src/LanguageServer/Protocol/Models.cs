@@ -601,3 +601,24 @@ public sealed class PublishDiagnosticsParams
     [JsonPropertyName("diagnostics")]
     public IEnumerable<Diagnostic> Diagnostics { get; set; }
 }
+
+public sealed class FullDocumentDiagnosticReport
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "full";
+
+    [JsonPropertyName("resultId")]
+    public string ResultId { get; set; }
+
+    [JsonPropertyName("items")]
+    public IReadOnlyList<Diagnostic> Items { get; set; }
+}
+
+public sealed class UnchangedDocumentDiagnosticReport
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "unchanged";
+
+    [JsonPropertyName("resultId")]
+    public string ResultId { get; set; }
+}
