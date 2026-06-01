@@ -79,8 +79,18 @@ Logging is **opt-in**: when `--log` is not supplied, no log file is created. Fro
 
 Diagnostics use the LSP **pull model** (`textDocument/diagnostic`): the editor requests diagnostics as the user types and on save, and the server runs the full pipeline — syntax parse, global-scope semantic analysis, and the binding pass — on every pull, so binding errors (e.g. unreachable code, missing return values, type mismatches inside function bodies) surface live rather than only on save. Results carry a `resultId`; when nothing relevant changed the server returns an `unchanged` report so the client reuses the prior squiggles. The expensive binding pass runs off the request gate and honors cancellation, so a slow analysis does not block interactive requests (hover, completion). For multi-file projects, edits that can affect other open documents trigger a debounced `workspace/diagnostic/refresh` so the client re-pulls them. Clients that do not advertise pull-diagnostic support fall back to push (`textDocument/publishDiagnostics`) on open/change/save. The diagnostic `code` field currently reports the pipeline stage (`Syntax`, `Semantic`, `Binding`). Stable `GS####` diagnostic IDs are planned for a future milestone.
 
+## Interpolation holes are real code (ADR-0055)
+
+Inside an interpreted string, the expression in each `${ … }` hole (and the identifier in `$ident`) is parsed as a real sub-tree whose tokens carry **absolute outer-file spans** (the parser remaps each hole using the lexer's recorded hole offset). As a result, all position-based IDE features work *inside* a hole exactly as they do in ordinary code:
+
+- **Semantic tokens** — `SemanticTokensComputer` no longer classifies an interpolated literal as one opaque `String`. It emits `String` only for the literal text and the `$`/`${`/`}` delimiters *outside* the holes, and overlays each hole expression's identifiers/keywords/numbers classified as real code (variables, functions, types, etc.). Other in-hole code — operators, punctuation, and member names the model cannot resolve — is intentionally left **unclassified** so the TextMate grammar colors it as code rather than as part of the surrounding string. Multi-line holes are split on line boundaries so each line's run is a separate token.
+- **Hover, go-to-definition, find-references, rename, completion, signature help** — all resolve a symbol referenced or called inside a hole, and references/rename span both the declaration and its in-hole usages.
+
+A nested interpolated string inside a hole is classified as a single `String` token (its own holes are not recursively decomposed), which keeps emitted semantic-token ranges non-overlapping.
+
 ## Limitations
 
 - **Single-file scope** — cross-file navigation and completion are not yet supported; the server analyzes one document at a time.
 - **No incremental re-binding** — each pull triggers a full re-parse and re-bind of the active document.
 - **Completion is keyword/scope-aware** but does not yet offer member completions on struct instances (dot-triggered completion is registered but scoped to globals).
+

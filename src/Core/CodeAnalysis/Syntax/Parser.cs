@@ -3910,6 +3910,20 @@ public class Parser
             // are not mis-split.
             SplitHole(fragment.Text, out var exprText, out var alignmentText, out var formatText);
 
+            // ADR-0055 §C: anchor diagnostics on the hole itself (using the
+            // hole's true source offset) rather than the whole string token.
+            var holeSpan = new TextSpan(fragment.Position, System.Math.Max(1, fragment.Text.Length));
+            var holeLocation = new TextLocation(syntaxTree.Text, holeSpan);
+            if (string.IsNullOrWhiteSpace(exprText))
+            {
+                Diagnostics.ReportEmptyInterpolationHole(holeLocation);
+            }
+
+            if (formatText != null && formatText.Length == 0)
+            {
+                Diagnostics.ReportEmptyInterpolationFormat(holeLocation);
+            }
+
             int? alignment = null;
             if (alignmentText != null)
             {
@@ -3919,22 +3933,27 @@ public class Parser
                 }
                 else
                 {
-                    Diagnostics.ReportInvalidInterpolationAlignment(new TextLocation(syntaxTree.Text, token.Span), alignmentText);
+                    Diagnostics.ReportInvalidInterpolationAlignment(holeLocation, alignmentText);
                 }
             }
 
-            // Parse the captured expression source by spinning up a fresh
-            // parser; embedded expressions are independent of the outer parser
-            // state aside from sharing the same syntax tree.
-            var innerText = SourceText.From(exprText);
+            // ADR-0055 §C: parse the captured expression with span remapping so
+            // every inner token, node, and diagnostic carries its true absolute
+            // position in the outer file. The hole's expression clause begins at
+            // fragment.Position; we re-create a source text in which everything
+            // before that offset is blanked to spaces (newlines preserved, so
+            // line/column also match) and the expression text sits at its real
+            // offset. Inner spans are therefore absolute outer-file spans.
+            var innerText = SourceText.From(BuildHolePaddedText(syntaxTree.Text, fragment.Position, exprText), syntaxTree.Text.FileName);
             var innerTree = SyntaxTree.Parse(innerText);
+            Diagnostics.AddRange(innerTree.Diagnostics);
             var innerExpression = ExtractFirstExpression(innerTree);
             if (innerExpression == null)
             {
                 // Fall back to a synthetic missing-name node anchored on the
-                // string token so binders still see a valid (error-producing)
-                // expression syntax.
-                var synthetic = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, token.Position, exprText, null);
+                // hole (at its true offset) so binders still see a valid
+                // (error-producing) expression syntax.
+                var synthetic = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, fragment.Position, exprText, null);
                 innerExpression = new NameExpressionSyntax(syntaxTree, synthetic);
             }
 
@@ -3942,6 +3961,25 @@ public class Parser
         }
 
         return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
+    }
+
+    // ADR-0055 §C: builds the source text used to parse a hole expression with
+    // correct absolute positions. The returned text equals the outer text up to
+    // <paramref name="holeOffset"/> — but with every non-newline character
+    // blanked to a space so the prefix produces no tokens — followed by the
+    // expression source itself. The expression's first character thus lands at
+    // its true outer offset, and preserved newlines keep line/column accurate.
+    private static string BuildHolePaddedText(SourceText outerText, int holeOffset, string exprText)
+    {
+        var builder = new System.Text.StringBuilder(holeOffset + exprText.Length);
+        for (var i = 0; i < holeOffset; i++)
+        {
+            var c = outerText[i];
+            builder.Append(c == '\r' || c == '\n' ? c : ' ');
+        }
+
+        builder.Append(exprText);
+        return builder.ToString();
     }
 
     // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`

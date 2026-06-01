@@ -330,6 +330,101 @@ public class InterpolatedStringTests
         Assert.Equal("amount: 1,234.50", msg);
     }
 
+    [Fact]
+    public void Nested_String_In_Hole_Lexes_As_Single_Interpolated_Token()
+    {
+        // ADR-0055 §A: the delimiter-aware lexer scanner must not terminate the
+        // hole at the nested string's quote.
+        var tokens = SyntaxTree.ParseTokens("\"x=${\"inner\"}\"").ToArray();
+        Assert.Equal(SyntaxKind.InterpolatedStringToken, tokens[0].Kind);
+    }
+
+    [Fact]
+    public void Nested_String_Literal_In_Hole_Evaluates()
+    {
+        var source = "let msg = \"x=${\"inner\"}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("x=inner", msg.Value);
+    }
+
+    [Fact]
+    public void Comma_And_Colon_Inside_Nested_String_Are_Not_Clause_Delimiters()
+    {
+        // The `,` and `:` live inside a nested string literal, so they must not
+        // be mistaken for the alignment/format clauses of the hole.
+        var source = "let msg = \"${\"a,b:c\".Length}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("5", msg.Value);
+    }
+
+    [Fact]
+    public void Multiline_Hole_Is_Allowed()
+    {
+        // ADR-0055 §A: a `${ … }` hole may span newlines (C# 11 parity).
+        var source = "let msg = \"sum=${1 +\n2}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("sum=3", msg.Value);
+    }
+
+    [Fact]
+    public void Empty_Hole_Reports_GS0223()
+    {
+        var diagnostics = GetDiagnostics("let msg = \"x=${}\"\n");
+        Assert.Contains(diagnostics, d => d.Id == "GS0223");
+    }
+
+    [Fact]
+    public void Empty_Format_Specifier_Reports_GS0224()
+    {
+        var diagnostics = GetDiagnostics("let n = 1\nlet msg = \"x=${n:}\"\n");
+        Assert.Contains(diagnostics, d => d.Id == "GS0224");
+    }
+
+    [Fact]
+    public void Unterminated_Hole_Reports_GS0222()
+    {
+        var diagnostics = GetDiagnostics("let msg = \"x=${1 + 2\"\n");
+        Assert.Contains(diagnostics, d => d.Id == "GS0222");
+    }
+
+    [Fact]
+    public void Newline_In_Literal_Portion_Reports_GS0225()
+    {
+        // The newline is in the literal text *after* a hole, so the lexer knows
+        // it is in an interpolated string and reports the specific code.
+        var diagnostics = GetDiagnostics("let x = 1\nlet msg = \"a${x}b\nc\"\n");
+        Assert.Contains(diagnostics, d => d.Id == "GS0225");
+    }
+
+    private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> GetDiagnostics(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        return tree.Diagnostics;
+    }
+
+    [Fact]
+    public void Hole_Diagnostic_Span_Maps_To_True_Source_Location()
+    {
+        // ADR-0055 §C: a diagnostic raised on an expression inside a hole must
+        // point at the expression's true offset in the outer file, not at the
+        // whole string token (or offset 0).
+        var source = "let x = 1\nlet msg = \"val=${undefinedThing}\"\n";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var vars = new System.Collections.Generic.Dictionary<VariableSymbol, object>();
+        var result = compilation.Evaluate(vars);
+
+        var expectedStart = source.IndexOf("undefinedThing", System.StringComparison.Ordinal);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Location.Span.Start == expectedStart);
+        Assert.Equal("undefinedThing".Length, diagnostic.Location.Span.Length);
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

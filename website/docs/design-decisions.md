@@ -79,6 +79,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0012](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0012-raw-string-delimiter.md) | Raw string delimiter — backtick | Chooses backtick-delimited raw strings. |
 | [0014](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0014-visibility-default.md) | Visibility defaults — `public` for top-level declarations | Makes unmodified top-level declarations public by default. |
 | [0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md) | Postfix member/index access on primary expressions | Chains `.`/`?.`/`[]` after any primary except a bare numeric literal (`(42).Member`). |
+| [0055](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0055-string-interpolation-revamp.md) | String interpolation revamp | Delimiter-aware multiline holes, alignment/format clauses, late context-driven lowering (`DefaultInterpolatedStringHandler`/`FormattableString`), and full IDE support inside holes. |
 
 ## CLR interop
 

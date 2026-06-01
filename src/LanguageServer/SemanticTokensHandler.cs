@@ -90,6 +90,14 @@ public static class SemanticTokensComputer
                 continue;
             }
 
+            // Interpolated string literals are decomposed: literal text is classified as String,
+            // while the hole expressions are tokenized as real code (identifiers, keywords, numbers).
+            if (token.Kind == SyntaxKind.InterpolatedStringToken)
+            {
+                EmitInterpolatedStringTokens(builder, tree, text, token.Span, compilation, declarationPositions);
+                continue;
+            }
+
             // For identifiers, resolve using the token from the parsed tree at the same position
             // (ParseTokens creates tokens in a different tree that won't resolve in the compilation)
             var resolveToken = token;
@@ -113,6 +121,187 @@ public static class SemanticTokensComputer
             var character = token.Span.Start - text.Lines[line].Start;
 
             builder.Push(line, character, token.Span.Length, tokenType, modifiers);
+        }
+    }
+
+    private static void EmitInterpolatedStringTokens(
+        SemanticTokensBuilder builder,
+        SyntaxTree tree,
+        GSharp.Core.CodeAnalysis.Text.SourceText text,
+        GSharp.Core.CodeAnalysis.Text.TextSpan literalSpan,
+        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
+        HashSet<int> declarationPositions)
+    {
+        var node = FindInterpolatedNode(tree.Root, literalSpan.Start);
+
+        // Collect classified hole tokens plus the hole-expression spans. String filler is emitted
+        // only for the literal/delimiter text OUTSIDE the holes; inside a hole, classified tokens
+        // (identifiers, keywords, numbers) are overlaid and the remaining code (operators,
+        // punctuation, member names the model can't resolve) is left for the TextMate grammar so it
+        // is colored as code rather than as part of the surrounding string.
+        var holeTokens = new List<(GSharp.Core.CodeAnalysis.Text.TextSpan Span, SemanticTokenType Type, SemanticTokenModifier[] Modifiers)>();
+        var holeSpans = new List<GSharp.Core.CodeAnalysis.Text.TextSpan>();
+        if (node != null)
+        {
+            foreach (var holeExpr in node.HoleExpressions)
+            {
+                if (holeExpr.Span.Length > 0 &&
+                    holeExpr.Span.Start >= literalSpan.Start &&
+                    holeExpr.Span.End <= literalSpan.End)
+                {
+                    holeSpans.Add(holeExpr.Span);
+                }
+
+                var leaves = new List<SyntaxToken>();
+                CollectHoleTokens(holeExpr, leaves);
+
+                foreach (var leaf in leaves)
+                {
+                    if (leaf.IsMissing || leaf.Span.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (leaf.Span.Start < literalSpan.Start || leaf.Span.End > literalSpan.End)
+                    {
+                        continue;
+                    }
+
+                    var resolveToken = leaf;
+                    if (leaf.Kind == SyntaxKind.IdentifierToken && compilation != null)
+                    {
+                        resolveToken = SemanticLookup.FindTokenAt(tree, leaf.Span.Start) ?? leaf;
+                    }
+
+                    var classification = ClassifyToken(resolveToken, compilation, declarationPositions);
+                    if (classification == null)
+                    {
+                        continue;
+                    }
+
+                    holeTokens.Add((leaf.Span, classification.Value.Type, classification.Value.Modifiers));
+                }
+            }
+        }
+
+        // Emit String filler for the literal span minus the hole-expression spans.
+        holeSpans.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = literalSpan.Start;
+        foreach (var hole in holeSpans)
+        {
+            if (hole.Start > cursor)
+            {
+                PushStringRange(builder, text, cursor, hole.Start);
+            }
+
+            if (hole.End > cursor)
+            {
+                cursor = hole.End;
+            }
+        }
+
+        if (cursor < literalSpan.End)
+        {
+            PushStringRange(builder, text, cursor, literalSpan.End);
+        }
+
+        // Overlay the classified hole tokens (sorted, non-overlapping).
+        holeTokens.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
+        var lastEnd = literalSpan.Start;
+        foreach (var hole in holeTokens)
+        {
+            if (hole.Span.Start < lastEnd)
+            {
+                continue;
+            }
+
+            PushRange(builder, text, hole.Span.Start, hole.Span.End, hole.Type, hole.Modifiers);
+            lastEnd = hole.Span.End;
+        }
+    }
+
+    private static InterpolatedStringExpressionSyntax FindInterpolatedNode(SyntaxNode node, int literalStart)
+    {
+        if (node is InterpolatedStringExpressionSyntax interpolated &&
+            interpolated.StringToken.Span.Start == literalStart)
+        {
+            return interpolated;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (child.Span.Start <= literalStart && literalStart < child.Span.End)
+            {
+                var found = FindInterpolatedNode(child, literalStart);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static void CollectHoleTokens(SyntaxNode node, List<SyntaxToken> tokens)
+    {
+        if (node is SyntaxToken token)
+        {
+            tokens.Add(token);
+            return;
+        }
+
+        // Treat a nested interpolated string as a single String token (avoids overlapping ranges).
+        if (node is InterpolatedStringExpressionSyntax nested)
+        {
+            tokens.Add(nested.StringToken);
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectHoleTokens(child, tokens);
+        }
+    }
+
+    private static void PushStringRange(
+        SemanticTokensBuilder builder,
+        GSharp.Core.CodeAnalysis.Text.SourceText text,
+        int from,
+        int to)
+    {
+        PushRange(builder, text, from, to, SemanticTokenType.String, System.Array.Empty<SemanticTokenModifier>());
+    }
+
+    // Pushes a (possibly multi-line) range as a sequence of per-line tokens of a single type.
+    private static void PushRange(
+        SemanticTokensBuilder builder,
+        GSharp.Core.CodeAnalysis.Text.SourceText text,
+        int from,
+        int to,
+        SemanticTokenType type,
+        SemanticTokenModifier[] modifiers)
+    {
+        var pos = from;
+        while (pos < to)
+        {
+            var lineIndex = text.GetLineIndex(pos);
+            var line = text.Lines[lineIndex];
+            var segmentEnd = System.Math.Min(to, line.End);
+            if (segmentEnd > pos)
+            {
+                builder.Push(lineIndex, pos - line.Start, segmentEnd - pos, type, modifiers);
+            }
+
+            // Advance to the start of the next line, skipping the line break.
+            if (lineIndex + 1 < text.Lines.Length)
+            {
+                pos = text.Lines[lineIndex + 1].Start;
+            }
+            else
+            {
+                break;
+            }
         }
     }
 

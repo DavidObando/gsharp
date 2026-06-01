@@ -31,43 +31,62 @@
     },
     "strings": {
       "patterns": [
+        { "include": "#interpreted-string" },
+        { "include": "#raw-string" }
+      ]
+    },
+    "interpreted-string": {
+      "name": "string.quoted.double.gsharp",
+      "begin": "\"",
+      "end": "\"",
+      "applyEndPatternLast": true,
+      "patterns": [
         {
-          "name": "string.quoted.double.interpolated.gsharp",
-          "begin": "\\$\"",
-          "end": "\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.gsharp",
-              "match": "\\\\."
-            },
-            {
-              "name": "meta.interpolation.gsharp",
-              "begin": "\\{",
-              "end": "\\}",
-              "beginCaptures": {
-                "0": { "name": "punctuation.definition.interpolation.begin.gsharp" }
-              },
-              "endCaptures": {
-                "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
-              },
-              "patterns": [
-                { "include": "source.gsharp" }
-              ]
-            }
-          ]
+          "name": "constant.character.escape.quote.gsharp",
+          "match": "\"\""
         },
         {
-          "name": "string.quoted.double.gsharp",
-          "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.gsharp",
-              "match": "\\\\."
-            }
-          ]
-        }
+          "name": "constant.character.escape.dollar.gsharp",
+          "match": "\\$\\$"
+        },
+        { "include": "#interpolation-braced" },
+        { "include": "#interpolation-ident" }
       ]
+    },
+    "raw-string": {
+      "name": "string.quoted.raw.backtick.gsharp",
+      "begin": "`",
+      "end": "`"
+    },
+    "interpolation-braced": {
+      "name": "meta.interpolation.gsharp",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.begin.gsharp" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
+      },
+      "patterns": [
+        { "include": "#interpolation-nested-braces" },
+        { "include": "source.gsharp" }
+      ]
+    },
+    "interpolation-nested-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        { "include": "#interpolation-nested-braces" },
+        { "include": "source.gsharp" }
+      ]
+    },
+    "interpolation-ident": {
+      "match": "(\\$)([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.interpolation.begin.gsharp" },
+        "2": { "name": "variable.other.interpolation.gsharp" }
+      }
     },
     "characters": {
       "patterns": [

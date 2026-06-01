@@ -27,7 +27,14 @@ Function literals are written with `func` or `async func`. A trailing lambda may
 
 ## Interpolation
 
-Interpolated strings evaluate `$name` and braced expression fragments inside normal double-quoted strings. Use `$$` for a literal dollar sign. Keep complex interpolation expressions readable by computing intermediate `let` values.
+Interpolated strings evaluate `$name` and braced `${expression}` fragments inside normal double-quoted strings — there is no `$"…"` prefix. A braced hole may add an alignment and format clause, `${expr,alignment:format}`, and the delimiter-aware scanner lets a hole contain nested strings, indexers, ternaries, and even newlines. Use `$$` for a literal dollar sign. By default an interpolation lowers to `DefaultInterpolatedStringHandler`; targeting `IFormattable`/`FormattableString` defers formatting via `FormattableStringFactory.Create`. Keep complex interpolation expressions readable by computing intermediate `let` values.
+
+```gsharp
+let value = 255
+let label = "hi"
+Console.WriteLine("hex=${value:X4}")
+Console.WriteLine("padded=[${label,5}]")
+```
 
 ## Declarations, assignment, and deconstruction
 
