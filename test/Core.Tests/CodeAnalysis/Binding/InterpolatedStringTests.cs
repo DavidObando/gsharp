@@ -167,6 +167,102 @@ public class InterpolatedStringTests
         Assert.Equal("n=042", ((System.IFormattable)f).ToString(null, System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    [Fact]
+    public void Argument_To_FormattableString_Parameter_Lowers_To_Formattable()
+    {
+        // ADR-0055 Tier 4 (#369): an interpolated string passed directly as a
+        // call argument whose parameter type is FormattableString is re-lowered
+        // to FormattableStringFactory.Create, so the callee receives a real
+        // FormattableString and can defer the culture choice.
+        var source =
+            "import System.Globalization\n" +
+            "func render(fs FormattableString) string {\n" +
+            "    return fs.ToString(CultureInfo.GetCultureInfo(\"de-DE\"))\n" +
+            "}\n" +
+            "let total = 1234.5\n" +
+            "let msg = render(\"amount: ${total:N2}\")\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        Assert.Equal("amount: 1.234,50", msg);
+    }
+
+    [Fact]
+    public void Argument_To_IFormattable_Parameter_Lowers_To_Formattable()
+    {
+        // The same relaxation applies when the parameter type is IFormattable.
+        // The function simply returns the value so the lowering can be inspected
+        // from the host without relying on in-language interface dispatch.
+        var source =
+            "func render(f IFormattable) IFormattable {\n" +
+            "    return f\n" +
+            "}\n" +
+            "let n = 42\n" +
+            "let msg = render(\"n=${n:D3}\")\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        Assert.IsAssignableFrom<System.IFormattable>(msg);
+        Assert.Equal("n=042", ((System.IFormattable)msg).ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void Argument_To_String_Parameter_Stays_String()
+    {
+        // A plain `string` parameter must continue to receive an eager string —
+        // the Tier 4 relaxation only fires for IFormattable/FormattableString
+        // targets, never displacing the interpolation's natural `string` type.
+        var source =
+            "func echo(s string) string {\n" +
+            "    return s\n" +
+            "}\n" +
+            "let total = 1234.5\n" +
+            "let msg = echo(\"amount: ${total:N2}\")\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        Assert.IsType<string>(msg);
+        Assert.Equal("amount: " + (1234.5).ToString("N2", System.Globalization.CultureInfo.CurrentCulture), msg);
+    }
+
+    [Fact]
+    public void Overload_Prefers_String_Parameter_Over_FormattableString()
+    {
+        // When a method exposes both a string and a FormattableString overload,
+        // an interpolated-string argument binds to the string overload (the
+        // identity conversion of its natural type), mirroring C#. Here
+        // string.Format(string, object) is chosen over any FormattableString
+        // path, producing an eager string.
+        var source =
+            "let total = 1234.5\n" +
+            "let msg = render(\"x\")\n" +
+            "func render(s string) string {\n" +
+            "    return s\n" +
+            "}\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        Assert.IsType<string>(msg);
+        Assert.Equal("x", msg);
+    }
+
+    [Fact]
+    public void Imported_Static_Call_FormattableString_Argument_Lowers()
+    {
+        // ADR-0055 Tier 4 (#369): overload resolution against an imported static
+        // method accepts an interpolated string for a FormattableString
+        // parameter. FormattableString.Invariant(FormattableString) formats with
+        // the invariant culture regardless of the ambient culture.
+        var source =
+            "import System\n" +
+            "let total = 1234.5\n" +
+            "let msg = FormattableString.Invariant(\"amount: ${total:N2}\")\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        Assert.Equal("amount: 1,234.50", msg);
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

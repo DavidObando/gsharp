@@ -295,6 +295,74 @@ public class OverloadResolutionTests
         return result.Best;
     }
 
+    [Fact]
+    public void Resolve_InterpolatedStringPrefersStringOverFormattable()
+    {
+        // ADR-0055 Tier 4 (#369): an interpolated-string argument keeps its
+        // natural `string` type for applicability, so the `string` overload (an
+        // identity conversion) beats the `FormattableString` overload.
+        var stringOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_String), BindingFlags.Public | BindingFlags.Static);
+        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { stringOverload, formattableOverload },
+            new[] { typeof(string) },
+            interpolatedStringArgs: new[] { true });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.F_String), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_InterpolatedStringIsApplicableToFormattableOnlyOverload()
+    {
+        // With only a FormattableString overload, the flagged interpolated-string
+        // argument is applicable thanks to the Tier 4 relaxation.
+        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { formattableOverload },
+            new[] { typeof(string) },
+            interpolatedStringArgs: new[] { true });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
+    }
+
+    [Fact]
+    public void Resolve_PlainStringIsNotApplicableToFormattableOverload()
+    {
+        // Regression guard: without the interpolated-string flag a plain `string`
+        // argument must NOT convert to FormattableString, so the overload is not
+        // applicable. This keeps ordinary string arguments unaffected.
+        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { formattableOverload },
+            new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void Resolve_InterpolatedStringPrefersFormattableStringOverIFormattable()
+    {
+        // FormattableString implements IFormattable, so it is the more specific
+        // (better) target when both overloads apply to an interpolated string.
+        var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
+        var iformattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_IFormattable), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { iformattableOverload, formattableOverload },
+            new[] { typeof(string) },
+            interpolatedStringArgs: new[] { true });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
+    }
+
+    [Fact]
+    public void IsFormattableStringTarget_RecognizesFormattableTargets()
+    {
+        Assert.True(OverloadResolution.IsFormattableStringTarget(typeof(System.FormattableString)));
+        Assert.True(OverloadResolution.IsFormattableStringTarget(typeof(System.IFormattable)));
+        Assert.False(OverloadResolution.IsFormattableStringTarget(typeof(string)));
+        Assert.False(OverloadResolution.IsFormattableStringTarget(typeof(object)));
+        Assert.False(OverloadResolution.IsFormattableStringTarget(null));
+    }
+
     public static class Fixture
     {
         public static void F_Int(int x) { _ = x; }
@@ -338,5 +406,13 @@ public class OverloadResolutionTests
         public static void O_TwoOptional(int a, System.Threading.CancellationToken first = default, System.Threading.CancellationToken second = default) { _ = a; _ = first; _ = second; }
 
         public static void O_Required(int a, int b) { _ = a; _ = b; }
+
+        // ADR-0055 Tier 4 (#369): fixtures for interpolated-string → formattable
+        // applicability and tie-breaking.
+        public static void F_String(string s) { _ = s; }
+
+        public static void F_FormattableString(System.FormattableString fs) { _ = fs; }
+
+        public static void F_IFormattable(System.IFormattable f) { _ = f; }
     }
 }

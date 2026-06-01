@@ -116,6 +116,8 @@ Lowering is tiered and chosen by context:
 * Any hole has a format/alignment clause → `String.Format(format, args)` (current culture).
 * The contextual target type is `System.IFormattable` or `System.FormattableString` → `FormattableStringFactory.Create(format, args)` (ADR-0055 Tier 4). Formatting is **deferred**: the caller chooses the culture via `ToString(IFormatProvider)`, e.g. `fs.ToString(CultureInfo.InvariantCulture)`. The default culture is `CultureInfo.CurrentCulture`.
 
+A *contextual target type* is supplied by a typed `let` declaration, a function return whose declared type is `IFormattable`/`FormattableString`, an explicit conversion (cast), or a **call argument** whose parameter type is one of those (functions, methods, constructors, and imported CLR overloads). In an overloaded call the interpolation keeps its natural `string` type for applicability, so a `string` overload is still preferred over a `FormattableString` overload (C# parity); the interpolation is re-lowered to `FormattableStringFactory.Create` only once a `FormattableString`/`IFormattable` parameter is actually chosen.
+
 ## Comments
 
 Single-line comments start with `//` and run to the end of the line. (Block-comment syntax is not yet implemented; see the execution plan.)

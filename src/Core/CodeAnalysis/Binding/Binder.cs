@@ -5604,6 +5604,59 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
+    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool})"/>,
+    /// marking each positional argument whose syntax is an interpolated-string
+    /// literal. These arguments may convert to an
+    /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
+    /// their natural <c>string</c> type. Returns <see langword="null"/> when no
+    /// argument qualifies so callers pay nothing on the common path.
+    /// </summary>
+    private static IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count)
+    {
+        bool[] flags = null;
+        var limit = Math.Min(count, argumentSyntax.Count);
+        for (var i = 0; i < limit; i++)
+        {
+            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax)
+            {
+                flags ??= new bool[count];
+                flags[i] = true;
+            }
+        }
+
+        return flags;
+    }
+
+    /// <summary>
+    /// ADR-0055 Tier 4 (#369): after overload resolution selects an imported
+    /// method/constructor, re-lowers each interpolated-string argument whose
+    /// chosen parameter type is <c>IFormattable</c>/<c>FormattableString</c> to
+    /// <c>FormattableStringFactory.Create(...)</c>. Arguments bound against any
+    /// other parameter (including <c>string</c>) are left untouched. Returns the
+    /// original array unchanged when nothing needs re-lowering.
+    /// </summary>
+    private ImmutableArray<BoundExpression> RebindFormattableInterpolationArguments(
+        ImmutableArray<BoundExpression> arguments,
+        SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
+        System.Reflection.ParameterInfo[] parameters)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        var limit = Math.Min(arguments.Length, Math.Min(parameters.Length, argumentSyntax.Count));
+        for (var i = 0; i < limit; i++)
+        {
+            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax interpolated
+                && OverloadResolution.IsFormattableStringTarget(parameters[i].ParameterType))
+            {
+                builder ??= arguments.ToBuilder();
+                builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);
+            }
+        }
+
+        return builder?.ToImmutable() ?? arguments;
+    }
+
+    /// <summary>
     /// Builds the C#-style composite format string (<c>"{0}"</c>,
     /// <c>"{0,10}"</c>, <c>"{0,-20:N2}"</c>) and the ordered, bound hole values
     /// for an interpolated string. Literal braces are escaped (<c>{</c> →
@@ -7056,6 +7109,17 @@ public sealed class Binder
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
+
+            // ADR-0055 Tier 4 (#369): an interpolated-string argument targeting an
+            // IFormattable/FormattableString constructor parameter lowers to
+            // FormattableStringFactory.Create rather than an eager string.
+            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+                && IsFormattableStringTargetType(parameter.Type))
+            {
+                boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type);
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -7122,6 +7186,16 @@ public sealed class Binder
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
+
+            // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
+            // targeting an IFormattable/FormattableString parameter.
+            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+                && IsFormattableStringTargetType(parameter.Type))
+            {
+                convertedArguments.Add(BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -7365,6 +7439,20 @@ public sealed class Binder
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
+
+            // ADR-0055 Tier 4 (#369): an interpolated-string argument bound
+            // against an IFormattable/FormattableString parameter is re-lowered
+            // to FormattableStringFactory.Create instead of an eager string. Only
+            // applies in the non-generic case (a type parameter is never a
+            // formattable target).
+            if (substitution == null
+                && i < syntax.Arguments.Count
+                && syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+                && IsFormattableStringTargetType(expectedType))
+            {
+                boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedArg, expectedType);
+                continue;
+            }
 
             if (argument.Type != expectedType
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
@@ -8073,7 +8161,7 @@ public sealed class Binder
         ConstructorInfo bestCtor = null;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
@@ -8094,7 +8182,8 @@ public sealed class Binder
 
         var ctorParameters = bestCtor.GetParameters();
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorArgs = AppendOmittedOptionalArguments(boundArguments.MoveToImmutable(), ctorParameters);
+        var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters);
+        var ctorArgs = AppendOmittedOptionalArguments(ctorRebound, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -8994,7 +9083,8 @@ public sealed class Binder
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences))
             {
                 var staticParameters = staticFn.Method.GetParameters();
-                var staticArguments = AppendOmittedOptionalArguments(arguments, staticParameters);
+                var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters);
+                var staticArguments = AppendOmittedOptionalArguments(staticRebound, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
                 return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
@@ -9097,13 +9187,14 @@ public sealed class Binder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length));
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
-                        var instArguments = AppendOmittedOptionalArguments(arguments, instParameters);
+                        var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
+                        var instArguments = AppendOmittedOptionalArguments(instRebound, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols);
@@ -9661,6 +9752,17 @@ public sealed class Binder
             }
 
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+
+            // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
+            // FormattableStringFactory.Create when the parameter is
+            // IFormattable/FormattableString.
+            if (ce.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+                && IsFormattableStringTargetType(expectedType))
+            {
+                convertedArgs.Add(BindInterpolatedStringAsFormattable(interpolatedArg, expectedType));
+                continue;
+            }
+
             convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
         }
 
