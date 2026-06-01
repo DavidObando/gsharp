@@ -510,6 +510,7 @@ public sealed class Evaluator
                 BoundNodeKind.AddressOfExpression => EvaluateAddressOfExpression((BoundAddressOfExpression)node),
                 BoundNodeKind.DereferenceExpression => EvaluateDereferenceExpression((BoundDereferenceExpression)node),
                 BoundNodeKind.DefaultExpression => EvaluateDefaultExpression((BoundDefaultExpression)node),
+                BoundNodeKind.InterpolatedStringExpression => EvaluateInterpolatedStringExpression((BoundInterpolatedStringExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -522,6 +523,46 @@ public sealed class Evaluator
     private object EvaluateLiteralExpression(BoundLiteralExpression n)
     {
         return n.Value;
+    }
+
+    // ADR-0055 (issue #368): render an interpolated string directly via
+    // composite formatting. Each hole is formatted with its format specifier
+    // (when the runtime value is IFormattable) under the current culture, then
+    // padded to the requested alignment. This mirrors the IL emitter's
+    // DefaultInterpolatedStringHandler lowering so interpreter and compiled
+    // output agree.
+    private object EvaluateInterpolatedStringExpression(BoundInterpolatedStringExpression node)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var part in node.Parts)
+        {
+            if (part.IsLiteral)
+            {
+                builder.Append(part.Literal);
+                continue;
+            }
+
+            var value = EvaluateExpression(part.Value);
+            string text;
+            if (part.Format != null && value is IFormattable formattable)
+            {
+                text = formattable.ToString(part.Format, System.Globalization.CultureInfo.CurrentCulture);
+            }
+            else
+            {
+                text = value?.ToString() ?? string.Empty;
+            }
+
+            if (part.Alignment.HasValue && part.Alignment.Value != 0)
+            {
+                var width = part.Alignment.Value;
+                text = width > 0 ? text.PadLeft(width) : text.PadRight(-width);
+            }
+
+            builder.Append(text);
+        }
+
+        return builder.ToString();
     }
 
     private object EvaluateVariableExpression(BoundVariableExpression v)

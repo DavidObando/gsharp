@@ -99,6 +99,19 @@ GSharp has two string forms:
 1. **Interpreted strings** delimited by `"…"`. Escape sequences are processed.
 2. **Raw strings** delimited by backticks (`` `…` ``). Contents are taken verbatim with no escape processing. Multi-line raw strings are allowed; CR and CRLF in the source are normalized to LF in the literal value. Embedded backticks are not representable; concatenate with `+` if needed.
 
+### String interpolation
+
+Interpreted strings support interpolation (ADR-0055):
+
+* `$ident` — inserts the value of a simple identifier: `"hi $name"`.
+* `${expr}` — inserts an arbitrary expression: `"sum=${a + b}"`, `"type=${x.GetType()}"`.
+* `${expr,alignment}` — pads the rendered value to a signed field width: positive right-justifies, negative left-justifies. `"[${name,5}]"` → `"[   hi]"`, `"[${name,-5}]"` → `"[hi   ]"`. The alignment must be a constant integer (otherwise **GS0214**).
+* `${expr:format}` — applies a .NET format specifier when the value is `IFormattable`: `"${n:X4}"` → `"00FF"`.
+* `${expr,alignment:format}` — both clauses: `"[${n,6:X2}]"` → `"[    FF]"`.
+* `$$` — escapes to a literal `$`.
+
+Formatting defaults to the current culture. Compiled code lowers interpolation to the .NET `DefaultInterpolatedStringHandler` pattern; value-type holes are appended without boxing.
+
 ## Comments
 
 Single-line comments start with `//` and run to the end of the line. (Block-comment syntax is not yet implemented; see the execution plan.)
@@ -114,7 +127,8 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 ## See also
 
 * `docs/coverage-matrix.md` — language-construct coverage matrix.
-* `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering.
+* `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering (superseded by ADR-0055).
+* `docs/adr/0055-string-interpolation-revamp.md` — current interpolation grammar, alignment/format, and handler lowering.
 * `docs/adr/0012-raw-string-delimiter.md` — rationale for backtick raw strings.
 * `docs/adr/0044-numeric-primitive-coverage.md` — primitive-type lattice and numeric suffix grammar.
 * `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.

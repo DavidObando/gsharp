@@ -1433,6 +1433,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS9007", "A type may contain at most one 'shared' block.");
     }
 
+    /// <summary>
+    /// ADR-0055: reports an interpolation hole whose alignment clause
+    /// (<c>${expr,alignment}</c>) is not a constant integer.
+    /// </summary>
+    /// <param name="location">The text location of the offending hole.</param>
+    /// <param name="text">The offending alignment text.</param>
+    public void ReportInvalidInterpolationAlignment(TextLocation location, string text)
+    {
+        Report(location, "GS0214", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

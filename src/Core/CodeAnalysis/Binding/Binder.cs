@@ -5490,15 +5490,17 @@ public sealed class Binder
 
     private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
     {
-        // Lower `"a $x b ${expr} c"` to a `+`-chain of string-typed sub-
-        // expressions: literal parts become string literals; expression parts
-        // are bound recursively and, when not already string-typed, wrapped in
-        // an instance `.ToString()` call. An empty interpolation collapses to
-        // the empty-string literal.
-        BoundExpression result = null;
+        // ADR-0055 (Phase 2): bind `"a $x b ${expr,align:fmt} c"` to a dedicated
+        // BoundInterpolatedStringExpression carrying the ordered literal/hole
+        // parts. Lowering is deferred (late) so that format/alignment intent is
+        // preserved through binding — the interpreter renders the node directly,
+        // and the emitter lowers it to the DefaultInterpolatedStringHandler
+        // pattern (issue #368). This replaces the legacy eager `+`-chain that
+        // mis-asserted `string`/`string?` operand types and produced the #366
+        // memory-unsafe IL.
+        var parts = ImmutableArray.CreateBuilder<BoundInterpolatedStringPart>(syntax.Segments.Length);
         foreach (var segment in syntax.Segments)
         {
-            BoundExpression piece;
             if (segment.IsExpression)
             {
                 var bound = BindExpression(segment.Expression);
@@ -5507,59 +5509,21 @@ public sealed class Binder
                     return bound;
                 }
 
-                piece = ConvertToString(bound, segment.Expression.Location);
-                if (piece is BoundErrorExpression)
+                if (bound.Type == null || bound.Type == TypeSymbol.Void)
                 {
-                    return piece;
+                    Diagnostics.ReportCannotConvert(segment.Expression.Location, bound.Type, TypeSymbol.String);
+                    return new BoundErrorExpression(null);
                 }
+
+                parts.Add(BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format));
             }
             else
             {
-                piece = new BoundLiteralExpression(null, segment.Text ?? string.Empty);
+                parts.Add(BoundInterpolatedStringPart.FromLiteral(segment.Text ?? string.Empty));
             }
-
-            result = result == null ? piece : Concat(result, piece);
         }
 
-        return result ?? new BoundLiteralExpression(null, string.Empty);
-    }
-
-    private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
-    {
-        if (expression.Type == TypeSymbol.String)
-        {
-            return expression;
-        }
-
-        var clrType = expression.Type?.ClrType;
-        if (clrType == null)
-        {
-            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
-            return new BoundErrorExpression(null);
-        }
-
-        // Bind a call to `System.Convert.ToString(<expr.Type>)`. Convert.ToString
-        // is a static overload set covering every primitive (int, long, bool,
-        // double, ...) plus `object`, so it works uniformly without emitter
-        // changes for value-type instance dispatch.
-        var convertType = typeof(System.Convert);
-        var method = convertType.GetMethod("ToString", new[] { clrType })
-            ?? convertType.GetMethod("ToString", new[] { typeof(object) });
-        if (method == null)
-        {
-            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
-            return new BoundErrorExpression(null);
-        }
-
-        var importedClass = new ImportedClassSymbol(convertType, declaration: null);
-        var importedFn = new ImportedFunctionSymbol(method.Name, importedClass, method, declaration: null);
-        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create(expression));
-    }
-
-    private static BoundExpression Concat(BoundExpression left, BoundExpression right)
-    {
-        var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
-        return new BoundBinaryExpression(null, left, op, right);
+        return new BoundInterpolatedStringExpression(syntax, parts.ToImmutable());
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)

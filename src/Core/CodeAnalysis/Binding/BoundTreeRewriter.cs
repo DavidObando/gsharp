@@ -388,6 +388,8 @@ public abstract class BoundTreeRewriter
                 return RewriteClrMethodGroupExpression((BoundClrMethodGroupExpression)node);
             case BoundNodeKind.IndirectCallExpression:
                 return RewriteIndirectCallExpression((BoundIndirectCallExpression)node);
+            case BoundNodeKind.InterpolatedStringExpression:
+                return RewriteInterpolatedStringExpression((BoundInterpolatedStringExpression)node);
             case BoundNodeKind.ClrConstructorCallExpression:
                 return RewriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node);
             case BoundNodeKind.ClrStaticCallExpression:
@@ -1675,5 +1677,45 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundIndirectCallExpression(null, target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments);
+    }
+
+    /// <summary>
+    /// Rewrites each interpolation hole's value expression, preserving the
+    /// ordered literal/hole structure plus alignment/format metadata
+    /// (ADR-0055).
+    /// </summary>
+    /// <param name="node">The interpolated-string node to rewrite.</param>
+    /// <returns>The rewritten node, or the original when nothing changed.</returns>
+    protected virtual BoundExpression RewriteInterpolatedStringExpression(BoundInterpolatedStringExpression node)
+    {
+        System.Collections.Immutable.ImmutableArray<BoundInterpolatedStringPart>.Builder builder = null;
+        for (var i = 0; i < node.Parts.Length; i++)
+        {
+            var oldPart = node.Parts[i];
+            if (oldPart.IsLiteral)
+            {
+                builder?.Add(oldPart);
+                continue;
+            }
+
+            var newValue = RewriteExpression(oldPart.Value);
+            if (newValue != oldPart.Value && builder == null)
+            {
+                builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundInterpolatedStringPart>(node.Parts.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Parts[j]);
+                }
+            }
+
+            builder?.Add(newValue == oldPart.Value ? oldPart : oldPart.WithValue(newValue));
+        }
+
+        if (builder == null)
+        {
+            return node;
+        }
+
+        return new BoundInterpolatedStringExpression(node.Syntax, builder.ToImmutable());
     }
 }

@@ -259,6 +259,7 @@ ImportedInstanceCallExpression
 IndexAssignmentExpression
 IndexExpression
 IndirectCallExpression
+InterpolatedStringExpression
 LabelStatement
 LenExpression
 ListPattern

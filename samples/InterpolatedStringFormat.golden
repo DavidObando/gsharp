@@ -1,0 +1,5 @@
+hex=00FF
+right=[   hi]
+left=[hi   ]
+both=[    FF]
+type=System.Double

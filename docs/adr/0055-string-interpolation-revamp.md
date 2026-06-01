@@ -1,6 +1,6 @@
 # ADR-0055: String interpolation revamp — rich, reliable, tool-aware
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-01
 - **Phase**: Phase 3 (language hardening); reliability sub-task is Phase 2 hotfix-eligible
 - **Related**: ADR-0007 (Kotlin-style choice — amended, not reversed), ADR-0011 (grammar + lowering — **superseded on acceptance**), ADR-0012 (raw strings stay non-interpolating), ADR-0044 (numeric primitives), docs/lexical.md §interpolation, docs/diagnostics.md, docs/lsp.md, docs/vscode-gsharp-spec.md, issue #366
@@ -140,6 +140,20 @@ This matches the scope names C# themes already style, so existing color themes l
 - **Phase 3 (usability):** Delimiter-aware scanner; `${e,align:format}`; multiline holes; Tier 2 generalized; new diagnostics GS0212–GS0216; parser span remapping. Update `docs/lexical.md`, `docs/diagnostics.md`.
 - **Phase 3 (tooling, parallelizable with usability):** LSP semantic tokens + hover/goto/completion/signature in holes; TextMate grammar; `docs/lsp.md`, `docs/vscode-gsharp-spec.md`.
 - **Phase 3+ (performance/extensibility, optional):** Tier 3 handler lowering; Tier 4 `FormattableString`; user `[InterpolatedStringHandler]` support — each contingent on emitter `ref struct`/generic-append support. Tracked blockers: #367 (`ref struct` support), #368 (`[InterpolatedStringHandler]` pattern), #369 (`IFormattable`/`FormattableString` conversion).
+
+## Implementation status
+
+- **Phase 2 (reliability) — done.** `BoundInterpolatedStringExpression` + `BoundInterpolatedStringPart` carry the ordered literal/hole parts; the binder no longer emits the eager `Convert.ToString` `+`-chain. The interpreter renders the node directly (`Evaluator.EvaluateInterpolatedStringExpression`, composite formatting under `CurrentCulture`). **Closes #366** — `${a.GetType()}` and value-type holes can no longer fault the process. Regression fixture: `samples/InterpolatedStringFormat.gs` (+`.golden`), which includes the `${pi.GetType()}` shape.
+- **Phase 3 (grammar) — done for `${e,align:format}`.** A delimiter-aware splitter (`Parser.SplitHole`) extracts the expression / alignment / format clauses, tracking `()[]{}` depth and skipping nested string/char literals so `${n.GetType()}` and `${dict["k"]}` are not mis-split. Invalid (non-constant) alignment reports **GS0214**. Multiline holes and the remaining grammar diagnostics (GS0212/GS0213/GS0215/GS0216) remain future work.
+- **Phase 3+ (Tier 3 handler lowering) — done (#368).** On the emit path only, `InterpolatedStringHandlerLowerer` rewrites each node into a `BoundBlockExpression` that constructs a `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` value-type local, calls `AppendLiteral`/`AppendFormatted<T>` per part, and yields `ToStringAndClear()`. The interpreter is untouched, so there is no interpret/compile drift.
+  - **`ref struct` support (was #367) — implemented directly here**, not deferred. The handler is a `ref struct`; in metadata it is an ordinary value type, so the existing value-type local + value-type instance-call (`ldloca`/`call`) emit paths handle it. The async/iterator state-machine rewriters were taught to **not hoist `ByRefLike` locals** into state-machine fields (a `ByRef`-like type cannot be an instance field); such locals are always built and consumed within a single expression and never stay live across a suspension, so they correctly remain `MoveNext` locals.
+  - **Value-type holes do not box (#368 criterion 5).** `AppendFormatted<T>` is closed over the hole's concrete CLR type via a MethodSpec, so e.g. an `int32`/`float64` hole is passed by value. **Type-erasure note:** for a *user-defined* G# type that has no reflection `System.Type`, the generic method is closed over an `object` placeholder while the real type-argument symbol is encoded into the emitted MethodSpec (issue #320 mechanism); the value is still passed by its natural representation (no box), and the user TypeDef — not `object` — is what the verifier sees.
+
+### Deferred / not yet covered
+
+- **`await` inside a hole** (`"x=${await f()}"`) is not specially handled: the handler local would otherwise straddle a suspension. C# falls back to `String.Format` in this case; G# currently does not, so this shape is unsupported pending a Tier-2 fallback selector.
+- **`[InterpolatedStringHandlerArgument]` forwarding** (#368 criterion 4) — i.e. *user* APIs that receive a custom handler as a parameter via target-typed handler conversion — is recognized at the type level but argument forwarding to user-defined handlers is not yet emitted; only the built-in `DefaultInterpolatedStringHandler` lowering is delivered.
+
 
 ## Consequences
 

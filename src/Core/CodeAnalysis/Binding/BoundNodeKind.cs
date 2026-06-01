@@ -63,6 +63,7 @@ public enum BoundNodeKind
     MethodGroupExpression,
     ClrMethodGroupExpression,
     IndirectCallExpression,
+    InterpolatedStringExpression,
     ClrConstructorCallExpression,
     ClrPropertyAccessExpression,
     ClrPropertyAssignmentExpression,
