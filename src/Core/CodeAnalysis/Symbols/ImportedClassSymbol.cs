@@ -118,7 +118,7 @@ public sealed class ImportedClassSymbol : Symbol
             argTypes[i] = t;
         }
 
-        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument);
+        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length));
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -155,4 +155,33 @@ public sealed class ImportedClassSymbol : Symbol
     /// <returns>Whether we found a matching function or not.</returns>
     public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
         => TryLookupFunction(text, callExpression, arguments, out function, out _);
+
+    /// <summary>
+    /// ADR-0055 Tier 4 (#369): produces the per-argument flags marking which
+    /// positional call arguments are interpolated-string literals, so overload
+    /// resolution can treat them as convertible to
+    /// <c>IFormattable</c>/<c>FormattableString</c> parameters. Returns
+    /// <see langword="null"/> when no argument qualifies (the common path).
+    /// </summary>
+    private static System.Collections.Generic.IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(CallExpressionSyntax callExpression, int count)
+    {
+        if (callExpression == null)
+        {
+            return null;
+        }
+
+        bool[] flags = null;
+        var argumentSyntax = callExpression.Arguments;
+        var limit = Math.Min(count, argumentSyntax.Count);
+        for (var i = 0; i < limit; i++)
+        {
+            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax)
+            {
+                flags ??= new bool[count];
+                flags[i] = true;
+            }
+        }
+
+        return flags;
+    }
 }
