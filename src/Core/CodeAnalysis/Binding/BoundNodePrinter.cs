@@ -208,6 +208,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.IndirectCallExpression:
                 WriteIndirectCallExpression((BoundIndirectCallExpression)node, writer);
                 break;
+            case BoundNodeKind.InterpolatedStringExpression:
+                WriteInterpolatedStringExpression((BoundInterpolatedStringExpression)node, writer);
+                break;
             case BoundNodeKind.ClrConstructorCallExpression:
                 WriteClrConstructorCallExpression((BoundClrConstructorCallExpression)node, writer);
                 break;
@@ -1420,6 +1423,37 @@ public static class BoundNodePrinter
         }
 
         writer.WriteIdentifier(node.MethodName);
+    }
+
+    private static void WriteInterpolatedStringExpression(BoundInterpolatedStringExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteString("$\"");
+        foreach (var part in node.Parts)
+        {
+            if (part.IsLiteral)
+            {
+                writer.WriteString(part.Literal.Replace("\"", "\\\""));
+                continue;
+            }
+
+            writer.WritePunctuation(SyntaxKind.OpenBraceToken);
+            part.Value.WriteTo(writer);
+            if (part.Alignment.HasValue)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteNumber(part.Alignment.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            if (part.Format != null)
+            {
+                writer.WritePunctuation(SyntaxKind.ColonToken);
+                writer.WriteString(part.Format);
+            }
+
+            writer.WritePunctuation(SyntaxKind.CloseBraceToken);
+        }
+
+        writer.WriteString("\"");
     }
 
     private static void WriteIndirectCallExpression(BoundIndirectCallExpression node, IndentedTextWriter writer)

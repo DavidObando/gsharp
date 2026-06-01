@@ -81,6 +81,17 @@ internal static class OverloadResolution
         UserDefinedImplicit = 6,
 
         /// <summary>
+        /// Issue #368: an interpolated string (statically typed <c>string</c>)
+        /// converting to a parameter typed as a
+        /// <c>[InterpolatedStringHandler]</c> type. Ranked lowest so that, when
+        /// both a <c>string</c> and a handler overload are applicable, the
+        /// <c>string</c> overload still wins (matching the conservative G#
+        /// model where only an actual interpolated-string node is later
+        /// rewritten to the handler pattern by the binder).
+        /// </summary>
+        InterpolatedStringHandler = 7,
+
+        /// <summary>
         /// ADR-0055 Tier 4 (#369): an interpolated-string argument converting to
         /// an <c>IFormattable</c>/<c>FormattableString</c> parameter. Ranked last
         /// (worst) so that, given both a <c>string</c> and a
@@ -88,7 +99,7 @@ internal static class OverloadResolution
         /// identity conversion of the interpolation's natural type) still wins —
         /// matching C#.
         /// </summary>
-        InterpolatedStringToFormattable = 7,
+        InterpolatedStringToFormattable = 8,
     }
 
     /// <summary>
@@ -198,6 +209,18 @@ internal static class OverloadResolution
         if (udi != null && udi(source, target))
         {
             return ImplicitConversionKind.UserDefinedImplicit;
+        }
+
+        // Issue #368: a `string`-typed argument (which is how an interpolated
+        // string statically types) is applicable to a parameter whose type is
+        // attributed `[InterpolatedStringHandler]`. The binder only ever
+        // rewrites an actual BoundInterpolatedStringExpression argument into the
+        // handler pattern, so this conversion is harmless for plain strings in
+        // practice and is ranked lowest (so a `string` overload always wins).
+        if (string.Equals(source.FullName, "System.String", StringComparison.Ordinal)
+            && InterpolatedStringHandlerInfo.IsHandlerType(target))
+        {
+            return ImplicitConversionKind.InterpolatedStringHandler;
         }
 
         return ImplicitConversionKind.None;

@@ -85,6 +85,33 @@ Console.WriteLine(t.Result)
         Assert.Contains("42", output);
     }
 
+    [Fact]
+    public void Await_Inside_InterpolationHole_Emits_And_Runs()
+    {
+        // Issue #368: an `await` inside an interpolation hole. The hole value is
+        // pre-evaluated into a temp before the (ByRefLike) DefaultInterpolated-
+        // StringHandler is constructed, so no handler local is live across the
+        // suspension; the spiller then flattens the lowered block expression.
+        const string Source = @"package AwaitInHoleTest
+import System
+import System.Threading.Tasks
+
+async func getN() int32 {
+    return await Task.FromResult(42)
+}
+
+async func build() string {
+    return ""n=${await getN()}""
+}
+
+var t = build()
+t.Wait()
+Console.WriteLine(t.Result)
+";
+        var output = CompileAndRun(Source, "AwaitInHoleTest");
+        Assert.Contains("n=42", output);
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();

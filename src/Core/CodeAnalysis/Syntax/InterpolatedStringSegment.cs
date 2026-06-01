@@ -6,7 +6,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// One segment of an <see cref="InterpolatedStringExpressionSyntax"/>: either
-/// a literal piece of text or an embedded expression.
+/// a literal piece of text or an embedded expression with optional alignment
+/// and format specifiers (ADR-0055: <c>${expr,alignment:format}</c>).
 /// </summary>
 public readonly struct InterpolatedStringSegment
 {

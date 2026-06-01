@@ -250,10 +250,40 @@ public static class SpillSequenceSpiller
                 case BoundUserInstanceCallExpression userInstance:
                     return SpillUserInstanceCall(userInstance);
 
+                case BoundBlockExpression block:
+                    return SpillBlockExpression(block);
+
                 default:
                     // No await in this expression — return trivially.
                     return Trivial(expression);
             }
+        }
+
+        /// <summary>
+        /// Spills a <see cref="BoundBlockExpression"/> (e.g. an interpolated
+        /// string lowered to the handler pattern, issue #368) by flattening its
+        /// statements through the statement rewriter — lifting any awaits to
+        /// statement level — and then spilling the trailing value expression.
+        /// The hole pre-evaluation in <c>InterpolatedStringHandlerLowerer</c>
+        /// guarantees awaits precede the (possibly ByRefLike) handler local, so
+        /// no handler local is live across a suspension after this flattening.
+        /// </summary>
+        private BoundSpillSequenceExpression SpillBlockExpression(BoundBlockExpression block)
+        {
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var statement in block.Statements)
+            {
+                RewriteStatementToList(statement, sideEffects);
+            }
+
+            var valueSpill = SpillExpression(block.Expression);
+            sideEffects.AddRange(valueSpill.SideEffects);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                valueSpill.Locals,
+                sideEffects.ToImmutable(),
+                valueSpill.Value);
         }
 
         private BoundSpillSequenceExpression SpillAwait(BoundAwaitExpression awaitExpr)

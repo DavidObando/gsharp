@@ -14,11 +14,13 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 1.1: string interpolation. <c>"$ident"</c> and <c>"${expr}"</c>
-/// inside an interpreted string literal are lowered by the binder to a
-/// chain of <c>+</c> concatenations over string-typed sub-expressions.
-/// Non-string expressions are wrapped in <c>.ToString()</c>. <c>$$</c>
-/// escapes to a literal <c>$</c>.
+/// Phase 1.1 / ADR-0055: string interpolation. <c>"$ident"</c> and
+/// <c>"${expr,alignment:format}"</c> inside an interpreted string literal bind
+/// to a dedicated <see cref="BoundInterpolatedStringExpression"/> (static type
+/// <c>string</c>) carrying ordered literal/hole parts. The tree-walk
+/// interpreter renders the node directly via composite formatting; the IL
+/// emitter lowers it to the <c>DefaultInterpolatedStringHandler</c> pattern.
+/// <c>$$</c> escapes to a literal <c>$</c>.
 /// </summary>
 public class InterpolatedStringTests
 {
@@ -89,6 +91,71 @@ public class InterpolatedStringTests
         Assert.Empty(result.Diagnostics);
         var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
         Assert.Equal("1 + 2 = 3", msg.Value);
+    }
+
+    [Fact]
+    public void Binder_Produces_InterpolatedStringExpression_Node()
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("let x = 1\nlet msg = \"hi $x\"\n", "test"));
+        var compilation = new Compilation(tree);
+        var declaration = compilation.GlobalScope.Statements
+            .OfType<BoundVariableDeclaration>()
+            .Single(d => d.Variable.Name == "msg");
+        Assert.IsType<BoundInterpolatedStringExpression>(declaration.Initializer);
+        Assert.Equal(TypeSymbol.String, declaration.Initializer.Type);
+    }
+
+    [Fact]
+    public void Interpolation_Hex_Format_Specifier_Renders()
+    {
+        // 255 -> "00FF" via the X4 format specifier (culture-independent).
+        var source = "let n = 255\nlet msg = \"${n:X4}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("00FF", msg.Value);
+    }
+
+    [Fact]
+    public void Interpolation_Positive_Alignment_Right_Justifies()
+    {
+        var source = "let s = \"hi\"\nlet msg = \"[${s,5}]\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("[   hi]", msg.Value);
+    }
+
+    [Fact]
+    public void Interpolation_Negative_Alignment_Left_Justifies()
+    {
+        var source = "let s = \"hi\"\nlet msg = \"[${s,-5}]\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("[hi   ]", msg.Value);
+    }
+
+    [Fact]
+    public void Interpolation_Alignment_And_Format_Combined()
+    {
+        var source = "let n = 255\nlet msg = \"[${n,6:X2}]\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("[    FF]", msg.Value);
+    }
+
+    [Fact]
+    public void Interpolation_Hole_Containing_Parenthesized_Call_Is_Not_Mis_Split()
+    {
+        // The delimiter-aware splitter must not treat the `()` or any inner
+        // punctuation of `n.GetType()` as an alignment/format delimiter.
+        var source = "let n = 1\nlet msg = \"${n.GetType()}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("System.Int32", msg.Value);
     }
 
     [Fact]

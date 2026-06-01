@@ -1450,6 +1450,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS9007", "A type may contain at most one 'shared' block.");
     }
 
+    /// <summary>
+    /// ADR-0055: reports an interpolation hole whose alignment clause
+    /// (<c>${expr,alignment}</c>) is not a constant integer.
+    /// </summary>
+    /// <param name="location">The text location of the offending hole.</param>
+    /// <param name="text">The offending alignment text.</param>
+    public void ReportInvalidInterpolationAlignment(TextLocation location, string text)
+    {
+        Report(location, "GS0220", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
+    }
+
+    /// <summary>
+    /// Issue #368: reports an interpolated string passed to an
+    /// <c>[InterpolatedStringHandler]</c> parameter whose
+    /// <c>[InterpolatedStringHandlerArgument]</c> forwarding could not be
+    /// satisfied (an unknown referenced argument, a missing receiver, or no
+    /// matching handler constructor).
+    /// </summary>
+    /// <param name="location">The text location of the interpolated argument.</param>
+    /// <param name="reason">A human-readable description of the failure.</param>
+    public void ReportInterpolatedStringHandlerArgument(TextLocation location, string reason)
+    {
+        Report(location, "GS0221", $"Cannot use the interpolated-string-handler argument: {reason}.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

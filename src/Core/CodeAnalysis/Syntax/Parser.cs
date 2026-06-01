@@ -3902,13 +3902,26 @@ public class Parser
                 continue;
             }
 
-            // A `${expr,alignment:format}` hole carries an optional constant
-            // alignment and an optional format specifier (ADR-0055). Split them
-            // off before parsing the expression so the inner parser only sees
-            // the expression source. The split is delimiter-aware: only a
-            // top-level `,`/`:` (outside any nested parentheses/brackets/braces)
-            // is treated as an alignment/format separator, matching C#.
-            SplitInterpolationHole(fragment.Text, out var exprText, out var alignment, out var format);
+            // ADR-0055: a hole is `expr [ , alignment ] [ : format ]`. Split
+            // the captured hole text into its expression / alignment / format
+            // clauses with a delimiter-aware scanner that ignores `,`/`:`
+            // nested inside (), [], {}, or string/char literals so that
+            // `a.GetType()`, `dict["k"]`, and `cond ? "a" : "b"` (parenthesized)
+            // are not mis-split.
+            SplitHole(fragment.Text, out var exprText, out var alignmentText, out var formatText);
+
+            int? alignment = null;
+            if (alignmentText != null)
+            {
+                if (int.TryParse(alignmentText.Trim(), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var a))
+                {
+                    alignment = a;
+                }
+                else
+                {
+                    Diagnostics.ReportInvalidInterpolationAlignment(new TextLocation(syntaxTree.Text, token.Span), alignmentText);
+                }
+            }
 
             // Parse the captured expression source by spinning up a fresh
             // parser; embedded expressions are independent of the outer parser
@@ -3925,94 +3938,80 @@ public class Parser
                 innerExpression = new NameExpressionSyntax(syntaxTree, synthetic);
             }
 
-            segments.Add(InterpolatedStringSegment.FromExpression(innerExpression, alignment, format));
+            segments.Add(InterpolatedStringSegment.FromExpression(innerExpression, alignment, formatText));
         }
 
         return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
     }
 
-    /// <summary>
-    /// Splits an interpolation hole's source into its expression, optional
-    /// constant alignment, and optional format specifier (ADR-0055 grammar
-    /// <c>Hole := Expression ["," Alignment] [":" FormatString]</c>). The scan
-    /// is delimiter-aware so a `,`/`:` nested inside `()`, `[]`, or `{}` is part
-    /// of the expression and never mistaken for a separator.
-    /// </summary>
-    /// <param name="holeText">The raw hole source (text between <c>${</c> and <c>}</c>, or a <c>$ident</c> name).</param>
-    /// <param name="expression">Receives the expression source.</param>
-    /// <param name="alignment">Receives the parsed constant alignment, or <c>null</c>.</param>
-    /// <param name="format">Receives the format specifier (without the colon), or <c>null</c>.</param>
-    private static void SplitInterpolationHole(string holeText, out string expression, out int? alignment, out string format)
+    // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`
+    // (alignment) and first top-level `:` (format), tracking ()/[]/{} depth
+    // and skipping nested "…"/'…' literals. The expression clause is the text
+    // before whichever delimiter appears first.
+    private static void SplitHole(string hole, out string expr, out string alignment, out string format)
     {
-        expression = holeText;
-        alignment = null;
-        format = null;
-        if (string.IsNullOrEmpty(holeText))
-        {
-            return;
-        }
-
         var depth = 0;
         var commaIndex = -1;
         var colonIndex = -1;
-        for (var i = 0; i < holeText.Length; i++)
+        for (var i = 0; i < hole.Length; i++)
         {
-            var c = holeText[i];
-            switch (c)
+            var c = hole[i];
+            if (c == '"' || c == '\'')
             {
-                case '(':
-                case '[':
-                case '{':
-                    depth++;
-                    break;
-                case ')':
-                case ']':
-                case '}':
-                    if (depth > 0)
+                // Skip the nested literal, honoring `""`/`\` escapes loosely.
+                var quote = c;
+                i++;
+                while (i < hole.Length && hole[i] != quote)
+                {
+                    if (hole[i] == '\\' && i + 1 < hole.Length)
                     {
-                        depth--;
+                        i++;
                     }
 
-                    break;
-                case ',':
-                    if (depth == 0 && commaIndex < 0 && colonIndex < 0)
-                    {
-                        commaIndex = i;
-                    }
+                    i++;
+                }
 
-                    break;
-                case ':':
-                    if (depth == 0 && colonIndex < 0)
-                    {
-                        colonIndex = i;
-                    }
+                continue;
+            }
 
-                    break;
+            if (c == '(' || c == '[' || c == '{')
+            {
+                depth++;
+            }
+            else if (c == ')' || c == ']' || c == '}')
+            {
+                depth--;
+            }
+            else if (depth == 0 && c == ',' && commaIndex < 0 && colonIndex < 0)
+            {
+                commaIndex = i;
+            }
+            else if (depth == 0 && c == ':' && colonIndex < 0)
+            {
+                colonIndex = i;
+                break;
             }
         }
 
+        alignment = null;
+        format = null;
         if (commaIndex < 0 && colonIndex < 0)
         {
+            expr = hole;
             return;
         }
 
-        var exprEnd = colonIndex < 0 ? (commaIndex < 0 ? holeText.Length : commaIndex)
-            : (commaIndex < 0 ? colonIndex : System.Math.Min(commaIndex, colonIndex));
-        expression = holeText.Substring(0, exprEnd);
+        var exprEnd = commaIndex >= 0 ? commaIndex : colonIndex;
+        expr = hole.Substring(0, exprEnd);
+        if (commaIndex >= 0)
+        {
+            var alignEnd = colonIndex >= 0 ? colonIndex : hole.Length;
+            alignment = hole.Substring(commaIndex + 1, alignEnd - commaIndex - 1);
+        }
 
         if (colonIndex >= 0)
         {
-            format = holeText.Substring(colonIndex + 1);
-        }
-
-        if (commaIndex >= 0)
-        {
-            var alignEnd = colonIndex >= 0 ? colonIndex : holeText.Length;
-            var alignText = holeText.Substring(commaIndex + 1, alignEnd - commaIndex - 1).Trim();
-            if (int.TryParse(alignText, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var parsedAlignment))
-            {
-                alignment = parsedAlignment;
-            }
+            format = hole.Substring(colonIndex + 1);
         }
     }
 

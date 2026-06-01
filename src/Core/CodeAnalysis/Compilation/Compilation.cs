@@ -250,6 +250,12 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
+        // ADR-0055 / issue #368: lower interpolated strings to the
+        // DefaultInterpolatedStringHandler pattern on the emit path only, before
+        // the async/iterator rewriters and IL emission. The interpreter path is
+        // untouched and renders the interpolation node directly.
+        program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
+
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
@@ -313,6 +319,12 @@ public class Compilation
         {
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
+
+        // ADR-0055 / issue #368: lower interpolated strings to the
+        // DefaultInterpolatedStringHandler pattern on the emit path only, before
+        // the async/iterator rewriters and IL emission. The interpreter path is
+        // untouched and renders the interpolation node directly.
+        program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
 
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))

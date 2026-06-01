@@ -224,6 +224,15 @@ public static class AsyncIteratorRewriter
 
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
+            // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
+            // DefaultInterpolatedStringHandler emitted for interpolated strings
+            // (ADR-0055 / issue #368). A ByRef-like type cannot be an instance
+            // field, so it must stay a MoveNext local rather than be hoisted.
+            if (node.Variable.Type?.ClrType?.IsByRefLike == true)
+            {
+                return base.RewriteVariableDeclaration(node);
+            }
+
             if (!Locals.Contains(node.Variable))
             {
                 Locals.Add(node.Variable);

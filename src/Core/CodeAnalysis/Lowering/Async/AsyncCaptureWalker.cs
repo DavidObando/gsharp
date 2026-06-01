@@ -77,6 +77,17 @@ public static class AsyncCaptureWalker
                 continue;
             }
 
+            // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
+            // DefaultInterpolatedStringHandler emitted for interpolated strings
+            // (ADR-0055 / issue #368). A ByRef-like type cannot be an instance
+            // field, so it must stay a MoveNext local. This is safe because such
+            // locals are always constructed and fully consumed within a single
+            // expression and never stay live across an await suspension.
+            if (local.Type?.ClrType?.IsByRefLike == true)
+            {
+                continue;
+            }
+
             orderedLocals.Add(local);
         }
 

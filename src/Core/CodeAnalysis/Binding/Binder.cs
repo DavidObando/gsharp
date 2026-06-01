@@ -5582,53 +5582,40 @@ public sealed class Binder
 
     private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
     {
-        // Tier 1 (ADR-0055, unchanged behaviour): when no hole carries a format
-        // or alignment clause, lower `"a $x b ${expr} c"` to a `+`-chain of
-        // string-typed sub-expressions. Literal parts become string literals;
-        // expression parts are bound recursively and, when not already string-
-        // typed, wrapped in `Convert.ToString(...)`. An empty interpolation
-        // collapses to the empty-string literal.
-        var hasFormatting = syntax.Segments.Any(s => s.IsExpression && (s.Alignment.HasValue || s.Format != null));
-        if (!hasFormatting)
+        // ADR-0055 (Phase 2): bind `"a $x b ${expr,align:fmt} c"` to a dedicated
+        // BoundInterpolatedStringExpression carrying the ordered literal/hole
+        // parts. Lowering is deferred (late) so that format/alignment intent is
+        // preserved through binding — the interpreter renders the node directly,
+        // and the emitter lowers it to the DefaultInterpolatedStringHandler
+        // pattern (issue #368). This replaces the legacy eager `+`-chain that
+        // mis-asserted `string`/`string?` operand types and produced the #366
+        // memory-unsafe IL.
+        var parts = ImmutableArray.CreateBuilder<BoundInterpolatedStringPart>(syntax.Segments.Length);
+        foreach (var segment in syntax.Segments)
         {
-            BoundExpression result = null;
-            foreach (var segment in syntax.Segments)
+            if (segment.IsExpression)
             {
-                BoundExpression piece;
-                if (segment.IsExpression)
+                var bound = BindExpression(segment.Expression);
+                if (bound is BoundErrorExpression)
                 {
-                    var bound = BindExpression(segment.Expression);
-                    if (bound is BoundErrorExpression)
-                    {
-                        return bound;
-                    }
-
-                    piece = ConvertToString(bound, segment.Expression.Location);
-                    if (piece is BoundErrorExpression)
-                    {
-                        return piece;
-                    }
-                }
-                else
-                {
-                    piece = new BoundLiteralExpression(null, segment.Text ?? string.Empty);
+                    return bound;
                 }
 
-                result = result == null ? piece : Concat(result, piece);
+                if (bound.Type == null || bound.Type == TypeSymbol.Void)
+                {
+                    Diagnostics.ReportCannotConvert(segment.Expression.Location, bound.Type, TypeSymbol.String);
+                    return new BoundErrorExpression(null);
+                }
+
+                parts.Add(BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format));
             }
-
-            return result ?? new BoundLiteralExpression(null, string.Empty);
+            else
+            {
+                parts.Add(BoundInterpolatedStringPart.FromLiteral(segment.Text ?? string.Empty));
+            }
         }
 
-        // Tier 2 (ADR-0055): at least one hole carries `,alignment`/`:format`,
-        // so synthesize a composite format string and lower to
-        // `String.Format(string, object[])` (CurrentCulture, matching C#).
-        if (!TryBuildInterpolationFormat(syntax, out var composite, out var holeValues))
-        {
-            return new BoundErrorExpression(null);
-        }
-
-        return BuildStringFormatCall(composite, holeValues);
+        return new BoundInterpolatedStringExpression(syntax, parts.ToImmutable());
     }
 
     /// <summary>
@@ -6772,6 +6759,71 @@ public sealed class Binder
     }
 
     /// <summary>ADR-0039: Computes per-argument <see cref="RefKind"/> from CLR parameter metadata.</summary>
+    /// <summary>
+    /// Issue #368 / ADR-0055: rewrites any interpolated-string argument passed to
+    /// a parameter typed as a user-defined <c>[InterpolatedStringHandler]</c> so
+    /// that it carries the resolved handler-construction target. The referenced
+    /// surrounding arguments / receiver named by
+    /// <c>[InterpolatedStringHandlerArgument]</c> are captured and forwarded into
+    /// the handler constructor by the emit lowerer. Arguments that are not
+    /// handler-targeted interpolations are returned unchanged.
+    /// </summary>
+    /// <param name="parameters">The resolved method's/constructor's parameters.</param>
+    /// <param name="arguments">The bound positional arguments (aligned with the leading parameters).</param>
+    /// <param name="receiver">The instance receiver, or <see langword="null"/> for static/constructor calls.</param>
+    /// <param name="location">The diagnostic location for the call.</param>
+    /// <returns>The arguments, with handler-targeted interpolations rewritten.</returns>
+    private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
+        System.Reflection.ParameterInfo[] parameters,
+        ImmutableArray<BoundExpression> arguments,
+        BoundExpression receiver,
+        TextLocation location)
+    {
+        if (parameters == null || arguments.IsDefaultOrEmpty)
+        {
+            return arguments;
+        }
+
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        var count = System.Math.Min(parameters.Length, arguments.Length);
+        for (var i = 0; i < count; i++)
+        {
+            if (arguments[i] is not BoundInterpolatedStringExpression interp || interp.Handler != null)
+            {
+                continue;
+            }
+
+            var parameterType = parameters[i].ParameterType;
+
+            // V1 supports by-value handler parameters only; a by-ref handler
+            // parameter (e.g. StringBuilder.Append(ref AppendInterpolatedStringHandler))
+            // would require passing the handler local by address, which the call
+            // sites here do not arrange.
+            if (parameterType.IsByRef || !InterpolatedStringHandlerInfo.IsHandlerType(parameterType))
+            {
+                continue;
+            }
+
+            var handler = InterpolatedStringHandlerInfo.TryCreate(
+                parameterType,
+                parameters[i],
+                parameters,
+                arguments,
+                receiver,
+                out var failure);
+            if (handler == null)
+            {
+                Diagnostics.ReportInterpolatedStringHandlerArgument(location, failure);
+                continue;
+            }
+
+            builder ??= arguments.ToBuilder();
+            builder[i] = interp.Update(interp.Parts, handler);
+        }
+
+        return builder?.ToImmutable() ?? arguments;
+    }
+
     private static ImmutableArray<RefKind> ComputeArgumentRefKinds(System.Reflection.ParameterInfo[] parameters)
     {
         var hasAnyRef = false;
@@ -8263,7 +8315,8 @@ public sealed class Binder
         var ctorParameters = bestCtor.GetParameters();
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
         var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters);
-        var ctorArgs = AppendOmittedOptionalArguments(ctorRebound, ctorParameters);
+        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location);
+        var ctorArgs = AppendOmittedOptionalArguments(ctorHandlerArgs, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -9164,7 +9217,8 @@ public sealed class Binder
             {
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters);
-                var staticArguments = AppendOmittedOptionalArguments(staticRebound, staticParameters);
+                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location);
+                var staticArguments = AppendOmittedOptionalArguments(staticHandlerArgs, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
                 return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
@@ -9274,7 +9328,8 @@ public sealed class Binder
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
                         var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
-                        var instArguments = AppendOmittedOptionalArguments(instRebound, instParameters);
+                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location);
+                        var instArguments = AppendOmittedOptionalArguments(instHandlerArgs, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols);
@@ -9353,7 +9408,8 @@ public sealed class Binder
             case OverloadResolution.ResolutionOutcome.Resolved:
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
-                var inheritedArguments = AppendOmittedOptionalArguments(arguments, inheritedParameters);
+                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, arguments, receiver, ce.Location);
+                var inheritedArguments = AppendOmittedOptionalArguments(inheritedHandlerArgs, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
                 result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
