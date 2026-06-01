@@ -31,11 +31,11 @@ public static class DocumentSyncHandler
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath)
     {
         var newLines = new List<int>();
-        int nextNewLine = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
+        int nextNewLine = text.IndexOf('\n');
         while (nextNewLine >= 0)
         {
             newLines.Add(nextNewLine);
-            nextNewLine = text.IndexOf(Environment.NewLine, nextNewLine + 1, StringComparison.Ordinal);
+            nextNewLine = text.IndexOf('\n', nextNewLine + 1);
         }
 
         var diagnostics = new List<Diagnostic>();
@@ -61,7 +61,7 @@ public static class DocumentSyncHandler
 
         foreach (var d in syntaxTree.Diagnostics)
         {
-            diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+            diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }
 
         foreach (var d in compilation.GlobalScope.Diagnostics)
@@ -72,7 +72,7 @@ public static class DocumentSyncHandler
                 continue;
             }
 
-            diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+            diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }
 
         if (!skipBinding)
@@ -85,25 +85,30 @@ public static class DocumentSyncHandler
                     continue;
                 }
 
-                diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+                diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
             }
         }
 
         return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
     }
 
-    private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, List<int> newLines)
+    private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)
     {
-        int line = newLines.Count(charNumber => charNumber < start);
-        int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
         return new Diagnostic
         {
             Code = new DiagnosticCode(code),
             Message = message,
-            Range = new Range(new Position(line, start - lineStart), new Position(line, end - lineStart)),
+            Range = new Range(ToPosition(start, sourceText), ToPosition(end, sourceText)),
             Severity = DiagnosticSeverity.Error,
             Source = Constants.LanguageIdentifier,
         };
+    }
+
+    private static Position ToPosition(int offset, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)
+    {
+        int line = sourceText.GetLineIndex(offset);
+        int lineStart = sourceText.Lines[line].Start;
+        return new Position(line, offset - lineStart);
     }
 }
 

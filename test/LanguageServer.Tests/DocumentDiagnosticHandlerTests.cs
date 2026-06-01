@@ -131,6 +131,25 @@ public class DocumentDiagnosticHandlerTests
         }
     }
 
+    [Fact]
+    public async Task DocumentDiagnostic_ErrorOnLaterLine_ReportsCorrectColumn()
+    {
+        // Regression: column mapping previously hardcoded a 2-char ("\r\n") line break, so on
+        // LF documents every line after the first was reported one column too early.
+        // Line 1 (0-based) is "var y uint8 = 255"; "255" starts at character index 14.
+        const string source = "let a = 1\nvar y uint8 = 255\n";
+        var (server, uri) = await CreateServerWithDocumentAsync(source);
+
+        var report = await server.DocumentDiagnosticAsync(
+            new DocumentDiagnosticParams { TextDocument = new TextDocumentIdentifier { Uri = uri } },
+            CancellationToken.None);
+
+        var full = Assert.IsType<FullDocumentDiagnosticReport>(report);
+        var conversion = Assert.Single(full.Items, d => d.Message.Contains("Cannot convert type", StringComparison.Ordinal));
+        Assert.Equal(1, conversion.Range.Start.Line);
+        Assert.Equal(14, conversion.Range.Start.Character);
+    }
+
     private static async Task<(LspServer Server, DocumentUri Uri)> CreateServerWithDocumentAsync(string source)
     {
         var server = new LspServer(new DocumentContentService(), new WorkspaceState());
