@@ -175,6 +175,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
 | GS0211 | Error | Attribute `[DllImport]` is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature. | `@DllImport("user32.dll") func MessageBox() {}` — emit support and the `extern` body marker arrive after v1.0. |
 | GS0214 | Error | Interpolation alignment clause is not a constant integer. | `"${x,abc}"` — the value after the `,` in `${expr,alignment[:format]}` must be a constant integer (e.g. `${x,5}` or `${x,-8:X4}`). |
+| GS0219 | Error | An interpolated string passed to an `[InterpolatedStringHandler]` parameter could not satisfy `[InterpolatedStringHandlerArgument]` forwarding. | The forwarded argument names an unknown parameter, the receiver cannot be forwarded, or no handler constructor matches `(int, int, …forwarded[, out bool])`. |
 
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 

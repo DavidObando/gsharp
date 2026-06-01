@@ -1711,11 +1711,38 @@ public abstract class BoundTreeRewriter
             builder?.Add(newValue == oldPart.Value ? oldPart : oldPart.WithValue(newValue));
         }
 
-        if (builder == null)
+        // Issue #368: rewrite the forwarded handler arguments as well.
+        var handler = node.Handler;
+        if (handler != null && !handler.ForwardedArguments.IsDefaultOrEmpty)
+        {
+            System.Collections.Immutable.ImmutableArray<BoundExpression>.Builder forwarded = null;
+            for (var i = 0; i < handler.ForwardedArguments.Length; i++)
+            {
+                var oldArg = handler.ForwardedArguments[i];
+                var newArg = RewriteExpression(oldArg);
+                if (newArg != oldArg && forwarded == null)
+                {
+                    forwarded = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundExpression>(handler.ForwardedArguments.Length);
+                    for (var j = 0; j < i; j++)
+                    {
+                        forwarded.Add(handler.ForwardedArguments[j]);
+                    }
+                }
+
+                forwarded?.Add(newArg);
+            }
+
+            if (forwarded != null)
+            {
+                handler = handler.WithForwardedArguments(forwarded.ToImmutable());
+            }
+        }
+
+        if (builder == null && ReferenceEquals(handler, node.Handler))
         {
             return node;
         }
 
-        return new BoundInterpolatedStringExpression(node.Syntax, builder.ToImmutable());
+        return node.Update(builder?.ToImmutable() ?? node.Parts, handler);
     }
 }

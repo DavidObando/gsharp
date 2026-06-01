@@ -533,6 +533,11 @@ public sealed class Evaluator
     // output agree.
     private object EvaluateInterpolatedStringExpression(BoundInterpolatedStringExpression node)
     {
+        if (node.Handler != null)
+        {
+            return EvaluateInterpolatedStringHandler(node);
+        }
+
         var builder = new System.Text.StringBuilder();
         foreach (var part in node.Parts)
         {
@@ -563,6 +568,160 @@ public sealed class Evaluator
         }
 
         return builder.ToString();
+    }
+
+    // Issue #368: render an interpolated string targeting a user-defined
+    // [InterpolatedStringHandler] by constructing the handler via reflection
+    // (forwarding the referenced surrounding arguments / receiver), invoking
+    // its AppendLiteral / AppendFormatted methods in order, and returning the
+    // constructed handler instance so the receiving API consumes it directly.
+    // This keeps the tree-walk interpreter in parity with the IL emit path.
+    private object EvaluateInterpolatedStringHandler(BoundInterpolatedStringExpression node)
+    {
+        var info = node.Handler;
+        var literalLength = 0;
+        var formattedCount = 0;
+        foreach (var part in node.Parts)
+        {
+            if (part.IsLiteral)
+            {
+                literalLength += part.Literal.Length;
+            }
+            else
+            {
+                formattedCount++;
+            }
+        }
+
+        var ctorParams = info.Constructor.GetParameters();
+        var ctorArgs = new object[ctorParams.Length];
+        ctorArgs[0] = literalLength;
+        ctorArgs[1] = formattedCount;
+        for (var i = 0; i < info.ForwardedArguments.Length; i++)
+        {
+            ctorArgs[2 + i] = EvaluateExpression(info.ForwardedArguments[i]);
+        }
+
+        var shouldAppend = true;
+        if (info.HasTrailingOutBool)
+        {
+            ctorArgs[ctorArgs.Length - 1] = false;
+        }
+
+        var handler = info.Constructor.Invoke(ctorArgs);
+        if (info.HasTrailingOutBool)
+        {
+            shouldAppend = (bool)ctorArgs[ctorArgs.Length - 1];
+        }
+
+        var handlerType = info.HandlerClrType;
+        var appendLiteral = handlerType.GetMethod("AppendLiteral", new[] { typeof(string) });
+        foreach (var part in node.Parts)
+        {
+            if (!shouldAppend)
+            {
+                break;
+            }
+
+            if (part.IsLiteral)
+            {
+                if (part.Literal.Length == 0)
+                {
+                    continue;
+                }
+
+                var literalResult = appendLiteral.Invoke(handler, new object[] { part.Literal });
+                if (literalResult is bool lb)
+                {
+                    shouldAppend = lb;
+                }
+
+                continue;
+            }
+
+            var value = EvaluateExpression(part.Value);
+            var formattedResult = InvokeUserAppendFormatted(handlerType, handler, part, value);
+            if (formattedResult is bool fb)
+            {
+                shouldAppend = fb;
+            }
+        }
+
+        return handler;
+    }
+
+    private static object InvokeUserAppendFormatted(System.Type handlerType, object handler, BoundInterpolatedStringPart part, object value)
+    {
+        var wantAlign = part.Alignment.HasValue;
+        var wantFormat = part.Format != null;
+        var extra = (wantAlign ? 1 : 0) + (wantFormat ? 1 : 0);
+
+        System.Reflection.MethodInfo best = null;
+        System.Reflection.MethodInfo valueOnly = null;
+        foreach (var method in handlerType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (method.Name != "AppendFormatted")
+            {
+                continue;
+            }
+
+            var ps = method.GetParameters();
+            if (ps.Length == 0)
+            {
+                continue;
+            }
+
+            if (ps.Length == 1 && valueOnly == null)
+            {
+                valueOnly = method;
+            }
+
+            if (ps.Length != 1 + extra)
+            {
+                continue;
+            }
+
+            var ok = true;
+            var idx = 1;
+            if (wantAlign)
+            {
+                ok = ps[idx].ParameterType == typeof(int);
+                idx++;
+            }
+
+            if (ok && wantFormat)
+            {
+                ok = ps[idx].ParameterType == typeof(string);
+            }
+
+            if (ok)
+            {
+                best = method;
+                break;
+            }
+        }
+
+        best ??= valueOnly ?? handlerType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .First(m => m.Name == "AppendFormatted");
+
+        if (best.IsGenericMethodDefinition)
+        {
+            var typeArg = value?.GetType() ?? typeof(object);
+            best = best.MakeGenericMethod(typeArg);
+        }
+
+        var args = new System.Collections.Generic.List<object> { value };
+        if (wantAlign)
+        {
+            args.Add(part.Alignment.Value);
+        }
+
+        if (wantFormat)
+        {
+            args.Add(part.Format);
+        }
+
+        return best.Invoke(handler, args.ToArray());
     }
 
     private object EvaluateVariableExpression(BoundVariableExpression v)

@@ -8890,7 +8890,18 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     foreach (var p in openCtor.GetParameters())
                     {
-                        this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                        var paramType = p.ParameterType;
+                        if (paramType.IsByRef)
+                        {
+                            // out/ref parameter (e.g. an interpolated-string
+                            // handler ctor's `out bool shouldAppend`): emit the
+                            // BYREF prefix, then encode the element type.
+                            this.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
+                        }
+                        else
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(), paramType);
+                        }
                     }
                 });
 
@@ -9991,6 +10002,24 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitBlockExpression(BoundBlockExpression blockExpression)
         {
+            // Labels introduced inside an expression-position block (e.g. the
+            // short-circuit gate emitted by InterpolatedStringHandlerLowerer)
+            // are not seen by the function-level CollectStatements pre-pass,
+            // which only walks statement positions. Pre-declare them here so
+            // forward conditional branches can resolve their target handles.
+            foreach (var statement in blockExpression.Statements)
+            {
+                var nested = new HashSet<BoundLabel>();
+                CollectLabels(statement, nested);
+                foreach (var label in nested)
+                {
+                    if (!this.labels.ContainsKey(label))
+                    {
+                        this.labels[label] = this.il.DefineLabel();
+                    }
+                }
+            }
+
             foreach (var statement in blockExpression.Statements)
             {
                 this.EmitStatement(statement);
@@ -12596,9 +12625,19 @@ internal sealed class ReflectionMetadataEmitter
             // non-generic types and constructed generic types — the parent of
             // the MemberRef becomes a TypeSpec for the latter, encoded in
             // `GetCtorReference` / `GetTypeHandleForMember`.
-            foreach (var arg in ctorCall.Arguments)
+            // Issue #368: honour by-ref/out argument ref-kinds (e.g. an
+            // interpolated-string handler whose constructor takes `out bool
+            // shouldAppend`) by emitting the argument address.
+            if (!ctorCall.ArgumentRefKinds.IsDefaultOrEmpty)
             {
-                this.EmitExpression(arg);
+                this.EmitImportedCallArguments(ctorCall.Arguments, ctorCall.ArgumentRefKinds);
+            }
+            else
+            {
+                foreach (var arg in ctorCall.Arguments)
+                {
+                    this.EmitExpression(arg);
+                }
             }
 
             var ctorRef = this.outer.GetCtorReference(ctorCall.Constructor);

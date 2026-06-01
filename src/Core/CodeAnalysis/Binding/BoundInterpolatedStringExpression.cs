@@ -35,17 +35,45 @@ public sealed class BoundInterpolatedStringExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="parts">The ordered literal/hole parts.</param>
     public BoundInterpolatedStringExpression(SyntaxNode syntax, ImmutableArray<BoundInterpolatedStringPart> parts)
+        : this(syntax, parts, handler: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundInterpolatedStringExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="parts">The ordered literal/hole parts.</param>
+    /// <param name="handler">
+    /// Issue #368: the user-defined <c>[InterpolatedStringHandler]</c> target this
+    /// interpolation is converted to, or <see langword="null"/> for the default
+    /// <c>string</c> result.
+    /// </param>
+    public BoundInterpolatedStringExpression(SyntaxNode syntax, ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo handler)
         : base(syntax)
     {
         Parts = parts;
+        Handler = handler;
     }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.InterpolatedStringExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => TypeSymbol.String;
+    public override TypeSymbol Type => Handler?.HandlerType ?? TypeSymbol.String;
 
     /// <summary>Gets the ordered literal/hole parts.</summary>
     public ImmutableArray<BoundInterpolatedStringPart> Parts { get; }
+
+    /// <summary>
+    /// Gets the user-defined interpolated-string-handler target (issue #368),
+    /// or <see langword="null"/> when this interpolation produces a plain
+    /// <c>string</c>.
+    /// </summary>
+    public InterpolatedStringHandlerInfo Handler { get; }
+
+    /// <summary>Returns a copy of this node with a different handler target and parts.</summary>
+    /// <param name="parts">The replacement parts.</param>
+    /// <param name="handler">The replacement handler target (may be <see langword="null"/>).</param>
+    /// <returns>The updated node.</returns>
+    public BoundInterpolatedStringExpression Update(ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo handler)
+        => new(Syntax, parts, handler);
 }

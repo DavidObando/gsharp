@@ -1444,6 +1444,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0214", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
     }
 
+    /// <summary>
+    /// Issue #368: reports an interpolated string passed to an
+    /// <c>[InterpolatedStringHandler]</c> parameter whose
+    /// <c>[InterpolatedStringHandlerArgument]</c> forwarding could not be
+    /// satisfied (an unknown referenced argument, a missing receiver, or no
+    /// matching handler constructor).
+    /// </summary>
+    /// <param name="location">The text location of the interpolated argument.</param>
+    /// <param name="reason">A human-readable description of the failure.</param>
+    public void ReportInterpolatedStringHandlerArgument(TextLocation location, string reason)
+    {
+        Report(location, "GS0219", $"Cannot use the interpolated-string-handler argument: {reason}.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
