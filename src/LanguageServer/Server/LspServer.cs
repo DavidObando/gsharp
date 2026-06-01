@@ -183,11 +183,12 @@ public sealed class LspServer
         // Snapshot the current text and owning project under the gate, then run the (potentially
         // expensive) full binding pass off the gate so interactive requests are not blocked.
         string text = null;
+        string filePath = null;
         ProjectState project = null;
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var filePath = uri.GetFileSystemPath();
+            filePath = uri.GetFileSystemPath();
             project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
             if (this.documentContentService.TryGet(uri.ToString(), out var content))
             {
@@ -205,7 +206,7 @@ public sealed class LspServer
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath);
         cancellationToken.ThrowIfCancellationRequested();
 
         var resultId = ComputeResultId(result.Diagnostics);
@@ -444,7 +445,7 @@ public sealed class LspServer
 
         // Parse-only content (no binding) feeds the content service used by other features;
         // diagnostics are produced on demand by the textDocument/diagnostic pull handler.
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project, filePath);
         this.documentContentService.AddOrUpdate(uri.ToString(), result.Content);
     }
 
@@ -459,7 +460,7 @@ public sealed class LspServer
 
         var filePath = uri.GetFileSystemPath();
         var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project, filePath);
 
         this.rpc?.NotifyWithParameterObjectAsync(
             "textDocument/publishDiagnostics",

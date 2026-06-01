@@ -92,6 +92,45 @@ public class DocumentDiagnosticHandlerTests
         Assert.Contains("\"items\":", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DocumentDiagnostic_ProjectFile_ReportsConversionError()
+    {
+        // Regression for #359 follow-up: a file that belongs to a project still reports its own
+        // semantic/binding diagnostics. The project keeps a separate SyntaxTree instance per file,
+        // so the report must be attributed to the in-memory-synced tree rather than dropped.
+        var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gsdiag" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(dir);
+        try
+        {
+            var gsPath = System.IO.Path.Combine(dir, "Program.gs");
+            const string source = "var y uint8 = 255\n";
+            System.IO.File.WriteAllText(gsPath, source);
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(dir, "Repro.gsproj"),
+                "<Project Sdk=\"Gsharp.NET.Sdk\">\n<PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup>\n<ItemGroup><Compile Include=\"Program.gs\" /></ItemGroup>\n</Project>\n");
+
+            var workspace = new WorkspaceState();
+            WorkspaceInitializer.Initialize(workspace, dir);
+            var server = new LspServer(new DocumentContentService(), workspace);
+            var uri = DocumentUri.FromFileSystemPath(gsPath);
+            await server.DidOpenAsync(new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem { Uri = uri, Text = source },
+            });
+
+            var report = await server.DocumentDiagnosticAsync(
+                new DocumentDiagnosticParams { TextDocument = new TextDocumentIdentifier { Uri = uri } },
+                CancellationToken.None);
+
+            var full = Assert.IsType<FullDocumentDiagnosticReport>(report);
+            Assert.Contains(full.Items, d => d.Message.Contains("Cannot convert type", StringComparison.Ordinal));
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static async Task<(LspServer Server, DocumentUri Uri)> CreateServerWithDocumentAsync(string source)
     {
         var server = new LspServer(new DocumentContentService(), new WorkspaceState());

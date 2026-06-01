@@ -174,7 +174,7 @@ public sealed class BoundScope
     /// <returns>The symbol.</returns>
     public Symbol TryLookupSymbol(string name)
     {
-        if (symbols != null && symbols.TryGetValue(name, out var symbol))
+        if (name != null && symbols != null && symbols.TryGetValue(name, out var symbol))
         {
             return symbol;
         }
@@ -299,6 +299,11 @@ public sealed class BoundScope
     /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
     public bool TryDeclareTypeAlias(string name, TypeSymbol target)
     {
+        if (name == null)
+        {
+            return false;
+        }
+
         if (typeAliases == null)
         {
             typeAliases = new Dictionary<string, TypeSymbol>();
@@ -321,7 +326,7 @@ public sealed class BoundScope
     /// <returns>Whether an alias exists.</returns>
     public bool TryLookupTypeAlias(string name, out TypeSymbol type)
     {
-        if (typeAliases != null && typeAliases.TryGetValue(name, out type))
+        if (name != null && typeAliases != null && typeAliases.TryGetValue(name, out type))
         {
             return true;
         }
@@ -367,6 +372,11 @@ public sealed class BoundScope
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {
+        if (symbol.Name == null)
+        {
+            return false;
+        }
+
         if (symbols == null)
         {
             symbols = new Dictionary<string, Symbol>();
