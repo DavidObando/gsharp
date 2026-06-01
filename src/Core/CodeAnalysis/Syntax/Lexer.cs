@@ -581,9 +581,26 @@ public sealed class Lexer
         {
             switch (Current)
             {
-                case '\0':
                 case '\r':
                 case '\n':
+                    // ADR-0055: a raw newline in the literal portion of an
+                    // interpolated string is its own diagnostic; in a plain
+                    // string it is an unterminated literal. (Multiline holes
+                    // are handled inside the `${ … }` scanner and never reach
+                    // here.)
+                    var newlineLoc = new TextLocation(this.text, new TextSpan(start, 1));
+                    if (fragments != null)
+                    {
+                        Diagnostics.ReportNewlineInInterpolatedStringLiteral(newlineLoc);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportUnterminatedString(newlineLoc);
+                    }
+
+                    done = true;
+                    break;
+                case '\0':
                     var location = new TextLocation(this.text, new TextSpan(start, 1));
                     Diagnostics.ReportUnterminatedString(location);
                     done = true;
@@ -624,29 +641,15 @@ public sealed class Lexer
 
                         position += 2; // consume '${'
                         var exprStart = position;
-                        var depth = 1;
-                        while (depth > 0 && Current != '\0' && Current != '\r' && Current != '\n' && Current != '"')
-                        {
-                            if (Current == '{')
-                            {
-                                depth++;
-                            }
-                            else if (Current == '}')
-                            {
-                                depth--;
-                                if (depth == 0)
-                                {
-                                    break;
-                                }
-                            }
 
-                            position++;
-                        }
-
-                        if (depth != 0)
+                        // ADR-0055: scan the hole with a delimiter-aware
+                        // sub-scanner that tracks ()[]{} nesting, skips nested
+                        // string/char literals (recursively, so a nested
+                        // interpolation is handled) and //, /* */ comments, and
+                        // permits newlines. The hole ends at the matching
+                        // top-level `}`.
+                        if (!ScanInterpolationHole(exprStart))
                         {
-                            var loc = new TextLocation(this.text, new TextSpan(start, 1));
-                            Diagnostics.ReportUnterminatedString(loc);
                             done = true;
                             break;
                         }
@@ -702,6 +705,149 @@ public sealed class Lexer
 
             kind = SyntaxKind.InterpolatedStringToken;
             value = fragments.ToImmutableArray();
+        }
+    }
+
+    /// <summary>
+    /// ADR-0055 delimiter-aware interpolation-hole scanner. Assumes the opening
+    /// <c>${</c> has already been consumed and <see cref="position"/> sits at
+    /// the first character of the hole body. Advances to the matching top-level
+    /// <c>}</c> (left un-consumed for the caller), tracking <c>()[]{}</c>
+    /// nesting and skipping nested string/char literals (recursively, so an
+    /// inner interpolation is handled) and <c>//</c> / <c>/* */</c> comments.
+    /// Newlines are permitted, so multiline holes are legal. Returns
+    /// <see langword="false"/> (after reporting) if the hole is unterminated.
+    /// </summary>
+    /// <param name="holeStart">Source offset of the hole body (for diagnostics).</param>
+    /// <returns><see langword="true"/> if the hole closed normally.</returns>
+    private bool ScanInterpolationHole(int holeStart)
+    {
+        var depth = 1; // the opening '{' of '${'
+        while (true)
+        {
+            var c = Current;
+            if (c == '\0')
+            {
+                var loc = new TextLocation(this.text, new TextSpan(holeStart, 1));
+                Diagnostics.ReportUnterminatedInterpolationHole(loc);
+                return false;
+            }
+
+            if (c == '"' || c == '\'')
+            {
+                SkipInterpolationNestedLiteral(c);
+                continue;
+            }
+
+            if (c == '/' && Lookahead == '/')
+            {
+                while (Current != '\0' && Current != '\r' && Current != '\n')
+                {
+                    position++;
+                }
+
+                continue;
+            }
+
+            if (c == '/' && Lookahead == '*')
+            {
+                position += 2;
+                while (Current != '\0' && !(Current == '*' && Lookahead == '/'))
+                {
+                    position++;
+                }
+
+                if (Current != '\0')
+                {
+                    position += 2; // consume '*/'
+                }
+
+                continue;
+            }
+
+            if (c == '(' || c == '[' || c == '{')
+            {
+                depth++;
+            }
+            else if (c == ')' || c == ']')
+            {
+                depth--;
+            }
+            else if (c == '}')
+            {
+                if (depth == 1)
+                {
+                    return true; // matching close; leave it for the caller
+                }
+
+                depth--;
+            }
+
+            position++;
+        }
+    }
+
+    /// <summary>
+    /// Skips a nested string or character literal inside an interpolation hole.
+    /// Mirrors the real literal lexers: a double-quoted string escapes a quote
+    /// via <c>""</c> (no backslash escapes) and may itself contain a nested
+    /// <c>${ … }</c> interpolation; a single-quoted char literal uses backslash
+    /// escapes. <see cref="position"/> starts on the opening delimiter.
+    /// </summary>
+    /// <param name="quote">The opening delimiter (<c>"</c> or <c>'</c>).</param>
+    private void SkipInterpolationNestedLiteral(char quote)
+    {
+        position++; // consume opening delimiter
+        if (quote == '"')
+        {
+            while (Current != '\0' && Current != '\r' && Current != '\n')
+            {
+                if (Current == '"')
+                {
+                    if (Lookahead == '"')
+                    {
+                        position += 2; // escaped quote ""
+                        continue;
+                    }
+
+                    position++; // closing quote
+                    return;
+                }
+
+                if (Current == '$' && Lookahead == '{')
+                {
+                    position += 2; // consume nested '${'
+                    if (!ScanInterpolationHole(position))
+                    {
+                        return;
+                    }
+
+                    position++; // consume nested '}'
+                    continue;
+                }
+
+                position++;
+            }
+
+            return; // unterminated; the outer scanner reports at EOF/newline
+        }
+
+        // Single-quoted character literal: backslash escapes a single char.
+        while (Current != '\0' && Current != '\r' && Current != '\n')
+        {
+            if (Current == '\\' && Lookahead != '\0')
+            {
+                position += 2;
+                continue;
+            }
+
+            if (Current == '\'')
+            {
+                position++;
+                return;
+            }
+
+            position++;
         }
     }
 

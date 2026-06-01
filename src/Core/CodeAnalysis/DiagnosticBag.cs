@@ -34,6 +34,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Adds a sequence of already-constructed diagnostics into this instance.
+    /// Used to surface inner diagnostics (e.g. an interpolation hole's syntax
+    /// errors) whose locations have already been mapped to the outer file.
+    /// </summary>
+    /// <param name="diagnostics">The diagnostics to copy in.</param>
+    public void AddRange(IEnumerable<Diagnostic> diagnostics)
+    {
+        this.diagnostics.AddRange(diagnostics);
+    }
+
+    /// <summary>
     /// Reports a bad character during lexing.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
@@ -1473,6 +1484,47 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportInterpolatedStringHandlerArgument(TextLocation location, string reason)
     {
         Report(location, "GS0221", $"Cannot use the interpolated-string-handler argument: {reason}.");
+    }
+
+    /// <summary>
+    /// ADR-0055: reports an interpolation hole (<c>${ … }</c>) that is never
+    /// closed by a matching <c>}</c> before the end of the source.
+    /// </summary>
+    /// <param name="location">The text location of the unterminated hole.</param>
+    public void ReportUnterminatedInterpolationHole(TextLocation location)
+    {
+        Report(location, "GS0222", "Unterminated interpolation hole; expected a closing '}'.");
+    }
+
+    /// <summary>
+    /// ADR-0055: reports an empty interpolation hole (<c>${}</c>), which has no
+    /// expression to evaluate.
+    /// </summary>
+    /// <param name="location">The text location of the empty hole.</param>
+    public void ReportEmptyInterpolationHole(TextLocation location)
+    {
+        Report(location, "GS0223", "Empty interpolation hole; expected an expression between '${' and '}'.");
+    }
+
+    /// <summary>
+    /// ADR-0055: reports an interpolation hole whose format clause is present
+    /// but empty (<c>${expr:}</c>).
+    /// </summary>
+    /// <param name="location">The text location of the offending hole.</param>
+    public void ReportEmptyInterpolationFormat(TextLocation location)
+    {
+        Report(location, "GS0224", "Empty format specifier; expected a format string after ':'.");
+    }
+
+    /// <summary>
+    /// ADR-0055: reports a raw newline in the literal portion of an
+    /// interpolated string. Newlines are only permitted inside <c>${ … }</c>
+    /// holes, not in the literal text segments.
+    /// </summary>
+    /// <param name="location">The text location of the newline.</param>
+    public void ReportNewlineInInterpolatedStringLiteral(TextLocation location)
+    {
+        Report(location, "GS0225", "Newline in the literal portion of an interpolated string; only '${ … }' holes may span lines.");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

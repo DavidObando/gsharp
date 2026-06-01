@@ -169,6 +169,32 @@ var xs = List[int32]()
 
 G# emits metadata specs for constructed generic types and methods, supports type-argument inference for imported open generic methods, and supports variance markers and constraints in its own type parameter model. The current implementation also has a type-erased generic model for some open or partially constructed shapes that contain type parameters; those shapes may be represented as `object` in emit paths. Treat this as an implementation constraint rather than a source-level API.
 
+## Interpolated strings and formatting
+
+Interpolated string literals are sigil-free in G# — holes (`$name`, `${expr}`, `${expr,alignment:format}`) live inside ordinary `"…"` strings — but their lowering is CLR formatting interop. The target type drives which formatting type is used:
+
+- By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`. The handler is a `ref struct`, so value-typed holes are appended without boxing, and the result is materialized with `ToStringAndClear()`.
+- When the contextual target type is `System.IFormattable` or `System.FormattableString`, the string lowers to `FormattableStringFactory.Create(format, args)` instead of an eager `string`. Formatting is deferred, so the caller chooses the culture via `ToString(IFormatProvider)`. This applies in `let`/`return`/cast contexts and when the interpolation is passed directly as an argument to a `FormattableString` parameter.
+- A parameter annotated with `[InterpolatedStringHandler]` receives the handler value directly, and `[InterpolatedStringHandlerArgument]` forwarding is honored when the handler constructor requests additional arguments.
+
+```gsharp title="samples/InterpolatedStringFormattable.gs"
+import System
+import System.Globalization
+
+func renderInvariant(fs FormattableString) string {
+    return fs.ToString(CultureInfo.InvariantCulture)
+}
+
+let total = 1234.5
+let qty = 7
+let fs FormattableString = "amount: ${total:N2} (x${qty,4})"
+
+Console.WriteLine(fs.ToString(CultureInfo.InvariantCulture))
+Console.WriteLine(fs.ToString(CultureInfo.GetCultureInfo("de-DE")))
+```
+
+Alignment (`,4`) and format (`:N2`) clauses are preserved in the synthesized composite format string, so the same `FormattableString` renders differently under different cultures. The grammar and diagnostics for holes are documented in the [language specification](./spec.md#string-literals).
+
 ## Unsupported interop surface
 
 The following are not implemented as source features today: P/Invoke/`extern` methods, user-authored `[DllImport]` bodies, default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values and import .NET APIs for library functionality.

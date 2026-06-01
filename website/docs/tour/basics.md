@@ -97,7 +97,7 @@ Console.WriteLine(sum)
 
 The primitive names are explicit about width: `bool`, `int32`, `uint32`, `int64`, `uint64`, `float32`, `float64`, `decimal`, `char`, `string`, and `object` are common examples. Older aliases such as `int`, `uint`, `long`, and `byte` are not G# built-in primitive names.
 
-Strings support interpolation with `$name` and braced expressions inside string literals:
+Strings support sigil-free interpolation with `$name` and braced `${expr}` holes inside ordinary string literals. Holes may add an alignment and format clause, `${expr,alignment:format}`:
 
 ```gsharp title="InterpolatedString.gs"
 package InterpolatedString

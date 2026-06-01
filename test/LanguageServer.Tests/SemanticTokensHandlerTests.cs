@@ -149,6 +149,77 @@ public class SemanticTokensHandlerTests
         Assert.Empty(tokens);
     }
 
+    [Fact]
+    public void Tokenize_InterpolatedString_ClassifiesHoleIdentifierAsCode()
+    {
+        const string source = "var name = \"x\"\nvar s = \"hi $name end\"\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var tokens = GetTokens(content);
+
+        // The hole identifier "name" (line 1, col 13, length 4) is classified as a variable reference,
+        // not as part of the surrounding String literal.
+        var nameRef = FindToken(tokens, 1, 13, 4);
+        Assert.NotNull(nameRef);
+        Assert.Equal(TokenTypeIndex("Variable"), nameRef.Value.TokenType);
+
+        // The literal text before the hole ("hi $) is String filler.
+        var leading = FindToken(tokens, 1, 8, 5);
+        Assert.NotNull(leading);
+        Assert.Equal(TokenTypeIndex("String"), leading.Value.TokenType);
+
+        // The literal text after the hole ( end") is String filler.
+        var trailing = FindToken(tokens, 1, 17, 5);
+        Assert.NotNull(trailing);
+        Assert.Equal(TokenTypeIndex("String"), trailing.Value.TokenType);
+    }
+
+    [Fact]
+    public void Tokenize_InterpolatedString_ClassifiesBracedHoleExpression()
+    {
+        const string source = "var n = 1\nvar s = \"v=${n + 2}!\"\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var tokens = GetTokens(content);
+
+        // "n" inside ${n + 2} is a variable reference.
+        // Line 1: var s = "v=${n + 2}!"  -> '"' at col 8, "v=" 9-10, "${" 11-12, 'n' at col 13.
+        var nRef = FindToken(tokens, 1, 13, 1);
+        Assert.NotNull(nRef);
+        Assert.Equal(TokenTypeIndex("Variable"), nRef.Value.TokenType);
+
+        // "2" inside the hole is a number literal (col 17).
+        var num = FindToken(tokens, 1, 17, 1);
+        Assert.NotNull(num);
+        Assert.Equal(TokenTypeIndex("Number"), num.Value.TokenType);
+    }
+
+    [Fact]
+    public void Tokenize_InterpolatedString_DoesNotPaintHoleCodeAsString()
+    {
+        // Regression: inside ${...}, operators/punctuation/member-access must NOT be classified as
+        // String filler (only the literal text and the ${ } / $ delimiters are String); the in-hole
+        // code is left to the TextMate grammar so a method call is colored as code, not string.
+        const string source = "import System\nvar a = 1\nvar s = \"a: ${a.GetType()}\"\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var tokens = GetTokens(content);
+
+        // Line 2: var s = "a: ${a.GetType()}"  -> '"' at 8, "a: " 9-11, "${" 12-13, 'a' 14,
+        // '.' 15, "GetType" 16-22, '(' 23, ')' 24, '}' 25, '"' 26.
+        var stringIndex = TokenTypeIndex("String");
+
+        // No String token may cover any column in the method-call region [15, 25).
+        foreach (var token in tokens.Where(t => t.Line == 2 && t.TokenType == stringIndex))
+        {
+            var start = token.Character;
+            var end = token.Character + token.Length;
+            Assert.False(start < 25 && end > 15, $"String token [{start},{end}) overlaps in-hole code region [15,25).");
+        }
+
+        // The hole identifier "a" is still classified as a variable.
+        var aRef = FindToken(tokens, 2, 14, 1);
+        Assert.NotNull(aRef);
+        Assert.Equal(TokenTypeIndex("Variable"), aRef.Value.TokenType);
+    }
+
     private static int TokenTypeIndex(string name)
     {
         for (var i = 0; i < SemanticTokensHandler.TokenTypes.Length; i++)

@@ -17,7 +17,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Implicit `System` import | Supported | Supported | Enabled by default; disabled with `/noimplicitimports` or `/no-implicit-imports`. |
 | Top-level statements and `func Main` | Supported | Supported | Mixing top-level statements and explicit `Main` is diagnosed by `GS0165`/`GS0166`. |
 | Comments | Supported | Supported | Line and block comments are accepted by the compiler lexer; editor grammar may lag. |
-| String, raw string, and interpolated string literals | Supported | Supported | Interpolation is parsed into expression segments. |
+| String, raw string, and interpolated string literals | Supported | Supported | Sigil-free interpolation with `$name`/`${expr,alignment:format}`, delimiter-aware multiline holes, and `DefaultInterpolatedStringHandler`/`FormattableString` lowering (ADR-0055). |
 | Character literals | Supported | Supported | Character diagnostics are `GS0191` through `GS0195`. |
 
 ## Types and values

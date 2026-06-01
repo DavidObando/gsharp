@@ -83,6 +83,14 @@ A TextMate grammar (`syntaxes/gsharp.tmLanguage.json`) provides tokenization for
 - Comments: `//` line comments; we still don't support `/* */` block comments
 - Identifiers, function calls, type annotations
 
+G# is sigil-free for interpolation (ADR-0055): interpolation lives inside an ordinary interpreted string `"…"`, not a `$"…"` literal. The `strings` repository therefore distinguishes two forms and emits these scopes:
+
+- `string.quoted.double.gsharp` — an interpreted `"…"` string. `applyEndPatternLast` is set so a doubled-quote escape `""` (`constant.character.escape.quote.gsharp`) is consumed before the closing `"`. A literal-`$` escape `$$` is `constant.character.escape.dollar.gsharp`.
+- `string.quoted.raw.backtick.gsharp` — a raw backtick string `` `…` ``; it is **non-interpolating** (no `$` patterns apply inside it).
+- `variable.other.interpolation.gsharp` — the identifier of a `$ident` hole; the `$` is `punctuation.definition.interpolation.begin.gsharp`.
+- `meta.interpolation.gsharp` — a `${ … }` hole. `${` / `}` are `punctuation.definition.interpolation.begin/end.gsharp`; the body recursively includes `source.gsharp`, so the hole expression is highlighted as real code (and a nested `"…"` literal or balanced inner `{ … }` block does not prematurely end the hole).
+
+
 ```jsonc
 {
   "contributes": {

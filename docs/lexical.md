@@ -119,6 +119,11 @@ Alignment  := [ "-" ] DecimalDigits      -- constant; '-' left-justifies (C# par
 
 The `,`/`:` separators are recognized only at the top level of the hole (a `,`/`:` nested inside `()`, `[]`, or `{}`, or inside a string/char literal, is part of the expression).
 
+A `${ … }` hole is scanned by a delimiter-aware sub-scanner: it tracks `()`/`[]`/`{}` nesting, skips nested `"…"`/`'…'` literals (recursively, so an inner interpolation is handled) and `//` / `/* */` comments, and **permits newlines**, so a hole may span multiple lines and may contain indexers (`${dict["k"]}`), ternaries (`${cond ? "a" : "b"}`), calls, and nested interpolations. The hole ends at the matching top-level `}`. There is no `{{`/`}}` escaping — a literal `$` is written `$$`, and braces that are not part of a `${ … }` hole are taken verbatim.
+
+Malformed holes are diagnosed: an unterminated hole is **GS0222**, an empty hole (`${}`) is **GS0223**, an empty format specifier (`${n:}`) is **GS0224**, and a raw newline in the *literal* portion of an interpreted string (outside any hole) is **GS0225**.
+
+
 Binding and lowering are unified through a dedicated `BoundInterpolatedStringExpression` node that preserves each literal/hole part with its alignment/format intent (ADR-0055). Lowering is *late* and chosen by context:
 
 * Default — formatting defaults to the current culture. The tree-walk interpreter renders the node directly via composite formatting; compiled code lowers it to the .NET `DefaultInterpolatedStringHandler` pattern, so value-type holes are appended without boxing (issue #368).
