@@ -710,6 +710,67 @@ public sealed class Binder
         };
     }
 
+    /// <summary>
+    /// Speculatively binds <paramref name="expression"/> against the program's
+    /// scope to infer its <see cref="TypeSymbol"/>, discarding any diagnostics.
+    /// Used by the language server to offer member completions on arbitrary
+    /// receiver expressions (e.g. <c>(a + b).</c>, <c>foo().</c>, <c>arr[0].</c>,
+    /// <c>a.b.</c>). Top-level variables are reachable through the reconstructed
+    /// parent scope; locals/parameters of an enclosing function must be supplied
+    /// via <paramref name="additionalLocals"/>.
+    /// </summary>
+    /// <param name="globalScope">The bound global scope of the compilation.</param>
+    /// <param name="references">The reference resolver supplying imported types.</param>
+    /// <param name="containingFunction">The function enclosing the expression, or <c>null</c> for top-level statements.</param>
+    /// <param name="additionalLocals">In-scope locals/parameters to declare before binding, or <c>null</c>.</param>
+    /// <param name="expression">The receiver expression to infer a type for.</param>
+    /// <returns>The inferred non-error, non-void type, or <c>null</c> when inference fails.</returns>
+    internal static TypeSymbol TryInferExpressionType(
+        BoundGlobalScope globalScope,
+        ReferenceResolver references,
+        FunctionSymbol containingFunction,
+        IEnumerable<VariableSymbol> additionalLocals,
+        ExpressionSyntax expression)
+    {
+        if (globalScope == null || expression == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var parentScope = CreateParentScope(globalScope, references, globalScope.PreprocessorSymbols);
+            var binder = new Binder(parentScope, containingFunction);
+
+            if (additionalLocals != null)
+            {
+                foreach (var local in additionalLocals)
+                {
+                    if (local != null)
+                    {
+                        // Speculative binding: collisions with already-declared
+                        // parameters are expected and harmless (TryDeclareVariable
+                        // simply reports false).
+                        binder.scope.TryDeclareVariable(local);
+                    }
+                }
+            }
+
+            // The binder writes any diagnostics into its own throwaway bag, so
+            // speculative binding never leaks errors into the open document.
+            var bound = binder.BindExpression(expression);
+            var type = bound?.Type;
+            return type == null || ReferenceEquals(type, TypeSymbol.Error) || ReferenceEquals(type, TypeSymbol.Void)
+                ? null
+                : type;
+        }
+        catch (Exception)
+        {
+            // Inference must never throw into the editor pipeline.
+            return null;
+        }
+    }
+
     private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
         var stack = new Stack<BoundGlobalScope>();

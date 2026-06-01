@@ -807,13 +807,39 @@ public static class CompletionComputer
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        if (accessor.LeftPart is not NameExpressionSyntax leftName || leftName.IdentifierToken.IsMissing)
+        var chainRoot = FindChainRoot(content.SyntaxTree.Root, accessor);
+        var isSimpleNameReceiver = ReferenceEquals(chainRoot, accessor)
+            && accessor.LeftPart is NameExpressionSyntax simpleName
+            && !simpleName.IdentifierToken.IsMissing;
+
+        if (!isSimpleNameReceiver)
         {
-            // Chained or complex receivers (e.g. `a.b.`) are not resolved yet, but we
-            // still suppress the keyword list rather than offering irrelevant items.
+            // Complex or chained receivers — `(a + b).`, `foo().`, `arr[0].`,
+            // `a.b.`, etc. Reconstruct the full receiver expression (chains parse
+            // right-nested, so the trailing accessor's LeftPart is only the last
+            // segment) and speculatively bind it to infer the member type.
+            var receiverExpression = ReconstructReceiverExpression(content, chainRoot, accessor);
+            if (receiverExpression != null)
+            {
+                var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, offset);
+                var receiverType = GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
+                    compilation.GlobalScope,
+                    compilation.References,
+                    function,
+                    locals,
+                    receiverExpression);
+                if (receiverType != null)
+                {
+                    AddInstanceTypeMembers(items, seen, receiverType);
+                }
+            }
+
+            // Whether or not inference succeeded, suppress the global keyword list
+            // since the caret sits in a member-access position.
             return items;
         }
 
+        var leftName = (NameExpressionSyntax)accessor.LeftPart;
         var receiver = SemanticLookup.ResolveSymbol(compilation, leftName.IdentifierToken);
         switch (receiver)
         {
@@ -836,6 +862,77 @@ public static class CompletionComputer
         }
 
         return items;
+    }
+
+    /// <summary>
+    /// Finds the outermost postfix expression (member access or index) that ends
+    /// at the same position as <paramref name="accessor"/> — i.e. the root of the
+    /// receiver chain. Member-access chains parse right-nested, so the trailing
+    /// dot's accessor covers only the final segment; the chain root spans the whole
+    /// receiver.
+    /// </summary>
+    private static ExpressionSyntax FindChainRoot(SyntaxNode root, AccessorExpressionSyntax accessor)
+    {
+        ExpressionSyntax best = accessor;
+        foreach (var node in EnumerateNodes(root))
+        {
+            if (node is not (AccessorExpressionSyntax or IndexExpressionSyntax))
+            {
+                continue;
+            }
+
+            var candidate = (ExpressionSyntax)node;
+            if (candidate.Span.End == accessor.Span.End
+                && candidate.Span.Start <= best.Span.Start
+                && candidate.Span.Start <= accessor.Span.Start)
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Reconstructs the receiver expression to the left of the trailing dot. When
+    /// the receiver is the accessor's own (non-chained) left part it is returned
+    /// directly; for chained receivers the source text between the chain root and
+    /// the trailing dot is re-parsed into a standalone expression.
+    /// </summary>
+    private static ExpressionSyntax ReconstructReceiverExpression(DocumentContent content, ExpressionSyntax chainRoot, AccessorExpressionSyntax accessor)
+    {
+        if (ReferenceEquals(chainRoot, accessor))
+        {
+            return accessor.LeftPart;
+        }
+
+        var dotStart = accessor.DotToken.Span.Start;
+        var start = chainRoot.Span.Start;
+        if (dotStart <= start)
+        {
+            return null;
+        }
+
+        var text = content.SyntaxTree.Text.ToString(start, dotStart - start);
+        var tree = SyntaxTree.Parse(text);
+        return EnumerateNodes(tree.Root).OfType<ExpressionSyntax>().FirstOrDefault();
+    }
+
+    private static IEnumerable<SyntaxNode> EnumerateNodes(SyntaxNode node)
+    {
+        yield return node;
+        foreach (var child in node.GetChildren())
+        {
+            if (child is SyntaxToken)
+            {
+                continue;
+            }
+
+            foreach (var descendant in EnumerateNodes(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static AccessorExpressionSyntax FindReceiverAccessor(SyntaxNode node, int offset)

@@ -82,4 +82,93 @@ let x = switch v { case 1 -> ""a"" default -> ""b"" }
         Assert.Equal(SyntaxKind.RightArrowToken, expression.Arms[0].ArrowToken.Kind);
         Assert.True(expression.Arms[1].IsDefault);
     }
+
+    [Fact]
+    public void Parses_MemberAccess_On_Parenthesized_Expression()
+    {
+        var expression = ParseExpressionStatement("(a + b).GetType()\n");
+
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expression);
+        Assert.IsType<ParenthesizedExpressionSyntax>(accessor.LeftPart);
+        Assert.IsType<CallExpressionSyntax>(accessor.RightPart);
+        Assert.False(accessor.IsNullConditional);
+    }
+
+    [Fact]
+    public void Parses_MemberAccess_On_String_Literal()
+    {
+        var expression = ParseExpressionStatement("\"s\".Length\n");
+
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expression);
+        Assert.IsType<LiteralExpressionSyntax>(accessor.LeftPart);
+        var member = Assert.IsType<NameExpressionSyntax>(accessor.RightPart);
+        Assert.Equal("Length", member.IdentifierToken.Text);
+    }
+
+    [Fact]
+    public void Parses_Index_On_Parenthesized_Expression()
+    {
+        var expression = ParseExpressionStatement("(a + b)[0]\n");
+
+        var index = Assert.IsType<IndexExpressionSyntax>(expression);
+        Assert.IsType<ParenthesizedExpressionSyntax>(index.Target);
+    }
+
+    [Fact]
+    public void Parses_NullConditional_On_Parenthesized_Expression()
+    {
+        var expression = ParseExpressionStatement("(a + b)?.x\n");
+
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expression);
+        Assert.IsType<ParenthesizedExpressionSyntax>(accessor.LeftPart);
+        Assert.True(accessor.IsNullConditional);
+    }
+
+    [Fact]
+    public void Parses_MemberAccess_On_Switch_Expression()
+    {
+        const string source = "let r = switch v { case 1 -> \"a\" default -> \"b\" }.ToString()\n";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var declaration = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(m => m.Statement)
+            .OfType<VariableDeclarationSyntax>()
+            .Single(v => v.Identifier.Text == "r");
+
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(declaration.Initializer);
+        Assert.IsType<SwitchExpressionSyntax>(accessor.LeftPart);
+        Assert.IsType<CallExpressionSyntax>(accessor.RightPart);
+    }
+
+    [Fact]
+    public void NumericLiteral_MemberAccess_Is_Not_Supported()
+    {
+        // Numeric literals are carved out of postfix chaining because `42.x`
+        // collides with float-literal lexing; users must write `(42).x`.
+        var tree = SyntaxTree.Parse("let x = 42.GetType()\n");
+        Assert.NotEmpty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void Parenthesized_NumericLiteral_MemberAccess_Is_Supported()
+    {
+        var expression = ParseExpressionStatement("(42).GetType()\n");
+
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expression);
+        Assert.IsType<ParenthesizedExpressionSyntax>(accessor.LeftPart);
+        Assert.IsType<CallExpressionSyntax>(accessor.RightPart);
+    }
+
+    private static ExpressionSyntax ParseExpressionStatement(string source)
+    {
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var statement = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(m => m.Statement)
+            .OfType<ExpressionStatementSyntax>()
+            .First();
+        return statement.Expression;
+    }
 }

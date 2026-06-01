@@ -342,7 +342,7 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 | 2 | `&&` | logical and |
 | 1 | `\|\|`, `?:` | logical or and null coalescing |
 
-Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions.
+Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
 ### Primary expressions and calls
 
@@ -360,7 +360,7 @@ TrailingLambda  = FunctionLiteral .
 
 ### Accessor chains
 
-Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors.
+Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors.
 
 ### Composite literals
 
@@ -394,6 +394,7 @@ BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | "[" Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
 PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+(* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
 ```
 
 ## Statements
