@@ -175,6 +175,14 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
 | GS0211 | Error | Attribute `[DllImport]` is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature. | `@DllImport("user32.dll") func MessageBox() {}` — emit support and the `extern` body marker arrive after v1.0. |
 
+### By-ref-like (`ref struct`) diagnostics (GS0219)
+
+A by-ref-like type — a CLR `ref struct` carrying `System.Runtime.CompilerServices.IsByRefLikeAttribute`, such as `System.Span[T]`, `System.ReadOnlySpan[T]`, or `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` — is stack-only (issue #367). G# permits declaring and using such a value as an ordinary local, but the CLR forbids any use that would let it reach the heap. Those escapes are rejected with GS0219.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0219 | Error | A by-ref-like (`ref struct`) value is used in a position that would let it escape the stack: boxing / converting it to a reference type (`object`, an interface, a delegate base), storing it in a field of a non-ref-struct (instance, primary-constructor, or static), capturing it in a closure, declaring it as a local in an `async` function or an iterator (where it would be hoisted into the heap-allocated state machine), or using it as a generic type argument. | `var o object = span` (box); a `class`/`struct` field typed `Span[int32]`; capturing a `ReadOnlySpan[char]` local inside `func() { ... }`; declaring a `Span[int32]` local in an `async` function; `List[ReadOnlySpan[int32]]`. |
+
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 
 | ID | Severity | Description | Example trigger |

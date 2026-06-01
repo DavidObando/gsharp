@@ -202,6 +202,23 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// Issue #367: returns <c>true</c> when <paramref name="type"/> denotes a CLR
+    /// by-ref-like (<c>ref struct</c>) type such as <c>Span[T]</c>,
+    /// <c>ReadOnlySpan[T]</c>, or <c>DefaultInterpolatedStringHandler</c>. These
+    /// values are stack-only and may not escape to the heap (no boxing, no field
+    /// of a non-ref-struct, no closure capture, no async/iterator hoisting, and
+    /// no use as a generic type argument). A <see cref="NullableTypeSymbol"/>
+    /// wrapper is unwrapped first so <c>Span[T]?</c> is still recognised.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> if the type is by-ref-like.</returns>
+    public static bool IsByRefLike(TypeSymbol type)
+    {
+        var unwrapped = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        return unwrapped?.ClrType != null && ClrTypeUtilities.IsByRefLike(unwrapped.ClrType);
+    }
+
+    /// <summary>
     /// #313: returns <c>true</c> if <paramref name="type"/> is, or structurally
     /// contains, an in-scope generic <see cref="TypeParameterSymbol"/> (e.g.
     /// <c>T</c>, <c>T?</c>, <c>[]T</c>, or <c>List[T]</c>). Such a type is an
