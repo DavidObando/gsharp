@@ -27,6 +27,22 @@ jobs:
       - name: Restore
         run: dotnet restore GSharp.sln
 
+      - name: Show Nerdbank.GitVersioning version
+        # Surface the version nbgv will stamp on assemblies / NuGet packages so
+        # that, when a build from `main` is green, the printed NuGetPackageVersion
+        # can be used directly as the `vX.Y.Z` release tag.
+        run: |
+          dotnet tool install --global nbgv || dotnet tool update --global nbgv
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          nbgv get-version
+          {
+            echo "### Nerdbank.GitVersioning"
+            echo ''
+            echo '```'
+            nbgv get-version
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build
         # Build the solution explicitly with the static project graph so each
         # project (notably Compiler, which is referenced by Compiler.Tests) is

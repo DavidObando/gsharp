@@ -8,6 +8,7 @@
   
     "publicReleaseRefSpec": [
       "^refs/heads/main$", // we release out of main
+      "^refs/tags/v\\d+(?:\\.\\d+)*$" // tagged releases (e.g. refs/tags/v1.2.3)
     ],
     "cloudBuild": {
       "buildNumber": {
