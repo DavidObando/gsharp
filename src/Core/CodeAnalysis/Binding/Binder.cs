@@ -1007,8 +1007,10 @@ public sealed class Binder
                 // Issue #367: a by-ref-like (`ref struct`) value cannot live in a
                 // field of a non-ref-struct, because the containing instance may
                 // be heap-allocated. A primary-constructor parameter materializes
-                // a field, so reject it here as well.
-                if (TypeSymbol.IsByRefLike(paramType))
+                // a field, so reject it here as well. A `ref struct` may itself
+                // hold by-ref-like fields (it is stack-only too), so this is only
+                // enforced when the containing type is not a ref struct.
+                if (!syntax.IsRef && TypeSymbol.IsByRefLike(paramType))
                 {
                     Diagnostics.ReportByRefLikeEscape(paramSyntax.Identifier.Location, paramType, $"be used as the type of field '{paramName}'");
                     continue;
@@ -1038,8 +1040,9 @@ public sealed class Binder
 
             // Issue #367: a by-ref-like (`ref struct`) value cannot be stored in
             // a field of a non-ref-struct (the containing instance may be boxed
-            // or heap-allocated).
-            if (TypeSymbol.IsByRefLike(fieldType))
+            // or heap-allocated). A `ref struct` is itself stack-only, so it may
+            // hold by-ref-like fields; only enforce this for non-ref-structs.
+            if (!syntax.IsRef && TypeSymbol.IsByRefLike(fieldType))
             {
                 Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
                 continue;
@@ -3166,12 +3169,20 @@ public sealed class Binder
         // Issue #367: a by-ref-like (`ref struct`) local is legal in an ordinary
         // function, but an async function or an iterator hoists every local into
         // a heap-allocated state machine, which the CLR forbids for a by-ref-like
-        // type. Reject the declaration in those bodies.
-        if (TypeSymbol.IsByRefLike(variableType) && function != null
-            && (function.IsAsync || IsIteratorReturnType(function.Type)))
+        // type. A top-level (global) variable is emitted as a static field, which
+        // is likewise heap-rooted and forbidden. Reject the declaration in those
+        // contexts.
+        if (TypeSymbol.IsByRefLike(variableType))
         {
-            var context = function.IsAsync ? "an async function" : "an iterator";
-            Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, $"be declared as a local in {context} (it would be hoisted into the state machine)");
+            if (function == null)
+            {
+                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, "be declared as a top-level variable (it would be emitted as a heap-rooted static field)");
+            }
+            else if (function.IsAsync || IsIteratorReturnType(function.Type))
+            {
+                var context = function.IsAsync ? "an async function" : "an iterator";
+                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, $"be declared as a local in {context} (it would be hoisted into the state machine)");
+            }
         }
 
         // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach

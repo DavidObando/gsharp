@@ -403,6 +403,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this struct was declared with the <c>inline</c> contextual keyword.</summary>
     public bool IsInline => InlineKeyword != null;
 
+    /// <summary>Gets a value indicating whether this struct was declared with the <c>ref</c> contextual keyword (issue #367 — a by-ref-like / <c>ref struct</c> type emitted with <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>). Always false for <c>class</c>.</summary>
+    public bool IsRef => RefModifier != null;
+
     /// <summary>Gets a value indicating whether this aggregate was declared with the <c>class</c> keyword (Phase 3.B.3) rather than <c>struct</c>.</summary>
     public bool IsClass => StructKeyword?.Kind == SyntaxKind.ClassKeyword;
 
@@ -426,6 +429,9 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>type Box[T any] class { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
     public TypeParameterListSyntax TypeParameterList { get; set; }
+
+    /// <summary>Gets or sets the optional <c>ref</c> contextual keyword (issue #367). Non-null marks this <c>struct</c> as by-ref-like (<c>ref struct</c>). Assigned by the parser; <c>null</c> otherwise.</summary>
+    public SyntaxToken RefModifier { get; set; }
 
     /// <summary>Gets or sets the optional <c>shared { … }</c> block (ADR-0053) grouping static member declarations. Null when the type has no shared block.</summary>
     public SharedBlockSyntax SharedBlock { get; set; }

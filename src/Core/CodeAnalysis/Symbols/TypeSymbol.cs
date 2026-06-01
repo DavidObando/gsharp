@@ -202,19 +202,28 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
-    /// Issue #367: returns <c>true</c> when <paramref name="type"/> denotes a CLR
-    /// by-ref-like (<c>ref struct</c>) type such as <c>Span[T]</c>,
-    /// <c>ReadOnlySpan[T]</c>, or <c>DefaultInterpolatedStringHandler</c>. These
-    /// values are stack-only and may not escape to the heap (no boxing, no field
-    /// of a non-ref-struct, no closure capture, no async/iterator hoisting, and
-    /// no use as a generic type argument). A <see cref="NullableTypeSymbol"/>
-    /// wrapper is unwrapped first so <c>Span[T]?</c> is still recognised.
+    /// Issue #367: returns <c>true</c> when <paramref name="type"/> denotes a
+    /// by-ref-like (<c>ref struct</c>) type. This covers both imported CLR types
+    /// such as <c>Span[T]</c>, <c>ReadOnlySpan[T]</c>, or
+    /// <c>DefaultInterpolatedStringHandler</c> (detected via
+    /// <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>) and
+    /// user-declared <c>ref struct</c> types (<see cref="StructSymbol.IsRefStruct"/>)
+    /// that have no CLR type yet because they are being compiled. These values are
+    /// stack-only and may not escape to the heap (no boxing, no field of a
+    /// non-ref-struct, no closure capture, no async/iterator hoisting, and no use
+    /// as a generic type argument). A <see cref="NullableTypeSymbol"/> wrapper is
+    /// unwrapped first so <c>Span[T]?</c> is still recognised.
     /// </summary>
     /// <param name="type">The type to inspect.</param>
     /// <returns><c>true</c> if the type is by-ref-like.</returns>
     public static bool IsByRefLike(TypeSymbol type)
     {
         var unwrapped = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        if (unwrapped is StructSymbol { IsRefStruct: true })
+        {
+            return true;
+        }
+
         return unwrapped?.ClrType != null && ClrTypeUtilities.IsByRefLike(unwrapped.ClrType);
     }
 

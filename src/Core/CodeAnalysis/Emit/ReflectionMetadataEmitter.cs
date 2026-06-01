@@ -2035,6 +2035,12 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitIsReadOnlyAttribute(handle2);
         }
 
+        if (structSym.IsRefStruct)
+        {
+            // Issue #367: mark user-declared `ref struct` types as by-ref-like.
+            this.EmitIsByRefLikeAttribute(handle2);
+        }
+
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.EmitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
     }
@@ -3474,6 +3480,11 @@ internal sealed class ReflectionMetadataEmitter
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.structTypeDefs[structSym] = handle2;
+        if (structSym.IsRefStruct)
+        {
+            // Issue #367: nested user-declared `ref struct` types are by-ref-like too.
+            this.EmitIsByRefLikeAttribute(handle2);
+        }
     }
 
     /// <summary>
@@ -3639,6 +3650,78 @@ internal sealed class ReflectionMetadataEmitter
             parent: typeHandle,
             constructor: ctorRef,
             value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Issue #367: emits the metadata that marks a user-declared <c>ref struct</c>
+    /// TypeDef as by-ref-like, matching what the C# compiler produces:
+    /// <list type="bullet">
+    ///   <item><description><c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>
+    ///   so the CLR and any modern compiler treat the type as stack-only.</description></item>
+    ///   <item><description><c>System.ObsoleteAttribute</c> carrying the well-known
+    ///   guard message <c>"Types with embedded references are not supported in this
+    ///   version of your compiler."</c> with <c>error: true</c>. Compilers that do
+    ///   not understand by-ref-like types surface this as an error; compilers that
+    ///   do recognise <c>IsByRefLikeAttribute</c> suppress the obsoletion.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="typeHandle">The ref-struct TypeDef handle.</param>
+    private void EmitIsByRefLikeAttribute(TypeDefinitionHandle typeHandle)
+    {
+        // IsByRefLikeAttribute() — parameterless ctor, no fixed/named args.
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        var ctorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
+
+        // Obsolete("Types with embedded references are not supported in this
+        // version of your compiler.", true) — the C# compiler's guard marker.
+        var obsoleteType = this.references.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
+            ? obsoleteResolved
+            : typeof(System.ObsoleteAttribute);
+        var obsoleteTypeRef = this.GetTypeReference(obsoleteType);
+
+        var obsoleteCtorSig = new BlobBuilder();
+        new BlobEncoder(obsoleteCtorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), p =>
+            {
+                p.AddParameter().Type().String();
+                p.AddParameter().Type().Boolean();
+            });
+
+        var obsoleteCtorRef = this.metadata.AddMemberReference(
+            obsoleteTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(obsoleteCtorSig));
+
+        var obsoleteBlob = new BlobBuilder();
+        obsoleteBlob.WriteUInt16(0x0001);
+        obsoleteBlob.WriteSerializedString("Types with embedded references are not supported in this version of your compiler.");
+        obsoleteBlob.WriteByte(1);
+        obsoleteBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: obsoleteCtorRef,
+            value: this.metadata.GetOrAddBlob(obsoleteBlob));
     }
 
     /// <summary>
