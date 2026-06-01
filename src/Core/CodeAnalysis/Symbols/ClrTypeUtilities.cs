@@ -109,6 +109,38 @@ internal static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Issue #367: returns whether <paramref name="type"/> is a CLR by-ref-like
+    /// (<c>ref struct</c>) type — one carrying
+    /// <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>, such as
+    /// <c>System.Span&lt;T&gt;</c>, <c>System.ReadOnlySpan&lt;T&gt;</c>, or
+    /// <c>System.Runtime.CompilerServices.DefaultInterpolatedStringHandler</c>.
+    /// Such values are stack-only: they cannot be boxed, stored in fields of a
+    /// non-ref-struct, captured by closures, hoisted into async/iterator state
+    /// machines, or used as generic type arguments. <see cref="Type.IsByRefLike"/>
+    /// is honoured by <see cref="System.Reflection.MetadataLoadContext"/>, so this
+    /// works for types loaded from reference assemblies. Guards against the
+    /// metadata-load failures described on <see cref="IsMetadataLoadFailure"/>.
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><c>true</c> when the type is a by-ref-like value type.</returns>
+    public static bool IsByRefLike(Type type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return type.IsByRefLike;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #338 (generalizing the #321 fix): determines whether an exception
     /// thrown while reflecting over a CLR member's signature is a
     /// metadata/assembly load failure. Such failures arise when a member's

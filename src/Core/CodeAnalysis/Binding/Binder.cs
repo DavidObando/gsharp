@@ -1004,6 +1004,16 @@ public sealed class Binder
                     continue;
                 }
 
+                // Issue #367: a by-ref-like (`ref struct`) value cannot live in a
+                // field of a non-ref-struct, because the containing instance may
+                // be heap-allocated. A primary-constructor parameter materializes
+                // a field, so reject it here as well.
+                if (TypeSymbol.IsByRefLike(paramType))
+                {
+                    Diagnostics.ReportByRefLikeEscape(paramSyntax.Identifier.Location, paramType, $"be used as the type of field '{paramName}'");
+                    continue;
+                }
+
                 ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier));
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
@@ -1023,6 +1033,15 @@ public sealed class Binder
             var fieldType = BindTypeClause(fieldSyntax.Type);
             if (fieldType == null)
             {
+                continue;
+            }
+
+            // Issue #367: a by-ref-like (`ref struct`) value cannot be stored in
+            // a field of a non-ref-struct (the containing instance may be boxed
+            // or heap-allocated).
+            if (TypeSymbol.IsByRefLike(fieldType))
+            {
+                Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
                 continue;
             }
 
@@ -1683,6 +1702,14 @@ public sealed class Binder
                 var fieldType = BindTypeClause(fieldSyntax.Type);
                 if (fieldType == null)
                 {
+                    continue;
+                }
+
+                // Issue #367: a by-ref-like (`ref struct`) value cannot be stored
+                // in a static field (statics are rooted on the heap).
+                if (TypeSymbol.IsByRefLike(fieldType))
+                {
+                    Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
                     continue;
                 }
 
@@ -3136,6 +3163,17 @@ public sealed class Binder
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
 
+        // Issue #367: a by-ref-like (`ref struct`) local is legal in an ordinary
+        // function, but an async function or an iterator hoists every local into
+        // a heap-allocated state machine, which the CLR forbids for a by-ref-like
+        // type. Reject the declaration in those bodies.
+        if (TypeSymbol.IsByRefLike(variableType) && function != null
+            && (function.IsAsync || IsIteratorReturnType(function.Type)))
+        {
+            var context = function.IsAsync ? "an async function" : "an iterator";
+            Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, $"be declared as a local in {context} (it would be hoisted into the state machine)");
+        }
+
         // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach
         // them to the variable symbol so #175 use-site diagnostics
         // (e.g. `@Obsolete`) fire when the variable is read or written.
@@ -3444,6 +3482,16 @@ public sealed class Binder
 
                 symbolicArgs.Add(ta);
 
+                // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
+                // a generic type argument (e.g. `List[Span[int32]]`); the CLR
+                // forbids constructing a generic type over a by-ref-like type.
+                if (TypeSymbol.IsByRefLike(ta))
+                {
+                    var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
+                    return null;
+                }
+
                 // #313: an in-scope generic type parameter used as a type
                 // argument (e.g. `List[T]` inside `func First[T](...)`) is a
                 // valid type in any position. Under the type-erased generic
@@ -3515,6 +3563,15 @@ public sealed class Binder
                 var ta = BindTypeClause(syntax.TypeArguments[i]);
                 if (ta == null)
                 {
+                    return null;
+                }
+
+                // Issue #367: by-ref-like (`ref struct`) types are not permitted
+                // as generic type arguments to a user-defined generic type.
+                if (TypeSymbol.IsByRefLike(ta))
+                {
+                    var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                     return null;
                 }
 
@@ -6006,6 +6063,18 @@ public sealed class Binder
         function = outerFunction;
 
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
+
+        // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
+        // closure; the capture would hoist it into a heap-allocated display
+        // class, which the CLR forbids.
+        foreach (var capturedVariable in captured)
+        {
+            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
+            {
+                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
+            }
+        }
+
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
     }
 
@@ -9829,6 +9898,21 @@ public sealed class Binder
         if (conversion.IsIdentity)
         {
             return expression;
+        }
+
+        // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
+        // a reference type (`object`, an interface, a delegate base, etc.), which
+        // the CLR forbids. The `(string)span` form is excluded: it lowers to a
+        // `ToString()` call rather than a box. Identity conversions (ref struct to
+        // the same ref struct) already returned above.
+        if (TypeSymbol.IsByRefLike(expression.Type)
+            && type != TypeSymbol.String
+            && type?.ClrType != null
+            && !type.ClrType.IsValueType
+            && expression.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
+            return new BoundErrorExpression(null);
         }
 
         return new BoundConversionExpression(null, type, expression);
