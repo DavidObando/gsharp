@@ -78,6 +78,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0011](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0011-string-interpolation-grammar.md) | String interpolation grammar and lowering | Specifies interpolation parsing and lowering details. |
 | [0012](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0012-raw-string-delimiter.md) | Raw string delimiter — backtick | Chooses backtick-delimited raw strings. |
 | [0014](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0014-visibility-default.md) | Visibility defaults — `public` for top-level declarations | Makes unmodified top-level declarations public by default. |
+| [0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md) | Postfix member/index access on primary expressions | Chains `.`/`?.`/`[]` after any primary except a bare numeric literal (`(42).Member`). |
 
 ## CLR interop
 

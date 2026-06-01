@@ -10244,6 +10244,11 @@ internal sealed class ReflectionMetadataEmitter
                         && declaringType != null
                         && !declaringType.IsValueType;
 
+                    // A value type calling a method it declares itself receives a
+                    // managed pointer (`this` is `ref TStruct`) and uses `call`;
+                    // a boxed value or a reference receiver uses `callvirt`.
+                    var useCall = receiverIsValueType && !receiverNeedsBox;
+
                     if (receiverNeedsBox)
                     {
                         // Load the receiver value (not its address) and box it so
@@ -10253,6 +10258,29 @@ internal sealed class ReflectionMetadataEmitter
                         this.il.OpCode(ILOpCode.Box);
                         this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
                     }
+                    else if (useCall)
+                    {
+                        // The value-type instance method needs a managed pointer
+                        // as `this`. An addressable receiver (local/parameter)
+                        // yields its address directly; a computed rvalue (e.g.
+                        // `(a + b).ToString()`) has no address, so materialize one
+                        // via box + unbox — `unbox` returns a managed pointer to
+                        // the value stored in the freshly boxed copy.
+                        if (instCall.Receiver is BoundVariableExpression bve
+                            && this.TryLoadVariableAddress(bve.Variable))
+                        {
+                            // Address already on the stack.
+                        }
+                        else
+                        {
+                            this.EmitExpression(instCall.Receiver);
+                            var receiverTypeToken = this.outer.GetElementTypeToken(instCall.Receiver.Type);
+                            this.il.OpCode(ILOpCode.Box);
+                            this.il.Token(receiverTypeToken);
+                            this.il.OpCode(ILOpCode.Unbox);
+                            this.il.Token(receiverTypeToken);
+                        }
+                    }
                     else
                     {
                         this.EmitInstanceReceiver(instCall.Receiver);
@@ -10261,10 +10289,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
                     var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols);
 
-                    // A value type calling its own (sealed, non-virtual) method
-                    // uses `call` on the receiver address. Once boxed, or for a
-                    // reference receiver, `callvirt` is used.
-                    this.il.OpCode(receiverIsValueType && !receiverNeedsBox ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.OpCode(useCall ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
                     break;
                 }

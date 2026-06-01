@@ -14,12 +14,13 @@ Unary operators include numeric identity and negation, logical not, bitwise comp
 
 ## Calls, access, and literals
 
-Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, and indexing uses brackets. Struct literals use field labels; data structs can be copied with `with` updates.
+Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, and indexing uses brackets. These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString()`, which is ambiguous with float-literal lexing (see [ADR-0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md)). Struct literals use field labels; data structs can be copied with `with` updates.
 
 ```gsharp
 let p = Point{X: 3, Y: 4}
 let q = p with { X = 10 }
 let value = maybePoint?.X ?: 0
+let kind = (p.X + p.Y).GetType()
 ```
 
 Function literals are written with `func` or `async func`. A trailing lambda may follow a call as the final argument. There is no arrow-lambda expression today; `->` is used for switch expression arms. See [ADR-0050](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0050-trailing-arrow-lambda.md) for the design discussion behind trailing lambda syntax and the current parser behavior.

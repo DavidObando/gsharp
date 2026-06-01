@@ -138,6 +138,81 @@ public class CompletionHandlerTests
         Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
     }
 
+    [Fact]
+    public void ComputeCompletions_AfterDotOnParenthesizedExpression_OffersInstanceMembers()
+    {
+        const string source = "var a int32 = 3\nvar b int32 = 4\n(a + b).\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "(a + b)."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.Contains(items, i => i.Label == "CompareTo" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnParenthesizedExpression_InsideFunction_UsesParameters()
+    {
+        const string source = "func add(a int32, b int32) {\n(a + b).\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "(a + b)."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnCallExpression_OffersReturnTypeMembers()
+    {
+        const string source = "func foo() int32 { return 1 }\nfunc use() {\nfoo().\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "foo()."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnIndexExpression_OffersElementMembers()
+    {
+        const string source = "var arr [3]int32 = [3]int32{1, 2, 3}\narr[0].\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "arr[0]."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterChainedMemberAccess_OffersMembers()
+    {
+        const string source = "type Point struct {\nX int32\nY int32\n}\nfunc use(p Point) {\np.X.\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "p.X."));
+
+        Assert.Contains(items, i => i.Label == "ToString" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnUnresolvableReceiver_ReturnsNoMembersAndNoKeywords()
+    {
+        const string source = "func use() {\n(nope + 1).\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "(nope + 1)."));
+
+        // Inference fails for the undefined receiver, but the member-access context
+        // must still suppress the keyword/global list.
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+        Assert.Empty(items);
+    }
+
     private static Position After(string source, string marker)
     {
         var start = LanguageServerTestHelpers.PositionOf(source, marker);

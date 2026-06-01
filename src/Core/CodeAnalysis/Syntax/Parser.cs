@@ -3140,46 +3140,79 @@ public class Parser
         switch (Current.Kind)
         {
             case SyntaxKind.OpenParenthesisToken:
-                return ParseParenthesizedExpression();
+                return ParsePostfixChain(ParseParenthesizedExpression());
 
             case SyntaxKind.FalseKeyword:
             case SyntaxKind.TrueKeyword:
-                return ParseBooleanLiteral();
+                return ParsePostfixChain(ParseBooleanLiteral());
 
             case SyntaxKind.NilKeyword:
-                return ParseNilLiteral();
+                return ParsePostfixChain(ParseNilLiteral());
 
+            // ADR-0054: postfix member/index access does NOT apply directly to a
+            // numeric literal (collides with float-literal lexing, e.g. `42.x`).
+            // Users write `(42).Member` instead.
             case SyntaxKind.NumberToken:
                 return ParseNumberLiteral();
 
             case SyntaxKind.CharacterToken:
-                return ParseCharacterLiteral();
+                return ParsePostfixChain(ParseCharacterLiteral());
 
             case SyntaxKind.StringToken:
-                return ParseStringLiteral();
+                return ParsePostfixChain(ParseStringLiteral());
 
             case SyntaxKind.InterpolatedStringToken:
-                return ParseInterpolatedStringLiteral();
+                return ParsePostfixChain(ParseInterpolatedStringLiteral());
 
             case SyntaxKind.OpenSquareBracketToken:
-                return ParseArrayCreationExpression();
+                return ParsePostfixChain(ParseArrayCreationExpression());
 
             case SyntaxKind.MapKeyword:
-                return ParseMapCreationExpression();
+                return ParsePostfixChain(ParseMapCreationExpression());
 
             case SyntaxKind.FuncKeyword:
-                return ParseFunctionLiteralExpression();
+                return ParsePostfixChain(ParseFunctionLiteralExpression());
 
             case SyntaxKind.AsyncKeyword when Peek(1).Kind == SyntaxKind.FuncKeyword:
-                return ParseFunctionLiteralExpression();
+                return ParsePostfixChain(ParseFunctionLiteralExpression());
 
             case SyntaxKind.SwitchKeyword:
-                return ParseSwitchExpression();
+                return ParsePostfixChain(ParseSwitchExpression());
 
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
         }
+    }
+
+    // ADR-0054: chains postfix member access (`.` / `?.`) and indexing (`[]`)
+    // onto an already-parsed primary expression. Used by both the name/call path
+    // and the other primary-expression cases so accessors work uniformly on
+    // parenthesized expressions, literals, and other primaries.
+    private ExpressionSyntax ParsePostfixChain(ExpressionSyntax current)
+    {
+        while (true)
+        {
+            if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
+            {
+                var dotToken = NextToken();
+                var rightSide = ParseNameOrCallExpression();
+                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+            }
+            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                var index = ParseExpression();
+                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return current;
     }
 
     private ExpressionSyntax ParseFunctionLiteralExpression()
@@ -3402,28 +3435,7 @@ public class Parser
             current = ParseNameExpression();
         }
 
-        while (true)
-        {
-            if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
-            {
-                var dotToken = NextToken();
-                var rightSide = ParseNameOrCallExpression();
-                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
-            }
-            else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
-            {
-                var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-                var index = ParseExpression();
-                var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        return current;
+        return ParsePostfixChain(current);
     }
 
     // Phase 4.1 / ADR-0020: bounded-lookahead disambiguation between

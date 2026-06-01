@@ -66,6 +66,33 @@ public static class SemanticLookup
     }
 
     /// <summary>
+    /// Computes the binding context for an expression at <paramref name="offset"/>:
+    /// the enclosing function (or <c>null</c> at top level) and the
+    /// locals/parameters in scope there. Used to speculatively infer receiver
+    /// types for member completions on arbitrary expressions.
+    /// </summary>
+    /// <param name="compilation">The compilation to inspect.</param>
+    /// <param name="offset">The source offset of the expression.</param>
+    /// <returns>The enclosing function symbol and the in-scope local symbols.</returns>
+    public static (FunctionSymbol Function, IReadOnlyList<VariableSymbol> Locals) GetExpressionBindingContext(Compilation compilation, int offset)
+    {
+        var funcDecl = FindNodes<FunctionDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root))
+            .Where(f => f.Span.Start <= offset && offset <= f.Span.End)
+            .OrderBy(f => f.Span.Length)
+            .FirstOrDefault();
+
+        if (funcDecl == null)
+        {
+            // Top-level statements: globals are reachable through the parent scope.
+            return (null, Array.Empty<VariableSymbol>());
+        }
+
+        var function = FindFunctionSymbol(compilation, funcDecl);
+        var locals = BuildModel(compilation).GetLocals(funcDecl);
+        return (function, locals);
+    }
+
+    /// <summary>
     /// Resolves a bare type name (e.g. <c>Console</c>) to a CLR <see cref="Type"/>
     /// reachable through the document's <c>import</c> declarations, the implicit
     /// <c>System</c> namespace, or a fully-qualified name.
@@ -179,6 +206,38 @@ public static class SemanticLookup
         return new GSharp.LanguageServer.Protocol.Range(
             new GSharp.LanguageServer.Protocol.Position(startLine, span.Start - text.Lines[startLine].Start),
             new GSharp.LanguageServer.Protocol.Position(endLine, span.End - text.Lines[endLine].Start));
+    }
+
+    private static FunctionSymbol FindFunctionSymbol(Compilation compilation, FunctionDeclarationSyntax declaration)
+    {
+        foreach (var function in compilation.GlobalScope.Functions)
+        {
+            if (ReferenceEquals(function.Declaration, declaration))
+            {
+                return function;
+            }
+        }
+
+        foreach (var structSym in compilation.GlobalScope.Structs)
+        {
+            foreach (var method in structSym.Methods)
+            {
+                if (ReferenceEquals(method.Declaration, declaration))
+                {
+                    return method;
+                }
+            }
+
+            foreach (var method in structSym.StaticMethods)
+            {
+                if (ReferenceEquals(method.Declaration, declaration))
+                {
+                    return method;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static IEnumerable<string> GetCandidateTypeNames(SyntaxTree tree, string name)
@@ -500,6 +559,16 @@ public static class SemanticLookup
             }
 
             return this.globals.TryGetValue(token.Text, out var global) ? global : ResolvePrimitiveOrImportedType(token.Text);
+        }
+
+        public IReadOnlyList<VariableSymbol> GetLocals(FunctionDeclarationSyntax declaration)
+        {
+            if (declaration != null && this.localDeclarations.TryGetValue(declaration, out var locals))
+            {
+                return locals.Values.OfType<VariableSymbol>().ToList();
+            }
+
+            return Array.Empty<VariableSymbol>();
         }
 
         private FunctionDeclarationSyntax FindContainingFunction(SyntaxToken token)
