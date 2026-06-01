@@ -157,6 +157,10 @@ export class ServerManager {
       const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'gsharp' }],
         traceOutputChannel: traceChannel,
+        diagnosticPullOptions: {
+          onChange: true,
+          onSave: true,
+        },
         initializationOptions: {
           formattingIndentSize: vscode.workspace
             .getConfiguration('gsharp')

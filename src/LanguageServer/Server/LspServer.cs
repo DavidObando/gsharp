@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,9 +29,13 @@ public sealed class LspServer
     private readonly WorkspaceState workspaceState;
     private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object refreshLock = new object();
 
     private JsonRpc rpc;
     private bool shutdownRequested;
+    private bool clientSupportsPullDiagnostics;
+    private bool clientSupportsDiagnosticRefresh;
+    private Timer refreshTimer;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState)
     {
@@ -52,6 +58,7 @@ public sealed class LspServer
     public Task<InitializeResult> InitializeAsync(InitializeParams request)
     {
         var rootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
+        this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
         try
         {
             WorkspaceInitializer.Initialize(this.workspaceState, rootPath);
@@ -99,7 +106,8 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            this.Diagnose(uri, text, skipBinding: true);
+            this.UpdateDocument(uri, text);
+            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: true);
             return 0;
         });
     }
@@ -116,7 +124,12 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            this.Diagnose(uri, text, skipBinding: true);
+            this.UpdateDocument(uri, text);
+            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: true);
+
+            // Inter-file edits can change diagnostics in other open documents; ask the
+            // client to re-pull them. Debounced so a burst of keystrokes coalesces.
+            this.RequestDiagnosticRefresh(uri);
             return 0;
         });
     }
@@ -133,8 +146,11 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
-            // Open/change keeps binding diagnostics disabled for responsive typing; save runs the full pipeline.
-            this.Diagnose(uri, text, skipBinding: false);
+            this.UpdateDocument(uri, text);
+
+            // Pull clients already receive live binding diagnostics; only push clients need
+            // the full pipeline run here.
+            this.PublishDiagnosticsIfPushMode(uri, text, skipBinding: false);
             return 0;
         });
     }
@@ -153,6 +169,57 @@ public sealed class LspServer
             this.documentContentService.TryRemove(uri.ToString());
             return 0;
         });
+    }
+
+    [JsonRpcMethod("textDocument/diagnostic", UseSingleObjectParameterDeserialization = true)]
+    public async Task<object> DocumentDiagnosticAsync(DocumentDiagnosticParams request, CancellationToken cancellationToken)
+    {
+        var uri = request?.TextDocument?.Uri;
+        if (uri == null)
+        {
+            return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
+        }
+
+        // Snapshot the current text and owning project under the gate, then run the (potentially
+        // expensive) full binding pass off the gate so interactive requests are not blocked.
+        string text = null;
+        string filePath = null;
+        ProjectState project = null;
+        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            filePath = uri.GetFileSystemPath();
+            project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
+            if (this.documentContentService.TryGet(uri.ToString(), out var content))
+            {
+                text = content.SyntaxTree.Text.ToString();
+            }
+        }
+        finally
+        {
+            this.gate.Release();
+        }
+
+        if (text == null)
+        {
+            return new FullDocumentDiagnosticReport { Items = Array.Empty<Diagnostic>() };
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var resultId = ComputeResultId(result.Diagnostics);
+        if (request.PreviousResultId != null && string.Equals(request.PreviousResultId, resultId, StringComparison.Ordinal))
+        {
+            return new UnchangedDocumentDiagnosticReport { ResultId = resultId };
+        }
+
+        return new FullDocumentDiagnosticReport
+        {
+            ResultId = resultId,
+            Items = result.Diagnostics.ToList(),
+        };
     }
 
     [JsonRpcMethod("workspace/didChangeWatchedFiles", UseSingleObjectParameterDeserialization = true)]
@@ -183,6 +250,8 @@ public sealed class LspServer
                 }
             }
 
+            // External file/project changes can alter diagnostics in open documents.
+            this.RequestDiagnosticRefresh();
             return 0;
         });
     }
@@ -365,7 +434,7 @@ public sealed class LspServer
         return uri != null && this.documentContentService.TryGet(uri.ToString(), out content);
     }
 
-    private void Diagnose(DocumentUri uri, string text, bool skipBinding)
+    private void UpdateDocument(DocumentUri uri, string text)
     {
         var filePath = uri.GetFileSystemPath();
         var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
@@ -374,12 +443,124 @@ public sealed class LspServer
             project.UpdateFile(filePath, text);
         }
 
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project);
+        // Parse-only content (no binding) feeds the content service used by other features;
+        // diagnostics are produced on demand by the textDocument/diagnostic pull handler.
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project, filePath);
         this.documentContentService.AddOrUpdate(uri.ToString(), result.Content);
+    }
+
+    private void PublishDiagnosticsIfPushMode(DocumentUri uri, string text, bool skipBinding)
+    {
+        // Clients advertising pull diagnostics request them via textDocument/diagnostic, so push
+        // is suppressed to avoid double reporting. Older push-only clients still get notifications.
+        if (this.clientSupportsPullDiagnostics)
+        {
+            return;
+        }
+
+        var filePath = uri.GetFileSystemPath();
+        var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project, filePath);
 
         this.rpc?.NotifyWithParameterObjectAsync(
             "textDocument/publishDiagnostics",
             new PublishDiagnosticsParams { Uri = uri, Diagnostics = result.Diagnostics });
+    }
+
+    private void DetectClientDiagnosticCapabilities(JsonElement capabilities)
+    {
+        try
+        {
+            if (capabilities.ValueKind == JsonValueKind.Object)
+            {
+                if (capabilities.TryGetProperty("textDocument", out var textDocument)
+                    && textDocument.ValueKind == JsonValueKind.Object
+                    && textDocument.TryGetProperty("diagnostic", out var diagnostic)
+                    && diagnostic.ValueKind == JsonValueKind.Object)
+                {
+                    this.clientSupportsPullDiagnostics = true;
+                }
+
+                if (capabilities.TryGetProperty("workspace", out var workspace)
+                    && workspace.ValueKind == JsonValueKind.Object
+                    && workspace.TryGetProperty("diagnostics", out var wsDiagnostics)
+                    && wsDiagnostics.ValueKind == JsonValueKind.Object
+                    && wsDiagnostics.TryGetProperty("refreshSupport", out var refreshSupport)
+                    && refreshSupport.ValueKind == JsonValueKind.True)
+                {
+                    this.clientSupportsDiagnosticRefresh = true;
+                }
+            }
+        }
+        catch
+        {
+            // Capability probing is best-effort; absence of pull support falls back to push.
+        }
+    }
+
+    private void RequestDiagnosticRefresh(DocumentUri changedUri)
+    {
+        if (!this.clientSupportsPullDiagnostics || !this.clientSupportsDiagnosticRefresh)
+        {
+            return;
+        }
+
+        // Single-file edits do not affect other documents, so skip refreshes for documents that
+        // are not part of a multi-file project.
+        var filePath = changedUri.GetFileSystemPath();
+        var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
+        if (project == null || project.SourceFiles.Count <= 1)
+        {
+            return;
+        }
+
+        this.RequestDiagnosticRefresh();
+    }
+
+    private void RequestDiagnosticRefresh()
+    {
+        if (!this.clientSupportsDiagnosticRefresh)
+        {
+            return;
+        }
+
+        // Debounce: coalesce bursts of changes into a single workspace/diagnostic/refresh request.
+        lock (this.refreshLock)
+        {
+            this.refreshTimer ??= new Timer(_ => this.SendDiagnosticRefresh(), null, Timeout.Infinite, Timeout.Infinite);
+            this.refreshTimer.Change(500, Timeout.Infinite);
+        }
+    }
+
+    private void SendDiagnosticRefresh()
+    {
+        try
+        {
+            this.rpc?.InvokeAsync("workspace/diagnostic/refresh");
+        }
+        catch
+        {
+            // The client may have disconnected; refresh is best-effort.
+        }
+    }
+
+    private static string ComputeResultId(IReadOnlyList<Diagnostic> diagnostics)
+    {
+        var builder = new StringBuilder();
+        foreach (var d in diagnostics)
+        {
+            builder.Append((int)d.Severity).Append('|');
+            if (d.Range != null)
+            {
+                builder.Append(d.Range.Start?.Line).Append(',').Append(d.Range.Start?.Character).Append('-')
+                    .Append(d.Range.End?.Line).Append(',').Append(d.Range.End?.Character);
+            }
+
+            builder.Append('|').Append(d.Code?.Value).Append('|').Append(d.Message).Append('\n');
+        }
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(bytes);
     }
 
     private SemanticTokens ComputeSemanticTokens(TextDocumentIdentifier identifier)

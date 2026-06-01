@@ -20,38 +20,59 @@ public static class DocumentSyncHandler
 {
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
-        return ComputeDiagnostics(text, skipBinding, project: null);
+        return ComputeDiagnostics(text, skipBinding, project: null, filePath: null);
     }
 
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project)
     {
+        return ComputeDiagnostics(text, skipBinding, project, filePath: null);
+    }
+
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath)
+    {
         var newLines = new List<int>();
-        int nextNewLine = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
+        int nextNewLine = text.IndexOf('\n');
         while (nextNewLine >= 0)
         {
             newLines.Add(nextNewLine);
-            nextNewLine = text.IndexOf(Environment.NewLine, nextNewLine + 1, StringComparison.Ordinal);
+            nextNewLine = text.IndexOf('\n', nextNewLine + 1);
         }
 
         var diagnostics = new List<Diagnostic>();
 
-        var syntaxTree = SyntaxTree.Parse(text);
-        foreach (var d in syntaxTree.Diagnostics)
+        // When the file belongs to a project, bind it as part of the project-level compilation
+        // for cross-file awareness, but make sure that compilation reflects the in-memory editor
+        // text. The project keeps its own SyntaxTree per file; we sync this file's tree with the
+        // current text and then filter diagnostics by that exact tree so squiggles for the edited
+        // file are reported (and diagnostics for other files in the project are excluded).
+        Compilation compilation;
+        SyntaxTree syntaxTree;
+        bool useProject = project != null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
+        if (useProject)
         {
-            diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+            syntaxTree = project.UpdateFile(filePath, text);
+            compilation = project.GetCompilation();
+        }
+        else
+        {
+            syntaxTree = SyntaxTree.Parse(text);
+            compilation = new Compilation(syntaxTree);
         }
 
-        // Use project-level compilation if available for cross-file awareness
-        var compilation = project != null ? project.GetCompilation() : new Compilation(syntaxTree);
+        foreach (var d in syntaxTree.Diagnostics)
+        {
+            diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
+        }
+
         foreach (var d in compilation.GlobalScope.Diagnostics)
         {
-            // Only report diagnostics that originate from this file's syntax tree
-            if (project != null && d.Location.Text != syntaxTree.Text)
+            // Only report diagnostics that originate from this file's syntax tree.
+            if (useProject && d.Location.Text != syntaxTree.Text)
             {
                 continue;
             }
 
-            diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+            diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }
 
         if (!skipBinding)
@@ -59,30 +80,35 @@ public static class DocumentSyncHandler
             var program = Binder.BindProgram(compilation.GlobalScope);
             foreach (var d in program.Diagnostics)
             {
-                if (project != null && d.Location.Text != syntaxTree.Text)
+                if (useProject && d.Location.Text != syntaxTree.Text)
                 {
                     continue;
                 }
 
-                diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, newLines));
+                diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
             }
         }
 
         return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
     }
 
-    private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, List<int> newLines)
+    private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)
     {
-        int line = newLines.Count(charNumber => charNumber < start);
-        int lineStart = line > 0 ? newLines[line - 1] + 2 : 0;
         return new Diagnostic
         {
             Code = new DiagnosticCode(code),
             Message = message,
-            Range = new Range(new Position(line, start - lineStart), new Position(line, end - lineStart)),
+            Range = new Range(ToPosition(start, sourceText), ToPosition(end, sourceText)),
             Severity = DiagnosticSeverity.Error,
             Source = Constants.LanguageIdentifier,
         };
+    }
+
+    private static Position ToPosition(int offset, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)
+    {
+        int line = sourceText.GetLineIndex(offset);
+        int lineStart = sourceText.Lines[line].Start;
+        return new Position(line, offset - lineStart);
     }
 }
 

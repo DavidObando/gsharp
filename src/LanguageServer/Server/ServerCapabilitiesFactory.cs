@@ -63,6 +63,12 @@ public static class ServerCapabilitiesFactory
                 Range = true,
             },
             InlayHintProvider = new InlayHintOptions { ResolveProvider = false },
+            DiagnosticProvider = new DiagnosticOptions
+            {
+                Identifier = Constants.LanguageId,
+                InterFileDependencies = true,
+                WorkspaceDiagnostics = false,
+            },
         };
     }
 }
