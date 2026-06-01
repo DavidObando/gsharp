@@ -10228,13 +10228,47 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.Call(this.outer.GetMethodEntityHandle(staticCall.Method));
                     break;
                 case BoundImportedInstanceCallExpression instCall:
-                    this.EmitInstanceReceiver(instCall.Receiver);
-                    this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
+                {
                     var receiverIsValueType = instCall.Receiver.Type?.ClrType?.IsValueType == true;
+
+                    // A value-type receiver invoking a method it inherits from a
+                    // reference base type (System.Object/ValueType/Enum) — e.g.
+                    // GetType(), or ToString()/Equals()/GetHashCode() when the
+                    // value type does not override them — must be boxed. The
+                    // callee's `this` is an object reference, not a managed
+                    // pointer to the value; without the box the raw value bits
+                    // are reinterpreted as a reference, producing an
+                    // AccessViolationException (or silent corruption) at runtime.
+                    var declaringType = instCall.Method.DeclaringType;
+                    var receiverNeedsBox = receiverIsValueType
+                        && declaringType != null
+                        && !declaringType.IsValueType;
+
+                    if (receiverNeedsBox)
+                    {
+                        // Load the receiver value (not its address) and box it so
+                        // the inherited reference-type method receives a proper
+                        // object reference.
+                        this.EmitExpression(instCall.Receiver);
+                        this.il.OpCode(ILOpCode.Box);
+                        this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
+                    }
+                    else
+                    {
+                        this.EmitInstanceReceiver(instCall.Receiver);
+                    }
+
+                    this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
                     var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols);
-                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+
+                    // A value type calling its own (sealed, non-virtual) method
+                    // uses `call` on the receiver address. Once boxed, or for a
+                    // reference receiver, `callvirt` is used.
+                    this.il.OpCode(receiverIsValueType && !receiverNeedsBox ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
                     break;
+                }
+
                 case BoundAddressOfExpression addressOf:
                     this.EmitAddressOf(addressOf);
                     break;
