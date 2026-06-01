@@ -154,6 +154,162 @@ func f() {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0219");
     }
 
+    [Fact]
+    public void UserDeclared_RefStruct_IsRecognizedAsByRefLike()
+    {
+        var source = @"
+package P
+type Window ref struct {
+    Total int32
+}
+";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var window = compilation.GlobalScope.Structs.Single(s => s.Name == "Window");
+        Assert.True(window.IsRefStruct);
+        Assert.True(TypeSymbol.IsByRefLike(window));
+    }
+
+    [Fact]
+    public void UserDeclared_PlainStruct_IsNotByRefLike()
+    {
+        var source = @"
+package P
+type Plain struct {
+    Total int32
+}
+";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var plain = compilation.GlobalScope.Structs.Single(s => s.Name == "Plain");
+        Assert.False(plain.IsRefStruct);
+        Assert.False(TypeSymbol.IsByRefLike(plain));
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_LocalIsPermitted()
+    {
+        var source = @"
+package P
+type Acc ref struct {
+    Total int32
+}
+func use() int32 {
+    var a Acc = Acc{Total: 5}
+    return a.Total
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_BoxedToObject_Reports_GS0219()
+    {
+        var source = @"
+package P
+type Acc ref struct {
+    Total int32
+}
+func box() object {
+    var a Acc = Acc{Total: 5}
+    var o object = a
+    return o
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_StoredInNonRefStructField_Reports_GS0219()
+    {
+        var source = @"
+package P
+type Acc ref struct {
+    Total int32
+}
+type Holder struct {
+    a Acc
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_FieldInsideRefStruct_IsPermitted()
+    {
+        var source = @"
+package P
+type Inner ref struct {
+    V int32
+}
+type Outer ref struct {
+    Slot Inner
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_CapturedByClosure_Reports_GS0219()
+    {
+        var source = @"
+package P
+type Acc ref struct {
+    Total int32
+}
+func f() {
+    var a Acc = Acc{Total: 5}
+    var g = func() int32 { return a.Total }
+    g()
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void UserDeclared_RefStruct_AsGenericTypeArgument_Reports_GS0219()
+    {
+        var source = @"
+package P
+import System.Collections.Generic
+type Acc ref struct {
+    Total int32
+}
+func f() {
+    var l List[Acc]
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void RefStruct_AsTopLevelGlobal_Reports_GS0219()
+    {
+        // A top-level variable is emitted as a heap-rooted static field, which the
+        // CLR forbids for a by-ref-like type. Applies to imported ref structs ...
+        var imported = @"
+import System
+var s ReadOnlySpan[int32] = []int32{1, 2, 3}
+";
+        Assert.Contains(Bind(imported), d => d.Id == "GS0219");
+
+        // ... and to user-declared ones.
+        var user = @"
+package P
+type Acc ref struct {
+    Total int32
+}
+var a Acc = Acc{Total: 1}
+";
+        Assert.Contains(Bind(user), d => d.Id == "GS0219");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

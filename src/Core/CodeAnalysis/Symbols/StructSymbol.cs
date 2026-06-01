@@ -169,6 +169,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets a value indicating whether this is an <c>inline struct</c> declaration (ADR-0033).</summary>
     public bool IsInline { get; }
 
+    /// <summary>Gets a value indicating whether this is a by-ref-like (<c>ref struct</c>) declaration (issue #367). By-ref-like value types are stack-only: they cannot be boxed, stored in a field of a non-ref-struct, captured by a closure, hoisted into an async/iterator state machine, or used as a generic type argument. Derived from the declaring syntax so it is preserved across generic construction.</summary>
+    public bool IsRefStruct => Declaration?.IsRef ?? false;
+
     /// <summary>Gets a value indicating whether this is a <c>class</c> declaration (Phase 3.B.3). Class types are reference types on the CLR; struct types (this flag false) are value types.</summary>
     public bool IsClass { get; }
 
