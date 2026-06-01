@@ -90,6 +90,16 @@ internal static class OverloadResolution
         /// rewritten to the handler pattern by the binder).
         /// </summary>
         InterpolatedStringHandler = 7,
+
+        /// <summary>
+        /// ADR-0055 Tier 4 (#369): an interpolated-string argument converting to
+        /// an <c>IFormattable</c>/<c>FormattableString</c> parameter. Ranked last
+        /// (worst) so that, given both a <c>string</c> and a
+        /// <c>FormattableString</c> overload, the <c>string</c> overload (an
+        /// identity conversion of the interpolation's natural type) still wins —
+        /// matching C#.
+        /// </summary>
+        InterpolatedStringToFormattable = 8,
     }
 
     /// <summary>
@@ -217,6 +227,32 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// ADR-0055 Tier 4 (#369): determines whether <paramref name="parameterType"/>
+    /// is one of the contextual targets to which an interpolated string converts —
+    /// <c>System.IFormattable</c> or <c>System.FormattableString</c>. Compared by
+    /// <see cref="Type.FullName"/> so it is robust across reflection contexts
+    /// (MetadataLoadContext vs. live runtime). By-ref parameters are peeled first.
+    /// </summary>
+    /// <param name="parameterType">The candidate parameter type.</param>
+    /// <returns><see langword="true"/> when the parameter is a Tier-4 target.</returns>
+    public static bool IsFormattableStringTarget(Type parameterType)
+    {
+        if (parameterType is null)
+        {
+            return false;
+        }
+
+        if (parameterType.IsByRef)
+        {
+            parameterType = parameterType.GetElementType();
+        }
+
+        var fullName = parameterType?.FullName;
+        return string.Equals(fullName, "System.FormattableString", StringComparison.Ordinal)
+            || string.Equals(fullName, "System.IFormattable", StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Resolves a method-overload set against the supplied argument types and
     /// returns the unique best applicable candidate, or an ambiguity / no-
     /// match result.
@@ -243,8 +279,16 @@ internal static class OverloadResolution
     /// When <see langword="null"/> the inferred arguments are used as-is.
     /// Explicit type arguments are assumed to be pre-projected by the caller.
     /// </param>
+    /// <param name="interpolatedStringArgs">
+    /// ADR-0055 Tier 4 (#369): optional per-argument flags marking which
+    /// arguments are interpolated-string expressions. A flagged argument may, in
+    /// addition to its natural <c>string</c> type, convert to an
+    /// <c>IFormattable</c>/<c>FormattableString</c> parameter. <see langword="null"/>
+    /// (the default) disables the relaxation, preserving prior behaviour for all
+    /// other call sites.
+    /// </param>
     /// <returns>The resolution result.</returns>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
@@ -262,7 +306,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -465,11 +509,11 @@ internal static class OverloadResolution
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied
     /// argument types, appending it to <paramref name="applicable"/> when it
-    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type})"/>
+    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool})"/>
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null)
         where T : MethodBase
     {
         {
@@ -564,8 +608,25 @@ internal static class OverloadResolution
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
                 if (conv == ImplicitConversionKind.None)
                 {
-                    ok = false;
-                    break;
+                    // ADR-0055 Tier 4 (#369): an interpolated-string argument
+                    // (natural type `string`) additionally converts to an
+                    // `IFormattable`/`FormattableString` parameter. This is the
+                    // only case where the argument's natural type does not
+                    // directly convert yet the candidate still applies; the
+                    // binder re-lowers the interpolation against the chosen
+                    // parameter once this candidate wins.
+                    if (interpolatedStringArgs != null
+                        && i < interpolatedStringArgs.Count
+                        && interpolatedStringArgs[i]
+                        && IsFormattableStringTarget(paramTypes[i]))
+                    {
+                        conv = ImplicitConversionKind.InterpolatedStringToFormattable;
+                    }
+                    else
+                    {
+                        ok = false;
+                        break;
+                    }
                 }
 
                 conversions[i] = conv;

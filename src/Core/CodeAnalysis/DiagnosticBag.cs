@@ -705,6 +705,23 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #367: reports that a by-ref-like (<c>ref struct</c>) value is used in
+    /// a position that would let it escape the stack. By-ref-like types such as
+    /// <c>Span[T]</c>, <c>ReadOnlySpan[T]</c>, and
+    /// <c>DefaultInterpolatedStringHandler</c> may be declared as locals and
+    /// passed around, but the CLR forbids boxing them, storing them in fields of a
+    /// non-ref-struct, capturing them in closures, hoisting them into
+    /// async/iterator state machines, and using them as generic type arguments.
+    /// </summary>
+    /// <param name="location">The text location of the illegal use.</param>
+    /// <param name="type">The by-ref-like type.</param>
+    /// <param name="reason">A description of why the value would escape.</param>
+    public void ReportByRefLikeEscape(TextLocation location, TypeSymbol type, string reason)
+    {
+        Report(location, "GS0219", $"By-ref-like type '{type}' is a `ref struct` and cannot {reason}.");
+    }
+
+    /// <summary>
     /// Reports that we couldn't find the specified type.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
@@ -1441,7 +1458,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="text">The offending alignment text.</param>
     public void ReportInvalidInterpolationAlignment(TextLocation location, string text)
     {
-        Report(location, "GS0214", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
+        Report(location, "GS0220", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
     }
 
     /// <summary>
@@ -1455,7 +1472,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="reason">A human-readable description of the failure.</param>
     public void ReportInterpolatedStringHandlerArgument(TextLocation location, string reason)
     {
-        Report(location, "GS0219", $"Cannot use the interpolated-string-handler argument: {reason}.");
+        Report(location, "GS0221", $"Cannot use the interpolated-string-handler argument: {reason}.");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

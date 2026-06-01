@@ -28,10 +28,18 @@ public readonly struct InterpolatedStringSegment
     /// <summary>Gets the embedded expression, or <c>null</c> when this segment is literal text.</summary>
     public ExpressionSyntax Expression { get; }
 
-    /// <summary>Gets the alignment specifier (signed field width; negative left-justifies), or <c>null</c>.</summary>
+    /// <summary>
+    /// Gets the optional constant alignment from a <c>${expr,alignment}</c> hole
+    /// (ADR-0055). A negative value left-justifies (C# parity). <c>null</c> when
+    /// no alignment clause was present.
+    /// </summary>
     public int? Alignment { get; }
 
-    /// <summary>Gets the format specifier (e.g. <c>N2</c>), or <c>null</c> when none was supplied.</summary>
+    /// <summary>
+    /// Gets the optional format specifier from a <c>${expr:format}</c> hole
+    /// (ADR-0055), verbatim and without the leading colon. <c>null</c> when no
+    /// format clause was present.
+    /// </summary>
     public string Format { get; }
 
     /// <summary>Creates a literal-text segment.</summary>
@@ -41,9 +49,8 @@ public readonly struct InterpolatedStringSegment
 
     /// <summary>Creates an embedded-expression segment.</summary>
     /// <param name="expression">The bound expression syntax.</param>
-    /// <param name="alignment">The optional alignment specifier.</param>
-    /// <param name="format">The optional format specifier.</param>
+    /// <param name="alignment">The optional constant alignment.</param>
+    /// <param name="format">The optional format specifier (without the leading colon).</param>
     /// <returns>The segment.</returns>
-    public static InterpolatedStringSegment FromExpression(ExpressionSyntax expression, int? alignment = null, string format = null)
-        => new(text: null, expression, alignment, format);
+    public static InterpolatedStringSegment FromExpression(ExpressionSyntax expression, int? alignment = null, string format = null) => new(text: null, expression, alignment, format);
 }

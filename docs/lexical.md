@@ -105,12 +105,26 @@ Interpreted strings support interpolation (ADR-0055):
 
 * `$ident` — inserts the value of a simple identifier: `"hi $name"`.
 * `${expr}` — inserts an arbitrary expression: `"sum=${a + b}"`, `"type=${x.GetType()}"`.
-* `${expr,alignment}` — pads the rendered value to a signed field width: positive right-justifies, negative left-justifies. `"[${name,5}]"` → `"[   hi]"`, `"[${name,-5}]"` → `"[hi   ]"`. The alignment must be a constant integer (otherwise **GS0214**).
+* `${expr,alignment}` — pads the rendered value to a signed field width: positive right-justifies, negative left-justifies. `"[${name,5}]"` → `"[   hi]"`, `"[${name,-5}]"` → `"[hi   ]"`. The alignment must be a constant integer (otherwise **GS0220**).
 * `${expr:format}` — applies a .NET format specifier when the value is `IFormattable`: `"${n:X4}"` → `"00FF"`.
 * `${expr,alignment:format}` — both clauses: `"[${n,6:X2}]"` → `"[    FF]"`.
 * `$$` — escapes to a literal `$`.
 
-Formatting defaults to the current culture. Compiled code lowers interpolation to the .NET `DefaultInterpolatedStringHandler` pattern; value-type holes are appended without boxing.
+The hole grammar is:
+
+```
+Hole       := Expression [ "," Alignment ] [ ":" FormatString ]
+Alignment  := [ "-" ] DecimalDigits      -- constant; '-' left-justifies (C# parity)
+```
+
+The `,`/`:` separators are recognized only at the top level of the hole (a `,`/`:` nested inside `()`, `[]`, or `{}`, or inside a string/char literal, is part of the expression).
+
+Binding and lowering are unified through a dedicated `BoundInterpolatedStringExpression` node that preserves each literal/hole part with its alignment/format intent (ADR-0055). Lowering is *late* and chosen by context:
+
+* Default — formatting defaults to the current culture. The tree-walk interpreter renders the node directly via composite formatting; compiled code lowers it to the .NET `DefaultInterpolatedStringHandler` pattern, so value-type holes are appended without boxing (issue #368).
+* The contextual target type is `System.IFormattable` or `System.FormattableString` → `FormattableStringFactory.Create(format, args)` (ADR-0055 Tier 4, #369). Formatting is **deferred**: the caller chooses the culture via `ToString(IFormatProvider)`, e.g. `fs.ToString(CultureInfo.InvariantCulture)`. The default culture is `CultureInfo.CurrentCulture`.
+
+A *contextual target type* is supplied by a typed `let` declaration, a function return whose declared type is `IFormattable`/`FormattableString`, an explicit conversion (cast), or a **call argument** whose parameter type is one of those (functions, methods, constructors, and imported CLR overloads). In an overloaded call the interpolation keeps its natural `string` type for applicability, so a `string` overload is still preferred over a `FormattableString` overload (C# parity); the interpolation is re-lowered to `FormattableStringFactory.Create` only once a `FormattableString`/`IFormattable` parameter is actually chosen.
 
 ## Comments
 
@@ -128,7 +142,7 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 
 * `docs/coverage-matrix.md` — language-construct coverage matrix.
 * `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering (superseded by ADR-0055).
-* `docs/adr/0055-string-interpolation-revamp.md` — current interpolation grammar, alignment/format, and handler lowering.
+* `docs/adr/0055-string-interpolation-revamp.md` — current interpolation grammar, alignment/format, tiered/culture-correct lowering (incl. `FormattableString`), and `DefaultInterpolatedStringHandler` lowering.
 * `docs/adr/0012-raw-string-delimiter.md` — rationale for backtick raw strings.
 * `docs/adr/0044-numeric-primitive-coverage.md` — primitive-type lattice and numeric suffix grammar.
 * `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.

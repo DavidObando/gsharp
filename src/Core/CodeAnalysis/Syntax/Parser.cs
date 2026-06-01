@@ -419,6 +419,16 @@ public class Parser
             inlineKeyword = NextToken();
         }
 
+        // Issue #367: optional `ref` contextual keyword marking a by-ref-like
+        // (`ref struct`) value type, e.g. `type Name ref struct { ... }`. Only
+        // meaningful directly before `struct`; combinations with `class` are
+        // diagnosed after the struct/class keyword is known.
+        SyntaxToken refModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && Peek(1).Kind == SyntaxKind.StructKeyword)
+        {
+            refModifier = NextToken();
+        }
+
         // Phase 3.B.5: optional `sealed` modifier on an interface declaration.
         // `sealed interface` restricts implementors to the same package
         // (binder enforced). `sealed` is not legal on struct/class in Phase 3.
@@ -453,6 +463,7 @@ public class Parser
 
             var structDecl = ParseStructDeclaration(accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, preconsumedStructOrClassKeyword);
             structDecl.TypeParameterList = typeParameterList;
+            structDecl.RefModifier = refModifier;
             return structDecl;
         }
 

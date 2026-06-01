@@ -1004,6 +1004,18 @@ public sealed class Binder
                     continue;
                 }
 
+                // Issue #367: a by-ref-like (`ref struct`) value cannot live in a
+                // field of a non-ref-struct, because the containing instance may
+                // be heap-allocated. A primary-constructor parameter materializes
+                // a field, so reject it here as well. A `ref struct` may itself
+                // hold by-ref-like fields (it is stack-only too), so this is only
+                // enforced when the containing type is not a ref struct.
+                if (!syntax.IsRef && TypeSymbol.IsByRefLike(paramType))
+                {
+                    Diagnostics.ReportByRefLikeEscape(paramSyntax.Identifier.Location, paramType, $"be used as the type of field '{paramName}'");
+                    continue;
+                }
+
                 ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier));
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
@@ -1023,6 +1035,16 @@ public sealed class Binder
             var fieldType = BindTypeClause(fieldSyntax.Type);
             if (fieldType == null)
             {
+                continue;
+            }
+
+            // Issue #367: a by-ref-like (`ref struct`) value cannot be stored in
+            // a field of a non-ref-struct (the containing instance may be boxed
+            // or heap-allocated). A `ref struct` is itself stack-only, so it may
+            // hold by-ref-like fields; only enforce this for non-ref-structs.
+            if (!syntax.IsRef && TypeSymbol.IsByRefLike(fieldType))
+            {
+                Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
                 continue;
             }
 
@@ -1683,6 +1705,14 @@ public sealed class Binder
                 var fieldType = BindTypeClause(fieldSyntax.Type);
                 if (fieldType == null)
                 {
+                    continue;
+                }
+
+                // Issue #367: a by-ref-like (`ref struct`) value cannot be stored
+                // in a static field (statics are rooted on the heap).
+                if (TypeSymbol.IsByRefLike(fieldType))
+                {
+                    Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
                     continue;
                 }
 
@@ -3128,13 +3158,45 @@ public sealed class Binder
         }
         else
         {
-            var initializer = BindExpression(syntax.Initializer);
-            variableType = type ?? initializer.Type;
-            convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+            // ADR-0055 Tier 4: an interpolated-string initializer whose declared
+            // type is IFormattable/FormattableString lowers to
+            // FormattableStringFactory.Create rather than an eager string.
+            if (type != null
+                && syntax.Initializer is InterpolatedStringExpressionSyntax interpolatedInit
+                && IsFormattableStringTargetType(type))
+            {
+                variableType = type;
+                convertedInitializer = BindInterpolatedStringAsFormattable(interpolatedInit, type);
+            }
+            else
+            {
+                var initializer = BindExpression(syntax.Initializer);
+                variableType = type ?? initializer.Type;
+                convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+            }
         }
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
+
+        // Issue #367: a by-ref-like (`ref struct`) local is legal in an ordinary
+        // function, but an async function or an iterator hoists every local into
+        // a heap-allocated state machine, which the CLR forbids for a by-ref-like
+        // type. A top-level (global) variable is emitted as a static field, which
+        // is likewise heap-rooted and forbidden. Reject the declaration in those
+        // contexts.
+        if (TypeSymbol.IsByRefLike(variableType))
+        {
+            if (function == null)
+            {
+                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, "be declared as a top-level variable (it would be emitted as a heap-rooted static field)");
+            }
+            else if (function.IsAsync || IsIteratorReturnType(function.Type))
+            {
+                var context = function.IsAsync ? "an async function" : "an iterator";
+                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, $"be declared as a local in {context} (it would be hoisted into the state machine)");
+            }
+        }
 
         // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach
         // them to the variable symbol so #175 use-site diagnostics
@@ -3444,6 +3506,16 @@ public sealed class Binder
 
                 symbolicArgs.Add(ta);
 
+                // Issue #367: a by-ref-like (`ref struct`) type cannot be used as
+                // a generic type argument (e.g. `List[Span[int32]]`); the CLR
+                // forbids constructing a generic type over a by-ref-like type.
+                if (TypeSymbol.IsByRefLike(ta))
+                {
+                    var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
+                    return null;
+                }
+
                 // #313: an in-scope generic type parameter used as a type
                 // argument (e.g. `List[T]` inside `func First[T](...)`) is a
                 // valid type in any position. Under the type-erased generic
@@ -3515,6 +3587,15 @@ public sealed class Binder
                 var ta = BindTypeClause(syntax.TypeArguments[i]);
                 if (ta == null)
                 {
+                    return null;
+                }
+
+                // Issue #367: by-ref-like (`ref struct`) types are not permitted
+                // as generic type arguments to a user-defined generic type.
+                if (TypeSymbol.IsByRefLike(ta))
+                {
+                    var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                    Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                     return null;
                 }
 
@@ -5354,6 +5435,17 @@ public sealed class Binder
 
     private BoundStatement BindReturnStatement(ReturnStatementSyntax syntax)
     {
+        // ADR-0055 Tier 4: returning an interpolated string where the function's
+        // declared type is IFormattable/FormattableString lowers to
+        // FormattableStringFactory.Create instead of an eager string.
+        if (syntax.Expression is InterpolatedStringExpressionSyntax interpolatedReturn
+            && function != null
+            && function.Type != TypeSymbol.Void
+            && IsFormattableStringTargetType(function.Type))
+        {
+            return new BoundReturnStatement(syntax, BindInterpolatedStringAsFormattable(interpolatedReturn, function.Type));
+        }
+
         var expression = syntax.Expression == null ? null : BindExpression(syntax.Expression);
 
         if (function == null)
@@ -5524,6 +5616,231 @@ public sealed class Binder
         }
 
         return new BoundInterpolatedStringExpression(syntax, parts.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0055 Tier 4: lowers an interpolated string whose contextual target
+    /// type is <see cref="System.IFormattable"/> or
+    /// <see cref="System.FormattableString"/> to
+    /// <c>FormattableStringFactory.Create(format, object[])</c>, preserving the
+    /// composite format string (alignment/format clauses included) so the caller
+    /// can defer formatting and choose a culture at consumption time. The result
+    /// is a <see cref="System.FormattableString"/> value, which is reference-
+    /// compatible with an <see cref="System.IFormattable"/> target.
+    /// </summary>
+    private BoundExpression BindInterpolatedStringAsFormattable(InterpolatedStringExpressionSyntax syntax, TypeSymbol targetType)
+    {
+        _ = targetType;
+        if (!TryBuildInterpolationFormat(syntax, out var composite, out var holeValues))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var formatLiteral = new BoundLiteralExpression(null, composite);
+        var argArray = BuildObjectArgumentArray(holeValues);
+
+        var factoryType = typeof(System.Runtime.CompilerServices.FormattableStringFactory);
+        var createMethod = factoryType.GetMethod("Create", new[] { typeof(string), typeof(object[]) });
+        var importedClass = new ImportedClassSymbol(factoryType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(createMethod.Name, importedClass, createMethod, declaration: null);
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
+    }
+
+    /// <summary>
+    /// Determines whether <paramref name="type"/> is the contextual target type
+    /// that triggers ADR-0055 Tier 4 lowering — <c>System.IFormattable</c> or
+    /// <c>System.FormattableString</c>. Compared by full name so the check is
+    /// robust to metadata-load-context type identity.
+    /// </summary>
+    private static bool IsFormattableStringTargetType(TypeSymbol type)
+    {
+        var fullName = type?.ClrType?.FullName;
+        return fullName == "System.FormattableString" || fullName == "System.IFormattable";
+    }
+
+    /// <summary>
+    /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
+    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool})"/>,
+    /// marking each positional argument whose syntax is an interpolated-string
+    /// literal. These arguments may convert to an
+    /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
+    /// their natural <c>string</c> type. Returns <see langword="null"/> when no
+    /// argument qualifies so callers pay nothing on the common path.
+    /// </summary>
+    private static IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count)
+    {
+        bool[] flags = null;
+        var limit = Math.Min(count, argumentSyntax.Count);
+        for (var i = 0; i < limit; i++)
+        {
+            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax)
+            {
+                flags ??= new bool[count];
+                flags[i] = true;
+            }
+        }
+
+        return flags;
+    }
+
+    /// <summary>
+    /// ADR-0055 Tier 4 (#369): after overload resolution selects an imported
+    /// method/constructor, re-lowers each interpolated-string argument whose
+    /// chosen parameter type is <c>IFormattable</c>/<c>FormattableString</c> to
+    /// <c>FormattableStringFactory.Create(...)</c>. Arguments bound against any
+    /// other parameter (including <c>string</c>) are left untouched. Returns the
+    /// original array unchanged when nothing needs re-lowering.
+    /// </summary>
+    private ImmutableArray<BoundExpression> RebindFormattableInterpolationArguments(
+        ImmutableArray<BoundExpression> arguments,
+        SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
+        System.Reflection.ParameterInfo[] parameters)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        var limit = Math.Min(arguments.Length, Math.Min(parameters.Length, argumentSyntax.Count));
+        for (var i = 0; i < limit; i++)
+        {
+            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax interpolated
+                && OverloadResolution.IsFormattableStringTarget(parameters[i].ParameterType))
+            {
+                builder ??= arguments.ToBuilder();
+                builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);
+            }
+        }
+
+        return builder?.ToImmutable() ?? arguments;
+    }
+
+    /// <summary>
+    /// Builds the C#-style composite format string (<c>"{0}"</c>,
+    /// <c>"{0,10}"</c>, <c>"{0,-20:N2}"</c>) and the ordered, bound hole values
+    /// for an interpolated string. Literal braces are escaped (<c>{</c> →
+    /// <c>{{</c>) so they survive <c>String.Format</c>/<c>FormattableString</c>
+    /// formatting. Returns <c>false</c> if any hole fails to bind.
+    /// </summary>
+    private bool TryBuildInterpolationFormat(InterpolatedStringExpressionSyntax syntax, out string composite, out ImmutableArray<BoundExpression> holeValues)
+    {
+        composite = null;
+        holeValues = default;
+
+        var format = new StringBuilder();
+        var values = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var segment in syntax.Segments)
+        {
+            if (!segment.IsExpression)
+            {
+                AppendEscapedLiteral(format, segment.Text ?? string.Empty);
+                continue;
+            }
+
+            var bound = BindExpression(segment.Expression);
+            if (bound is BoundErrorExpression)
+            {
+                return false;
+            }
+
+            var index = values.Count;
+            values.Add(bound);
+
+            format.Append('{').Append(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (segment.Alignment.HasValue)
+            {
+                format.Append(',').Append(segment.Alignment.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            if (segment.Format != null)
+            {
+                format.Append(':').Append(segment.Format);
+            }
+
+            format.Append('}');
+        }
+
+        composite = format.ToString();
+        holeValues = values.ToImmutable();
+        return true;
+    }
+
+    private static void AppendEscapedLiteral(StringBuilder builder, string text)
+    {
+        foreach (var c in text)
+        {
+            if (c == '{' || c == '}')
+            {
+                builder.Append(c);
+            }
+
+            builder.Append(c);
+        }
+    }
+
+    /// <summary>
+    /// Wraps the bound hole values in an <c>object[]</c> creation, boxing value
+    /// types via an explicit conversion to <c>object</c> so the emitter produces
+    /// verifiable IL (ADR-0055 — no <c>Convert.ToString</c> mis-typing).
+    /// </summary>
+    private BoundExpression BuildObjectArgumentArray(ImmutableArray<BoundExpression> holeValues)
+    {
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(holeValues.Length);
+        foreach (var value in holeValues)
+        {
+            elements.Add(value.Type == TypeSymbol.Object
+                ? value
+                : new BoundConversionExpression(null, TypeSymbol.Object, value));
+        }
+
+        var arrayType = ArrayTypeSymbol.Get(TypeSymbol.Object, holeValues.Length);
+        return new BoundArrayCreationExpression(null, arrayType, elements.ToImmutable());
+    }
+
+    private BoundExpression BuildStringFormatCall(string composite, ImmutableArray<BoundExpression> holeValues)
+    {
+        var formatLiteral = new BoundLiteralExpression(null, composite);
+        var argArray = BuildObjectArgumentArray(holeValues);
+
+        var stringType = typeof(string);
+        var formatMethod = stringType.GetMethod("Format", new[] { typeof(string), typeof(object[]) });
+        var importedClass = new ImportedClassSymbol(stringType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(formatMethod.Name, importedClass, formatMethod, declaration: null);
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
+    }
+
+    private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
+    {
+        if (expression.Type == TypeSymbol.String)
+        {
+            return expression;
+        }
+
+        var clrType = expression.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression(null);
+        }
+
+        // Bind a call to `System.Convert.ToString(<expr.Type>)`. Convert.ToString
+        // is a static overload set covering every primitive (int, long, bool,
+        // double, ...) plus `object`, so it works uniformly without emitter
+        // changes for value-type instance dispatch.
+        var convertType = typeof(System.Convert);
+        var method = convertType.GetMethod("ToString", new[] { clrType })
+            ?? convertType.GetMethod("ToString", new[] { typeof(object) });
+        if (method == null)
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            return new BoundErrorExpression(null);
+        }
+
+        var importedClass = new ImportedClassSymbol(convertType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(method.Name, importedClass, method, declaration: null);
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create(expression));
+    }
+
+    private static BoundExpression Concat(BoundExpression left, BoundExpression right)
+    {
+        var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
+        return new BoundBinaryExpression(null, left, op, right);
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)
@@ -5970,6 +6287,18 @@ public sealed class Binder
         function = outerFunction;
 
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
+
+        // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
+        // closure; the capture would hoist it into a heap-allocated display
+        // class, which the CLR forbids.
+        foreach (var capturedVariable in captured)
+        {
+            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
+            {
+                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
+            }
+        }
+
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
     }
 
@@ -6912,6 +7241,17 @@ public sealed class Binder
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
+
+            // ADR-0055 Tier 4 (#369): an interpolated-string argument targeting an
+            // IFormattable/FormattableString constructor parameter lowers to
+            // FormattableStringFactory.Create rather than an eager string.
+            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+                && IsFormattableStringTargetType(parameter.Type))
+            {
+                boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type);
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -6978,6 +7318,16 @@ public sealed class Binder
         {
             var argument = boundArguments[i];
             var parameter = parameters[i];
+
+            // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
+            // targeting an IFormattable/FormattableString parameter.
+            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+                && IsFormattableStringTargetType(parameter.Type))
+            {
+                convertedArguments.Add(BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -7221,6 +7571,20 @@ public sealed class Binder
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
+
+            // ADR-0055 Tier 4 (#369): an interpolated-string argument bound
+            // against an IFormattable/FormattableString parameter is re-lowered
+            // to FormattableStringFactory.Create instead of an eager string. Only
+            // applies in the non-generic case (a type parameter is never a
+            // formattable target).
+            if (substitution == null
+                && i < syntax.Arguments.Count
+                && syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+                && IsFormattableStringTargetType(expectedType))
+            {
+                boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedArg, expectedType);
+                continue;
+            }
 
             if (argument.Type != expectedType
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
@@ -7929,7 +8293,7 @@ public sealed class Binder
         ConstructorInfo bestCtor = null;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
@@ -7950,7 +8314,8 @@ public sealed class Binder
 
         var ctorParameters = bestCtor.GetParameters();
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, boundArguments.MoveToImmutable(), receiver: null, syntax.Location);
+        var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters);
+        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location);
         var ctorArgs = AppendOmittedOptionalArguments(ctorHandlerArgs, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
@@ -8851,7 +9216,8 @@ public sealed class Binder
             if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences))
             {
                 var staticParameters = staticFn.Method.GetParameters();
-                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, arguments, receiver: null, ce.Location);
+                var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters);
+                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location);
                 var staticArguments = AppendOmittedOptionalArguments(staticHandlerArgs, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
@@ -8955,13 +9321,14 @@ public sealed class Binder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length));
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
-                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, arguments, receiver, ce.Location);
+                        var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
+                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location);
                         var instArguments = AppendOmittedOptionalArguments(instHandlerArgs, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
@@ -9521,6 +9888,17 @@ public sealed class Binder
             }
 
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+
+            // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
+            // FormattableStringFactory.Create when the parameter is
+            // IFormattable/FormattableString.
+            if (ce.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+                && IsFormattableStringTargetType(expectedType))
+            {
+                convertedArgs.Add(BindInterpolatedStringAsFormattable(interpolatedArg, expectedType));
+                continue;
+            }
+
             convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
         }
 
@@ -9819,6 +10197,14 @@ public sealed class Binder
 
     private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
     {
+        // ADR-0055 Tier 4: contextual conversion of an interpolated string to
+        // IFormattable/FormattableString. Handled here, before eager string
+        // lowering, so the format/alignment intent is preserved.
+        if (syntax is InterpolatedStringExpressionSyntax interpolated && IsFormattableStringTargetType(type))
+        {
+            return BindInterpolatedStringAsFormattable(interpolated, type);
+        }
+
         var expression = BindExpression(syntax);
         return BindConversion(syntax.Location, expression, type, allowExplicit);
     }
@@ -9862,6 +10248,21 @@ public sealed class Binder
         if (conversion.IsIdentity)
         {
             return expression;
+        }
+
+        // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
+        // a reference type (`object`, an interface, a delegate base, etc.), which
+        // the CLR forbids. The `(string)span` form is excluded: it lowers to a
+        // `ToString()` call rather than a box. Identity conversions (ref struct to
+        // the same ref struct) already returned above.
+        if (TypeSymbol.IsByRefLike(expression.Type)
+            && type != TypeSymbol.String
+            && type?.ClrType != null
+            && !type.ClrType.IsValueType
+            && expression.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
+            return new BoundErrorExpression(null);
         }
 
         return new BoundConversionExpression(null, type, expression);
