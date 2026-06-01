@@ -99,6 +99,23 @@ GSharp has two string forms:
 1. **Interpreted strings** delimited by `"…"`. Escape sequences are processed.
 2. **Raw strings** delimited by backticks (`` `…` ``). Contents are taken verbatim with no escape processing. Multi-line raw strings are allowed; CR and CRLF in the source are normalized to LF in the literal value. Embedded backticks are not representable; concatenate with `+` if needed.
 
+### Interpolation
+
+Inside an interpreted string, `$name` and `${expr}` embed values (ADR-0007). `$$` is a literal `$`. A `${…}` hole may carry an optional constant alignment and an optional format specifier (ADR-0055):
+
+```
+Hole       := Expression [ "," Alignment ] [ ":" FormatString ]
+Alignment  := [ "-" ] DecimalDigits      -- constant; '-' left-justifies (C# parity)
+```
+
+`${price:N2}`, `${name,-20}`, and `${total,12:N2}` are legal; the `,`/`:` separators are recognized only at the top level of the hole (a `,`/`:` nested inside `()`, `[]`, or `{}` is part of the expression). `$name` is shorthand for `${name}` with default formatting.
+
+Lowering is tiered and chosen by context:
+
+* No hole has a format/alignment clause → `String.Concat` (a `+`-chain).
+* Any hole has a format/alignment clause → `String.Format(format, args)` (current culture).
+* The contextual target type is `System.IFormattable` or `System.FormattableString` → `FormattableStringFactory.Create(format, args)` (ADR-0055 Tier 4). Formatting is **deferred**: the caller chooses the culture via `ToString(IFormatProvider)`, e.g. `fs.ToString(CultureInfo.InvariantCulture)`. The default culture is `CultureInfo.CurrentCulture`.
+
 ## Comments
 
 Single-line comments start with `//` and run to the end of the line. (Block-comment syntax is not yet implemented; see the execution plan.)
@@ -115,6 +132,7 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 
 * `docs/coverage-matrix.md` — language-construct coverage matrix.
 * `docs/adr/0011-string-interpolation-grammar.md` — interpolation sub-grammar and lowering.
+* `docs/adr/0055-string-interpolation-revamp.md` — interpolation revamp: `${e,align:format}` holes and tiered, culture-correct lowering (incl. `FormattableString`).
 * `docs/adr/0012-raw-string-delimiter.md` — rationale for backtick raw strings.
 * `docs/adr/0044-numeric-primitive-coverage.md` — primitive-type lattice and numeric suffix grammar.
 * `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.

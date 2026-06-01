@@ -3128,9 +3128,22 @@ public sealed class Binder
         }
         else
         {
-            var initializer = BindExpression(syntax.Initializer);
-            variableType = type ?? initializer.Type;
-            convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+            // ADR-0055 Tier 4: an interpolated-string initializer whose declared
+            // type is IFormattable/FormattableString lowers to
+            // FormattableStringFactory.Create rather than an eager string.
+            if (type != null
+                && syntax.Initializer is InterpolatedStringExpressionSyntax interpolatedInit
+                && IsFormattableStringTargetType(type))
+            {
+                variableType = type;
+                convertedInitializer = BindInterpolatedStringAsFormattable(interpolatedInit, type);
+            }
+            else
+            {
+                var initializer = BindExpression(syntax.Initializer);
+                variableType = type ?? initializer.Type;
+                convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+            }
         }
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
@@ -5354,6 +5367,17 @@ public sealed class Binder
 
     private BoundStatement BindReturnStatement(ReturnStatementSyntax syntax)
     {
+        // ADR-0055 Tier 4: returning an interpolated string where the function's
+        // declared type is IFormattable/FormattableString lowers to
+        // FormattableStringFactory.Create instead of an eager string.
+        if (syntax.Expression is InterpolatedStringExpressionSyntax interpolatedReturn
+            && function != null
+            && function.Type != TypeSymbol.Void
+            && IsFormattableStringTargetType(function.Type))
+        {
+            return new BoundReturnStatement(syntax, BindInterpolatedStringAsFormattable(interpolatedReturn, function.Type));
+        }
+
         var expression = syntax.Expression == null ? null : BindExpression(syntax.Expression);
 
         if (function == null)
@@ -5490,38 +5514,187 @@ public sealed class Binder
 
     private BoundExpression BindInterpolatedStringExpression(InterpolatedStringExpressionSyntax syntax)
     {
-        // Lower `"a $x b ${expr} c"` to a `+`-chain of string-typed sub-
-        // expressions: literal parts become string literals; expression parts
-        // are bound recursively and, when not already string-typed, wrapped in
-        // an instance `.ToString()` call. An empty interpolation collapses to
-        // the empty-string literal.
-        BoundExpression result = null;
-        foreach (var segment in syntax.Segments)
+        // Tier 1 (ADR-0055, unchanged behaviour): when no hole carries a format
+        // or alignment clause, lower `"a $x b ${expr} c"` to a `+`-chain of
+        // string-typed sub-expressions. Literal parts become string literals;
+        // expression parts are bound recursively and, when not already string-
+        // typed, wrapped in `Convert.ToString(...)`. An empty interpolation
+        // collapses to the empty-string literal.
+        var hasFormatting = syntax.Segments.Any(s => s.IsExpression && (s.Alignment.HasValue || s.Format != null));
+        if (!hasFormatting)
         {
-            BoundExpression piece;
-            if (segment.IsExpression)
+            BoundExpression result = null;
+            foreach (var segment in syntax.Segments)
             {
-                var bound = BindExpression(segment.Expression);
-                if (bound is BoundErrorExpression)
+                BoundExpression piece;
+                if (segment.IsExpression)
                 {
-                    return bound;
+                    var bound = BindExpression(segment.Expression);
+                    if (bound is BoundErrorExpression)
+                    {
+                        return bound;
+                    }
+
+                    piece = ConvertToString(bound, segment.Expression.Location);
+                    if (piece is BoundErrorExpression)
+                    {
+                        return piece;
+                    }
+                }
+                else
+                {
+                    piece = new BoundLiteralExpression(null, segment.Text ?? string.Empty);
                 }
 
-                piece = ConvertToString(bound, segment.Expression.Location);
-                if (piece is BoundErrorExpression)
-                {
-                    return piece;
-                }
-            }
-            else
-            {
-                piece = new BoundLiteralExpression(null, segment.Text ?? string.Empty);
+                result = result == null ? piece : Concat(result, piece);
             }
 
-            result = result == null ? piece : Concat(result, piece);
+            return result ?? new BoundLiteralExpression(null, string.Empty);
         }
 
-        return result ?? new BoundLiteralExpression(null, string.Empty);
+        // Tier 2 (ADR-0055): at least one hole carries `,alignment`/`:format`,
+        // so synthesize a composite format string and lower to
+        // `String.Format(string, object[])` (CurrentCulture, matching C#).
+        if (!TryBuildInterpolationFormat(syntax, out var composite, out var holeValues))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        return BuildStringFormatCall(composite, holeValues);
+    }
+
+    /// <summary>
+    /// ADR-0055 Tier 4: lowers an interpolated string whose contextual target
+    /// type is <see cref="System.IFormattable"/> or
+    /// <see cref="System.FormattableString"/> to
+    /// <c>FormattableStringFactory.Create(format, object[])</c>, preserving the
+    /// composite format string (alignment/format clauses included) so the caller
+    /// can defer formatting and choose a culture at consumption time. The result
+    /// is a <see cref="System.FormattableString"/> value, which is reference-
+    /// compatible with an <see cref="System.IFormattable"/> target.
+    /// </summary>
+    private BoundExpression BindInterpolatedStringAsFormattable(InterpolatedStringExpressionSyntax syntax, TypeSymbol targetType)
+    {
+        _ = targetType;
+        if (!TryBuildInterpolationFormat(syntax, out var composite, out var holeValues))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var formatLiteral = new BoundLiteralExpression(null, composite);
+        var argArray = BuildObjectArgumentArray(holeValues);
+
+        var factoryType = typeof(System.Runtime.CompilerServices.FormattableStringFactory);
+        var createMethod = factoryType.GetMethod("Create", new[] { typeof(string), typeof(object[]) });
+        var importedClass = new ImportedClassSymbol(factoryType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(createMethod.Name, importedClass, createMethod, declaration: null);
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
+    }
+
+    /// <summary>
+    /// Determines whether <paramref name="type"/> is the contextual target type
+    /// that triggers ADR-0055 Tier 4 lowering — <c>System.IFormattable</c> or
+    /// <c>System.FormattableString</c>. Compared by full name so the check is
+    /// robust to metadata-load-context type identity.
+    /// </summary>
+    private static bool IsFormattableStringTargetType(TypeSymbol type)
+    {
+        var fullName = type?.ClrType?.FullName;
+        return fullName == "System.FormattableString" || fullName == "System.IFormattable";
+    }
+
+    /// <summary>
+    /// Builds the C#-style composite format string (<c>"{0}"</c>,
+    /// <c>"{0,10}"</c>, <c>"{0,-20:N2}"</c>) and the ordered, bound hole values
+    /// for an interpolated string. Literal braces are escaped (<c>{</c> →
+    /// <c>{{</c>) so they survive <c>String.Format</c>/<c>FormattableString</c>
+    /// formatting. Returns <c>false</c> if any hole fails to bind.
+    /// </summary>
+    private bool TryBuildInterpolationFormat(InterpolatedStringExpressionSyntax syntax, out string composite, out ImmutableArray<BoundExpression> holeValues)
+    {
+        composite = null;
+        holeValues = default;
+
+        var format = new StringBuilder();
+        var values = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var segment in syntax.Segments)
+        {
+            if (!segment.IsExpression)
+            {
+                AppendEscapedLiteral(format, segment.Text ?? string.Empty);
+                continue;
+            }
+
+            var bound = BindExpression(segment.Expression);
+            if (bound is BoundErrorExpression)
+            {
+                return false;
+            }
+
+            var index = values.Count;
+            values.Add(bound);
+
+            format.Append('{').Append(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (segment.Alignment.HasValue)
+            {
+                format.Append(',').Append(segment.Alignment.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            if (segment.Format != null)
+            {
+                format.Append(':').Append(segment.Format);
+            }
+
+            format.Append('}');
+        }
+
+        composite = format.ToString();
+        holeValues = values.ToImmutable();
+        return true;
+    }
+
+    private static void AppendEscapedLiteral(StringBuilder builder, string text)
+    {
+        foreach (var c in text)
+        {
+            if (c == '{' || c == '}')
+            {
+                builder.Append(c);
+            }
+
+            builder.Append(c);
+        }
+    }
+
+    /// <summary>
+    /// Wraps the bound hole values in an <c>object[]</c> creation, boxing value
+    /// types via an explicit conversion to <c>object</c> so the emitter produces
+    /// verifiable IL (ADR-0055 — no <c>Convert.ToString</c> mis-typing).
+    /// </summary>
+    private BoundExpression BuildObjectArgumentArray(ImmutableArray<BoundExpression> holeValues)
+    {
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(holeValues.Length);
+        foreach (var value in holeValues)
+        {
+            elements.Add(value.Type == TypeSymbol.Object
+                ? value
+                : new BoundConversionExpression(null, TypeSymbol.Object, value));
+        }
+
+        var arrayType = ArrayTypeSymbol.Get(TypeSymbol.Object, holeValues.Length);
+        return new BoundArrayCreationExpression(null, arrayType, elements.ToImmutable());
+    }
+
+    private BoundExpression BuildStringFormatCall(string composite, ImmutableArray<BoundExpression> holeValues)
+    {
+        var formatLiteral = new BoundLiteralExpression(null, composite);
+        var argArray = BuildObjectArgumentArray(holeValues);
+
+        var stringType = typeof(string);
+        var formatMethod = stringType.GetMethod("Format", new[] { typeof(string), typeof(object[]) });
+        var importedClass = new ImportedClassSymbol(stringType, declaration: null);
+        var importedFn = new ImportedFunctionSymbol(formatMethod.Name, importedClass, formatMethod, declaration: null);
+        return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
     }
 
     private BoundExpression ConvertToString(BoundExpression expression, TextLocation diagnosticLocation)
@@ -9786,6 +9959,14 @@ public sealed class Binder
 
     private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
     {
+        // ADR-0055 Tier 4: contextual conversion of an interpolated string to
+        // IFormattable/FormattableString. Handled here, before eager string
+        // lowering, so the format/alignment intent is preserved.
+        if (syntax is InterpolatedStringExpressionSyntax interpolated && IsFormattableStringTargetType(type))
+        {
+            return BindInterpolatedStringAsFormattable(interpolated, type);
+        }
+
         var expression = BindExpression(syntax);
         return BindConversion(syntax.Location, expression, type, allowExplicit);
     }

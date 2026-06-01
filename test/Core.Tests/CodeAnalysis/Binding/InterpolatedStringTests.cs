@@ -91,6 +91,82 @@ public class InterpolatedStringTests
         Assert.Equal("1 + 2 = 3", msg.Value);
     }
 
+    [Fact]
+    public void Format_Specifier_On_String_Path_Uses_String_Format()
+    {
+        // ADR-0055 Tier 2: a `:format` clause in a plain (string-typed)
+        // interpolation lowers to String.Format with the composite format
+        // string, honoring the format specifier.
+        var source = "let total = 1234.5\nlet msg = \"amount: ${total:N2}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("amount: " + (1234.5).ToString("N2", System.Globalization.CultureInfo.CurrentCulture), msg.Value);
+    }
+
+    [Fact]
+    public void Alignment_Specifier_On_String_Path_Pads()
+    {
+        var source = "let name = \"Acme\"\nlet msg = \"[${name,8}][${name,-8}]\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        Assert.Equal("[    Acme][Acme    ]", msg.Value);
+    }
+
+    [Fact]
+    public void FormattableString_Target_Produces_FormattableString()
+    {
+        // ADR-0055 Tier 4: the contextual target type FormattableString lowers
+        // to FormattableStringFactory.Create, producing a real
+        // System.FormattableString rather than an eager string.
+        var source = "let total = 1234.5\nlet fs FormattableString = \"amount: ${total:N2}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var fs = result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+        Assert.IsAssignableFrom<System.FormattableString>(fs);
+    }
+
+    [Fact]
+    public void FormattableString_Defers_Culture_To_Caller()
+    {
+        // Deferred ToString(IFormatProvider) honors the caller-supplied culture:
+        // the same FormattableString renders differently under invariant vs de-DE.
+        var source = "let total = 1234.5\nlet fs FormattableString = \"amount: ${total:N2}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+
+        Assert.Equal("amount: 1,234.50", fs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal("amount: 1.234,50", fs.ToString(System.Globalization.CultureInfo.GetCultureInfo("de-DE")));
+    }
+
+    [Fact]
+    public void FormattableString_Preserves_Composite_Format()
+    {
+        // The synthesized composite format string keeps positional indices,
+        // alignment, and the format specifier intact.
+        var source = "let total = 1234.5\nlet qty = 7\nlet fs FormattableString = \"a ${total:N2} b ${qty,4} c\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+
+        Assert.Equal("a {0:N2} b {1,4} c", fs.Format);
+        Assert.Equal(2, fs.ArgumentCount);
+        Assert.Equal("a 1,234.50 b    7 c", fs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void IFormattable_Target_Produces_Formattable_Value()
+    {
+        var source = "let n = 42\nlet f IFormattable = \"n=${n:D3}\"\n";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        var f = result.Variables.Single(kv => kv.Key.Name == "f").Value;
+        Assert.IsAssignableFrom<System.IFormattable>(f);
+        Assert.Equal("n=042", ((System.IFormattable)f).ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
