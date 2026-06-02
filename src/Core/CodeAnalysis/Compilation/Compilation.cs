@@ -1,4 +1,4 @@
-﻿// <copyright file="Compilation.cs" company="GSharp">
+// <copyright file="Compilation.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -290,7 +291,7 @@ public class Compilation
     /// </summary>
     /// <param name="peStream">Destination stream for the PE bytes.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream) => Emit(peStream, pdbStream: null, refStream: null, assemblyName: null);
+    public EmitResult Emit(Stream peStream) => Emit(peStream, pdbStream: null, refStream: null, docStream: null, assemblyName: null);
 
     /// <summary>
     /// Compiles the current syntax tree and writes the resulting assembly to
@@ -306,6 +307,23 @@ public class Compilation
     /// <param name="assemblyVersion">Optional informational version string stamped as <c>AssemblyInformationalVersionAttribute</c>.</param>
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, string assemblyName = null, string assemblyVersion = null)
+        => Emit(peStream, pdbStream, refStream, docStream: null, assemblyName, assemblyVersion);
+
+    /// <summary>
+    /// Compiles the current syntax tree and writes the resulting assembly to
+    /// <paramref name="peStream"/>, optionally writing a Portable PDB stream
+    /// to <paramref name="pdbStream"/>, a metadata-only sibling assembly to
+    /// <paramref name="refStream"/>, and an XML documentation file to
+    /// <paramref name="docStream"/>.
+    /// </summary>
+    /// <param name="peStream">Destination stream for the PE bytes. May be <c>null</c> when only non-PE sidecars are desired.</param>
+    /// <param name="pdbStream">Destination stream for the Portable PDB sidecar. Only consumed when <see cref="DebugInformation"/>'s <see cref="DebugInformationOptions.Format"/> is <see cref="DebugInformationFormat.Portable"/>.</param>
+    /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
+    /// <param name="docStream">Optional destination stream for the XML documentation file.</param>
+    /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
+    /// <param name="assemblyVersion">Optional informational version string stamped as <c>AssemblyInformationalVersionAttribute</c>.</param>
+    /// <returns>An emit result.</returns>
+    public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, Stream docStream, string assemblyName = null, string assemblyVersion = null)
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
@@ -352,6 +370,11 @@ public class Compilation
                 // pointing at a sidecar that doesn't describe this PE.
                 EmitAssembly(program, refStream, References, assemblyName, assemblyVersion, metadataOnly: true, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: null, pdbStream: null);
             }
+
+            if (docStream is not null)
+            {
+                DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program.Structs, program.Functions.Keys);
+            }
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
@@ -373,7 +396,7 @@ public class Compilation
     /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream, Stream refStream) =>
-        Emit(peStream, pdbStream: null, refStream, assemblyName: null);
+        Emit(peStream, pdbStream: null, refStream, docStream: null, assemblyName: null);
 
     /// <summary>
     /// The canonical async/iterator lowering pipeline. Runs all rewriter

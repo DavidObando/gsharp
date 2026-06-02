@@ -171,6 +171,16 @@ public class Program
             }
         }
 
+        var documentationOutputPath = args.DocumentationFile;
+        if (!string.IsNullOrEmpty(documentationOutputPath))
+        {
+            var documentationDir = Path.GetDirectoryName(documentationOutputPath);
+            if (!string.IsNullOrEmpty(documentationDir))
+            {
+                Directory.CreateDirectory(documentationDir);
+            }
+        }
+
         // Phase 3 / ADR-0027 §7.7a: when Portable PDB is requested, open the
         // sidecar stream alongside the PE. If the caller did not supply an
         // explicit /pdb:<path>, default to "<PE>.pdb" (csc.exe convention).
@@ -196,8 +206,9 @@ public class Program
         using (var peStream = File.Create(outputPath))
         using (var refStream = string.IsNullOrEmpty(refOutputPath) ? null : File.Create(refOutputPath))
         using (var pdbStream = pdbOutputPath is null ? null : File.Create(pdbOutputPath))
+        using (var docStream = string.IsNullOrEmpty(documentationOutputPath) ? null : File.Create(documentationOutputPath))
         {
-            result = compilation.Emit(peStream, pdbStream, refStream, args.AssemblyName, args.Version);
+            result = compilation.Emit(peStream, pdbStream, refStream, docStream, args.AssemblyName, args.Version);
         }
 
         // Apply /nowarn, /warnaserror filtering.
@@ -222,6 +233,11 @@ public class Program
             if (!string.IsNullOrEmpty(pdbOutputPath))
             {
                 TryDelete(pdbOutputPath);
+            }
+
+            if (!string.IsNullOrEmpty(documentationOutputPath))
+            {
+                TryDelete(documentationOutputPath);
             }
 
             Console.Error.WriteLine("Failed.");
@@ -478,6 +494,15 @@ public class Program
 
                         break;
 
+                    case "doc":
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            throw new CommandLineException("/doc requires a path: /doc:<file>.");
+                        }
+
+                        result.DocumentationFile = value;
+                        break;
+
                     case "sourcelink":
                         if (string.IsNullOrEmpty(value))
                         {
@@ -709,6 +734,9 @@ public class Program
 
         /// <summary>Gets or sets the explicit sidecar PDB path (from /pdb:&lt;path&gt;). Null means "default to {OutputPath}.pdb".</summary>
         public string PdbPath { get; set; }
+
+        /// <summary>Gets or sets the XML documentation output path (from /doc:&lt;path&gt;).</summary>
+        public string DocumentationFile { get; set; }
 
         /// <summary>Gets or sets the path to a Source Link JSON file (from /sourcelink:&lt;path&gt;).</summary>
         public string SourceLinkPath { get; set; }

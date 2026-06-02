@@ -94,6 +94,9 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the path of the metadata-only reference assembly to write (refint).</summary>
     public string RefAssembly { get; set; }
 
+    /// <summary>Gets or sets the path of the XML documentation file to write.</summary>
+    public string DocumentationFile { get; set; }
+
     /// <summary>Gets or sets the comma-separated list of diagnostic IDs to suppress (NoWarn MSBuild property).</summary>
     public string NoWarn { get; set; }
 
@@ -174,6 +177,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (!string.IsNullOrEmpty(this.RefAssembly))
         {
             args.Add($"/refout:{this.RefAssembly}");
+        }
+
+        if (!string.IsNullOrEmpty(this.DocumentationFile))
+        {
+            args.Add($"/doc:{this.DocumentationFile}");
         }
 
         if (!string.IsNullOrEmpty(this.NoWarn))
