@@ -1484,7 +1484,8 @@ public sealed class Binder
                     isAutoProperty,
                     isVirtual,
                     isOverride,
-                    setterParamName);
+                    setterParamName,
+                    declaration: propSyntax);
                 AttachDocumentation(propertySymbol, propSyntax);
 
                 // Create backing field for auto-properties
@@ -1593,7 +1594,8 @@ public sealed class Binder
                     eventAccessibility,
                     isFieldLike,
                     isVirtual,
-                    isOverride);
+                    isOverride,
+                    declaration: eventSyntax);
                 AttachDocumentation(eventSymbol, eventSyntax);
 
                 // Create backing field for field-like events
@@ -1899,7 +1901,8 @@ public sealed class Binder
                     isVirtual: false,
                     isOverride: false,
                     setterParamName,
-                    isStatic: true);
+                    isStatic: true,
+                    declaration: propSyntax);
 
                 if (isAutoProperty)
                 {
@@ -1996,7 +1999,8 @@ public sealed class Binder
                     isFieldLike,
                     isVirtual: false,
                     isOverride: false,
-                    isStatic: true);
+                    isStatic: true,
+                    declaration: eventSyntax);
 
                 if (isFieldLike)
                 {
@@ -2367,7 +2371,8 @@ public sealed class Binder
                     hasSetter,
                     isAutoProperty: false,
                     isVirtual: false,
-                    isOverride: false);
+                    isOverride: false,
+                    declaration: propSyntax);
 
                 AttachDocumentation(propSymbol, propSyntax);
                 propertiesBuilder.Add(propSymbol);
@@ -2401,7 +2406,8 @@ public sealed class Binder
                     Accessibility.Public,
                     isFieldLike: false,
                     isVirtual: false,
-                    isOverride: false);
+                    isOverride: false,
+                    declaration: eventSyntax);
 
                 AttachDocumentation(eventSymbol, eventSyntax);
                 eventsBuilder.Add(eventSymbol);

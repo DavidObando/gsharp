@@ -55,6 +55,7 @@ public class Compilation
         References = references ?? previous?.References;
         ImplicitSystemImport = previous?.ImplicitSystemImport ?? true;
         PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
+        WarnOnMissingDocumentation = previous?.WarnOnMissingDocumentation ?? false;
         debugInformation = CloneDebugInformation(previous?.DebugInformation);
     }
 
@@ -115,6 +116,13 @@ public class Compilation
         get => debugInformation;
         set => debugInformation = value ?? new DebugInformationOptions();
     }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether public source symbols missing
+    /// documentation comments should produce GS0228 warnings during emit.
+    /// Defaults to <see langword="false"/>.
+    /// </summary>
+    public bool WarnOnMissingDocumentation { get; set; }
 
     /// <summary>
     /// Gets the global scope.
@@ -251,6 +259,14 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
+        var documentationDiagnostics = new DiagnosticBag();
+        DocumentationValidator.Validate(
+            SyntaxTrees,
+            program.Functions.Keys.ToImmutableArray(),
+            program.Structs,
+            documentationDiagnostics,
+            WarnOnMissingDocumentation);
+
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
@@ -265,6 +281,7 @@ public class Compilation
 
         var allWarnings = syntaxDiagnostics
             .Concat(program.Diagnostics)
+            .Concat(documentationDiagnostics)
             .Concat(lowerDiagnostics)
             .Where(d => !d.IsError)
             .ToImmutableArray();
@@ -338,6 +355,14 @@ public class Compilation
             return new EmitResult(success: false, program.Diagnostics.ToImmutableArray());
         }
 
+        var documentationDiagnostics = new DiagnosticBag();
+        DocumentationValidator.Validate(
+            SyntaxTrees,
+            program.Functions.Keys.ToImmutableArray(),
+            program.Structs,
+            documentationDiagnostics,
+            WarnOnMissingDocumentation);
+
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
@@ -352,6 +377,7 @@ public class Compilation
 
         var allWarnings = syntaxDiagnostics
             .Concat(program.Diagnostics)
+            .Concat(documentationDiagnostics)
             .Concat(lowerDiagnostics)
             .Where(d => !d.IsError)
             .ToImmutableArray();

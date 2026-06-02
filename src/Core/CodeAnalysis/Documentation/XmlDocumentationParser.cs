@@ -57,6 +57,9 @@ public static class XmlDocumentationParser
                 case "remarks":
                     AppendInto(remarks, ParseInline(element));
                     break;
+                case "inheritdoc":
+                    remarks.Add(new DocInline.InheritDoc(CrefAttribute(element)));
+                    break;
                 case "param":
                     parameters.Add(new DocParam(NameAttribute(element), ParseInline(element)));
                     break;
@@ -141,6 +144,8 @@ public static class XmlDocumentationParser
             case "paramref":
             case "typeparamref":
                 return new DocInline.ParamRef(NameAttribute(element));
+            case "inheritdoc":
+                return new DocInline.InheritDoc(CrefAttribute(element));
             case "see":
                 return ParseSee(element);
             default:

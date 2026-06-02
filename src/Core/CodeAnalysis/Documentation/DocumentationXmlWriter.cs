@@ -164,6 +164,15 @@ internal static class DocumentationXmlWriter
                 writer.WriteAttributeString("name", paramRef.Name);
                 writer.WriteEndElement();
                 break;
+            case DocInline.InheritDoc inheritDoc:
+                writer.WriteStartElement("inheritdoc");
+                if (!string.IsNullOrEmpty(inheritDoc.Cref))
+                {
+                    writer.WriteAttributeString("cref", inheritDoc.Cref);
+                }
+
+                writer.WriteEndElement();
+                break;
             case DocInline.UnknownXmlElement unknownXml:
                 writer.WriteRaw(unknownXml.RawXml);
                 break;

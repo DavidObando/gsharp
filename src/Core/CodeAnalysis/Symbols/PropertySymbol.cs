@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -22,6 +24,7 @@ public sealed class PropertySymbol : Symbol
     /// <param name="isOverride">Whether this property overrides a base property.</param>
     /// <param name="setterParameterName">The setter parameter name (defaults to "value").</param>
     /// <param name="isStatic">Whether this property is declared inside a <c>shared</c> block (ADR-0053).</param>
+    /// <param name="declaration">The declaring syntax node, or <see langword="null"/> for synthesized properties.</param>
     public PropertySymbol(
         string name,
         TypeSymbol type,
@@ -32,7 +35,8 @@ public sealed class PropertySymbol : Symbol
         bool isVirtual,
         bool isOverride,
         string setterParameterName = "value",
-        bool isStatic = false)
+        bool isStatic = false,
+        PropertyDeclarationSyntax declaration = null)
         : base(name)
     {
         Type = type;
@@ -44,6 +48,7 @@ public sealed class PropertySymbol : Symbol
         IsOverride = isOverride;
         SetterParameterName = setterParameterName;
         IsStatic = isStatic;
+        Declaration = declaration;
     }
 
     /// <inheritdoc/>
@@ -75,6 +80,9 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets a value indicating whether this property is declared inside a <c>shared</c> block (ADR-0053).</summary>
     public bool IsStatic { get; }
+
+    /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized properties.</summary>
+    public PropertyDeclarationSyntax Declaration { get; }
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol BackingField { get; set; }

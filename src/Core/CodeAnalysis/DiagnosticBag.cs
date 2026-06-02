@@ -1540,6 +1540,49 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0226", message);
     }
 
+    /// <summary>
+    /// ADR-0057 §P4: reports a documentation comment block that does not precede
+    /// any documentable declaration (a "floating" doc comment).
+    /// </summary>
+    /// <param name="location">The text location of the floating documentation comment.</param>
+    public void ReportFloatingDocumentationComment(TextLocation location)
+    {
+        Report(location, "GS0227", "Documentation comment is not attached to a declaration.", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0057 §P4: reports a public API member that lacks documentation (opt-in via /warnondoc or similar mechanism).
+    /// </summary>
+    /// <param name="location">The text location of the undocumented declaration.</param>
+    /// <param name="symbolName">The undocumented public symbol name.</param>
+    public void ReportMissingDocumentation(TextLocation location, string symbolName)
+    {
+        Report(location, "GS0228", $"Missing documentation comment on public member '{symbolName}'.", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0057 §P4: reports a @param or @typeparam tag whose name does not match
+    /// any parameter in the documented member's signature.
+    /// </summary>
+    /// <param name="location">The text location of the documented declaration.</param>
+    /// <param name="paramName">The unmatched parameter or type-parameter name.</param>
+    /// <param name="symbolName">The documented symbol name.</param>
+    public void ReportDocParamMismatch(TextLocation location, string paramName, string symbolName)
+    {
+        Report(location, "GS0229", $"Documentation @param '{paramName}' does not match any parameter of '{symbolName}'.", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0057 §P4: reserved for unsupported Markdown constructs that cannot be
+    /// represented in the documentation model.
+    /// </summary>
+    /// <param name="location">The text location of the unsupported Markdown construct.</param>
+    /// <param name="detail">Details about the unsupported Markdown construct.</param>
+    public void ReportUnsupportedDocumentationMarkdown(TextLocation location, string detail)
+    {
+        Report(location, "GS0230", $"Unsupported documentation Markdown: {detail}. Use ```xmldoc for complex XML-doc constructs.", DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
