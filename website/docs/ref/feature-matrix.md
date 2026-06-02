@@ -44,7 +44,8 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Function types, literals, closures | Supported | Supported | Delegate conversions are strongest on the emit path. |
 | Generics and method inference | Supported | Supported for binding/evaluation | Metadata specs plus type-erased handling for open type-parameter-containing shapes. |
 | Variance and constraints | Supported semantically | Supported semantically | Diagnostics include `GS0150` through `GS0153`. |
-| By-ref and pointers | Partial | Limited/not supported | Syntax and diagnostics exist; evaluator rejects generic address/deref execution. |
+| By-ref and pointers | Partial | Limited/not supported | `&` / `*` / `*T` for CLR `ref`/`out`/`in` interop (ADR-0039); ref returns auto-dereference in rvalue position (ADR-0056 §1). Evaluator rejects generic address/deref execution. |
+| Spans and `ref struct` types | Mostly supported | Limited | Stack-only consumption of `Span[T]` / `ReadOnlySpan[T]` and user `type X ref struct`: element read/write, `[]T`→span conversion, closed generic value-type fields (ADR-0056). Escape rules are `GS0219`; `ReadOnlySpan[T]` writes are `GS0226`. Full ref-safe-to-escape analysis is deferred (#376). |
 
 ## Declarations and members
 

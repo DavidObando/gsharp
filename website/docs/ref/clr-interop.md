@@ -196,6 +196,66 @@ The by-ref surface is deliberately scoped to managed references for CLR interop.
 | `GS9005` | `&` is applied to a constant. |
 | `GS9006` | A pointer (`*T`) type is used as a field type. |
 
+## Spans and `ref struct` types
+
+G# can consume CLR `ref struct` types — most importantly `System.Span[T]` and `System.ReadOnlySpan[T]` — as ordinary stack-only locals, parameters, and fields. The consumption surface is defined by [ADR-0056](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0056-span-consumption-v1.md) and builds on the by-ref machinery above.
+
+A by-ref-like (`ref struct`) value carries `System.Runtime.CompilerServices.IsByRefLikeAttribute` and is stack-only: the CLR forbids any use that would let it reach the heap. G# enforces this with **`GS0219`** — boxing or converting it to a reference type, storing it in a non-`ref struct` field, capturing it in a closure, hoisting it into an `async`/iterator state machine, using it as a generic type argument, or declaring it as a top-level global are all rejected. Because of the last rule, span locals live inside functions.
+
+### Span element access
+
+A `Span[T]` / `ReadOnlySpan[T]` indexer returns a managed pointer (`ref T` / `ref readonly T`). Reading an element in rvalue position **auto-dereferences** the ref return to the pointee `T` (you do not write `*`), and a `Span[T]` element write `s[i] = v` stores through the returned `ref T`:
+
+```gsharp
+import System
+
+func sumSpan(values []int32) int32 {
+    var s ReadOnlySpan[int32] = values   // []T -> ReadOnlySpan[T] implicit conversion
+    var total = 0
+    var i = 0
+    for i < s.Length {
+        total = total + s[i]             // read auto-dereferences ref readonly int32 -> int32
+        i = i + 1
+    }
+    return total
+}
+
+func writeBack(values []int32) int32 {
+    var s Span[int32] = values
+    s[0] = 100                           // store through the ref int32 from get_Item
+    s[2] = 300
+    return s[0] + s[1] + s[2]
+}
+```
+
+A `ReadOnlySpan[T]` element is `ref readonly T`, so writing through it is a hard error — **`GS0226`** (`s[0] = 1` on a `ReadOnlySpan[T]`); reading it is always allowed. Auto-dereference is the same general rule for every ref-returning CLR member (indexers, `ref` property getters, ref-returning methods): **ref returns auto-dereference in rvalue position; taking an address still requires `&`.**
+
+### Slice-to-span conversion
+
+A `[]T` slice converts implicitly to `Span[T]` / `ReadOnlySpan[T]` (via the BCL's `op_Implicit`) at local initialization **and** in argument position, so a slice flows straight into a span-typed BCL or user API without an explicit cast.
+
+### Closed generic value-type fields
+
+A user `ref struct` may embed a **closed** constructed generic value-type field, such as a span:
+
+```gsharp
+import System
+
+type Window ref struct {
+    data ReadOnlySpan[int32]
+}
+
+func firstLen(w Window) int32 {
+    return w.data.Length
+}
+```
+
+Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, never erased to `System.Object`), and instance-member calls on the field receiver take its address correctly. Type erasure (see [Generics interop](#generics-interop)) applies only to *open*, type-parameter-bearing shapes; closed value-type generics in field position carry real layout.
+
+### Limitations
+
+Per ADR-0056, the following remain out of scope: by-ref returns from G# functions and the full two-level `ref-safe-to-escape` analysis (`scoped`, `[UnscopedRef]`), deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376); open generic value-type `ref struct` fields (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
+
 ## Generics interop
 
 Imported generic types and methods use G# bracket syntax:
@@ -206,7 +266,7 @@ import System.Collections.Generic
 var xs = List[int32]()
 ```
 
-G# emits metadata specs for constructed generic types and methods, supports type-argument inference for imported open generic methods, and supports variance markers and constraints in its own type parameter model. The current implementation also has a type-erased generic model for some open or partially constructed shapes that contain type parameters; those shapes may be represented as `object` in emit paths. Treat this as an implementation constraint rather than a source-level API.
+G# emits metadata specs for constructed generic types and methods, supports type-argument inference for imported open generic methods, and supports variance markers and constraints in its own type parameter model. The current implementation also has a type-erased generic model for some open or partially constructed shapes that contain type parameters; those shapes may be represented as `object` in emit paths. Closed constructed generic *value* types (e.g. `ReadOnlySpan[int32]`, `Nullable[int32]`) are an exception: in field position they carry their real layout and are never erased (see [Spans and `ref struct` types](#spans-and-ref-struct-types)). Treat the open-shape erasure as an implementation constraint rather than a source-level API.
 
 ## Interpolated strings and formatting
 
