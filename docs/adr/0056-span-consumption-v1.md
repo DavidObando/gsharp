@@ -2,6 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-06-01
+- **Amended**: 2026-06-01 — §4's root-cause analysis was corrected after implementation (#382); the closed generic value-type field layout was already emitted correctly, and the #375 fault was a separate value-type receiver address-of bug. The §4 *invariant* stands; see [Amendment](#amendment-2026-06-01-4-root-cause-correction).
 - **Phase**: Phase 8 — `ref struct` / `Span<T>` consumption (level 2 of issue #344)
 - **Related**: #344 (consuming ref structs / `Span<T>` — level decision), #367 / #371 / #373 (binder, GS0219, user `ref struct` declaration + emit), #375 (generic value-type field layout fault), #376 (full ref-safe-to-escape, deferred), ADR-0039 (by-ref pointers `&`/`*`, `ByRefTypeSymbol`), ADR-0004 (type-erased generics)
 
@@ -26,7 +27,7 @@ What is blocked today (each reproduced against the current `main`):
    - `span[0]` in value position binds but emits a malformed open methodref `System.T& ReadOnlySpan`1.get_Item(Int32)` → **`MissingMethodException`** at runtime (the element type is erased and the by-ref return is not loaded).
    - `Span[T]` element write `s[i] = 99` → `GS0116: type ... is not indexable`.
 2. **`[]T → Span[T]` / `ReadOnlySpan[T]` conversion is not applied in argument position.** `sum(nums)` where `sum` takes `ReadOnlySpan[int32]` and `nums` is `[]int32` → `GS0154`, even though the identical conversion succeeds at local-init. Argument coercion / overload applicability uses `Conversion.Classify` (which returns `None` for slice→span) and never reaches the `op_Implicit` fallback that `BindConversion` uses.
-3. **A user `ref struct` embedding a closed constructed generic value-type field faults at runtime (#375).** `type Window ref struct { data ReadOnlySpan[int32] }` constructs and compiles, but reading `w.data.Length` throws **`AccessViolationException`**. The constructed generic value type in field position is laid out under the type-erased generics model (ADR-0004) rather than with its real, closed layout, so the field has the wrong size and the CLR corrupts the stack.
+3. **A user `ref struct` embedding a closed constructed generic value-type field faults at runtime (#375).** `type Window ref struct { data ReadOnlySpan[int32] }` constructs and compiles, but reading `w.data.Length` throws **`AccessViolationException`**. *(Diagnosis corrected during implementation — see [Amendment](#amendment-2026-06-01-4-root-cause-correction): the field is in fact laid out correctly; the fault is a value-type receiver address-of bug, not erasure.)*
 
 These three gaps are exactly what keeps level 2 from delivering value: a span you cannot index, cannot pass a slice into, and cannot embed is barely usable. They share one root theme — **G# can name `ref struct` and by-ref types but cannot yet flow values through ref-returning members or lay out closed generic value types** — so they are best decided together.
 
@@ -71,9 +72,11 @@ Argument coercion and overload applicability must consider the same user-defined
 
 ### 4. Closed constructed generic value-type fields get real layout (#375)
 
-The type-erasure boundary is tightened: a field whose type is a **closed** constructed generic value type (no in-scope type parameters; e.g. `ReadOnlySpan[int32]`, `Nullable[int32]`) is emitted with its real `GenericInstantiation(openDef, args, isValueType: true)` signature — never erased to `System.Object`. Erasure (ADR-0004) continues to apply only to open, type-parameter-bearing types (`T`, `List[T]`, `func(T) U`). `EncodeClrType` already encodes constructed generic value types correctly (the `IsConstructedGenericType` path); the fix is to route generic value-type **field** signatures through that path instead of the erased-object path, so the emitted field has the correct size and layout.
+> **Amended (#382):** The premise below — that #375 faulted because the field was *erased* to `System.Object` — proved incorrect at implementation time. The field was already emitted with its real `valuetype ReadOnlySpan`1<int32>` signature; the actual fault was a value-type-receiver address-of bug in the emitter. The decision still holds as a stated invariant (closed generic value-type fields carry real layout, never erased), and is now locked in by a regression test, but it required *no* field-signature change. See the [Amendment](#amendment-2026-06-01-4-root-cause-correction) for the corrected analysis.
 
-This is a targeted emitter fix, but it is captured here (rather than as a bare bug) because it *decides where erasure stops* — a design boundary that interacts with ADR-0004 — and because it is a prerequisite for embedding spans in user `ref struct` types.
+The type-erasure boundary is tightened: a field whose type is a **closed** constructed generic value type (no in-scope type parameters; e.g. `ReadOnlySpan[int32]`, `Nullable[int32]`) is emitted with its real `GenericInstantiation(openDef, args, isValueType: true)` signature — never erased to `System.Object`. Erasure (ADR-0004) continues to apply only to open, type-parameter-bearing types (`T`, `List[T]`, `func(T) U`). `EncodeClrType` already encodes constructed generic value types correctly (the `IsConstructedGenericType` path), and — as #382 confirmed — generic value-type field signatures already flow through that path; the emitted field has the correct size and layout.
+
+This boundary is captured here (rather than as a bare bug) because it *decides where erasure stops* — a design boundary that interacts with ADR-0004 — and because correct closed generic value-type field layout is a prerequisite for embedding spans in user `ref struct` types.
 
 ### Scope boundaries (explicitly out of v1)
 
@@ -88,7 +91,7 @@ This is a targeted emitter fix, but it is captured here (rather than as a bare b
 
 - Real buffer-style consumption: read and write span elements, iterate a span by index, pass a `[]T` slice straight into a span-typed BCL or user API, and embed a closed generic span in a user `ref struct` (the `Window` example runs instead of faulting).
 - A clean, teachable surface rule: **ref returns auto-dereference in rvalue position; taking an address requires `&`.** This generalizes beyond spans to every ref-returning CLR member.
-- The type-erasure boundary is now stated precisely (closed value-type generics in field position carry real layout), removing a class of `AccessViolationException` faults that is not limited to spans.
+- The type-erasure boundary is now stated precisely (closed value-type generics in field position carry real layout) and locked in by a regression test, foreclosing a class of layout-erasure faults — though the specific #375 fault turned out to be an emitter receiver bug rather than erasure (see [Amendment](#amendment-2026-06-01-4-root-cause-correction)).
 
 **Constrained / foreclosed:**
 
@@ -130,7 +133,7 @@ Hard-code span indexing rather than the general ref-returning-member auto-deref 
 
 Leave ADR-0004 erasure untouched and box the span into the field.
 
-**Cons:** `ref struct` values cannot be boxed by definition (the entire reason they exist), and erasure is precisely what produces the `AccessViolationException` in #375. Closed value types have a real layout that the emitter already knows how to encode. **Rejected** — there is no correct erased representation for a `ref struct`-bearing field.
+**Cons:** `ref struct` values cannot be boxed by definition (the entire reason they exist), and an erased field would have the wrong size and layout. Closed value types have a real layout that the emitter already knows how to encode — and, as #382 found, already emits. **Rejected** — there is no correct erased representation for a `ref struct`-bearing field. *(Note: the original claim that erasure was the actual cause of #375's `AccessViolationException` was incorrect; see [Amendment](#amendment-2026-06-01-4-root-cause-correction). The rejection still stands — erasing such a field would be wrong regardless.)*
 
 ## Follow-ups
 
@@ -138,3 +141,27 @@ Leave ADR-0004 erasure untouched and box the span into the field.
 - **Open generic `ref struct` declarations** (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`) — open generic value-type field layout, broader than v1's closed-only support.
 - **`stackalloc` / stack buffers / `MemoryMarshal`** — high-performance span creation, a separate ADR.
 - **`Utf8JsonReader` end-to-end** — once §1–§4 land, re-evaluate the originally-motivating ref-struct JSON reader path from #344 as a conformance target.
+
+## Amendment 2026-06-01: §4 root-cause correction
+
+During implementation of §4 (PR #382, fixing #375) the documented root cause turned out to be wrong, so this amendment records the corrected analysis. The design decision and its invariant are unchanged; only the *diagnosis* and the *nature of the fix* are corrected.
+
+**What the ADR originally claimed.** That `type Window ref struct { data ReadOnlySpan[int32] }` faulted with `AccessViolationException` because the closed constructed generic value-type field was laid out under the ADR-0004 type-erased model (erased to `System.Object`), giving the field the wrong size and corrupting the stack. §4 therefore proposed "routing generic value-type field signatures through the constructed-generic path instead of the erased-object path."
+
+**What was actually true.** The field signature was already correct. The emitted metadata shows the real value type, no `ClassLayout` row, and the correct `IsByRefLikeAttribute`:
+
+```il
+.field public valuetype [System.Private.CoreLib]System.ReadOnlySpan`1<int32> Demo.Window::data
+```
+
+The fault was a separate emitter bug in the **instance-method receiver load**. Calling an instance method on a value type requires a managed pointer (`this`). `EmitInstanceReceiver` only took the *address* of a value-type receiver (`ldflda`) when that receiver was a `BoundVariableExpression`; a `BoundFieldAccessExpression` receiver (`w.data`) fell through to `ldfld`, pushing the struct *by value* and reinterpreting its bits as the `this` pointer. `ilverify` pinpointed it:
+
+```
+[StackUnexpected] [found value 'ReadOnlySpan`1<int32>'] [expected address of 'ReadOnlySpan`1<int32>']
+```
+
+**The actual fix.** A one-line behavioral change in `EmitInstanceReceiver` (`ReflectionMetadataEmitter.cs`): load a value-type field-access receiver by address (`ldflda`, via the existing `EmitFieldAddress`) instead of by value. No field-signature or type-erasure code was touched.
+
+**Why §4 still stands.** The decision — *closed constructed generic value-type fields carry their real layout and are never erased to `System.Object`* — remains a correct and now-tested invariant of the emitter; #382 added a regression test asserting the field is the real `System.ReadOnlySpan<int>` value type (not `System.Object`) and that the receiver opcode is `ldflda`. The boundary §4 draws around ADR-0004 erasure (open-only) is unchanged. What changed is that this invariant was already upheld by the existing signature path, so realizing #375's fix required no change there — the corrective work was entirely in receiver emission.
+
+**Lesson for future ADRs.** The erasure hypothesis was plausible but unverified against emitted IL. Reproducing the fault under `ilverify` before settling on a cause would have caught this earlier; ADRs that assert an emitter root cause should cite IL/`ilverify` evidence.
