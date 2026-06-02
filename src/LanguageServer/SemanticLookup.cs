@@ -324,6 +324,37 @@ public static class SemanticLookup
                 {
                     declarations[aggregate.Declaration.Fields[i].Identifier] = aggregate.Fields[i];
                 }
+
+                MapMembersByName(
+                    declarations,
+                    aggregate.Declaration.Properties.Select(p => p.Identifier),
+                    aggregate.Properties.Concat(aggregate.StaticProperties));
+
+                MapMembersByName(
+                    declarations,
+                    aggregate.Declaration.Events.Select(e => e.Identifier),
+                    aggregate.Events.Concat(aggregate.StaticEvents));
+            }
+        }
+
+        foreach (var import in compilation.GlobalScope.Imports)
+        {
+            if (import.Declaration?.AliasIdentifier is { } aliasIdentifier)
+            {
+                declarations[aliasIdentifier] = import;
+            }
+        }
+
+        foreach (var package in compilation.GlobalScope.Packages)
+        {
+            if (package.Declaration == null)
+            {
+                continue;
+            }
+
+            foreach (var identifier in package.Declaration.Identifiers)
+            {
+                declarations[identifier] = package;
             }
         }
 
@@ -344,6 +375,26 @@ public static class SemanticLookup
 
         MapLocalVariables(compilation, declarations, localDeclarations);
         return new SemanticModel(compilation, declarations, globals, localDeclarations);
+    }
+
+    private static void MapMembersByName(
+        Dictionary<SyntaxToken, Symbol> declarations,
+        IEnumerable<SyntaxToken> identifiers,
+        IEnumerable<Symbol> symbols)
+    {
+        var byName = new Dictionary<string, Symbol>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            byName[symbol.Name] = symbol;
+        }
+
+        foreach (var identifier in identifiers)
+        {
+            if (identifier != null && byName.TryGetValue(identifier.Text, out var symbol))
+            {
+                declarations[identifier] = symbol;
+            }
+        }
     }
 
     private static void MapParameters(
