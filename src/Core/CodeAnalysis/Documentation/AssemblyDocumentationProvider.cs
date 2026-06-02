@@ -111,6 +111,75 @@ public sealed class AssemblyDocumentationProvider
     }
 
     /// <summary>
+    /// Resolves the ingested documentation for a reflected property from its assembly's
+    /// companion xml, or <see langword="null"/> when unavailable.
+    /// </summary>
+    /// <param name="property">The reflected property.</param>
+    /// <returns>The documentation, or <see langword="null"/>.</returns>
+    public static DocumentationComment Resolve(PropertyInfo property)
+    {
+        if (property is null)
+        {
+            return null;
+        }
+
+        var provider = ForAssembly(SafeAssembly(property.DeclaringType));
+        if (provider == null)
+        {
+            return null;
+        }
+
+        var id = DocumentationIdProvider.GetDocumentationId(property);
+        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+    }
+
+    /// <summary>
+    /// Resolves the ingested documentation for a reflected field from its assembly's
+    /// companion xml, or <see langword="null"/> when unavailable.
+    /// </summary>
+    /// <param name="field">The reflected field.</param>
+    /// <returns>The documentation, or <see langword="null"/>.</returns>
+    public static DocumentationComment Resolve(FieldInfo field)
+    {
+        if (field is null)
+        {
+            return null;
+        }
+
+        var provider = ForAssembly(SafeAssembly(field.DeclaringType));
+        if (provider == null)
+        {
+            return null;
+        }
+
+        var id = DocumentationIdProvider.GetDocumentationId(field);
+        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+    }
+
+    /// <summary>
+    /// Resolves the ingested documentation for a reflected event from its assembly's
+    /// companion xml, or <see langword="null"/> when unavailable.
+    /// </summary>
+    /// <param name="event">The reflected event.</param>
+    /// <returns>The documentation, or <see langword="null"/>.</returns>
+    public static DocumentationComment Resolve(EventInfo @event)
+    {
+        if (@event is null)
+        {
+            return null;
+        }
+
+        var provider = ForAssembly(SafeAssembly(@event.DeclaringType));
+        if (provider == null)
+        {
+            return null;
+        }
+
+        var id = DocumentationIdProvider.GetDocumentationId(@event);
+        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+    }
+
+    /// <summary>
     /// Looks up the documentation for a member by its DocID.
     /// </summary>
     /// <param name="documentationId">The member's DocID (e.g. <c>T:System.Console</c>).</param>

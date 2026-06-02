@@ -87,15 +87,239 @@ public static class HoverComputer
         }
 
         var clrType = SemanticLookup.ResolveImportedClrType(tree, compilation, token.Text);
-        if (clrType == null)
+        if (clrType != null)
+        {
+            var signature = SymbolDisplay.ToDisplayString(clrType, SymbolDisplayFormat.Hover);
+            var documentation = HoverDocumentationRenderer.Render(
+                GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(clrType));
+            return new HoverModel(signature, documentation, OverloadCount: 1);
+        }
+
+        if (!TryResolveClrMember(tree, compilation, token, out var member, out var overloadCount))
         {
             return null;
         }
 
-        var signature = SymbolDisplay.ToDisplayString(clrType, SymbolDisplayFormat.Hover);
-        var documentation = HoverDocumentationRenderer.Render(
-            GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(clrType));
-        return new HoverModel(signature, documentation, OverloadCount: 1);
+        return member switch
+        {
+            PropertyInfo property => new HoverModel(
+                SymbolDisplay.ToDisplayString(property, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(property)),
+                OverloadCount: 1),
+            FieldInfo field => new HoverModel(
+                SymbolDisplay.ToDisplayString(field, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(field)),
+                OverloadCount: 1),
+            EventInfo @event => new HoverModel(
+                SymbolDisplay.ToDisplayString(@event, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(@event)),
+                OverloadCount: 1),
+            MethodInfo method => new HoverModel(
+                SymbolDisplay.ToDisplayString(method, SymbolDisplayFormat.Hover),
+                HoverDocumentationRenderer.Render(GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(method)),
+                overloadCount),
+            _ => null,
+        };
+    }
+
+    private static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo member, out int overloadCount)
+    {
+        member = null;
+        overloadCount = 0;
+
+        var accessor = FindAccessorWithHoveredRightPart(tree.Root, token);
+        if (accessor == null
+            || !TryGetAccessorMemberName(accessor.RightPart, token, out var memberName)
+            || !TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver))
+        {
+            return false;
+        }
+
+        var flags = BindingFlags.Public | (receiver.StaticMembers ? BindingFlags.Static : BindingFlags.Instance);
+        var property = ClrTypeUtilities.SafeGetProperty(receiver.Type, memberName, flags);
+        if (property != null && property.GetIndexParameters().Length == 0)
+        {
+            member = property;
+            overloadCount = 1;
+            return true;
+        }
+
+        var field = ClrTypeUtilities.SafeGetField(receiver.Type, memberName, flags);
+        if (field != null)
+        {
+            member = field;
+            overloadCount = 1;
+            return true;
+        }
+
+        var @event = ClrTypeUtilities.SafeGetEvent(receiver.Type, memberName, flags);
+        if (@event != null)
+        {
+            member = @event;
+            overloadCount = 1;
+            return true;
+        }
+
+        var methods = ClrTypeUtilities.SafeGetMethods(receiver.Type, flags)
+            .Where(m => m.Name == memberName && !m.IsSpecialName)
+            .ToArray();
+        if (methods.Length == 0)
+        {
+            return false;
+        }
+
+        member = methods[0];
+        overloadCount = methods.Length;
+        return true;
+    }
+
+    private static AccessorExpressionSyntax FindAccessorWithHoveredRightPart(SyntaxNode root, SyntaxToken token)
+    {
+        return FindNodes<AccessorExpressionSyntax>(root)
+            .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
+            .Where(a => MatchesHoveredMemberToken(a.RightPart, token))
+            .OrderBy(a => a.Span.Length)
+            .FirstOrDefault();
+    }
+
+    private static bool MatchesHoveredMemberToken(ExpressionSyntax expression, SyntaxToken token)
+    {
+        return expression switch
+        {
+            NameExpressionSyntax name => MatchesToken(name.IdentifierToken, token),
+            CallExpressionSyntax call => MatchesToken(call.Identifier, token),
+            _ => false,
+        };
+    }
+
+    private static bool TryGetAccessorMemberName(ExpressionSyntax expression, SyntaxToken token, out string memberName)
+    {
+        memberName = expression switch
+        {
+            NameExpressionSyntax name when token == null || MatchesToken(name.IdentifierToken, token) => name.IdentifierToken.Text,
+            CallExpressionSyntax call when token == null || MatchesToken(call.Identifier, token) => call.Identifier.Text,
+            _ => null,
+        };
+
+        return memberName != null;
+    }
+
+    private static bool MatchesToken(SyntaxToken candidate, SyntaxToken token)
+    {
+        return ReferenceEquals(candidate, token)
+            || (candidate != null && token != null
+                && candidate.Span.Start == token.Span.Start
+                && candidate.Span.End == token.Span.End
+                && string.Equals(candidate.Text, token.Text, StringComparison.Ordinal));
+    }
+
+    private static bool TryResolveClrReceiver(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression, out ClrReceiver receiver)
+    {
+        switch (expression)
+        {
+            case NameExpressionSyntax name:
+                if (TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken), out var symbolType))
+                {
+                    receiver = new ClrReceiver(symbolType, StaticMembers: false);
+                    return true;
+                }
+
+                var importedType = SemanticLookup.ResolveImportedClrType(tree, compilation, name.IdentifierToken.Text);
+                if (importedType != null)
+                {
+                    receiver = new ClrReceiver(importedType, StaticMembers: true);
+                    return true;
+                }
+
+                break;
+            case CallExpressionSyntax call when TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, call.Identifier), out var callType):
+                receiver = new ClrReceiver(callType, StaticMembers: false);
+                return true;
+            case AccessorExpressionSyntax accessor when TryResolveClrMemberExpression(tree, compilation, accessor, out var memberType):
+                receiver = new ClrReceiver(memberType, StaticMembers: false);
+                return true;
+        }
+
+        receiver = default;
+        return false;
+    }
+
+    private static bool TryResolveClrMemberExpression(SyntaxTree tree, Compilation compilation, AccessorExpressionSyntax accessor, out Type memberType)
+    {
+        memberType = null;
+        if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver)
+            || !TryGetAccessorMemberName(accessor.RightPart, token: null, out var memberName))
+        {
+            return false;
+        }
+
+        var flags = BindingFlags.Public | (receiver.StaticMembers ? BindingFlags.Static : BindingFlags.Instance);
+        var property = ClrTypeUtilities.SafeGetProperty(receiver.Type, memberName, flags);
+        if (property != null && property.GetIndexParameters().Length == 0)
+        {
+            memberType = property.PropertyType;
+            return true;
+        }
+
+        var field = ClrTypeUtilities.SafeGetField(receiver.Type, memberName, flags);
+        if (field != null)
+        {
+            memberType = field.FieldType;
+            return true;
+        }
+
+        var @event = ClrTypeUtilities.SafeGetEvent(receiver.Type, memberName, flags);
+        if (@event != null)
+        {
+            memberType = @event.EventHandlerType;
+            return true;
+        }
+
+        var method = ClrTypeUtilities.SafeGetMethods(receiver.Type, flags)
+            .FirstOrDefault(m => m.Name == memberName && !m.IsSpecialName);
+        if (method == null)
+        {
+            return false;
+        }
+
+        memberType = method.ReturnType;
+        return true;
+    }
+
+    private static bool TryResolveClrTypeFromSymbol(Symbol symbol, out Type clrType)
+    {
+        clrType = symbol switch
+        {
+            ImportedClassSymbol importedClass => importedClass.ClassType,
+            ImportedTypeSymbol importedType => importedType.Type,
+            TypeSymbol typeSymbol => typeSymbol.ClrType,
+            VariableSymbol variable => variable.Type?.ClrType,
+            PropertySymbol property => property.Type?.ClrType,
+            FieldSymbol field => field.Type?.ClrType,
+            EventSymbol @event => @event.Type?.ClrType,
+            FunctionSymbol function => function.Type?.ClrType,
+            ImportedFunctionSymbol function => function.Type?.ClrType,
+            _ => null,
+        };
+
+        return clrType != null;
+    }
+
+    private static IEnumerable<T> FindNodes<T>(SyntaxNode root)
+        where T : SyntaxNode
+    {
+        if (root is T matched)
+        {
+            yield return matched;
+        }
+
+        foreach (var child in root.GetChildren())
+        {
+            foreach (var descendant in FindNodes<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static string RenderHover(HoverModel model)
@@ -150,6 +374,8 @@ public static class HoverComputer
     {
         return type?.Name ?? "void";
     }
+
+    private sealed record ClrReceiver(Type Type, bool StaticMembers);
 
     private sealed record HoverModel(string Signature, IReadOnlyList<HoverDocSection> Documentation, int OverloadCount);
 }

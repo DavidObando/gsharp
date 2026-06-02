@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -48,6 +49,17 @@ public static class SymbolDisplay
     public static string ToDisplayString(Type clrType, SymbolDisplayFormat format)
     {
         return PartsToString(ToDisplayParts(clrType, format));
+    }
+
+    /// <summary>
+    /// Renders a reflected CLR <paramref name="member"/> to a flat string.
+    /// </summary>
+    /// <param name="member">The reflected CLR member.</param>
+    /// <param name="format">The display options.</param>
+    /// <returns>The rendered display string.</returns>
+    public static string ToDisplayString(MemberInfo member, SymbolDisplayFormat format)
+    {
+        return PartsToString(ToDisplayParts(member, format));
     }
 
     /// <summary>
@@ -136,7 +148,35 @@ public static class SymbolDisplay
             : "class";
         builder.Keyword(keyword);
         builder.Space();
-        builder.Type(format.QualifyNames ? clrType.FullName ?? clrType.Name : clrType.Name);
+        builder.Type(FormatClrTypeName(clrType, format.QualifyNames));
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Renders a reflected CLR <paramref name="member"/> to classified display parts.
+    /// </summary>
+    /// <param name="member">The reflected CLR member.</param>
+    /// <param name="format">The display options.</param>
+    /// <returns>The classified display parts.</returns>
+    public static ImmutableArray<SymbolDisplayPart> ToDisplayParts(MemberInfo member, SymbolDisplayFormat format)
+    {
+        var builder = new PartBuilder();
+        switch (member)
+        {
+            case PropertyInfo property:
+                AppendClrProperty(builder, format, property);
+                break;
+            case FieldInfo field:
+                AppendClrField(builder, format, field);
+                break;
+            case EventInfo @event:
+                AppendClrEvent(builder, format, @event);
+                break;
+            case MethodInfo method:
+                AppendClrMethod(builder, format, method);
+                break;
+        }
+
         return builder.ToImmutable();
     }
 
@@ -390,6 +430,73 @@ public static class SymbolDisplay
         builder.Punctuation(">");
     }
 
+    private static void AppendClrProperty(PartBuilder builder, SymbolDisplayFormat format, PropertyInfo property)
+    {
+        builder.Type(FormatClrTypeName(property.PropertyType, format.QualifyNames));
+        builder.Space();
+        builder.Add(SymbolDisplayPartKind.PropertyName, FormatClrMemberName(property.DeclaringType, property.Name, format));
+        if (format.IncludePropertyAccessors)
+        {
+            builder.Space();
+            builder.Punctuation("{");
+            if (property.CanRead)
+            {
+                builder.Space();
+                builder.Keyword("get");
+                builder.Punctuation(";");
+            }
+
+            if (property.CanWrite)
+            {
+                builder.Space();
+                builder.Keyword("set");
+                builder.Punctuation(";");
+            }
+
+            builder.Space();
+            builder.Punctuation("}");
+        }
+    }
+
+    private static void AppendClrField(PartBuilder builder, SymbolDisplayFormat format, FieldInfo field)
+    {
+        builder.Type(FormatClrTypeName(field.FieldType, format.QualifyNames));
+        builder.Space();
+        builder.Add(SymbolDisplayPartKind.FieldName, FormatClrMemberName(field.DeclaringType, field.Name, format));
+    }
+
+    private static void AppendClrEvent(PartBuilder builder, SymbolDisplayFormat format, EventInfo @event)
+    {
+        builder.Keyword("event");
+        builder.Space();
+        builder.Type(FormatClrTypeName(@event.EventHandlerType, format.QualifyNames));
+        builder.Space();
+        builder.Add(SymbolDisplayPartKind.Identifier, FormatClrMemberName(@event.DeclaringType, @event.Name, format));
+    }
+
+    private static void AppendClrMethod(PartBuilder builder, SymbolDisplayFormat format, MethodInfo method)
+    {
+        builder.Type(FormatClrTypeName(method.ReturnType, format.QualifyNames));
+        builder.Space();
+        builder.Add(SymbolDisplayPartKind.MethodName, FormatClrMemberName(method.DeclaringType, method.Name, format));
+        builder.Punctuation("(");
+        var parameters = method.GetParameters();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                builder.Punctuation(",");
+                builder.Space();
+            }
+
+            builder.Add(SymbolDisplayPartKind.ParameterName, parameters[i].Name);
+            builder.Space();
+            builder.Type(FormatClrTypeName(parameters[i].ParameterType, format.QualifyNames));
+        }
+
+        builder.Punctuation(")");
+    }
+
     private static string QualifiedName(SymbolDisplayFormat format, string packageName, string name)
     {
         // "Default" is G#'s implicit package (the analog of C#'s global namespace);
@@ -402,6 +509,57 @@ public static class SymbolDisplay
     private static string FormatType(TypeSymbol type)
     {
         return type == null || IsVoid(type) ? "void" : type.Name;
+    }
+
+    private static string FormatClrMemberName(Type declaringType, string name, SymbolDisplayFormat format)
+    {
+        return format.QualifyNames && declaringType != null
+            ? $"{FormatClrTypeName(declaringType, qualifyNames: true)}.{name}"
+            : name;
+    }
+
+    private static string FormatClrTypeName(Type clrType, bool qualifyNames)
+    {
+        if (clrType == null)
+        {
+            return "void";
+        }
+
+        if (clrType.IsByRef)
+        {
+            return $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}@";
+        }
+
+        if (clrType.IsArray)
+        {
+            return $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}[]";
+        }
+
+        if (clrType.IsPointer)
+        {
+            return $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}*";
+        }
+
+        if (clrType.IsGenericParameter)
+        {
+            return clrType.Name;
+        }
+
+        if (!clrType.IsGenericType)
+        {
+            return qualifyNames ? (clrType.FullName ?? clrType.Name).Replace('+', '.') : clrType.Name;
+        }
+
+        var typeName = clrType.IsNested ? clrType.Name : (qualifyNames ? clrType.FullName ?? clrType.Name : clrType.Name);
+        var tickIndex = typeName.IndexOf('`');
+        if (tickIndex >= 0)
+        {
+            typeName = typeName.Substring(0, tickIndex);
+        }
+
+        typeName = typeName.Replace('+', '.');
+        var args = clrType.GetGenericArguments();
+        return $"{typeName}[{string.Join(", ", args.Select(a => FormatClrTypeName(a, qualifyNames)))}]";
     }
 
     private static bool IsVoid(TypeSymbol type)
