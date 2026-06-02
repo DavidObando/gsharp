@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -63,6 +64,12 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// Gets the imported function type.
     /// </summary>
     public TypeSymbol Type { get; }
+
+    /// <inheritdoc/>
+    public override DocumentationComment GetDocumentation()
+    {
+        return AssemblyDocumentationProvider.Resolve(Method) ?? base.GetDocumentation();
+    }
 
     private TypeSymbol GetMethodType(MethodInfo method)
     {

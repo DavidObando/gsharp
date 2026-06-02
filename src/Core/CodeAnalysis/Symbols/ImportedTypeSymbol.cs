@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Documentation;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -100,5 +101,11 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         var baseName = openDefinition?.FullName ?? openDefinition?.Name ?? erasedClosedType.FullName ?? erasedClosedType.Name;
         var name = $"{baseName}[{argNames}]";
         return new ImportedTypeSymbol(name, erasedClosedType, openDefinition, typeArguments);
+    }
+
+    /// <inheritdoc/>
+    public override DocumentationComment GetDocumentation()
+    {
+        return AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type) ?? base.GetDocumentation();
     }
 }

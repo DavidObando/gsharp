@@ -93,7 +93,9 @@ public static class HoverComputer
         }
 
         var signature = SymbolDisplay.ToDisplayString(clrType, SymbolDisplayFormat.Hover);
-        return new HoverModel(signature, Array.Empty<HoverDocSection>(), OverloadCount: 1);
+        var documentation = HoverDocumentationRenderer.Render(
+            GSharp.Core.CodeAnalysis.Documentation.AssemblyDocumentationProvider.Resolve(clrType));
+        return new HoverModel(signature, documentation, OverloadCount: 1);
     }
 
     private static string RenderHover(HoverModel model)
@@ -136,11 +138,12 @@ public static class HoverComputer
         return compilation.GlobalScope.Functions.Count(f => f.Name == function.Name);
     }
 
-    // Documentation sections are an empty shell until ADR-0057 ingestion/authoring
-    // (Stage C) populate the model. The renderer above already lays them out.
+    // Surfaces ingested CLR documentation (ADR-0057 §6): imported symbols resolve their
+    // companion .xml on demand via GetDocumentation(); authored G# docs (P2) flow through
+    // the same path once attached. Symbols with no documentation render just the signature.
     private static IReadOnlyList<HoverDocSection> BuildDocumentation(Symbol symbol)
     {
-        return Array.Empty<HoverDocSection>();
+        return HoverDocumentationRenderer.Render(symbol.GetDocumentation());
     }
 
     private static string FormatType(TypeSymbol type)
@@ -149,9 +152,12 @@ public static class HoverComputer
     }
 
     private sealed record HoverModel(string Signature, IReadOnlyList<HoverDocSection> Documentation, int OverloadCount);
-
-    private sealed record HoverDocSection(string Heading, string Body);
 }
+
+/// <summary>A rendered hover documentation section: an optional bold heading and a Markdown body.</summary>
+/// <param name="Heading">The section heading, or null for the lead (summary) section.</param>
+/// <param name="Body">The Markdown body.</param>
+internal sealed record HoverDocSection(string Heading, string Body);
 
 public static class ReferencesComputer
 {
