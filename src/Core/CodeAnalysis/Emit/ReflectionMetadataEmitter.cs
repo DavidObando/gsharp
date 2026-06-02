@@ -13356,11 +13356,30 @@ internal sealed class ReflectionMetadataEmitter
             // emit `ldloca`/`ldarga`. Other shapes are not yet exercised by the
             // emit pipeline.
             var clrType = receiver.Type?.ClrType;
-            if (clrType != null && clrType.IsValueType
-                && receiver is BoundVariableExpression bve
-                && this.TryLoadVariableAddress(bve.Variable))
+            if (clrType != null && clrType.IsValueType)
             {
-                return;
+                if (receiver is BoundVariableExpression bve
+                    && this.TryLoadVariableAddress(bve.Variable))
+                {
+                    return;
+                }
+
+                // ADR-0056 §4 (#375): a value-type *field* used as an instance
+                // receiver (e.g. `w.data.Length` where `data` is a closed
+                // constructed generic value type like `ReadOnlySpan[int32]`)
+                // must be loaded by address (`ldflda`), not by value (`ldfld`).
+                // Calling an instance method on a value type requires a managed
+                // pointer as `this`; pushing the value instead reinterprets the
+                // struct's bits as the `this` pointer and corrupts the stack
+                // (AccessViolationException). The field signature already
+                // carries the real constructed-generic layout, so the address
+                // form is both correct and safe.
+                if (receiver is BoundFieldAccessExpression fa
+                    && this.outer.structFieldDefs.ContainsKey(fa.Field))
+                {
+                    this.EmitFieldAddress(fa);
+                    return;
+                }
             }
 
             this.EmitExpression(receiver);
