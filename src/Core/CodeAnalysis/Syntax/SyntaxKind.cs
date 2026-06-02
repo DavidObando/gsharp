@@ -17,6 +17,7 @@ public enum SyntaxKind
     BadToken,
     WhitespaceToken,
     CommentToken,
+    DocumentationCommentToken,
     EndOfFileToken,
 
     // Language tokens

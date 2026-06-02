@@ -52,6 +52,7 @@ DefaultKeyword
 DeferKeyword
 DeferStatement
 DiscardPattern
+DocumentationCommentToken
 DotToken
 EllipsisToken
 ElseClause

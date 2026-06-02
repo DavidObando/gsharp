@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -289,6 +290,7 @@ public sealed class Binder
                 packageSymbol = new PackageSymbol(packageName, packageSyntax);
                 packagesByName[packageName] = packageSymbol;
                 packagesInOrder.Add(packageSymbol);
+                AttachDocumentation(packageSymbol, packageSyntax);
             }
 
             packageByTree[tree] = packageSymbol;
@@ -836,6 +838,7 @@ public sealed class Binder
         var targetPath = sb.ToString();
         var localName = import.AliasIdentifier?.Text ?? targetPath;
         var importSymbol = new ImportSymbol(localName, targetPath, import);
+        AttachDocumentation(importSymbol, import);
         scope.TryImport(importSymbol);
     }
 
@@ -885,6 +888,7 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var enumSymbol = new EnumSymbol(name, accessibility, package.Name, syntax);
+        AttachDocumentation(enumSymbol, syntax);
         enumSymbol.SetAttributes(BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,
@@ -904,6 +908,7 @@ public sealed class Binder
             }
 
             var memberSymbol = new EnumMemberSymbol(memberName, enumSymbol, members.Count);
+            AttachDocumentation(memberSymbol, memberSyntax);
 
             // Issue #188 / ADR-0047 §3: bind any `@Foo` annotations attached
             // to the enum-member entry with default target `field` (enum
@@ -1050,6 +1055,7 @@ public sealed class Binder
 
             var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
             var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline);
+            AttachDocumentation(fieldSymbol, fieldSyntax);
 
             // Issue #186 / ADR-0047 §3: bind any `@Foo` annotations attached
             // to the field declaration with default target `field` so #175
@@ -1204,6 +1210,7 @@ public sealed class Binder
             primaryCtorParameters,
             isOpen: syntax.IsOpen && syntax.IsClass,
             baseClass: baseClassSymbol);
+        AttachDocumentation(structSymbol, syntax);
 
         if (!typeParameters.IsDefaultOrEmpty)
         {
@@ -1357,6 +1364,7 @@ public sealed class Binder
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.TypeParameters = methodTypeParameters;
+                    AttachDocumentation(methodSymbol, methodSyntax);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
@@ -1477,6 +1485,7 @@ public sealed class Binder
                     isVirtual,
                     isOverride,
                     setterParamName);
+                AttachDocumentation(propertySymbol, propSyntax);
 
                 // Create backing field for auto-properties
                 if (isAutoProperty && !syntax.IsData)
@@ -1585,6 +1594,7 @@ public sealed class Binder
                     isFieldLike,
                     isVirtual,
                     isOverride);
+                AttachDocumentation(eventSymbol, eventSyntax);
 
                 // Create backing field for field-like events
                 if (isFieldLike)
@@ -1729,6 +1739,8 @@ public sealed class Binder
                         System.AttributeTargets.Field));
                 }
 
+                AttachDocumentation(fieldSymbol, fieldSyntax);
+
                 // Issue #262: bind the initializer expression if present.
                 if (fieldSyntax.Initializer != null)
                 {
@@ -1819,6 +1831,8 @@ public sealed class Binder
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
                     }
+
+                    AttachDocumentation(methodSymbol, methodSyntax);
 
                     staticMethodsBuilder.Add(methodSymbol);
                 }
@@ -1948,6 +1962,8 @@ public sealed class Binder
                         System.AttributeTargets.Property));
                 }
 
+                AttachDocumentation(propertySymbol, propSyntax);
+
                 staticPropertiesBuilder.Add(propertySymbol);
             }
 
@@ -2070,6 +2086,8 @@ public sealed class Binder
                         "an event declaration",
                         System.AttributeTargets.Event));
                 }
+
+                AttachDocumentation(eventSymbol, eventSyntax);
 
                 staticEventsBuilder.Add(eventSymbol);
             }
@@ -2196,6 +2214,7 @@ public sealed class Binder
         var name = syntax.Identifier.Text;
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
+        AttachDocumentation(interfaceSymbol, syntax);
         interfaceSymbol.SetAttributes(BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,
@@ -2296,6 +2315,7 @@ public sealed class Binder
                 package,
                 Accessibility.Public,
                 receiverType: null);
+            AttachDocumentation(methodSymbol, methodSyntax);
             methodsBuilder.Add(methodSymbol);
         }
 
@@ -2349,6 +2369,7 @@ public sealed class Binder
                     isVirtual: false,
                     isOverride: false);
 
+                AttachDocumentation(propSymbol, propSyntax);
                 propertiesBuilder.Add(propSymbol);
             }
 
@@ -2382,6 +2403,7 @@ public sealed class Binder
                     isVirtual: false,
                     isOverride: false);
 
+                AttachDocumentation(eventSymbol, eventSyntax);
                 eventsBuilder.Add(eventSymbol);
             }
 
@@ -2637,6 +2659,7 @@ public sealed class Binder
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
                 function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+                AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
                 methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
                 return;
@@ -2645,6 +2668,7 @@ public sealed class Binder
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+            AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);
 
             if (syntax.IsExtension)
@@ -10994,6 +11018,7 @@ public sealed class Binder
         };
 
         var constructorSymbol = new ConstructorSymbol(ctorFunction, ctorSyntax);
+        AttachDocumentation(ctorFunction, ctorSyntax);
 
         // Resolve the optional `: base(args)` initializer, with the constructor
         // parameters in scope so they can be forwarded to the base.
@@ -11184,6 +11209,25 @@ public sealed class Binder
         }
 
         return annotation.NameSegments[0].Text == "Attribute";
+    }
+
+    /// <summary>
+    /// Attaches authored documentation from a G# doc comment to a symbol (ADR-0057 §7/§8).
+    /// Parses the block text from the syntax tree side-table and calls <see cref="Symbol.SetDocumentation"/>.
+    /// </summary>
+    private static void AttachDocumentation(Symbol symbol, SyntaxNode syntax)
+    {
+        var docText = syntax?.SyntaxTree?.GetDocumentation(syntax);
+        if (docText == null)
+        {
+            return;
+        }
+
+        var doc = GSharpDocumentationParser.Parse(docText);
+        if (doc != null)
+        {
+            symbol.SetDocumentation(doc);
+        }
     }
 
     /// <summary>
