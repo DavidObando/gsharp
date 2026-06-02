@@ -78,6 +78,8 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0011](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0011-string-interpolation-grammar.md) | String interpolation grammar and lowering | Specifies interpolation parsing and lowering details. |
 | [0012](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0012-raw-string-delimiter.md) | Raw string delimiter — backtick | Chooses backtick-delimited raw strings. |
 | [0014](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0014-visibility-default.md) | Visibility defaults — `public` for top-level declarations | Makes unmodified top-level declarations public by default. |
+| [0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md) | Postfix member/index access on primary expressions | Chains `.`/`?.`/`[]` after any primary except a bare numeric literal (`(42).Member`). |
+| [0055](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0055-string-interpolation-revamp.md) | String interpolation revamp | Delimiter-aware multiline holes, alignment/format clauses, late context-driven lowering (`DefaultInterpolatedStringHandler`/`FormattableString`), and full IDE support inside holes. |
 
 ## CLR interop
 
@@ -91,6 +93,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0037](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0037-numeric-tiebreaking.md) | Numeric better-conversion target tie-breaking in overload resolution | Defines numeric conversion ranking for overload resolution. |
 | [0039](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0039-byref-pointers-and-clr-interop.md) | By-ref pointers and CLR interop for `ref` / `out` / `in` parameters | Introduces `*T`, `&`, dereference, `ref` arguments, and related diagnostics. |
 | [0047](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0047-attribute-syntax-and-declaration.md) | Attribute consumption and declaration (Kotlin-style annotations) | Defines `@` annotation syntax, use-site targets, attribute arguments, and `@Attribute` sugar. |
+| [0056](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0056-span-consumption-v1.md) | Span consumption v1 — ref-returning members, span element access, closed generic value-type fields | Auto-dereferences ref-returning members in rvalue position, makes spans indexable (read/write), applies `[]T → Span[T]` conversion in argument position, and gives closed generic value-type fields real layout. |
 
 ## Emit and tooling
 

@@ -82,7 +82,9 @@ Character literals are single-quoted and represent exactly one UTF-16 code unit 
 
 Normal string literals are delimited by double quotes. In the current compiler lexer, the escape-like form for a literal quote inside a normal string is doubled quotes, as in `"a ""quoted"" word"`; backslash escapes are not interpreted by the normal string lexer. Raw strings are delimited by backticks, may span lines, do not process escapes or interpolation, normalize CR and CRLF to LF in their value, and cannot contain a backtick.
 
-Interpolated strings are normal double-quoted strings containing `$name` or braced interpolation fragments. Use `$$` for a literal dollar sign. Braced interpolation parses the captured expression text as a fresh expression syntax tree.
+Interpolation is sigil-free: holes live inside ordinary double-quoted strings, not behind a C#-style `$"…"` prefix. A hole is either `$name`, which captures a single identifier, or a braced `${expression}`. Use `$$` for a literal dollar sign. There is no `{{`/`}}` brace escaping; a literal brace is just a brace. Braced interpolation parses the captured expression text as a fresh expression syntax tree whose tokens carry absolute source spans, so IDE features (hover, go-to-definition, find-references, completion, signature help) work inside a hole.
+
+A braced hole may carry an optional alignment and format clause: `${expr,alignment}`, `${expr:format}`, or `${expr,alignment:format}`. The alignment is a constant integer (negative for left-justify), and the format is a standard .NET format string. The `,` and `:` separators are recognized only at the top level of the hole.
 
 ```gsharp title="samples/InterpolatedString.gs"
 package InterpolatedString
@@ -93,6 +95,18 @@ Console.WriteLine("Hello, $name!")
 Console.WriteLine("answer = ${n * 7}")
 Console.WriteLine("$$ stays literal")
 ```
+
+The `${…}` scanner is delimiter-aware. It tracks `()`, `[]`, and `{}` nesting, skips over nested `"…"` and `'…'` literals and `//` and `/* */` comments, and allows the hole expression to span multiple lines. Consequently `${dict["k"]}`, `${cond ? "a" : "b"}`, and a hole whose expression wraps onto a second line all lex correctly, and a `,` or `:` inside a nested string is never mistaken for an alignment or format clause.
+
+```gsharp title="samples/InterpolatedStringRichHoles.gs"
+let n = 6
+Console.WriteLine("greeting=${"hello"}")
+Console.WriteLine("len=${"a,b:c".Length}")
+Console.WriteLine("answer=${n *
+7}")
+```
+
+Malformed interpolation is reported by dedicated diagnostics: `GS0220` (non-constant alignment), `GS0221` (handler forwarding), `GS0222` (unterminated hole), `GS0223` (empty hole), `GS0224` (empty format specifier), and `GS0225` (newline in the literal portion of the string). By default an interpolated string lowers to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (composite formatting in the interpreter); when its contextual target type is `IFormattable` or `FormattableString` it instead lowers to `FormattableStringFactory.Create`, deferring formatting so the caller selects the culture. See the [CLR interop reference](./clr-interop.md#interpolated-strings-and-formatting).
 
 ### Boolean and nil literals
 
@@ -259,6 +273,8 @@ TypeArgList = "[" TypeClause { "," TypeClause } "]" .
 
 Byref/pointer syntax exists as `*T`, unary `&`, and unary `*`. It is primarily an emit/interop feature today; the evaluator rejects the generic address-of and dereference path.
 
+CLR `ref struct` types such as `Span[T]` and `ReadOnlySpan[T]` are consumable as stack-only values (ADR-0056): they are indexable (`s[i]`), ref-returning members auto-dereference in rvalue position, a `[]T` slice converts implicitly to a span, and a user `type X ref struct { … }` may embed a closed generic value-type field. Stack-escape violations are reported as `GS0219`; writing through a `ReadOnlySpan[T]` element is `GS0226`. The full ref-safe-to-escape analysis is deferred (issue #376).
+
 ## Declarations and scope
 
 ### Packages and imports
@@ -342,7 +358,7 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 | 2 | `&&` | logical and |
 | 1 | `\|\|`, `?:` | logical or and null coalescing |
 
-Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions.
+Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
 ### Primary expressions and calls
 
@@ -360,7 +376,7 @@ TrailingLambda  = FunctionLiteral .
 
 ### Accessor chains
 
-Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors.
+Member access and indexing chain after primaries. `a.b`, `a?.b`, `a[i]`, `a.b(c)`, and generic call access forms are valid where the binder can resolve the target. Chains also apply to parenthesized and literal receivers — `(a + b).GetType()`, `(nums)[0]`, `("s").Length`, and `switch v { … }.ToString()` — with one exception: a bare numeric literal does not chain (`42.Member` is unsupported; write `(42).Member`). Assignment permits identifiers, indexed targets, field/property targets, and event `+=` or `-=` on accessors.
 
 ### Composite literals
 
@@ -394,6 +410,11 @@ BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
 PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" ) PrefixExpression | PostfixExpression .
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | "[" Expression "]" } ( "with" "{" FieldEqualsList? "}" )? .
 PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+(* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`. See ADR-0054. *)
+Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
+InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
+InterpolationHole = "${" Expression ( "," Expression )? ( ":" FormatText )? "}" .
+(* The hole scanner is delimiter-aware: it balances ()[]{}, skips nested string/char literals and comments, and permits newlines, so the "," and ":" clause separators are only recognized at the top level of the hole. See ADR-0055. *)
 ```
 
 ## Statements
@@ -503,6 +524,8 @@ Iterator functions return `sequence[T]` and contain `yield`. Async sequences use
 G# imports can resolve CLR namespaces and metadata references. CLR primitive types map to G# built-ins when possible; other CLR types are represented as imported types. The binder and evaluator support imported constructors, static and instance methods, fields, properties, indexers, events, delegates, method groups, operator overloads, and conversion operators. G# function values can convert to compatible CLR delegates such as `Action`, `Func`, named delegates, and `Predicate`, and can widen to `System.Delegate` or `System.MulticastDelegate`.
 
 Attributes use `@Name(...)` and optional use-site targets such as `@field:`, `@param:`, and `@return:`. The current implementation recognizes attributes, but user P/Invoke or extern declarations are not supported.
+
+Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
 
 ## Appendix: full parser grammar
 
@@ -635,6 +658,9 @@ BinaryExpression  ::= PrefixExpression (BinaryOperator PrefixExpression)*
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression '!!'* (('.' | '?.') NameOrCall | '[' Expression ']')* ('with' '{' FieldEqualsList? '}')?
 PrimaryExpression ::= Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | SwitchExpr | '(' Expression ')' | TupleLiteral | MakeChannel | TypeOf | NameOf
+Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
+InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
+InterpolationHole ::= '${' Expression ( ',' Expression )? ( ':' FormatText )? '}'
 Call              ::= identifier '(' Arguments? ')' TrailingLambda?
 GenericCall       ::= identifier TypeArgList ('(' Arguments? ')' TrailingLambda? | StructLiteralBody)
 StructLiteral     ::= identifier '{' FieldInitList? '}'
