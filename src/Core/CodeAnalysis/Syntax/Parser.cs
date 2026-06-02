@@ -25,6 +25,7 @@ public class Parser
     public Parser(SyntaxTree syntaxTree)
     {
         var tokens = new List<SyntaxToken>();
+        var docTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
 
         var lexer = new Lexer(syntaxTree);
         SyntaxToken token;
@@ -32,7 +33,11 @@ public class Parser
         {
             token = lexer.Lex();
 
-            if (token.Kind != SyntaxKind.WhitespaceToken &&
+            if (token.Kind == SyntaxKind.DocumentationCommentToken)
+            {
+                docTokens.Add(token);
+            }
+            else if (token.Kind != SyntaxKind.WhitespaceToken &&
                 token.Kind != SyntaxKind.CommentToken &&
                 token.Kind != SyntaxKind.BadToken)
             {
@@ -43,6 +48,7 @@ public class Parser
 
         this.syntaxTree = syntaxTree;
         this.tokens = tokens.ToImmutableArray();
+        DocumentationTokens = docTokens.ToImmutable();
         Diagnostics.AddRange(lexer.Diagnostics);
     }
 
@@ -50,6 +56,13 @@ public class Parser
     /// Gets tiagnostic bag associated to this parser.
     /// </summary>
     public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+
+    /// <summary>
+    /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
+    /// These are retained in a side-channel so the parser ignores them during
+    /// parsing but can provide them for the post-parse attachment pass.
+    /// </summary>
+    internal ImmutableArray<SyntaxToken> DocumentationTokens { get; }
 
     private SyntaxToken Current => Peek(0);
 

@@ -114,7 +114,11 @@ public sealed class Lexer
                 break;
             case '/':
                 position++;
-                if (Current == '/')
+                if (Current == '/' && Peek(1) == '/')
+                {
+                    ReadDocumentationComment();
+                }
+                else if (Current == '/')
                 {
                     ReadSingleLineComment();
                 }
@@ -479,6 +483,55 @@ public sealed class Lexer
         }
 
         kind = SyntaxKind.CommentToken;
+        value = sb.ToString();
+    }
+
+    // ADR-0057 §2: exactly three slashes start a doc comment. The first slash was
+    // consumed by the Lex() dispatcher; we enter here with Current=='/' and
+    // Peek(1)=='/'. We consume the second and third slashes, then strip one optional
+    // following space. Everything after (including a 4th slash) is content.
+    private void ReadDocumentationComment()
+    {
+        // Consume the second and third slashes (first was consumed by Lex dispatcher).
+        position += 2;
+
+        // Strip one optional leading space (ADR §2).
+        if (Current == ' ')
+        {
+            position++;
+        }
+
+        var sb = new StringBuilder();
+        var done = false;
+
+        while (!done)
+        {
+            switch (Current)
+            {
+                case '\0':
+                    done = true;
+                    break;
+                case '\r':
+                    if (Lookahead == '\n')
+                    {
+                        position++;
+                    }
+
+                    position++;
+                    done = true;
+                    break;
+                case '\n':
+                    position++;
+                    done = true;
+                    break;
+                default:
+                    sb.Append(Current);
+                    position++;
+                    break;
+            }
+        }
+
+        kind = SyntaxKind.DocumentationCommentToken;
         value = sb.ToString();
     }
 

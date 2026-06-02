@@ -14,18 +14,22 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public class SyntaxTree
 {
-    private SyntaxTree(SourceText text,  ParseHandler handler)
+    private Dictionary<SyntaxNode, string> documentationTable;
+
+    private SyntaxTree(SourceText text, ParseHandler handler)
     {
         Text = text;
-        handler(this, out var root, out var diagnostics);
+        handler(this, out var root, out var diagnostics, out var docTokens);
         Root = root;
         Diagnostics = diagnostics;
+        DocumentationTokens = docTokens;
     }
 
     private delegate void ParseHandler(
         SyntaxTree syntaxTree,
         out CompilationUnitSyntax root,
-        out ImmutableArray<Diagnostic> diagnostics);
+        out ImmutableArray<Diagnostic> diagnostics,
+        out ImmutableArray<SyntaxToken> documentationTokens);
 
     /// <summary>
     /// Gets the source text.
@@ -41,6 +45,11 @@ public class SyntaxTree
     /// Gets the compilation unit root.
     /// </summary>
     public CompilationUnitSyntax Root { get; }
+
+    /// <summary>
+    /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
+    /// </summary>
+    internal ImmutableArray<SyntaxToken> DocumentationTokens { get; }
 
     /// <summary>
     /// Parses the source text from the provided file path into a syntax tree.
@@ -73,11 +82,12 @@ public class SyntaxTree
     /// <returns>A parsed syntax tree.</returns>
     public static SyntaxTree Parse(SourceText text)
     {
-        static void Parse(SyntaxTree syntaxTree, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> diagnostics)
+        static void Parse(SyntaxTree syntaxTree, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> diagnostics, out ImmutableArray<SyntaxToken> docTokens)
         {
             var parser = new Parser(syntaxTree);
             root = parser.ParseCompilationUnit();
             diagnostics = parser.Diagnostics.ToImmutableArray();
+            docTokens = parser.DocumentationTokens;
         }
 
         return new SyntaxTree(text, Parse);
@@ -126,9 +136,10 @@ public class SyntaxTree
     {
         var tokens = new List<SyntaxToken>();
 
-        void ParseTokens(SyntaxTree st, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> d)
+        void ParseTokens(SyntaxTree st, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> d, out ImmutableArray<SyntaxToken> docTokens)
         {
             root = null;
+            docTokens = ImmutableArray<SyntaxToken>.Empty;
             var l = new Lexer(st);
             while (true)
             {
@@ -148,5 +159,21 @@ public class SyntaxTree
         var syntaxTree = new SyntaxTree(text, ParseTokens);
         diagnostics = syntaxTree.Diagnostics;
         return tokens.ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Gets the attached documentation text for a declaration node, or <see langword="null"/>
+    /// when no documentation block is associated (ADR-0057 §7).
+    /// </summary>
+    /// <param name="node">The declaration syntax node.</param>
+    /// <returns>The joined documentation block text, or <see langword="null"/>.</returns>
+    internal string GetDocumentation(SyntaxNode node)
+    {
+        if (documentationTable == null)
+        {
+            documentationTable = DocumentationAttacher.Attach(this);
+        }
+
+        return documentationTable.TryGetValue(node, out var doc) ? doc : null;
     }
 }
