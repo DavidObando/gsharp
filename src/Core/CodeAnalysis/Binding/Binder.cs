@@ -7255,6 +7255,12 @@ public sealed class Binder
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                if (TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                {
+                    boundArguments[i] = convertedArg;
+                    continue;
+                }
+
                 if (argument.Type != TypeSymbol.Error)
                 {
                     Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
@@ -7331,6 +7337,12 @@ public sealed class Binder
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                if (TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                {
+                    convertedArguments.Add(convertedArg);
+                    continue;
+                }
+
                 if (argument.Type != TypeSymbol.Error)
                 {
                     Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
@@ -7590,6 +7602,12 @@ public sealed class Binder
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
+                if (TryApplyUserDefinedImplicitArgumentConversion(argument, expectedType, out var convertedArg))
+                {
+                    boundArguments[i] = convertedArg;
+                    continue;
+                }
+
                 if (argument.Type != TypeSymbol.Error)
                 {
                     Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, argument.Type);
@@ -10266,6 +10284,29 @@ public sealed class Binder
         }
 
         return new BoundConversionExpression(null, type, expression);
+    }
+
+    // ADR-0056 (#344), low-hanging-fruit item #3: a call argument whose declared
+    // parameter type is reachable only through a user-defined CLR `op_Implicit`
+    // (e.g. `[]T -> System.ReadOnlySpan[T]` / `Span[T]`) is converted here, the
+    // same way local-init/explicit-target conversions go through `BindConversion`.
+    // Built-in conversions (identity, numeric widening, ...) classify earlier and
+    // never reach this fallback, so existing overloads keep selecting unchanged.
+    // Returns true and emits a `BoundClrConversionCallExpression` when a
+    // user-defined implicit conversion applies; false leaves the argument as-is.
+    private bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
+    {
+        if (argument?.Type?.ClrType != null
+            && expectedType?.ClrType != null
+            && argument.Type != TypeSymbol.Error
+            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
+            return true;
+        }
+
+        converted = argument;
+        return false;
     }
 
     private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)

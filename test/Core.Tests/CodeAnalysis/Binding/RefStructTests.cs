@@ -55,6 +55,42 @@ func length(arr []int32) int32 {
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0219");
     }
 
+    // ADR-0056 (#344) low-hanging-fruit #3: the `[]T -> ReadOnlySpan[T]`
+    // user-defined `op_Implicit` that already works at local-init position must
+    // also apply when the slice is passed as a call argument, with no GS0154.
+    [Fact]
+    public void SliceArgument_ToReadOnlySpanParameter_IsPermitted()
+    {
+        var source = @"
+import System
+func sum(s ReadOnlySpan[int32]) int32 { return s.Length }
+func Main() {
+    var nums []int32 = []int32{10, 20, 30}
+    Console.WriteLine(sum(nums))
+}
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0154");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0219");
+    }
+
+    // ADR-0056 (#344): the same implicit conversion applies for `Span[T]`.
+    [Fact]
+    public void SliceArgument_ToSpanParameter_IsPermitted()
+    {
+        var source = @"
+import System
+func len(s Span[int32]) int32 { return s.Length }
+func Main() {
+    var nums []int32 = []int32{1, 2, 3, 4}
+    Console.WriteLine(len(nums))
+}
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0154");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0219");
+    }
+
     [Fact]
     public void Boxing_RefStruct_ToObject_Reports_GS0219()
     {
