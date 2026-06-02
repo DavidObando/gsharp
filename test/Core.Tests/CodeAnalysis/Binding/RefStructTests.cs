@@ -346,6 +346,88 @@ var a Acc = Acc{Total: 1}
         Assert.Contains(Bind(user), d => d.Id == "GS0219");
     }
 
+    // ADR-0056 §1/§2: reading a `ReadOnlySpan[T]` element auto-dereferences the
+    // `ref readonly T` indexer return, so `s[i]` observes the pointee `T`
+    // (int32), not the managed pointer `Int32&`. The bound shape is a
+    // `BoundDereferenceExpression` wrapping a `BoundClrIndexExpression` whose
+    // own type is the `ByRefTypeSymbol`.
+    [Fact]
+    public void SpanElementRead_AutoDereferences_ToPointeeType()
+    {
+        var source = @"
+import System
+func get(arr []int32) int32 {
+    var s ReadOnlySpan[int32] = arr
+    return s[0]
+}
+";
+        var program = BindProgram(source);
+        var derefs = CollectIndexReads(program);
+        var deref = Assert.Single(derefs);
+        Assert.Equal(TypeSymbol.Int32, deref.Type);
+        var index = Assert.IsType<GSharp.Core.CodeAnalysis.Binding.BoundClrIndexExpression>(deref.Operand);
+        var byRef = Assert.IsType<ByRefTypeSymbol>(index.Type);
+        Assert.Equal(TypeSymbol.Int32, byRef.PointeeType);
+    }
+
+    // ADR-0056 §2: `total + s[i]` previously failed with GS0129 because the
+    // element typed as `System.Int32&`. After auto-deref the read is `int32`,
+    // so no operator/type error is reported.
+    [Fact]
+    public void SpanElementRead_InArithmetic_NoTypeError()
+    {
+        var source = @"
+import System
+func sum(arr []int32) int32 {
+    var s ReadOnlySpan[int32] = arr
+    var total = 0
+    var i = 0
+    for i < s.Length {
+        total = total + s[i]
+        i = i + 1
+    }
+    return total
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0155");
+    }
+
+    // ADR-0056 §2: a `Span[T]` element write is permitted (stores through the
+    // `ref T` indexer); no GS0226 and no GS0116.
+    [Fact]
+    public void SpanElementWrite_IsPermitted()
+    {
+        var source = @"
+import System
+func set(arr []int32) int32 {
+    var s Span[int32] = arr
+    s[1] = 99
+    return s[1]
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0226");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0116");
+    }
+
+    // ADR-0056 §2 / Diagnostics: writing through a `ReadOnlySpan[T]` element is a
+    // hard error because its indexer is `ref readonly T`.
+    [Fact]
+    public void ReadOnlySpanElementWrite_Reports_GS0226()
+    {
+        var source = @"
+import System
+func set(arr []int32) {
+    var s ReadOnlySpan[int32] = arr
+    s[1] = 99
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0226");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -365,5 +447,49 @@ var a Acc = Acc{Total: 1}
             .Concat(compilation.GlobalScope.Diagnostics)
             .Concat(program.Diagnostics)
             .ToImmutableArray();
+    }
+
+    private static GSharp.Core.CodeAnalysis.Binding.BoundProgram BindProgram(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(compilation.GlobalScope, compilation.References);
+    }
+
+    private static List<GSharp.Core.CodeAnalysis.Binding.BoundDereferenceExpression> CollectIndexReads(
+        GSharp.Core.CodeAnalysis.Binding.BoundProgram program)
+    {
+        var collector = new IndexReadCollector();
+        foreach (var body in program.Functions.Values)
+        {
+            collector.Visit(body);
+        }
+
+        collector.Visit(program.Statement);
+        return collector.Results;
+    }
+
+    // Walks bound function bodies and records every BoundDereferenceExpression
+    // whose operand is a BoundClrIndexExpression — i.e. an auto-dereferenced
+    // ref-returning indexer read (ADR-0056 §1/§2).
+    private sealed class IndexReadCollector : GSharp.Core.CodeAnalysis.Binding.BoundTreeRewriter
+    {
+        public List<GSharp.Core.CodeAnalysis.Binding.BoundDereferenceExpression> Results { get; } = new();
+
+        public void Visit(GSharp.Core.CodeAnalysis.Binding.BoundStatement statement)
+        {
+            RewriteStatement(statement);
+        }
+
+        protected override GSharp.Core.CodeAnalysis.Binding.BoundExpression RewriteDereferenceExpression(
+            GSharp.Core.CodeAnalysis.Binding.BoundDereferenceExpression node)
+        {
+            if (node.Operand is GSharp.Core.CodeAnalysis.Binding.BoundClrIndexExpression)
+            {
+                Results.Add(node);
+            }
+
+            return base.RewriteDereferenceExpression(node);
+        }
     }
 }
