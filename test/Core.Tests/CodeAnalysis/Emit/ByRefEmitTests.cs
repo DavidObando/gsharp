@@ -75,6 +75,26 @@ Console.WriteLine(counter)
         Assert.Contains("1", output);
     }
 
+    // ADR-0056 (#344) low-hanging-fruit #3: a `[]int32` argument flowing into a
+    // `ReadOnlySpan[int32]` parameter goes through the `op_Implicit` conversion at
+    // the call site, end-to-end, just like it already does at local-init position.
+    [Fact]
+    public void SliceArgument_ToReadOnlySpanParameter_Emits_And_Runs()
+    {
+        const string Source = @"package SliceToSpanArg
+import System
+
+func sum(s ReadOnlySpan[int32]) int32 {
+    return s.Length
+}
+
+var nums []int32 = []int32{10, 20, 30}
+Console.WriteLine(sum(nums))
+";
+        var output = CompileAndRun(Source, "SliceToSpanArg");
+        Assert.Contains("3", output);
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();
