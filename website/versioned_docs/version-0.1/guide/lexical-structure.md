@@ -36,7 +36,7 @@ A character literal is one UTF-16 code unit or escape in single quotes. Supporte
 
 Normal strings are double-quoted. In the implementation snapshot, doubled quotes produce a literal quote; backslash escapes are not interpreted by the normal string lexer. Raw strings are backtick-delimited, can span lines, normalize CR and CRLF to LF, and do not process escapes or interpolation. See [ADR-0012](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0012-raw-string-delimiter.md).
 
-Interpolated strings use `$name` and braced expression interpolation. Use `$$` for a literal dollar sign.
+Interpolated strings are sigil-free: holes live inside ordinary double-quoted strings rather than behind a C#-style `$"…"` prefix. A hole is `$name` (a single identifier) or a braced `${expression}`, optionally with an alignment and format clause, `${expr,alignment:format}`. Use `$$` for a literal dollar sign; there is no `{{`/`}}` brace escaping. The braced-hole scanner is delimiter-aware — it balances brackets, skips nested string and char literals and comments, and allows the expression to span lines — so `${dict["k"]}`, `${cond ? "a" : "b"}`, and multiline holes all work. Holes are real code: hover, go-to-definition, find-references, completion, and signature help all work inside `${…}`.
 
 ```gsharp title="samples/InterpolatedString.gs"
 package InterpolatedString
@@ -48,7 +48,7 @@ Console.WriteLine("answer = ${n * 7}")
 Console.WriteLine("$$ stays literal")
 ```
 
-Interpolation rationale: [ADR-0007](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0007-string-interpolation.md) and [ADR-0011](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0011-string-interpolation-grammar.md).
+Interpolation rationale: [ADR-0007](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0007-string-interpolation.md), [ADR-0011](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0011-string-interpolation-grammar.md), and [ADR-0055](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0055-string-interpolation-revamp.md) (delimiter-aware grammar, alignment/format clauses, late lowering, and IDE support).
 
 ## Operators and punctuation
 

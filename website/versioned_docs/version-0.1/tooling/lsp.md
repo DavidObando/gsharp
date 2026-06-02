@@ -39,7 +39,7 @@ The server capability factory enables the following:
 | Capability | LSP surface |
 | --- | --- |
 | Text synchronization | Open/close, full-document changes, save with text. |
-| Diagnostics | `textDocument/publishDiagnostics` notifications after open/change/save. |
+| Diagnostics | `textDocument/diagnostic` pull requests (live as-you-type), with `workspace/diagnostic/refresh` for cross-file edits; falls back to `textDocument/publishDiagnostics` for push-only clients. |
 | Hover | `textDocument/hover`. |
 | Definition | `textDocument/definition`. |
 | Type definition | `textDocument/typeDefinition`. |
@@ -62,7 +62,7 @@ The server capability factory enables the following:
 
 ## Diagnostics lifecycle
 
-On open and change, the server parses the active document and publishes responsive syntax/global-scope diagnostics while skipping the full binding pass. On save, it runs the fuller binding pipeline and republishes diagnostics. The active document is stored in memory, and if it belongs to a discovered `.gsproj`, the project state is updated before diagnostics are computed.
+The server keeps the active document parsed in memory and, when it belongs to a discovered `.gsproj`, updates the project state on open/change/save. Diagnostics are served through the LSP **pull model**: the editor requests `textDocument/diagnostic` as the user types and on save, and the server runs the full pipeline — syntax, global-scope semantic analysis, and the binding pass — on every pull, so binding errors appear live rather than only on save. Each report carries a `resultId`; unchanged results return an `unchanged` report so the client reuses existing squiggles. The binding pass runs off the handler gate and supports cancellation, keeping interactive requests responsive, and cross-file edits in multi-file projects trigger a debounced `workspace/diagnostic/refresh`. Push-only clients (no pull-diagnostic capability) fall back to `textDocument/publishDiagnostics` on open/change/save.
 
 ## Workspace and project awareness
 
