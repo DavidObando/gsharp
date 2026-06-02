@@ -24,4 +24,19 @@ public class HoverHandlerTests
         Assert.NotNull(hover);
         Assert.Contains(expected, hover.Contents.ToString(), System.StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("package P\ntype Person class {\n    prop Name string\n}\n", "Name")]
+    [InlineData("package P\nimport sys = System\n", "sys")]
+    [InlineData("package Outer.Inner\n", "Outer")]
+    [InlineData("package Outer.Inner\n", "Inner")]
+    [InlineData("package P\nimport System\ntype Foo class {\n  event Click func(Object, EventArgs)\n}\n", "Click")]
+    public void ComputeHover_ResolvesPropertyImportPackageAndEventSymbols(string source, string token)
+    {
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, token));
+
+        Assert.NotNull(hover);
+        Assert.Contains(token, hover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
 }
