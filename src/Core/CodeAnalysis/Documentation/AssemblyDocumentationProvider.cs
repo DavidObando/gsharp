@@ -5,8 +5,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Security;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
@@ -216,8 +218,10 @@ public sealed class AssemblyDocumentationProvider
 
     // Discovery (ADR-0057 §6): the companion xml sits next to the resolved assembly for
     // both reference packs and NuGet lib/ref assets, so the sibling .xml is the primary
-    // (and, in this environment, sufficient) location. A culture-invariant sibling is the
-    // only fallback needed today; richer NuGet/targeting-pack probing is a follow-up.
+    // location. When the assembly is loaded from the shared framework (runtime) directory
+    // at design time (e.g. the language server uses runtime-loaded types for hover), the
+    // sibling xml won't exist — fall back to probing the ref pack where .NET ships the
+    // XML documentation alongside the reference assemblies.
     private static string DiscoverXmlPath(Assembly assembly)
     {
         string location;
@@ -236,7 +240,95 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var sibling = Path.ChangeExtension(location, ".xml");
-        return File.Exists(sibling) ? sibling : null;
+        if (File.Exists(sibling))
+        {
+            return sibling;
+        }
+
+        return ProbeRefPackXml(location);
+    }
+
+    // Probes the .NET ref pack for the companion xml when the assembly is in the shared
+    // framework directory. Layout:
+    //   {dotnet_root}/shared/Microsoft.NETCore.App/{version}/{assembly}.dll  (runtime)
+    //   {dotnet_root}/packs/Microsoft.NETCore.App.Ref/{version}/ref/{tfm}/{assembly}.xml
+    // Special case: System.Private.CoreLib hosts many BCL types but its docs ship in
+    // System.Runtime.xml in the ref pack.
+    private static string ProbeRefPackXml(string assemblyLocation)
+    {
+        try
+        {
+            var assemblyDir = Path.GetDirectoryName(assemblyLocation);
+            if (string.IsNullOrEmpty(assemblyDir))
+            {
+                return null;
+            }
+
+            // Check if we're in a shared framework directory:
+            // .../shared/Microsoft.NETCore.App/{version}/
+            var versionDir = new DirectoryInfo(assemblyDir);
+            var frameworkDir = versionDir.Parent;
+            var sharedDir = frameworkDir?.Parent;
+            if (sharedDir == null
+                || !string.Equals(sharedDir.Name, "shared", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var dotnetRoot = sharedDir.Parent?.FullName;
+            if (string.IsNullOrEmpty(dotnetRoot))
+            {
+                return null;
+            }
+
+            var assemblyFileName = Path.GetFileNameWithoutExtension(assemblyLocation);
+
+            // System.Private.CoreLib hosts most BCL types, but documentation ships in
+            // System.Runtime.xml. Probe both names for CoreLib.
+            var candidateNames = string.Equals(assemblyFileName, "System.Private.CoreLib", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "System.Private.CoreLib", "System.Runtime" }
+                : new[] { assemblyFileName };
+
+            var packsDir = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
+            if (!Directory.Exists(packsDir))
+            {
+                return null;
+            }
+
+            // Find the best matching ref pack version (highest available)
+            var packVersions = Directory.GetDirectories(packsDir)
+                .Select(d => Path.GetFileName(d))
+                .OrderByDescending(v => v, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var packVersion in packVersions)
+            {
+                var refDir = Path.Combine(packsDir, packVersion, "ref");
+                if (!Directory.Exists(refDir))
+                {
+                    continue;
+                }
+
+                // Look through all TFM subdirectories (e.g. net8.0, net9.0, net10.0)
+                foreach (var tfmDir in Directory.GetDirectories(refDir))
+                {
+                    foreach (var candidate in candidateNames)
+                    {
+                        var xmlPath = Path.Combine(tfmDir, candidate + ".xml");
+                        if (File.Exists(xmlPath))
+                        {
+                            return xmlPath;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            // File system probing failed — degrade gracefully.
+        }
+
+        return null;
     }
 
     private static Dictionary<string, DocumentationComment> LoadIndex(string path)
