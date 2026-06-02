@@ -144,18 +144,57 @@ Annotation names resolve either to the exact type name or to the conventional `A
 
 Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `[DllImport]` is recognized but unsupported for v1.0; using it reports `GS0211`.
 
-## By-ref and pointer surface
+## By-ref pointers (`&` / `*` / `*T`)
 
-The by-ref/pointer interop surface is intentionally narrow today:
+G# has a managed by-ref surface that lets you call CLR methods with `ref`, `out`, and `in` parameters. It is implemented end-to-end in binding and emit (per [ADR-0039](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0039-byref-pointers-and-clr-interop.md)): taking the address of a local and passing it to a `ref`/`out` parameter compiles to `ldloca` and runs.
 
 | Surface | Meaning |
 | --- | --- |
-| `*T` | By-ref/pointer type clause syntax. |
-| `&expr` | Address-of expression. |
-| `*expr` | Dereference expression. |
-| `ref` arguments | Required for CLR `ref`, `out`, or `in` parameter calls when the binder demands it. |
+| `&x` | Address-of: produces a managed pointer to the lvalue `x`, used to pass `ref` / `out` / `in` arguments. |
+| `*p` | Dereference: reads or writes through a managed pointer `p`. |
+| `*T` | The managed-pointer (by-ref) type, equivalent to C#'s `ref T` at a parameter or local level. |
 
-Diagnostics `GS9001` through `GS9006` cover non-lvalue address-of, missing `ref`, definite assignment before `ref`, ref escape, constants, and pointer fields. The evaluator does not implement generic address-of/dereference execution, so this surface is primarily for emit and CLR interop.
+Taking an address with `&` requires an lvalue — a local, parameter, field, or array element. The address-of operand is what makes the argument flow by reference at the call site, so `&` is written explicitly at CLR `ref`/`out`/`in` call sites:
+
+```gsharp
+import System
+
+var result = 0
+var ok = Int32.TryParse("42", &result)
+if ok {
+    Console.WriteLine(result)
+}
+```
+
+The same `&` form drives any `ref`/`out` BCL API, for example `Interlocked.CompareExchange`:
+
+```gsharp
+import System
+import System.Threading
+
+var counter = 0
+Interlocked.CompareExchange(&counter, 1, 0)
+Console.WriteLine(counter)
+```
+
+`out` variables need not be definitely assigned before the call: passing `&result` at an `out` position is allowed even when `result` was never written, and after the call the variable is considered definitely assigned. Variables passed at a `ref` (not `out`) position must already be definitely assigned.
+
+At the CLR metadata level, `*T` maps to `ELEMENT_TYPE_BYREF` — a managed reference, the same encoding as C#'s `ref T` — and not to `ELEMENT_TYPE_PTR` (an unmanaged pointer). No unmanaged-pointer semantics (arithmetic, pinning, `fixed`) are implied.
+
+### Limitations
+
+The by-ref surface is deliberately scoped to managed references for CLR interop. Per ADR-0039 the following are out of scope today: unmanaged pointers, pointer arithmetic, and `unsafe` blocks; by-ref returns from G# functions (`func foo() *int { return &x }`); and the full Roslyn-style `ref-safe-to-escape` / `safe-to-escape` two-level escape analysis, which is deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376). V1 uses a simpler rule: by-ref values cannot escape their declaring scope.
+
+### Diagnostics
+
+| Diagnostic | Reported when |
+| --- | --- |
+| `GS9001` | `&` is applied to a non-lvalue expression. |
+| `GS9002` | A `ref`/`out`/`in` argument is missing the required `&` at the call site. |
+| `GS9003` | A variable is passed at a `ref` (not `out`) position before being definitely assigned. |
+| `GS9004` | A by-ref value would escape its declaring scope (captured in a lambda, returned, or stored in a field). |
+| `GS9005` | `&` is applied to a constant. |
+| `GS9006` | A pointer (`*T`) type is used as a field type. |
 
 ## Generics interop
 
