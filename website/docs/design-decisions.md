@@ -93,6 +93,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0037](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0037-numeric-tiebreaking.md) | Numeric better-conversion target tie-breaking in overload resolution | Defines numeric conversion ranking for overload resolution. |
 | [0039](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0039-byref-pointers-and-clr-interop.md) | By-ref pointers and CLR interop for `ref` / `out` / `in` parameters | Introduces `*T`, `&`, dereference, `ref` arguments, and related diagnostics. |
 | [0047](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0047-attribute-syntax-and-declaration.md) | Attribute consumption and declaration (Kotlin-style annotations) | Defines `@` annotation syntax, use-site targets, attribute arguments, and `@Attribute` sugar. |
+| [0056](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0056-span-consumption-v1.md) | Span consumption v1 — ref-returning members, span element access, closed generic value-type fields | Auto-dereferences ref-returning members in rvalue position, makes spans indexable (read/write), applies `[]T → Span[T]` conversion in argument position, and gives closed generic value-type fields real layout. |
 
 ## Emit and tooling
 
