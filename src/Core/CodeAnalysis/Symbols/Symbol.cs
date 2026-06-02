@@ -5,6 +5,7 @@
 using System.Collections.Immutable;
 using System.IO;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Documentation;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -13,6 +14,8 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public abstract class Symbol
 {
+    private DocumentationComment authoredDocumentation;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Symbol"/> class.
     /// </summary>
@@ -61,6 +64,18 @@ public abstract class Symbol
     }
 
     /// <summary>
+    /// Gets the structured documentation for this symbol (ADR-0057 §4), or
+    /// <see langword="null"/> when the symbol is undocumented. The default returns the
+    /// authored documentation set by the binder (G# symbols); imported CLR symbols
+    /// override this to resolve documentation from the ingested <c>.xml</c> on demand.
+    /// </summary>
+    /// <returns>The documentation comment, or <see langword="null"/> when undocumented.</returns>
+    public virtual DocumentationComment GetDocumentation()
+    {
+        return this.authoredDocumentation;
+    }
+
+    /// <summary>
     /// Sets the bound-attribute list for this symbol. Called by the binder
     /// once attribute resolution for the owning declaration completes.
     /// </summary>
@@ -68,5 +83,15 @@ public abstract class Symbol
     internal void SetAttributes(ImmutableArray<BoundAttribute> attributes)
     {
         Attributes = attributes;
+    }
+
+    /// <summary>
+    /// Attaches authored documentation parsed from a G# doc comment. Called by the
+    /// binder once the owning declaration's doc block is parsed into the model.
+    /// </summary>
+    /// <param name="documentation">The parsed documentation comment.</param>
+    internal void SetDocumentation(DocumentationComment documentation)
+    {
+        this.authoredDocumentation = documentation;
     }
 }
