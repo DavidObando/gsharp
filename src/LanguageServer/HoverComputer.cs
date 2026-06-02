@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.LanguageServer.Protocol;
@@ -27,11 +28,11 @@ public static class HoverComputer
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
 
-        var signature = symbol != null
-            ? FormatSymbol(symbol, compilation)
-            : FormatImportedClrType(content.SyntaxTree, compilation, token);
+        var model = symbol != null
+            ? BuildHoverModel(symbol, compilation)
+            : BuildImportedClrModel(content.SyntaxTree, compilation, token);
 
-        if (signature == null)
+        if (model == null)
         {
             return null;
         }
@@ -41,78 +42,44 @@ public static class HoverComputer
             Contents = new MarkedStringsOrMarkupContent(new MarkupContent
             {
                 Kind = MarkupKind.Markdown,
-                Value = $"```gsharp\n{signature}\n```",
+                Value = RenderHover(model),
             }),
             Range = SemanticLookup.ToRange(token),
         };
     }
 
+    /// <summary>
+    /// Renders a symbol's compact signature label for signature help and completion
+    /// detail. Hover uses the richer <see cref="SymbolDisplayFormat.Hover"/> form via
+    /// <see cref="ComputeHover"/>.
+    /// </summary>
+    /// <param name="symbol">The symbol to render.</param>
+    /// <returns>The compact signature label.</returns>
     public static string FormatSymbol(Symbol symbol)
     {
-        return FormatSymbol(symbol, compilation: null);
+        return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature);
     }
 
+    /// <summary>
+    /// Renders a symbol's compact signature label, using <paramref name="compilation"/>
+    /// to recover a variable's exact declaring keyword.
+    /// </summary>
+    /// <param name="symbol">The symbol to render.</param>
+    /// <param name="compilation">The compilation providing declaration syntax.</param>
+    /// <returns>The compact signature label.</returns>
     public static string FormatSymbol(Symbol symbol, Compilation compilation)
     {
-        return symbol switch
-        {
-            ParameterSymbol parameter => $"{parameter.Name} {FormatType(parameter.Type)}",
-            VariableSymbol variable => $"{ResolveVariableKeyword(variable, compilation)} {variable.Name} {FormatType(variable.Type)}",
-            FunctionSymbol function => FormatFunction(function),
-            StructSymbol aggregate => FormatAggregate(aggregate),
-            EnumSymbol enumSymbol => FormatEnum(enumSymbol),
-            EnumMemberSymbol member => $"enum member {member.EnumType.Name}.{member.Name}: {FormatType(member.EnumType)}",
-            FieldSymbol field => $"field {field.Name}: {FormatType(field.Type)}",
-            TypeSymbol type => $"type {FormatType(type)}",
-            _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}",
-        };
+        return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature, compilation);
     }
 
-    private static string ResolveVariableKeyword(VariableSymbol variable, Compilation compilation)
+    private static HoverModel BuildHoverModel(Symbol symbol, Compilation compilation)
     {
-        if (compilation != null && variable.DeclaringSyntax is SyntaxToken identifier)
-        {
-            foreach (var tree in compilation.SyntaxTrees)
-            {
-                foreach (var declaration in FindVariableDeclarations(tree.Root))
-                {
-                    if (ReferenceEquals(declaration.Identifier, identifier)
-                        || (declaration.Identifier.Span.Start == identifier.Span.Start
-                            && declaration.Identifier.Span.Length == identifier.Span.Length
-                            && declaration.Identifier.Text == identifier.Text))
-                    {
-                        var keyword = declaration.Keyword?.Text;
-                        if (!string.IsNullOrEmpty(keyword))
-                        {
-                            return keyword;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback when the declaration cannot be located: `let` is read-only,
-        // `var` is mutable (ADR keeps `const` read-only as well).
-        return variable.IsReadOnly ? "let" : "var";
+        var signature = SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Hover, compilation);
+        var overloadCount = symbol is FunctionSymbol function ? CountOverloads(compilation, function) : 1;
+        return new HoverModel(signature, BuildDocumentation(symbol), overloadCount);
     }
 
-    private static IEnumerable<VariableDeclarationSyntax> FindVariableDeclarations(SyntaxNode node)
-    {
-        if (node is VariableDeclarationSyntax declaration)
-        {
-            yield return declaration;
-        }
-
-        foreach (var child in node.GetChildren())
-        {
-            foreach (var descendant in FindVariableDeclarations(child))
-            {
-                yield return descendant;
-            }
-        }
-    }
-
-    private static string FormatImportedClrType(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    private static HoverModel BuildImportedClrModel(SyntaxTree tree, Compilation compilation, SyntaxToken token)
     {
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
         {
@@ -125,38 +92,65 @@ public static class HoverComputer
             return null;
         }
 
-        var keyword = clrType.IsInterface ? "interface"
-            : clrType.IsEnum ? "enum"
-            : clrType.IsValueType ? "struct"
-            : "class";
-
-        return $"{keyword} {clrType.FullName ?? clrType.Name}";
+        var signature = SymbolDisplay.ToDisplayString(clrType, SymbolDisplayFormat.Hover);
+        return new HoverModel(signature, Array.Empty<HoverDocSection>(), OverloadCount: 1);
     }
 
-    private static string FormatFunction(FunctionSymbol function)
+    private static string RenderHover(HoverModel model)
     {
-        var parameters = string.Join(", ", function.Parameters.Select(p => $"{p.Name} {FormatType(p.Type)}"));
-        var returnType = ReferenceEquals(function.Type, TypeSymbol.Void) ? string.Empty : $" {FormatType(function.Type)}";
-        return $"func {function.Name}({parameters}){returnType}";
+        var sb = new StringBuilder();
+        sb.Append("```gsharp\n").Append(model.Signature).Append("\n```");
+
+        if (model.OverloadCount > 1)
+        {
+            var others = model.OverloadCount - 1;
+            sb.Append("\n\n*(+ ").Append(others).Append(others == 1 ? " overload)*" : " overloads)*");
+        }
+
+        foreach (var section in model.Documentation)
+        {
+            sb.Append("\n\n");
+            if (!string.IsNullOrEmpty(section.Heading))
+            {
+                sb.Append("**").Append(section.Heading).Append("**\n\n");
+            }
+
+            sb.Append(section.Body);
+        }
+
+        return sb.ToString();
     }
 
-    private static string FormatAggregate(StructSymbol aggregate)
+    private static int CountOverloads(Compilation compilation, FunctionSymbol function)
     {
-        var keyword = aggregate.IsClass ? "class" : "struct";
-        var fields = string.Join("; ", aggregate.Fields.Select(f => $"{f.Name} {FormatType(f.Type)}"));
-        return $"{keyword} {aggregate.Name} {{ {fields} }}";
+        if (function.StaticOwnerType is StructSymbol staticOwner)
+        {
+            return staticOwner.StaticMethods.Count(m => m.Name == function.Name);
+        }
+
+        if (function.ReceiverType is StructSymbol owner)
+        {
+            return owner.Methods.Count(m => m.Name == function.Name);
+        }
+
+        return compilation.GlobalScope.Functions.Count(f => f.Name == function.Name);
     }
 
-    private static string FormatEnum(EnumSymbol enumSymbol)
+    // Documentation sections are an empty shell until ADR-0057 ingestion/authoring
+    // (Stage C) populate the model. The renderer above already lays them out.
+    private static IReadOnlyList<HoverDocSection> BuildDocumentation(Symbol symbol)
     {
-        var members = string.Join(", ", enumSymbol.Members.Select(m => m.Name));
-        return $"enum {enumSymbol.Name} {{ {members} }}";
+        return Array.Empty<HoverDocSection>();
     }
 
     private static string FormatType(TypeSymbol type)
     {
         return type?.Name ?? "void";
     }
+
+    private sealed record HoverModel(string Signature, IReadOnlyList<HoverDocSection> Documentation, int OverloadCount);
+
+    private sealed record HoverDocSection(string Heading, string Body);
 }
 
 public static class ReferencesComputer
