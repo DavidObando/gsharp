@@ -8859,7 +8859,7 @@ internal sealed class ReflectionMetadataEmitter
             genericParameterCount: openForMethodGenerics.IsGenericMethodDefinition ? openForMethodGenerics.GetGenericArguments().Length : 0);
         sigEncoder.Parameters(
                 openForMethodGenerics.GetParameters().Length,
-                returnType: r => this.EncodeReturnClr(r, openForMethodGenerics.ReturnType),
+                returnType: r => this.EncodeReturnClr(r, openForMethodGenerics.ReturnParameter, openForMethodGenerics.ReturnType),
                 parameters: ps =>
                 {
                     foreach (var p in openForMethodGenerics.GetParameters())
@@ -9456,11 +9456,32 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private void EncodeReturnClr(ReturnTypeEncoder encoder, Type type)
+    private void EncodeReturnClr(ReturnTypeEncoder encoder, ParameterInfo returnParameter, Type type)
     {
         if (type?.FullName == "System.Void")
         {
             encoder.Void();
+        }
+        else if (type != null && type.IsByRef)
+        {
+            // ADR-0056 §1/§2: a `ref`/`ref readonly T` return (e.g. the span
+            // indexer's `get_Item`) must encode as a managed pointer to the
+            // pointee. A `ref readonly T` return additionally carries a required
+            // custom modifier (`modreq(InAttribute)` on `ReadOnlySpan[T]`); it
+            // must be encoded or the methodref signature fails to resolve at
+            // runtime (MissingMethodException). Without `isByRef: true` the
+            // return was malformed for every ref-returning member.
+            var requiredModifiers = returnParameter?.GetRequiredCustomModifiers() ?? Type.EmptyTypes;
+            if (requiredModifiers.Length > 0)
+            {
+                var modifiers = encoder.CustomModifiers();
+                foreach (var modifier in requiredModifiers)
+                {
+                    modifiers.AddModifier(this.GetTypeReference(modifier), isOptional: false);
+                }
+            }
+
+            this.EncodeClrType(encoder.Type(isByRef: true), type.GetElementType()!);
         }
         else
         {
@@ -12973,6 +12994,45 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
         {
+            var setter = ixa.Indexer.GetSetMethod(nonPublic: false);
+
+            // ADR-0056 §2: span element write. `Span[T]` has no setter; its
+            // indexer getter returns `ref T`. Obtain the managed pointer via
+            // `get_Item`, then store the value through it (`stobj`/`stind.*`).
+            // The expression result re-reads the element (get_Item + load
+            // indirect), mirroring the array/CLR set_Item read-back below.
+            if (setter == null)
+            {
+                var refGetter = ixa.Indexer.GetGetMethod(nonPublic: false)
+                    ?? throw new InvalidOperationException(
+                        $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
+                var receiver = new BoundVariableExpression(null, ixa.Target);
+
+                // store: <receiver-addr> <index...> get_Item(ref T) <value> stobj/stind
+                this.EmitInstanceReceiver(receiver);
+                foreach (var arg in ixa.Arguments)
+                {
+                    this.EmitExpression(arg);
+                }
+
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.GetMethodReference(refGetter));
+                this.EmitExpression(ixa.Value);
+                this.EmitStoreIndirect(ixa.Type);
+
+                // expression result: re-read the just-written element.
+                this.EmitInstanceReceiver(receiver);
+                foreach (var arg in ixa.Arguments)
+                {
+                    this.EmitExpression(arg);
+                }
+
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.GetMethodReference(refGetter));
+                this.EmitLoadIndirect(ixa.Type);
+                return;
+            }
+
             // Phase 4 emit parity: indexer write. `d[k] = v` -> `callvirt set_Item(k, v)`.
             // Like the array-index assignment path, the expression result is the
             // assigned value, so re-read via `get_Item` after the store.
@@ -12983,9 +13043,6 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.EmitExpression(ixa.Value);
-            var setter = ixa.Indexer.GetSetMethod(nonPublic: false)
-                ?? throw new InvalidOperationException(
-                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter.");
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(setter));
 
@@ -13605,6 +13662,45 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 this.il.OpCode(ILOpCode.Ldind_ref);
+            }
+        }
+
+        /// <summary>ADR-0056 §2: Emits stind.* or stobj to store a value through a managed pointer.</summary>
+        private void EmitStoreIndirect(TypeSymbol pointeeType)
+        {
+            var clrType = pointeeType?.ClrType;
+            if (clrType == typeof(int) || clrType == typeof(uint))
+            {
+                this.il.OpCode(ILOpCode.Stind_i4);
+            }
+            else if (clrType == typeof(long) || clrType == typeof(ulong))
+            {
+                this.il.OpCode(ILOpCode.Stind_i8);
+            }
+            else if (clrType == typeof(float))
+            {
+                this.il.OpCode(ILOpCode.Stind_r4);
+            }
+            else if (clrType == typeof(double))
+            {
+                this.il.OpCode(ILOpCode.Stind_r8);
+            }
+            else if (clrType == typeof(short) || clrType == typeof(ushort) || clrType == typeof(char))
+            {
+                this.il.OpCode(ILOpCode.Stind_i2);
+            }
+            else if (clrType == typeof(byte) || clrType == typeof(sbyte) || clrType == typeof(bool))
+            {
+                this.il.OpCode(ILOpCode.Stind_i1);
+            }
+            else if (clrType != null && clrType.IsValueType)
+            {
+                this.il.OpCode(ILOpCode.Stobj);
+                this.il.Token(this.outer.GetElementTypeToken(pointeeType));
+            }
+            else
+            {
+                this.il.OpCode(ILOpCode.Stind_ref);
             }
         }
 

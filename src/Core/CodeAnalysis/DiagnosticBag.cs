@@ -1527,6 +1527,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0225", "Newline in the literal portion of an interpolated string; only '${ … }' holes may span lines.");
     }
 
+    /// <summary>
+    /// ADR-0056 §2: reports an attempt to assign through a read-only span
+    /// element. A <c>ReadOnlySpan[T]</c> indexer is <c>ref readonly T</c>, so
+    /// <c>span[i] = v</c> is not permitted (only <c>Span[T]</c> writes are).
+    /// </summary>
+    /// <param name="location">The text location of the offending assignment.</param>
+    /// <param name="type">The read-only span type being written through.</param>
+    public void ReportCannotAssignReadOnlySpanElement(TextLocation location, TypeSymbol type)
+    {
+        var message = $"Cannot assign through a read-only span element ('{type.Name}' is read-only).";
+        Report(location, "GS0226", message);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

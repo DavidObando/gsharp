@@ -9064,7 +9064,7 @@ public sealed class Binder
                     var prop = ClrTypeUtilities.SafeGetProperty(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
-                        return new BoundClrPropertyAccessExpression(null, receiver, prop, TypeSymbol.FromClrType(prop.PropertyType));
+                        return AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, MapClrMemberType(prop.PropertyType)));
                     }
 
                     var fld = ClrTypeUtilities.SafeGetField(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
@@ -9343,14 +9343,14 @@ public sealed class Binder
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
-                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
+                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
                         var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
                         var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location);
                         var instArguments = AppendOmittedOptionalArguments(instHandlerArgs, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                        return new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols);
+                        return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
                         return new BoundErrorExpression(null);
@@ -10046,13 +10046,13 @@ public sealed class Binder
         if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx && TryResolveClrIndexer(clrAnnotIdx, new[] { syntax.Index }, out var idxPropAnnot, out var idxArgsAnnot))
         {
             var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
-            return new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot);
+            return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
         }
 
         if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
             var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
-            return new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType);
+            return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -10107,8 +10107,27 @@ public sealed class Binder
 
         if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
         {
+            // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
+            // indexer is a `ref T`-returning getter and writes go through that
+            // managed pointer. Detect the ref-returning getter and store through
+            // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
+            // hard error (GS0226).
             if (!idxProp.CanWrite)
             {
+                var refGetter = idxProp.GetGetMethod(nonPublic: false);
+                if (refGetter != null && refGetter.ReturnType.IsByRef)
+                {
+                    if (IsReadOnlyRefReturn(idxProp, refGetter))
+                    {
+                        Diagnostics.ReportCannotAssignReadOnlySpanElement(syntax.TargetIdentifier.Location, variable.Type);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
+                    var refValue = BindConversion(syntax.Value, pointeeType);
+                    return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
+                }
+
                 Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
                 return new BoundErrorExpression(null);
             }
@@ -10144,12 +10163,20 @@ public sealed class Binder
                     openDefinition,
                     closedIndexer.Name,
                     BindingFlags.Public | BindingFlags.Instance);
-                if (openIndexer?.PropertyType is System.Type openElement && openElement.IsGenericParameter)
+                if (openIndexer?.PropertyType is System.Type openElement)
                 {
-                    var position = openElement.GenericParameterPosition;
-                    if (position >= 0 && position < target.TypeArguments.Length)
+                    // ADR-0056 §1/§2: a ref-returning indexer (e.g. `Span[T]`)
+                    // surfaces its element as `T&`; map it through a
+                    // `ByRefTypeSymbol` so §1 auto-dereference applies.
+                    var openCore = openElement.IsByRef ? openElement.GetElementType()! : openElement;
+                    if (openCore.IsGenericParameter)
                     {
-                        return target.TypeArguments[position];
+                        var position = openCore.GenericParameterPosition;
+                        if (position >= 0 && position < target.TypeArguments.Length)
+                        {
+                            var arg = target.TypeArguments[position];
+                            return openElement.IsByRef ? ByRefTypeSymbol.Get(arg) : arg;
+                        }
                     }
                 }
             }
@@ -10159,7 +10186,73 @@ public sealed class Binder
             }
         }
 
-        return TypeSymbol.FromClrType(closedIndexer.PropertyType);
+        // ADR-0056 §2: a closed ref-returning indexer (e.g. `ReadOnlySpan[int32]`
+        // / `Span[int32]`) reports its element as `int32&`. Surface it as a
+        // `ByRefTypeSymbol` over the pointee so the read auto-dereferences (§1)
+        // and the emitter loads through the managed pointer.
+        var propertyType = closedIndexer.PropertyType;
+        if (propertyType.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(propertyType.GetElementType()!));
+        }
+
+        return TypeSymbol.FromClrType(propertyType);
+    }
+
+    // ADR-0056 §1: when a CLR member access (call, property, or indexer)
+    // resolves to a member whose CLR return type is `T&` (a `ByRefTypeSymbol`)
+    // and appears in an rvalue position, auto-dereference it so its observable
+    // type is the pointee `T`. This reuses ADR-0039's `BoundDereferenceExpression`
+    // (no new bound-node kind). Taking an address with `&` and passing `ref`/`out`
+    // arguments are unaffected because those produce `BoundAddressOfExpression`,
+    // not a ref-returning member access.
+    private static BoundExpression AutoDereferenceRefReturn(BoundExpression expression)
+    {
+        return expression.Type is ByRefTypeSymbol
+            ? new BoundDereferenceExpression(null, expression)
+            : expression;
+    }
+
+    // ADR-0056 §1: map a CLR member's return/field type to a `TypeSymbol`,
+    // surfacing a `T&` return as a `ByRefTypeSymbol` over the pointee so that
+    // `AutoDereferenceRefReturn` can apply the §1 rule generally to ref-returning
+    // methods and properties (not just the span indexer).
+    private static TypeSymbol MapClrMemberType(System.Type clrType)
+    {
+        if (clrType != null && clrType.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(clrType.GetElementType()!));
+        }
+
+        return TypeSymbol.FromClrType(clrType);
+    }
+
+    // ADR-0056 §2: a `ref readonly T` return (e.g. `ReadOnlySpan[T].get_Item`)
+    // carries a required custom modifier `System.Runtime.InteropServices.InAttribute`
+    // on the indexer property / getter return, whereas a `ref T` return
+    // (`Span[T].get_Item`) carries none. This distinguishes a writable span
+    // element from a read-only one.
+    private static bool IsReadOnlyRefReturn(PropertyInfo indexer, MethodInfo getter)
+    {
+        static bool HasInModifier(System.Type[] modifiers)
+        {
+            foreach (var m in modifiers)
+            {
+                if (m.Name == "InAttribute")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (HasInModifier(indexer.GetRequiredCustomModifiers()))
+        {
+            return true;
+        }
+
+        return HasInModifier(getter.ReturnParameter.GetRequiredCustomModifiers());
     }
 
     private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)
