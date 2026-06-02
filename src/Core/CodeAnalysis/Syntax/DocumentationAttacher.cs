@@ -25,22 +25,16 @@ internal static class DocumentationAttacher
     internal static Dictionary<SyntaxNode, string> Attach(SyntaxTree tree)
     {
         var result = new Dictionary<SyntaxNode, string>();
-        var docTokens = tree.DocumentationTokens;
-        if (docTokens.IsDefaultOrEmpty)
+        var blocks = GetBlocks(tree);
+        if (blocks.IsDefaultOrEmpty)
         {
             return result;
         }
 
         var sourceText = tree.Text;
-        var blocks = GroupIntoBlocks(docTokens, sourceText);
-        if (blocks.Count == 0)
-        {
-            return result;
-        }
 
         // Collect all documentable declarations sorted by source position.
-        var declarations = CollectDocumentableDeclarations(tree.Root);
-        declarations.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
+        var declarations = GetDocumentableDeclarations(tree);
 
         var declIndex = 0;
         foreach (var block in blocks)
@@ -70,6 +64,24 @@ internal static class DocumentationAttacher
         return result;
     }
 
+    internal static ImmutableArray<DocBlock> GetBlocks(SyntaxTree tree)
+    {
+        var docTokens = tree.DocumentationTokens;
+        if (docTokens.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<DocBlock>.Empty;
+        }
+
+        return GroupIntoBlocks(docTokens, tree.Text).ToImmutableArray();
+    }
+
+    internal static List<SyntaxNode> GetDocumentableDeclarations(SyntaxTree tree)
+    {
+        var declarations = CollectDocumentableDeclarations(tree.Root);
+        declarations.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
+        return declarations;
+    }
+
     private static List<DocBlock> GroupIntoBlocks(ImmutableArray<SyntaxToken> docTokens, SourceText sourceText)
     {
         var blocks = new List<DocBlock>();
@@ -77,6 +89,7 @@ internal static class DocumentationAttacher
         var currentFirstLine = -1;
         var currentLastLine = -1;
         var currentEndPosition = 0;
+        TextLocation currentLocation = default;
 
         foreach (var token in docTokens)
         {
@@ -85,13 +98,14 @@ internal static class DocumentationAttacher
             if (currentLines.Count > 0 && tokenLine != currentLastLine + 1)
             {
                 // Gap: finalize current block.
-                blocks.Add(new DocBlock(currentFirstLine, currentLastLine, currentEndPosition, JoinBlock(currentLines)));
+                blocks.Add(new DocBlock(currentFirstLine, currentLastLine, currentEndPosition, currentLocation, JoinBlock(currentLines)));
                 currentLines.Clear();
             }
 
             if (currentLines.Count == 0)
             {
                 currentFirstLine = tokenLine;
+                currentLocation = token.Location;
             }
 
             currentLastLine = tokenLine;
@@ -101,7 +115,7 @@ internal static class DocumentationAttacher
 
         if (currentLines.Count > 0)
         {
-            blocks.Add(new DocBlock(currentFirstLine, currentLastLine, currentEndPosition, JoinBlock(currentLines)));
+            blocks.Add(new DocBlock(currentFirstLine, currentLastLine, currentEndPosition, currentLocation, JoinBlock(currentLines)));
         }
 
         return blocks;
@@ -231,13 +245,14 @@ internal static class DocumentationAttacher
         }
     }
 
-    private readonly struct DocBlock
+    internal readonly struct DocBlock
     {
-        public DocBlock(int firstLine, int lastLine, int endPosition, string text)
+        public DocBlock(int firstLine, int lastLine, int endPosition, TextLocation location, string text)
         {
             FirstLine = firstLine;
             LastLine = lastLine;
             EndPosition = endPosition;
+            Location = location;
             Text = text;
         }
 
@@ -246,6 +261,8 @@ internal static class DocumentationAttacher
         public int LastLine { get; }
 
         public int EndPosition { get; }
+
+        public TextLocation Location { get; }
 
         public string Text { get; }
     }

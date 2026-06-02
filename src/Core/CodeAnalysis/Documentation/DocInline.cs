@@ -52,6 +52,10 @@ public abstract record DocInline
     /// <param name="Name">The referenced parameter name.</param>
     public sealed record ParamRef(string Name) : DocInline;
 
+    /// <summary>An <c>&lt;inheritdoc/&gt;</c> marker, resolved lazily at hover time.</summary>
+    /// <param name="Cref">The optional cref target, or null for "inherit from base".</param>
+    public sealed record InheritDoc(string Cref) : DocInline;
+
     /// <summary>
     /// A verbatim, well-formed XML fragment with no first-class model case. Backs
     /// both the authoring escape hatch and full-fidelity ingestion (ADR-0057 §4/§6).

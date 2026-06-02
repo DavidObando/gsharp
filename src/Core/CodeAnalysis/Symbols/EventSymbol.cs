@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -19,6 +21,7 @@ public sealed class EventSymbol : Symbol
     /// <param name="isVirtual">Whether this event is virtual (open modifier present).</param>
     /// <param name="isOverride">Whether this event overrides a base event.</param>
     /// <param name="isStatic">Whether this event is declared inside a <c>shared</c> block (ADR-0053).</param>
+    /// <param name="declaration">The declaring syntax node, or <see langword="null"/> for synthesized events.</param>
     public EventSymbol(
         string name,
         TypeSymbol type,
@@ -26,7 +29,8 @@ public sealed class EventSymbol : Symbol
         bool isFieldLike,
         bool isVirtual,
         bool isOverride,
-        bool isStatic = false)
+        bool isStatic = false,
+        EventDeclarationSyntax declaration = null)
         : base(name)
     {
         Type = type;
@@ -35,6 +39,7 @@ public sealed class EventSymbol : Symbol
         IsVirtual = isVirtual;
         IsOverride = isOverride;
         IsStatic = isStatic;
+        Declaration = declaration;
     }
 
     /// <inheritdoc/>
@@ -57,6 +62,9 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this event is declared inside a <c>shared</c> block (ADR-0053).</summary>
     public bool IsStatic { get; }
+
+    /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized events.</summary>
+    public EventDeclarationSyntax Declaration { get; }
 
     /// <summary>Gets or sets the synthesized backing delegate field (null for explicit accessors).</summary>
     public FieldSymbol BackingField { get; set; }

@@ -242,3 +242,12 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 |----|----------|-------------|
 | GS9998 | Error | An unexpected `NotSupportedException` or `InvalidOperationException` was raised during IL emission. The message text contains the original exception message. |
 | GS9999 | Error | An unexpected exception was caught by the evaluator. The message text contains the original exception message. |
+
+## Documentation diagnostics (GS0227–GS0230)
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0227 | Warning | Documentation comment is not attached to a declaration. |
+| GS0228 | Warning | Missing documentation comment on public member '{name}'. (opt-in) |
+| GS0229 | Warning | Documentation @param '{name}' does not match any parameter of '{symbol}'. |
+| GS0230 | Warning | Unsupported documentation Markdown: {detail}. |

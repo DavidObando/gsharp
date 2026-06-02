@@ -119,6 +119,16 @@ public class XmlDocumentationParserTests
     }
 
     [Fact]
+    public void InheritDoc_IsModelled()
+    {
+        var member = Member("<inheritdoc cref=\"M:Base.Foo\"/>");
+        var doc = XmlDocumentationParser.ParseMember(member);
+        var inheritDoc = doc.Remarks.OfType<DocInline.InheritDoc>().Single();
+
+        Assert.Equal("M:Base.Foo", inheritDoc.Cref);
+    }
+
+    [Fact]
     public void CodeBlock_PreservesLanguageAndText()
     {
         var member = Member("<summary><code language=\"csharp\">var x = 1;</code></summary>");
