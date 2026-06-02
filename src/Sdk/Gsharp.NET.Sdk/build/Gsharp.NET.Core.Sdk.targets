@@ -49,6 +49,7 @@
         Optimization="$(Optimize)"
         DebugType="$(DebugType)"
         PdbFile="@(_DebugSymbolsIntermediatePath)"
+        DocumentationFile="$(DocumentationFile)"
         SourceLink="$(SourceLink)"
         EmbedAllSources="$(EmbedAllSources)"
         Deterministic="$(Deterministic)"
@@ -65,6 +66,7 @@
     <ItemGroup>
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
       <FileWrites Include="$(_GsharpRefAssemblyPath)" Condition=" '$(_GsharpRefAssemblyPath)' != '' " />
+      <FileWrites Include="$(DocumentationFile)" Condition=" '$(DocumentationFile)' != '' " />
 
       <!-- Phase 8: declare the sidecar PDB to MSBuild so incremental build,
            Clean, dotnet publish, and dotnet pack (when GeneratePackageOnBuild
