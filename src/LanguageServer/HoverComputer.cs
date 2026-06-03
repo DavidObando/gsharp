@@ -182,50 +182,52 @@ public static class HoverComputer
         member = null;
         overloadCount = 0;
 
-        var accessor = FindAccessorWithHoveredRightPart(tree.Root, token);
-        if (accessor == null
-            || !TryGetAccessorMemberName(accessor.RightPart, token, out var memberName)
-            || !TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver))
+        foreach (var context in FindAccessorMemberContexts(tree, token))
         {
-            return false;
-        }
+            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiver))
+            {
+                continue;
+            }
 
-        var flags = BindingFlags.Public | (receiver.StaticMembers ? BindingFlags.Static : BindingFlags.Instance);
-        var property = ClrTypeUtilities.SafeGetProperty(receiver.Type, memberName, flags);
-        if (property != null && property.GetIndexParameters().Length == 0)
-        {
-            member = property;
-            overloadCount = 1;
+            var flags = BindingFlags.Public | (receiver.StaticMembers ? BindingFlags.Static : BindingFlags.Instance);
+            var property = ClrTypeUtilities.SafeGetProperty(receiver.Type, context.MemberName, flags);
+            if (property != null && property.GetIndexParameters().Length == 0)
+            {
+                member = property;
+                overloadCount = 1;
+                return true;
+            }
+
+            var field = ClrTypeUtilities.SafeGetField(receiver.Type, context.MemberName, flags);
+            if (field != null)
+            {
+                member = field;
+                overloadCount = 1;
+                return true;
+            }
+
+            var @event = ClrTypeUtilities.SafeGetEvent(receiver.Type, context.MemberName, flags);
+            if (@event != null)
+            {
+                member = @event;
+                overloadCount = 1;
+                return true;
+            }
+
+            var methods = ClrTypeUtilities.SafeGetMethods(receiver.Type, flags)
+                .Where(m => m.Name == context.MemberName && !m.IsSpecialName)
+                .ToArray();
+            if (methods.Length == 0)
+            {
+                continue;
+            }
+
+            member = methods[0];
+            overloadCount = methods.Length;
             return true;
         }
 
-        var field = ClrTypeUtilities.SafeGetField(receiver.Type, memberName, flags);
-        if (field != null)
-        {
-            member = field;
-            overloadCount = 1;
-            return true;
-        }
-
-        var @event = ClrTypeUtilities.SafeGetEvent(receiver.Type, memberName, flags);
-        if (@event != null)
-        {
-            member = @event;
-            overloadCount = 1;
-            return true;
-        }
-
-        var methods = ClrTypeUtilities.SafeGetMethods(receiver.Type, flags)
-            .Where(m => m.Name == memberName && !m.IsSpecialName)
-            .ToArray();
-        if (methods.Length == 0)
-        {
-            return false;
-        }
-
-        member = methods[0];
-        overloadCount = methods.Length;
-        return true;
+        return false;
     }
 
     /// <summary>
@@ -243,13 +245,16 @@ public static class HoverComputer
         }
 
         // Case 1: member access expression (e.g. var x = person.Name)
-        var accessor = FindAccessorWithHoveredRightPart(tree.Root, token);
-        if (accessor != null && TryGetAccessorMemberName(accessor.RightPart, token, out var memberName))
+        foreach (var context in FindAccessorMemberContexts(tree, token))
         {
-            var structSymbol = ResolveReceiverStructSymbol(tree, compilation, accessor.LeftPart);
+            var structSymbol = ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression);
             if (structSymbol != null)
             {
-                return LookupMemberOnStruct(structSymbol, memberName);
+                var member = LookupMemberOnStruct(structSymbol, context.MemberName);
+                if (member != null)
+                {
+                    return member;
+                }
             }
         }
 
@@ -376,23 +381,57 @@ public static class HoverComputer
         return null;
     }
 
-    private static AccessorExpressionSyntax FindAccessorWithHoveredRightPart(SyntaxNode root, SyntaxToken token)
+    private static IEnumerable<(ExpressionSyntax ReceiverExpression, string MemberName)> FindAccessorMemberContexts(SyntaxTree tree, SyntaxToken token)
     {
-        return FindNodes<AccessorExpressionSyntax>(root)
-            .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
-            .Where(a => MatchesHoveredMemberToken(a.RightPart, token))
-            .OrderBy(a => a.Span.Length)
-            .FirstOrDefault();
+        if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+        {
+            yield break;
+        }
+
+        foreach (var accessor in FindNodes<AccessorExpressionSyntax>(tree.Root)
+                     .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
+                     .OrderBy(a => a.Span.Length))
+        {
+            if (TryResolveAccessorMemberContext(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpression, out var memberName))
+            {
+                yield return (receiverExpression, memberName);
+            }
+        }
     }
 
-    private static bool MatchesHoveredMemberToken(ExpressionSyntax expression, SyntaxToken token)
+    private static bool TryResolveAccessorMemberContext(
+        SyntaxTree tree,
+        ExpressionSyntax expression,
+        ExpressionSyntax receiver,
+        SyntaxToken token,
+        out ExpressionSyntax receiverExpression,
+        out string memberName)
     {
-        return expression switch
+        receiverExpression = null;
+        memberName = null;
+
+        switch (expression)
         {
-            NameExpressionSyntax name => MatchesToken(name.IdentifierToken, token),
-            CallExpressionSyntax call => MatchesToken(call.Identifier, token),
-            _ => false,
-        };
+            case NameExpressionSyntax name when MatchesToken(name.IdentifierToken, token):
+                receiverExpression = receiver;
+                memberName = name.IdentifierToken.Text;
+                return true;
+            case CallExpressionSyntax call when MatchesToken(call.Identifier, token):
+                receiverExpression = receiver;
+                memberName = call.Identifier.Text;
+                return true;
+            case AccessorExpressionSyntax nested:
+                if (TryResolveAccessorMemberContext(tree, nested.LeftPart, receiver, token, out receiverExpression, out memberName))
+                {
+                    return true;
+                }
+
+                // Rebuild the left prefix as a receiver expression for the nested right segment.
+                var nestedReceiver = new AccessorExpressionSyntax(tree, receiver, nested.DotToken, nested.LeftPart);
+                return TryResolveAccessorMemberContext(tree, nested.RightPart, nestedReceiver, token, out receiverExpression, out memberName);
+            default:
+                return false;
+        }
     }
 
     private static bool TryGetAccessorMemberName(ExpressionSyntax expression, SyntaxToken token, out string memberName)
@@ -450,10 +489,21 @@ public static class HoverComputer
     private static bool TryResolveClrMemberExpression(SyntaxTree tree, Compilation compilation, AccessorExpressionSyntax accessor, out Type memberType)
     {
         memberType = null;
-        if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver)
-            || !TryGetAccessorMemberName(accessor.RightPart, token: null, out var memberName))
+        if (!TryGetAccessorMemberName(accessor.RightPart, token: null, out var memberName))
         {
             return false;
+        }
+
+        if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver))
+        {
+            var gsharpReceiver = ResolveReceiverStructSymbol(tree, compilation, accessor.LeftPart);
+            if (gsharpReceiver == null)
+            {
+                return false;
+            }
+
+            var gsharpMember = LookupMemberOnStruct(gsharpReceiver, memberName);
+            return TryResolveClrTypeFromSymbol(gsharpMember, out memberType);
         }
 
         var flags = BindingFlags.Public | (receiver.StaticMembers ? BindingFlags.Static : BindingFlags.Instance);
