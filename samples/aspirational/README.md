@@ -4,13 +4,25 @@ Per ADR-0010 (aspirational samples policy), this folder holds samples that exerc
 
 A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, discovers every `*.gs` file in this folder that has a paired `*.golden`, parses + binds + evaluates it through the same `Compilation.Evaluate(...)` path as the in-repo unit tests, and compares captured stdout against the golden.
 
-## Current contents (post Phase A–G emit closure)
+## Current contents
 
-| Sample | Demonstrates |
-| --- | --- |
-| *(AsyncTask.gs was promoted to top-level `samples/` in #135 after async emit shipped end-to-end — see ADR-0023.)* | |
+| Sample | Demonstrates | Blocker |
+| --- | --- | --- |
+| `Defer.gs` | Block-scoped `defer` and `using` cleanup convergence (Phase 7.1) | Deferred functions are not executed by the emit backend; only the `using` body output appears. |
+| `MethodsWithReceivers.gs` | Same-package receiver declarations bound as methods on user-defined structs (Phase 6.4) | The emitted assembly crashes with SIGSEGV (exit 139) at runtime. |
 
-Other Phase 5 samples (`PortScan.gs` exercising `chan` + `go` + `scope` + `select`, and `Patterns.gs` / `SwitchExpression.gs` exercising pattern matching) now live under top-level `samples/` and run on both backends after the Phase A–G emit work.
+### Previously promoted samples
+
+| Sample | Promoted from aspirational in | Demonstrates |
+| --- | --- | --- |
+| `AsyncTask.gs` | #135 | Async/await with `Task` (ADR-0023) |
+| `PortScan.gs` | Phase A–G emit closure | `chan` + `go` + `scope` + `select` concurrency |
+| `Patterns.gs` | Phase A–G emit closure | Pattern matching |
+| `SwitchExpression.gs` | Phase A–G emit closure | Switch expressions |
+| `Enum.gs` | This PR | `type … enum` declarations with switch/arrow patterns |
+| `Exhaustiveness.gs` | This PR | Exhaustive enum switch expressions (no `default` needed) |
+| `ExpressionEval.gs` | This PR | Sealed-interface type-pattern switch expressions |
+| `NullableFlow.gs` | This PR | Nullable flow analysis with pattern switch and `if` guard |
 
 ## When to add a sample here
 

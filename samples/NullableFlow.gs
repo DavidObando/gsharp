@@ -1,7 +1,7 @@
-// file: aspirational/NullableFlow.gs
+// file: NullableFlow.gs
 //
-// Phase 6.6 sample. Nullable flow-analysis is binder/interpreter-covered;
-// emit for pattern switches remains deferred with the rest of Phase 6 patterns.
+// Phase 6.6 sample. Demonstrates nullable flow analysis with a type-pattern
+// switch and an if-guard on a nullable string.
 
 package GSharp.Samples.NullableFlow
 

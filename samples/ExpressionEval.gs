@@ -1,4 +1,4 @@
-// file: aspirational/ExpressionEval.gs
+// file: ExpressionEval.gs
 //
 // Phase 6 exit sample. Builds a tiny expression AST as a sealed interface
 // hierarchy and evaluates it through a switch expression with type-pattern
@@ -7,9 +7,6 @@
 // the binder proves all three implementors are covered), and 6.4
 // (Phase 6.4 method-with-receiver form is not used here, but the surface
 // composes cleanly with this sample).
-//
-// Interpreter-only for now (switch expressions follow the same posture as
-// the rest of Phase 6 — emit is deferred).
 
 package GSharp.Samples.ExpressionEval
 

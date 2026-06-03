@@ -1,4 +1,4 @@
-// file: aspirational/Exhaustiveness.gs
+// file: Exhaustiveness.gs
 //
 // Phase 6.3 sample. Enum switch expressions may omit default when all
 // members are covered explicitly.
