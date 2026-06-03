@@ -1,6 +1,6 @@
 # ADR-0051: Property declarations — `prop` keyword with accessor bodies
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-28
 - **Related**: ADR-0003 (OO surface); ADR-0034 (imported CLR interop — property consumption); ADR-0047 (attribute syntax — `property` target kind); issue #195
 

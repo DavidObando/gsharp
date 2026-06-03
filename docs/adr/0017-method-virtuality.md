@@ -1,6 +1,6 @@
 # ADR-0017: Method virtuality — sealed by default, opt-in with `open`
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.3)
 - **Related**: ADR-0003 (OO surface — data-oriented core with light OO escape hatch); ADR-0006 (visibility); execution plan §3.B.3; gaps doc §3.2

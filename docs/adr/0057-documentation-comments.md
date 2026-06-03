@@ -1,6 +1,6 @@
 # ADR-0057: Documentation comments — Markdown authoring with lossless CLR XML-doc round-trip
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-02
 - **Phase**: Hover revamp, Phase 4 (foundational)
 - **Related**: issue #388 (hover revamp); ADR-0047 (attribute/annotation syntax); ADR-0051 (property declarations); ADR-0052 (event declarations); ADR-0034 (imported CLR interop); `docs/lexical.md` (Comments); `docs/lsp.md` (hover)

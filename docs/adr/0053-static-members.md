@@ -1,6 +1,6 @@
 # ADR-0053: Static members on user types — `shared` block
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-29
 - **Phase**: Phase 10 — CLR round-trip completeness
 - **Related**: Issue #196; ADR-0003 (OO surface); ADR-0051 (properties); ADR-0052 (events); Kotlin companion objects

@@ -1,6 +1,6 @@
 # ADR-0019: Extension function declaration syntax — `func (Receiver) Name(…) …`
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.6); revisited by ADR-0024 in Phase 6
 - **Related**: ADR-0003 (OO surface); execution plan §3.B.6, §6.4; gaps doc §3.B

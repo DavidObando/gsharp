@@ -1,6 +1,6 @@
 # ADR-0042: `async sequence[T]` as a type-clause spelling for `IAsyncEnumerable[T]`
 
-- **Status**: Accepted (implemented in this PR)
+- **Status**: Accepted
 - **Date**: 2026-05-25
 - **Phase**: Phase 7 follow-up — iterator ergonomics
 - **Related**: ADR-0023 (async state machine), ADR-0040 (`sequence[T]` + `yield`), ADR-0041 (`sequence[T]` aliases `IAsyncEnumerable[T]` in async return slot), issue #150 (`async func(P) R` as a function-type clause)
