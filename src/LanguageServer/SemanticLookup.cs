@@ -132,6 +132,11 @@ public static class SemanticLookup
         {
             foreach (var token in EnumerateTokens(tree.Root))
             {
+                if (token.IsMissing)
+                {
+                    continue;
+                }
+
                 if (token.Kind == SyntaxKind.IdentifierToken && ReferenceEquals(model.Resolve(token), target))
                 {
                     yield return token;
@@ -334,6 +339,35 @@ public static class SemanticLookup
                     declarations,
                     aggregate.Declaration.Events.Select(e => e.Identifier),
                     aggregate.Events.Concat(aggregate.StaticEvents));
+
+                MapMembersByName(
+                    declarations,
+                    aggregate.Declaration.Methods.Select(m => m.Identifier),
+                    aggregate.Methods.Concat(aggregate.StaticMethods));
+            }
+        }
+
+        foreach (var iface in compilation.GlobalScope.Interfaces)
+        {
+            globals[iface.Name] = iface;
+            if (iface.Declaration != null)
+            {
+                declarations[iface.Declaration.Identifier] = iface;
+
+                MapMembersByName(
+                    declarations,
+                    iface.Declaration.Methods.Select(m => m.Identifier),
+                    iface.Methods);
+
+                MapMembersByName(
+                    declarations,
+                    iface.Declaration.Properties.Select(p => p.Identifier),
+                    iface.Properties);
+
+                MapMembersByName(
+                    declarations,
+                    iface.Declaration.Events.Select(e => e.Identifier),
+                    iface.Events);
             }
         }
 
