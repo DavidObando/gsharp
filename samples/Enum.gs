@@ -1,6 +1,6 @@
-// file: aspirational/Enum.gs
+// file: Enum.gs
 //
-// Phase 6.8 sample. Enums are interpreter-only for now; emit is deferred.
+// Phase 6.8 sample. Demonstrates enum type declarations with switch/arrow-pattern expressions.
 
 package GSharp.Samples.Enum
 
