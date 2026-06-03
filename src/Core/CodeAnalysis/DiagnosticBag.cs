@@ -1583,6 +1583,17 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0230", $"Unsupported documentation Markdown: {detail}. Use ```xmldoc for complex XML-doc constructs.", DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// Reports GS0231 when a documentation comment contains an unknown block tag
+    /// (e.g. <c>@return</c> instead of <c>@returns</c>).
+    /// </summary>
+    /// <param name="location">The location of the documentation comment.</param>
+    /// <param name="tagName">The unrecognised tag text.</param>
+    public void ReportUnknownDocumentationTag(TextLocation location, string tagName)
+    {
+        Report(location, "GS0231", $"Unknown documentation tag '{tagName}'. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso.", DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

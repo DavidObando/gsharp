@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -12,6 +13,17 @@ namespace GSharp.Core.CodeAnalysis.Documentation;
 
 internal static class DocumentationValidator
 {
+    private static readonly HashSet<string> KnownTags = new(StringComparer.Ordinal)
+    {
+        "@param",
+        "@typeparam",
+        "@returns",
+        "@remarks",
+        "@value",
+        "@exception",
+        "@seealso",
+    };
+
     /// <summary>
     /// Validates documentation across a single syntax tree, emitting diagnostics.
     /// Called after binding is complete.
@@ -50,6 +62,7 @@ internal static class DocumentationValidator
         foreach (var tree in trees)
         {
             ValidateFloatingDocComments(tree, diagnostics);
+            ValidateUnknownTags(tree, diagnostics);
         }
 
         ValidateParamMatches(functions, diagnostics);
@@ -106,6 +119,36 @@ internal static class DocumentationValidator
             if (!attached[i])
             {
                 diagnostics.ReportFloatingDocumentationComment(blocks[i].Location);
+            }
+        }
+    }
+
+    private static void ValidateUnknownTags(SyntaxTree tree, DiagnosticBag diagnostics)
+    {
+        var blocks = DocumentationAttacher.GetBlocks(tree);
+        if (blocks.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var block in blocks)
+        {
+            foreach (var line in block.Text.Split('\n'))
+            {
+                var trimmed = line.TrimStart();
+                if (trimmed.Length < 2 || trimmed[0] != '@')
+                {
+                    continue;
+                }
+
+                // Extract the tag name: everything from '@' up to the first space or end of line.
+                var spaceIdx = trimmed.IndexOf(' ');
+                var tag = spaceIdx < 0 ? trimmed : trimmed.Substring(0, spaceIdx);
+
+                if (!KnownTags.Contains(tag))
+                {
+                    diagnostics.ReportUnknownDocumentationTag(block.Location, tag);
+                }
             }
         }
     }

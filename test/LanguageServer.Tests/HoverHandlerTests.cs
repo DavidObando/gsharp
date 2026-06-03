@@ -18,9 +18,9 @@ public class HoverHandlerTests
     [InlineData("var count = 0\n", "count", "var count int32")]
     [InlineData("func add(a int32, b int32) int32 { return a + b }\n", "add", "func add(a int32, b int32) int32")]
     [InlineData("func greet(name string) { }\n", "name", "name string")]
-    [InlineData("type Point struct {\nX int32\nY int32\n}\n", "Point", "struct Point { X int32; Y int32 }")]
+    [InlineData("type Point struct {\nX int32\nY int32\n}\n", "Point", "type Point struct { X int32; Y int32 }")]
     [InlineData("type Color enum { Red, Green }\n", "Color", "enum Color { Red, Green }")]
-    [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "class System.Console")]
+    [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "type System.Console class")]
     public void ComputeHover_ReturnsMarkdownSignature(string source, string token, string expected)
     {
         var content = LanguageServerTestHelpers.Content(source);
@@ -75,6 +75,75 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_ResolvesPropertyOnUserDefinedClass()
+    {
+        const string source = "package P\ntype Person class {\n    /// The name\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var n = person.Name\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Name string", value, System.StringComparison.Ordinal);
+        Assert.Contains("The name", value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_ResolvesFieldOnUserDefinedStruct()
+    {
+        const string source = "package P\ntype Point struct {\n    /// X coordinate\n    X int32\n    Y int32\n}\nfunc Main() {\n    var p = Point{}\n    var x = p.X\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "X", 1));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("X int32", value, System.StringComparison.Ordinal);
+        Assert.Contains("X coordinate", value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_ResolvesMethodOnUserDefinedClass()
+    {
+        const string source = "package P\ntype Person class {\n    prop Name string\n    /// Says hello\n    func Greet() string { return \"hi\" }\n}\nfunc Main() {\n    var person = Person{}\n    person.Greet()\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Greet", 1));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Greet", value, System.StringComparison.Ordinal);
+        Assert.Contains("Says hello", value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_ResolvesFieldAssignmentOnUserDefinedClass()
+    {
+        const string source = "package P\ntype Person class {\n    /// The age of the person\n    prop Age int32\n}\nfunc Main() {\n    var person = Person{}\n    person.Age = 30\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Age", 1));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("Age int32", value, System.StringComparison.Ordinal);
+        Assert.Contains("The age of the person", value, System.StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("func main() {\n    let x = 42\n}\n", "42", "int32")]
+    [InlineData("func main() {\n    let x = 3.14\n}\n", "3.14", "float64")]
+    [InlineData("func main() {\n    let x = \"hello\"\n}\n", "\"hello\"", "string")]
+    [InlineData("func main() {\n    let x = true\n}\n", "true", "bool")]
+    [InlineData("func main() {\n    let x = false\n}\n", "false", "bool")]
+    public void ComputeHover_ShowsLiteralType(string source, string token, string expectedType)
+    {
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, token));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains(expectedType, value, System.StringComparison.Ordinal);
+        Assert.Contains(token, value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_RendersImportedClrInstancePropertyDocumentation()
     {
         const string source = "import System.Text\nfunc main() {\n    var sb = StringBuilder()\n    var length = sb.Length\n}\n";
@@ -84,7 +153,7 @@ public class HoverHandlerTests
         Assert.NotNull(hover);
         var value = hover.Contents.ToString();
         Assert.Contains("System.Text.StringBuilder.Length", value, System.StringComparison.Ordinal);
-        Assert.Contains("System.Int32", value, System.StringComparison.Ordinal);
+        Assert.Contains("int32", value, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -97,7 +166,7 @@ public class HoverHandlerTests
         Assert.NotNull(hover);
         var value = hover.Contents.ToString();
         Assert.Contains("System.Math.PI", value, System.StringComparison.Ordinal);
-        Assert.Contains("System.Double", value, System.StringComparison.Ordinal);
+        Assert.Contains("float64", value, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,8 +192,9 @@ public class HoverHandlerTests
 
         Assert.NotNull(hover);
         var value = hover.Contents.ToString();
-        Assert.Contains("System.Console.WriteLine", value, System.StringComparison.Ordinal);
-        Assert.Contains("System.Void", value, System.StringComparison.Ordinal);
+        Assert.Contains("func", value, System.StringComparison.Ordinal);
+        Assert.Contains("System.Console", value, System.StringComparison.Ordinal);
+        Assert.Contains("WriteLine", value, System.StringComparison.Ordinal);
     }
 
     [Fact]

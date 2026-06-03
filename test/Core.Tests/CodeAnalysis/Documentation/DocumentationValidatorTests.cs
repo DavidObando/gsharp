@@ -77,6 +77,40 @@ public class DocumentationValidatorTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0228" && d.Message.Contains("'Foo'"));
     }
 
+    [Fact]
+    public void UnknownDocTag_ProducesGS0231()
+    {
+        var result = Compile(
+            """
+            package Lib
+
+            /// Gets a value.
+            /// @return the value
+            func Get() int32 {
+                return 0
+            }
+            """);
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0231" && d.Message.Contains("'@return'"));
+    }
+
+    [Fact]
+    public void KnownDocTag_DoesNotProduceGS0231()
+    {
+        var result = Compile(
+            """
+            package Lib
+
+            /// Gets a value.
+            /// @returns the value
+            func Get() int32 {
+                return 0
+            }
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0231");
+    }
+
     private static EmitResult Compile(string source, bool warnOnMissingDocs = false)
     {
         var tree = SyntaxTree.Parse(source);

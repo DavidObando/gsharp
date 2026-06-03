@@ -28,9 +28,23 @@ public static class HoverComputer
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
 
+        // When the token isn't directly in the semantic model (e.g. member access
+        // on a user-defined type like person.Name), try resolving through the
+        // accessor expression's receiver type.
+        if (symbol == null)
+        {
+            symbol = TryResolveGSharpMember(content.SyntaxTree, compilation, token);
+        }
+
         var model = symbol != null
             ? BuildHoverModel(symbol, compilation)
             : BuildImportedClrModel(content.SyntaxTree, compilation, token);
+
+        // Literal tokens (numbers, strings, booleans) show their inferred type.
+        if (model == null)
+        {
+            model = BuildLiteralModel(token);
+        }
 
         if (model == null)
         {
@@ -122,6 +136,47 @@ public static class HoverComputer
         };
     }
 
+    private static HoverModel BuildLiteralModel(SyntaxToken token)
+    {
+        if (token == null)
+        {
+            return null;
+        }
+
+        var typeName = token.Kind switch
+        {
+            SyntaxKind.NumberToken => GetNumericTypeName(token.Value),
+            SyntaxKind.StringToken => "string",
+            SyntaxKind.InterpolatedStringToken => "string",
+            SyntaxKind.TrueKeyword => "bool",
+            SyntaxKind.FalseKeyword => "bool",
+            _ => null,
+        };
+
+        if (typeName == null)
+        {
+            return null;
+        }
+
+        var signature = $"({typeName}) {token.Text}";
+        return new HoverModel(signature, Array.Empty<HoverDocSection>(), OverloadCount: 1);
+    }
+
+    private static string GetNumericTypeName(object value)
+    {
+        return value switch
+        {
+            int => "int32",
+            uint => "uint32",
+            long => "int64",
+            ulong => "uint64",
+            float => "float32",
+            double => "float64",
+            decimal => "decimal",
+            _ => "int32",
+        };
+    }
+
     private static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo member, out int overloadCount)
     {
         member = null;
@@ -171,6 +226,154 @@ public static class HoverComputer
         member = methods[0];
         overloadCount = methods.Length;
         return true;
+    }
+
+    /// <summary>
+    /// Resolves a member access on a user-defined G# type (struct/class).
+    /// For example, hovering over <c>Name</c> in <c>person.Name</c> where
+    /// <c>person</c> is a G#-defined class resolves to the <see cref="PropertySymbol"/>,
+    /// <see cref="FieldSymbol"/>, <see cref="EventSymbol"/>, or <see cref="FunctionSymbol"/>
+    /// declared on that type.
+    /// </summary>
+    private static Symbol TryResolveGSharpMember(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    {
+        if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return null;
+        }
+
+        // Case 1: member access expression (e.g. var x = person.Name)
+        var accessor = FindAccessorWithHoveredRightPart(tree.Root, token);
+        if (accessor != null && TryGetAccessorMemberName(accessor.RightPart, token, out var memberName))
+        {
+            var structSymbol = ResolveReceiverStructSymbol(tree, compilation, accessor.LeftPart);
+            if (structSymbol != null)
+            {
+                return LookupMemberOnStruct(structSymbol, memberName);
+            }
+        }
+
+        // Case 2: field assignment expression (e.g. person.Age = 30)
+        var fieldAssignment = FindFieldAssignmentWithHoveredField(tree.Root, token);
+        if (fieldAssignment != null)
+        {
+            var receiverSymbol = SemanticLookup.ResolveSymbol(compilation, fieldAssignment.Receiver);
+            var receiverStruct = receiverSymbol switch
+            {
+                VariableSymbol variable => variable.Type as StructSymbol,
+                StructSymbol structSym => structSym,
+                _ => null,
+            };
+
+            if (receiverStruct != null)
+            {
+                return LookupMemberOnStruct(receiverStruct, fieldAssignment.FieldIdentifier.Text);
+            }
+        }
+
+        return null;
+    }
+
+    private static FieldAssignmentExpressionSyntax FindFieldAssignmentWithHoveredField(SyntaxNode root, SyntaxToken token)
+    {
+        return FindNodes<FieldAssignmentExpressionSyntax>(root)
+            .Where(f => MatchesToken(f.FieldIdentifier, token))
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Resolves the receiver expression of an accessor to its <see cref="StructSymbol"/>
+    /// type (user-defined G# struct or class).
+    /// </summary>
+    private static StructSymbol ResolveReceiverStructSymbol(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression)
+    {
+        switch (expression)
+        {
+            case NameExpressionSyntax name:
+                var symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken);
+                return symbol switch
+                {
+                    VariableSymbol variable => variable.Type as StructSymbol,
+                    StructSymbol structSym => structSym,
+                    _ => null,
+                };
+            case CallExpressionSyntax call:
+                var callSymbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier);
+                return callSymbol switch
+                {
+                    FunctionSymbol function => function.Type as StructSymbol,
+                    StructSymbol structSym => structSym,
+                    _ => null,
+                };
+            case AccessorExpressionSyntax nestedAccessor:
+                // Chained access: resolve the intermediate member's type.
+                if (!TryGetAccessorMemberName(nestedAccessor.RightPart, token: null, out var intermediateName))
+                {
+                    return null;
+                }
+
+                var outerStruct = ResolveReceiverStructSymbol(tree, compilation, nestedAccessor.LeftPart);
+                if (outerStruct == null)
+                {
+                    return null;
+                }
+
+                var member = LookupMemberOnStruct(outerStruct, intermediateName);
+                return member switch
+                {
+                    PropertySymbol property => property.Type as StructSymbol,
+                    FieldSymbol field => field.Type as StructSymbol,
+                    FunctionSymbol function => function.Type as StructSymbol,
+                    _ => null,
+                };
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Looks up a member (property, field, event, or method) by name on a G# struct/class symbol,
+    /// including inherited members from base classes.
+    /// </summary>
+    private static Symbol LookupMemberOnStruct(StructSymbol structSymbol, string memberName)
+    {
+        // Walk the type hierarchy (including base classes).
+        for (var current = structSymbol; current != null; current = current.BaseClass)
+        {
+            // Properties (instance + static)
+            var property = current.Properties.Concat(current.StaticProperties)
+                .FirstOrDefault(p => p.Name == memberName);
+            if (property != null)
+            {
+                return property;
+            }
+
+            // Fields (instance + static)
+            var field = current.Fields.Concat(current.StaticFields)
+                .FirstOrDefault(f => f.Name == memberName);
+            if (field != null)
+            {
+                return field;
+            }
+
+            // Events (instance + static)
+            var @event = current.Events.Concat(current.StaticEvents)
+                .FirstOrDefault(e => e.Name == memberName);
+            if (@event != null)
+            {
+                return @event;
+            }
+
+            // Methods (instance + static)
+            var method = current.Methods.Concat(current.StaticMethods)
+                .FirstOrDefault(m => m.Name == memberName);
+            if (method != null)
+            {
+                return method;
+            }
+        }
+
+        return null;
     }
 
     private static AccessorExpressionSyntax FindAccessorWithHoveredRightPart(SyntaxNode root, SyntaxToken token)
