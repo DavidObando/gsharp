@@ -132,7 +132,12 @@ public static class SemanticLookup
         {
             foreach (var token in EnumerateTokens(tree.Root))
             {
-                if (token.Kind == SyntaxKind.IdentifierToken && !token.IsMissing && ReferenceEquals(model.Resolve(token), target))
+                if (token.IsMissing)
+                {
+                    continue;
+                }
+
+                if (token.Kind == SyntaxKind.IdentifierToken && ReferenceEquals(model.Resolve(token), target))
                 {
                     yield return token;
                 }
