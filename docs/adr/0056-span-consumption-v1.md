@@ -1,6 +1,6 @@
 # ADR-0056: Span consumption v1 — ref-returning members, span element access, and closed generic value-type fields
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-01
 - **Amended**: 2026-06-01 — §4's root-cause analysis was corrected after implementation (#382); the closed generic value-type field layout was already emitted correctly, and the #375 fault was a separate value-type receiver address-of bug. The §4 *invariant* stands; see [Amendment](#amendment-2026-06-01-4-root-cause-correction).
 - **Phase**: Phase 8 — `ref struct` / `Span<T>` consumption (level 2 of issue #344)

@@ -1,6 +1,6 @@
 # ADR-0043: `async func(P) R` as a type-clause spelling for `func(P) Task[R]`
 
-- **Status**: Accepted (implemented in this PR)
+- **Status**: Accepted
 - **Date**: 2026-05-26
 - **Phase**: Phase 7 follow-up — async ergonomics
 - **Related**: ADR-0023 (async state machine), ADR-0042 (`async sequence[T]` type clause), issue #150

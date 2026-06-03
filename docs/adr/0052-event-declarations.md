@@ -1,6 +1,6 @@
 # ADR-0052: Event declarations on user types — `event` keyword
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-29
 - **Phase**: Phase 9 — language depth (post-primitive)
 - **Related**: ADR-0036 (CLR event subscription — consumption side); ADR-0047 (attribute syntax — `@event:` target kind); ADR-0051 (property declarations — parallel `prop` pattern); issue #140

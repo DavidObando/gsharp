@@ -1,6 +1,6 @@
 # ADR-0018: Interface default methods — not in Phase 3
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.4); revisit in Phase 6
 - **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); execution plan §3.B.4
