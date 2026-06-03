@@ -426,6 +426,7 @@ public static class HoverComputer
                     return true;
                 }
 
+                // Rebuild the left prefix as a receiver expression for the nested right segment.
                 var nestedReceiver = new AccessorExpressionSyntax(tree, receiver, nested.DotToken, nested.LeftPart);
                 return TryResolveAccessorMemberContext(tree, nested.RightPart, nestedReceiver, token, out receiverExpression, out memberName);
             default:
