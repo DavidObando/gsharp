@@ -461,7 +461,7 @@ public sealed class Binder
             {
                 var binder = new Binder(parentScope, method);
                 var body = binder.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body);
+                var loweredBody = Lowerer.Lower(body, structSym);
 
                 if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
                 {
@@ -487,7 +487,7 @@ public sealed class Binder
 
             var ctorBinder = new Binder(parentScope, ctor.Function);
             var ctorBody = ctorBinder.BindStatement(ctor.Declaration.Body);
-            var ctorLoweredBody = Lowerer.Lower(ctorBody);
+            var ctorLoweredBody = Lowerer.Lower(ctorBody, structSym);
             functionBodies.Add(ctor.Function, ctorLoweredBody);
             diagnostics.AddRange(ctorBinder.Diagnostics);
         }
@@ -509,7 +509,7 @@ public sealed class Binder
                     {
                         var binder = new Binder(parentScope, prop.GetterSymbol);
                         var body = binder.BindStatement(prop.GetterBodySyntax);
-                        var loweredBody = Lowerer.Lower(body);
+                        var loweredBody = Lowerer.Lower(body, structSym);
 
                         if (!ControlFlowGraph.AllPathsReturn(loweredBody))
                         {
@@ -524,7 +524,7 @@ public sealed class Binder
                     {
                         var binder = new Binder(parentScope, prop.SetterSymbol);
                         var body = binder.BindStatement(prop.SetterBodySyntax);
-                        var loweredBody = Lowerer.Lower(body);
+                        var loweredBody = Lowerer.Lower(body, structSym);
                         functionBodies.Add(prop.SetterSymbol, loweredBody);
                         diagnostics.AddRange(binder.Diagnostics);
                     }
@@ -545,7 +545,7 @@ public sealed class Binder
                     {
                         var binder = new Binder(parentScope, ev.AddMethodSymbol);
                         var body = binder.BindStatement(ev.AddBodySyntax);
-                        var loweredBody = Lowerer.Lower(body);
+                        var loweredBody = Lowerer.Lower(body, structSym);
                         functionBodies.Add(ev.AddMethodSymbol, loweredBody);
                         diagnostics.AddRange(binder.Diagnostics);
                     }
@@ -554,7 +554,7 @@ public sealed class Binder
                     {
                         var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
                         var body = binder.BindStatement(ev.RemoveBodySyntax);
-                        var loweredBody = Lowerer.Lower(body);
+                        var loweredBody = Lowerer.Lower(body, structSym);
                         functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
                         diagnostics.AddRange(binder.Diagnostics);
                     }
@@ -564,7 +564,7 @@ public sealed class Binder
                     {
                         var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
                         var body = binder.BindStatement(ev.RaiseBodySyntax);
-                        var loweredBody = Lowerer.Lower(body);
+                        var loweredBody = Lowerer.Lower(body, structSym);
                         functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
                         diagnostics.AddRange(binder.Diagnostics);
                     }
@@ -591,7 +591,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, prop.GetterSymbol);
                     var body = binder.BindStatement(prop.GetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
+                    var loweredBody = Lowerer.Lower(body, structSym);
 
                     if (!ControlFlowGraph.AllPathsReturn(loweredBody))
                     {
@@ -606,7 +606,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, prop.SetterSymbol);
                     var body = binder.BindStatement(prop.SetterBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
+                    var loweredBody = Lowerer.Lower(body, structSym);
                     functionBodies.Add(prop.SetterSymbol, loweredBody);
                     diagnostics.AddRange(binder.Diagnostics);
                 }
@@ -632,7 +632,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, ev.AddMethodSymbol);
                     var body = binder.BindStatement(ev.AddBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
+                    var loweredBody = Lowerer.Lower(body, structSym);
                     functionBodies.Add(ev.AddMethodSymbol, loweredBody);
                     diagnostics.AddRange(binder.Diagnostics);
                 }
@@ -641,7 +641,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, ev.RemoveMethodSymbol);
                     var body = binder.BindStatement(ev.RemoveBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
+                    var loweredBody = Lowerer.Lower(body, structSym);
                     functionBodies.Add(ev.RemoveMethodSymbol, loweredBody);
                     diagnostics.AddRange(binder.Diagnostics);
                 }
@@ -651,7 +651,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, ev.RaiseMethodSymbol);
                     var body = binder.BindStatement(ev.RaiseBodySyntax);
-                    var loweredBody = Lowerer.Lower(body);
+                    var loweredBody = Lowerer.Lower(body, structSym);
                     functionBodies.Add(ev.RaiseMethodSymbol, loweredBody);
                     diagnostics.AddRange(binder.Diagnostics);
                 }
@@ -675,7 +675,7 @@ public sealed class Binder
 
                 var binder = new Binder(parentScope, method);
                 var body = binder.BindStatement(method.Declaration.Body);
-                var loweredBody = Lowerer.Lower(body);
+                var loweredBody = Lowerer.Lower(body, structSym);
 
                 if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(loweredBody))
                 {
