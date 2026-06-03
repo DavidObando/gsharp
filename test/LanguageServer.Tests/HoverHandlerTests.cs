@@ -114,6 +114,23 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_ResolvesChainedUserDefinedAndClrMembers()
+    {
+        const string source = "package P\ntype Person class {\n    /// The name of the person\n    prop Name string\n}\nfunc Main() {\n    var person = Person{}\n    var y = person.Name.GetType()\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var nameHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
+        Assert.NotNull(nameHover);
+        var nameValue = nameHover.Contents.ToString();
+        Assert.Contains("Name string", nameValue, System.StringComparison.Ordinal);
+        Assert.Contains("The name of the person", nameValue, System.StringComparison.Ordinal);
+
+        var getTypeHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "GetType"));
+        Assert.NotNull(getTypeHover);
+        Assert.Contains("GetType", getTypeHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_ResolvesFieldAssignmentOnUserDefinedClass()
     {
         const string source = "package P\ntype Person class {\n    /// The age of the person\n    prop Age int32\n}\nfunc Main() {\n    var person = Person{}\n    person.Age = 30\n}\n";
