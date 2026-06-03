@@ -183,7 +183,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
             foreach (var p in m.Parameters)
             {
-                substParams.Add(new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), p.IsVariadic));
+                substParams.Add(new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), p.IsVariadic, isScoped: p.IsScoped));
             }
 
             var substReturn = SubstituteType(m.Type, subst);

@@ -1610,6 +1610,17 @@ public class Parser
         // ADR-0047: parameter-level annotations precede the identifier.
         var annotations = ParseAnnotations();
 
+        // ADR-0058 / issue #376: optional `scoped` contextual modifier precedes the identifier.
+        // Disambiguate: `scoped` is only a modifier when followed by another identifier (the
+        // parameter name). If the current token IS the parameter name (no following identifier),
+        // treat it as the identifier, not as a modifier.
+        SyntaxToken scopedModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            scopedModifier = NextToken();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
@@ -1618,7 +1629,9 @@ public class Parser
         }
 
         var type = ParseTypeClause();
-        return new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
+        var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
+        parameter.ScopedModifier = scopedModifier;
+        return parameter;
     }
 
     private TypeClauseSyntax ParseTypeClause()

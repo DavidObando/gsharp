@@ -64,6 +64,17 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this is a variadic parameter (Phase 4.8).</summary>
     public bool IsVariadic => EllipsisToken != null;
 
+    /// <summary>
+    /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
+    /// When non-null, the parameter is <c>scoped</c> — its safe-to-escape scope is restricted to
+    /// the current function body and the value may not be returned.
+    /// Assigned by the parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken ScopedModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this parameter carries the <c>scoped</c> modifier (ADR-0058).</summary>
+    public bool IsScoped => ScopedModifier != null;
+
     /// <summary>Attaches the given annotation list to this parameter and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
     /// <returns>This same <see cref="ParameterSyntax"/>, with <see cref="Annotations"/> updated.</returns>

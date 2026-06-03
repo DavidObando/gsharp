@@ -1021,7 +1021,15 @@ public sealed class Binder
                     continue;
                 }
 
-                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier));
+                // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type —
+                // CLR metadata does not permit ELEMENT_TYPE_BYREF in FieldDef signatures.
+                if (paramType is ByRefTypeSymbol byRefParamType)
+                {
+                    Diagnostics.ReportPointerTypeCannotBeFieldType(paramSyntax.Identifier.Location, byRefParamType.Name);
+                    continue;
+                }
+
+                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped));
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
 
@@ -1050,6 +1058,14 @@ public sealed class Binder
             if (!syntax.IsRef && TypeSymbol.IsByRefLike(fieldType))
             {
                 Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
+                continue;
+            }
+
+            // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type —
+            // CLR metadata does not permit ELEMENT_TYPE_BYREF in FieldDef signatures.
+            if (fieldType is ByRefTypeSymbol byRefFieldType)
+            {
+                Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefFieldType.Name);
                 continue;
             }
 
@@ -1314,7 +1330,7 @@ public sealed class Binder
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                         }
                     }
 
@@ -1728,6 +1744,13 @@ public sealed class Binder
                     continue;
                 }
 
+                // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type.
+                if (fieldType is ByRefTypeSymbol byRefStaticFieldType)
+                {
+                    Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefStaticFieldType.Name);
+                    continue;
+                }
+
                 var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
                 var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: false, isStatic: true);
 
@@ -1804,7 +1827,7 @@ public sealed class Binder
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                         }
                     }
 
@@ -2306,7 +2329,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                 }
             }
 
@@ -2546,7 +2569,7 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier);
+                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped);
                     parameters.Add(parameter);
                     parameterSymbolBySyntax[pIndex] = parameter;
                 }
@@ -5504,6 +5527,33 @@ public sealed class Binder
             }
         }
 
+        if (expression != null)
+        {
+            // ADR-0039 §4 / ADR-0058: a managed-pointer (*T) value cannot be returned from
+            // a function — the callee's stack frame (containing the pointed-to variable) is
+            // invalid after the function returns. Diagnose with GS9004.
+            if (expression.Type is ByRefTypeSymbol)
+            {
+                Diagnostics.ReportByRefCannotEscape(
+                    syntax.Expression.Location,
+                    "a managed pointer (*T) cannot be returned from a function; managed references must not outlive their declaring scope");
+            }
+
+            // ADR-0058 / issue #376: a ref struct value that directly references a `scoped`
+            // parameter cannot be returned — the `scoped` annotation restricts the value's
+            // safe-to-escape scope to the current function body.
+            if (TypeSymbol.IsByRefLike(expression.Type)
+                && expression is BoundVariableExpression returnedVar
+                && returnedVar.Variable is ParameterSymbol returnedParam
+                && returnedParam.IsScoped)
+            {
+                Diagnostics.ReportByRefLikeEscape(
+                    syntax.Expression.Location,
+                    expression.Type,
+                    "be returned from a function (parameter is marked `scoped`, restricting its safe-to-escape scope to the current method)");
+            }
+        }
+
         return new BoundReturnStatement(syntax, expression);
     }
 
@@ -6276,12 +6326,22 @@ public sealed class Binder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier));
+            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped));
             parameterTypes.Add(ptype);
         }
 
         var returnType = syntax.ReturnTypeClause != null ? BindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
+
+        // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
+        // because CLR Func<> delegates cannot carry by-ref type arguments.
+        if (returnType is ByRefTypeSymbol && syntax.ReturnTypeClause != null)
+        {
+            Diagnostics.ReportByRefCannotEscape(
+                syntax.ReturnTypeClause.Location,
+                "a managed pointer (*T) cannot be the return type of a function literal");
+            returnType = TypeSymbol.Error;
+        }
 
         // For async lambdas, the observable return type (from the caller's
         // perspective) is Task or Task<T>, matching top-level async functions —
@@ -6321,11 +6381,19 @@ public sealed class Binder
         // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
         // closure; the capture would hoist it into a heap-allocated display
         // class, which the CLR forbids.
+        // ADR-0058 / issue #376: a managed-pointer (*T / ByRefTypeSymbol) local also
+        // cannot be captured — the closure may outlive the pointed-to variable.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
             {
                 Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
+            }
+            else if (capturedVariable.Type is ByRefTypeSymbol)
+            {
+                Diagnostics.ReportByRefCannotEscape(
+                    syntax.Location,
+                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
             }
         }
 
@@ -11006,7 +11074,7 @@ public sealed class Binder
             }
             else
             {
-                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
             }
         }
 
