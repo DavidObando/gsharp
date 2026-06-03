@@ -142,13 +142,34 @@ public static class SymbolDisplay
             return builder.ToImmutable();
         }
 
-        var keyword = clrType.IsInterface ? "interface"
-            : clrType.IsEnum ? "enum"
-            : clrType.IsValueType ? "struct"
-            : "class";
-        builder.Keyword(keyword);
+        builder.Keyword("type");
         builder.Space();
         builder.Type(FormatClrTypeName(clrType, format.QualifyNames));
+        builder.Space();
+
+        if (clrType.IsInterface)
+        {
+            builder.Keyword("interface");
+        }
+        else if (clrType.IsEnum)
+        {
+            builder.Keyword("enum");
+        }
+        else if (clrType.IsValueType)
+        {
+            if (IsByRefLikeType(clrType))
+            {
+                builder.Keyword("ref");
+                builder.Space();
+            }
+
+            builder.Keyword("struct");
+        }
+        else
+        {
+            builder.Keyword("class");
+        }
+
         return builder.ToImmutable();
     }
 
@@ -275,28 +296,53 @@ public static class SymbolDisplay
 
     private static void AppendAggregate(PartBuilder builder, SymbolDisplayFormat format, StructSymbol aggregate)
     {
-        builder.Keyword(aggregate.IsClass ? "class" : "struct");
+        builder.Keyword("type");
         builder.Space();
         builder.Type(QualifiedName(format, aggregate.PackageName, aggregate.Name));
         AppendTypeParameters(builder, aggregate.TypeParameters);
         builder.Space();
-        builder.Punctuation("{");
-        builder.Space();
-        for (var i = 0; i < aggregate.Fields.Length; i++)
-        {
-            if (i > 0)
-            {
-                builder.Punctuation(";");
-                builder.Space();
-            }
 
-            builder.Add(SymbolDisplayPartKind.FieldName, aggregate.Fields[i].Name);
+        if (aggregate.IsRefStruct)
+        {
+            builder.Keyword("ref");
             builder.Space();
-            builder.Type(FormatType(aggregate.Fields[i].Type));
         }
 
-        builder.Space();
-        builder.Punctuation("}");
+        if (aggregate.IsData)
+        {
+            builder.Keyword("data");
+            builder.Space();
+        }
+
+        if (aggregate.IsInline)
+        {
+            builder.Keyword("inline");
+            builder.Space();
+        }
+
+        builder.Keyword(aggregate.IsClass ? "class" : "struct");
+
+        if (!aggregate.Fields.IsEmpty)
+        {
+            builder.Space();
+            builder.Punctuation("{");
+            builder.Space();
+            for (var i = 0; i < aggregate.Fields.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Punctuation(";");
+                    builder.Space();
+                }
+
+                builder.Add(SymbolDisplayPartKind.FieldName, aggregate.Fields[i].Name);
+                builder.Space();
+                builder.Type(FormatType(aggregate.Fields[i].Type));
+            }
+
+            builder.Space();
+            builder.Punctuation("}");
+        }
     }
 
     private static void AppendEnum(PartBuilder builder, SymbolDisplayFormat format, EnumSymbol enumSymbol)
@@ -432,9 +478,9 @@ public static class SymbolDisplay
 
     private static void AppendClrProperty(PartBuilder builder, SymbolDisplayFormat format, PropertyInfo property)
     {
-        builder.Type(FormatClrTypeName(property.PropertyType, format.QualifyNames));
-        builder.Space();
         builder.Add(SymbolDisplayPartKind.PropertyName, FormatClrMemberName(property.DeclaringType, property.Name, format));
+        builder.Space();
+        builder.Type(FormatClrTypeName(property.PropertyType, format.QualifyNames));
         if (format.IncludePropertyAccessors)
         {
             builder.Space();
@@ -460,25 +506,34 @@ public static class SymbolDisplay
 
     private static void AppendClrField(PartBuilder builder, SymbolDisplayFormat format, FieldInfo field)
     {
-        builder.Type(FormatClrTypeName(field.FieldType, format.QualifyNames));
-        builder.Space();
         builder.Add(SymbolDisplayPartKind.FieldName, FormatClrMemberName(field.DeclaringType, field.Name, format));
+        builder.Space();
+        builder.Type(FormatClrTypeName(field.FieldType, format.QualifyNames));
     }
 
     private static void AppendClrEvent(PartBuilder builder, SymbolDisplayFormat format, EventInfo @event)
     {
         builder.Keyword("event");
         builder.Space();
-        builder.Type(FormatClrTypeName(@event.EventHandlerType, format.QualifyNames));
-        builder.Space();
         builder.Add(SymbolDisplayPartKind.Identifier, FormatClrMemberName(@event.DeclaringType, @event.Name, format));
+        builder.Space();
+        builder.Type(FormatClrTypeName(@event.EventHandlerType, format.QualifyNames));
     }
 
     private static void AppendClrMethod(PartBuilder builder, SymbolDisplayFormat format, MethodInfo method)
     {
-        builder.Type(FormatClrTypeName(method.ReturnType, format.QualifyNames));
+        builder.Keyword("func");
         builder.Space();
-        builder.Add(SymbolDisplayPartKind.MethodName, FormatClrMemberName(method.DeclaringType, method.Name, format));
+
+        if (format.QualifyNames && method.DeclaringType != null)
+        {
+            builder.Punctuation("(");
+            builder.Type(FormatClrTypeName(method.DeclaringType, qualifyNames: true));
+            builder.Punctuation(")");
+            builder.Space();
+        }
+
+        builder.Add(SymbolDisplayPartKind.MethodName, method.Name);
         builder.Punctuation("(");
         var parameters = method.GetParameters();
         for (var i = 0; i < parameters.Length; i++)
@@ -495,6 +550,12 @@ public static class SymbolDisplay
         }
 
         builder.Punctuation(")");
+
+        if (method.ReturnType != typeof(void))
+        {
+            builder.Space();
+            builder.Type(FormatClrTypeName(method.ReturnType, format.QualifyNames));
+        }
     }
 
     private static string QualifiedName(SymbolDisplayFormat format, string packageName, string name)
@@ -523,6 +584,17 @@ public static class SymbolDisplay
         if (clrType == null)
         {
             return "void";
+        }
+
+        if (clrType == typeof(void))
+        {
+            return "void";
+        }
+
+        // Map CLR primitives to G# type names.
+        if (TryGetGSharpPrimitiveName(clrType, out var primitiveName))
+        {
+            return primitiveName;
         }
 
         if (clrType.IsByRef)
@@ -560,6 +632,122 @@ public static class SymbolDisplay
         typeName = typeName.Replace('+', '.');
         var args = clrType.GetGenericArguments();
         return $"{typeName}[{string.Join(", ", args.Select(a => FormatClrTypeName(a, qualifyNames)))}]";
+    }
+
+    private static bool TryGetGSharpPrimitiveName(Type clrType, out string name)
+    {
+        if (clrType == typeof(bool))
+        {
+            name = "bool";
+            return true;
+        }
+
+        if (clrType == typeof(byte))
+        {
+            name = "uint8";
+            return true;
+        }
+
+        if (clrType == typeof(sbyte))
+        {
+            name = "int8";
+            return true;
+        }
+
+        if (clrType == typeof(short))
+        {
+            name = "int16";
+            return true;
+        }
+
+        if (clrType == typeof(ushort))
+        {
+            name = "uint16";
+            return true;
+        }
+
+        if (clrType == typeof(int))
+        {
+            name = "int32";
+            return true;
+        }
+
+        if (clrType == typeof(uint))
+        {
+            name = "uint32";
+            return true;
+        }
+
+        if (clrType == typeof(long))
+        {
+            name = "int64";
+            return true;
+        }
+
+        if (clrType == typeof(ulong))
+        {
+            name = "uint64";
+            return true;
+        }
+
+        if (clrType == typeof(nint))
+        {
+            name = "nint";
+            return true;
+        }
+
+        if (clrType == typeof(nuint))
+        {
+            name = "nuint";
+            return true;
+        }
+
+        if (clrType == typeof(float))
+        {
+            name = "float32";
+            return true;
+        }
+
+        if (clrType == typeof(double))
+        {
+            name = "float64";
+            return true;
+        }
+
+        if (clrType == typeof(decimal))
+        {
+            name = "decimal";
+            return true;
+        }
+
+        if (clrType == typeof(char))
+        {
+            name = "char";
+            return true;
+        }
+
+        if (clrType == typeof(string))
+        {
+            name = "string";
+            return true;
+        }
+
+        if (clrType == typeof(object))
+        {
+            name = "object";
+            return true;
+        }
+
+        name = null;
+        return false;
+    }
+
+    private static bool IsByRefLikeType(Type type)
+    {
+        // System.Runtime.CompilerServices.IsByRefLikeAttribute is present on ref structs.
+        return type.IsValueType
+            && type.GetCustomAttributes(inherit: false)
+                .Any(a => a.GetType().FullName == "System.Runtime.CompilerServices.IsByRefLikeAttribute");
     }
 
     private static bool IsVoid(TypeSymbol type)

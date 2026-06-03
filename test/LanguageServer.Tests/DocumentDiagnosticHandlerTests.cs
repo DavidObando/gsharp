@@ -160,4 +160,28 @@ public class DocumentDiagnosticHandlerTests
         });
         return (server, uri);
     }
+
+    [Fact]
+    public async Task DocumentDiagnostic_UnknownDocTag_ReportsGS0231Warning()
+    {
+        const string source = """
+            package Lib
+
+            /// Gets a value.
+            /// @return the value
+            func Get() int32 {
+                return 0
+            }
+            """;
+        var (server, uri) = await CreateServerWithDocumentAsync(source);
+
+        var report = await server.DocumentDiagnosticAsync(
+            new DocumentDiagnosticParams { TextDocument = new TextDocumentIdentifier { Uri = uri } },
+            CancellationToken.None);
+
+        var full = Assert.IsType<FullDocumentDiagnosticReport>(report);
+        var diag = Assert.Single(full.Items, d => d.Code.Value == "GS0231");
+        Assert.Equal(DiagnosticSeverity.Warning, diag.Severity);
+        Assert.Contains("@return", diag.Message, StringComparison.Ordinal);
+    }
 }

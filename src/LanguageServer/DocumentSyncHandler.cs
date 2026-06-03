@@ -4,9 +4,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
 using Range = GSharp.LanguageServer.Protocol.Range;
@@ -87,6 +89,25 @@ public static class DocumentSyncHandler
 
                 diagnostics.Add(BuildDiagnostic("Binding", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
             }
+
+            // Documentation validation (warnings only — these don't block compilation).
+            var docDiagnostics = new Core.CodeAnalysis.DiagnosticBag();
+            DocumentationValidator.Validate(
+                useProject ? compilation.SyntaxTrees : ImmutableArray.Create(syntaxTree),
+                program.Functions.Keys.ToImmutableArray(),
+                program.Structs,
+                docDiagnostics,
+                warnOnMissingDocs: false);
+
+            foreach (var d in docDiagnostics)
+            {
+                if (useProject && d.Location.Text != syntaxTree.Text)
+                {
+                    continue;
+                }
+
+                diagnostics.Add(BuildDiagnostic(d.Id, d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text, ToLspSeverity(d.Severity)));
+            }
         }
 
         return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
@@ -94,13 +115,28 @@ public static class DocumentSyncHandler
 
     private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)
     {
+        return BuildDiagnostic(code, message, start, end, sourceText, DiagnosticSeverity.Error);
+    }
+
+    private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, GSharp.Core.CodeAnalysis.Text.SourceText sourceText, DiagnosticSeverity severity)
+    {
         return new Diagnostic
         {
             Code = new DiagnosticCode(code),
             Message = message,
             Range = new Range(ToPosition(start, sourceText), ToPosition(end, sourceText)),
-            Severity = DiagnosticSeverity.Error,
+            Severity = severity,
             Source = Constants.LanguageIdentifier,
+        };
+    }
+
+    private static DiagnosticSeverity ToLspSeverity(Core.CodeAnalysis.DiagnosticSeverity severity)
+    {
+        return severity switch
+        {
+            Core.CodeAnalysis.DiagnosticSeverity.Error => DiagnosticSeverity.Error,
+            Core.CodeAnalysis.DiagnosticSeverity.Warning => DiagnosticSeverity.Warning,
+            _ => DiagnosticSeverity.Information,
         };
     }
 
