@@ -71,4 +71,70 @@ public class CodeLensHandlerTests
         Assert.Equal("file:///test.gs", command.Arguments[0]);
         Assert.IsType<GSharp.LanguageServer.Protocol.Position>(command.Arguments[1]);
     }
+
+    [Fact]
+    public void ComputeLenses_StructFields()
+    {
+        const string source = "type Point struct {\n    X int32\n    Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content);
+
+        // struct + 2 fields
+        Assert.Equal(3, lenses.Count);
+        var fieldLenses = lenses.Skip(1).ToList();
+        Assert.All(fieldLenses, l => Assert.NotNull(l.Command));
+    }
+
+    [Fact]
+    public void ComputeLenses_EnumMembers()
+    {
+        const string source = "type Color enum {\n    Red,\n    Green,\n    Blue\n}\nvar c = Color.Red\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content);
+
+        // enum type + 3 members
+        Assert.Equal(4, lenses.Count);
+    }
+
+    [Fact]
+    public void ComputeLenses_EnumMemberReferenceCounts()
+    {
+        const string source = "type Color enum {\n    Red,\n    Green\n}\nvar a = Color.Red\nvar b = Color.Red\nvar c = Color.Green\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content);
+
+        // enum + Red + Green
+        Assert.Equal(3, lenses.Count);
+        var redLens = lenses.First(l => l.Command.Title.StartsWith("2"));
+        Assert.Equal("2 references", redLens.Command.Title);
+        var greenLens = lenses.First(l => l.Command.Title.StartsWith("1"));
+        Assert.Equal("1 reference", greenLens.Command.Title);
+    }
+
+    [Fact]
+    public void ComputeLenses_ClassBodyMethods()
+    {
+        const string source = "type Counter class {\n    Value int32\n    func Increment() {\n        Value = Value + 1\n    }\n}\nvar c = Counter{Value: 0}\nc.Increment()\nc.Increment()\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content);
+
+        // class + 1 field + 1 method
+        Assert.Equal(3, lenses.Count);
+    }
+
+    [Fact]
+    public void ComputeLenses_InterfaceMethods()
+    {
+        const string source = "type Greeter interface {\n    func Greet() string\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeLenses(content);
+
+        // interface + 1 method
+        Assert.Equal(2, lenses.Count);
+    }
 }

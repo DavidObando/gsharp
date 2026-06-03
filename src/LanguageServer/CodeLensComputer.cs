@@ -55,6 +55,10 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
+                    AddMemberLenses(compilation, lenses, structDecl.Fields.Select(f => f.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, structDecl.Properties.Select(p => p.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, structDecl.Events.Select(e => e.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, structDecl.Methods.Select(m => m.Identifier), uri);
                     break;
                 case EnumDeclarationSyntax enumDecl:
                     var enumSymbol = SemanticLookup.ResolveSymbol(compilation, enumDecl.Identifier);
@@ -65,6 +69,7 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
+                    AddMemberLenses(compilation, lenses, enumDecl.Members.Select(m => m.Identifier), uri);
                     break;
                 case InterfaceDeclarationSyntax ifaceDecl:
                     var ifaceSymbol = SemanticLookup.ResolveSymbol(compilation, ifaceDecl.Identifier);
@@ -75,11 +80,32 @@ public static class CodeLensComputer
                         lenses.Add(CreateReferenceLens(range, refCount, uri));
                     }
 
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Methods.Select(m => m.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Properties.Select(p => p.Identifier), uri);
+                    AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri);
                     break;
             }
         }
 
         return lenses;
+    }
+
+    private static void AddMemberLenses(
+        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
+        List<CodeLens> lenses,
+        IEnumerable<SyntaxToken> identifiers,
+        string uri)
+    {
+        foreach (var identifier in identifiers)
+        {
+            var symbol = SemanticLookup.ResolveSymbol(compilation, identifier);
+            if (symbol != null)
+            {
+                var refCount = SemanticLookup.FindReferences(compilation, symbol).Count() - 1;
+                var range = SemanticLookup.ToRange(identifier);
+                lenses.Add(CreateReferenceLens(range, refCount, uri));
+            }
+        }
     }
 
     private static CodeLens CreateReferenceLens(Range range, int refCount, string uri)
