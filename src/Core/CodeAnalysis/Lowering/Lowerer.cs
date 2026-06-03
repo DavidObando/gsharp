@@ -16,10 +16,18 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// </summary>
 public sealed class Lowerer : BoundTreeRewriter
 {
+    // The type whose body is currently being lowered. When non-null, auto-property
+    // access on this type is lowered to direct backing-field access (the accessor
+    // is inside the type and has access to its private fields). When null (e.g.
+    // top-level statements), auto-property access remains as property access so
+    // the emitter generates callvirt get_/set_ — avoiding FieldAccessException.
+    private readonly StructSymbol declaringType;
+
     private int labelCount;
 
-    private Lowerer()
+    private Lowerer(StructSymbol declaringType = null)
     {
+        this.declaringType = declaringType;
     }
 
     /// <summary>
@@ -30,6 +38,22 @@ public sealed class Lowerer : BoundTreeRewriter
     public static BoundBlockStatement Lower(BoundStatement statement)
     {
         var lowerer = new Lowerer();
+        var result = lowerer.RewriteStatement(statement);
+        return Flatten(result);
+    }
+
+    /// <summary>
+    /// Produces a lowered version of the supplied bound statement within the
+    /// context of a declaring type. Auto-property access on the declaring type
+    /// is lowered to direct backing-field access; access from outside the type
+    /// is left as property access (emitted as callvirt get_/set_).
+    /// </summary>
+    /// <param name="statement">The bound statement.</param>
+    /// <param name="declaringType">The type whose member body is being lowered.</param>
+    /// <returns>A lowered version of the bound statement.</returns>
+    public static BoundBlockStatement Lower(BoundStatement statement, StructSymbol declaringType)
+    {
+        var lowerer = new Lowerer(declaringType);
         var result = lowerer.RewriteStatement(statement);
         return Flatten(result);
     }
@@ -300,13 +324,16 @@ public sealed class Lowerer : BoundTreeRewriter
     /// <inheritdoc/>
     protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
     {
-        // ADR-0051: auto-properties lower to backing field access.
-        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        // ADR-0051: auto-properties lower to backing field access, but ONLY when
+        // we are inside the declaring type. From outside the type, the backing
+        // field is private so we must go through the accessor method (callvirt).
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null
+            && this.declaringType != null && node.StructType == this.declaringType)
         {
             return new BoundFieldAccessExpression(null, node.Receiver, node.StructType, node.Property.BackingField);
         }
 
-        // Computed properties remain as BoundPropertyAccessExpression —
+        // Computed properties (or external access) remain as BoundPropertyAccessExpression —
         // the interpreter evaluates the getter body and the emitter emits a call to get_X.
         return base.RewritePropertyAccessExpression(node);
     }
@@ -314,8 +341,10 @@ public sealed class Lowerer : BoundTreeRewriter
     /// <inheritdoc/>
     protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
     {
-        // ADR-0051: auto-properties lower to backing field assignment.
-        if (node.Property.IsAutoProperty && node.Property.BackingField != null)
+        // ADR-0051: auto-properties lower to backing field assignment, but ONLY
+        // when we are inside the declaring type (same rationale as read access).
+        if (node.Property.IsAutoProperty && node.Property.BackingField != null
+            && this.declaringType != null && node.StructType == this.declaringType)
         {
             var value = RewriteExpression(node.Value);
 
@@ -331,7 +360,8 @@ public sealed class Lowerer : BoundTreeRewriter
             }
         }
 
-        // Computed properties (or non-variable receivers) remain as BoundPropertyAssignmentExpression.
+        // Computed properties (or non-variable receivers, or external access)
+        // remain as BoundPropertyAssignmentExpression.
         return base.RewritePropertyAssignmentExpression(node);
     }
 
