@@ -4821,6 +4821,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -4841,6 +4842,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 il);
 
@@ -4876,6 +4878,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 constValues: constValues);
             emitter.EmitBlock(body);
@@ -5098,6 +5101,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5128,6 +5132,7 @@ internal sealed class ReflectionMetadataEmitter
                     scopeFrameSlots,
                     selectStatementSlots,
                     receiverSpillSlots,
+                    indexAssignmentValueSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5168,6 +5173,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5269,6 +5275,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5299,6 +5306,7 @@ internal sealed class ReflectionMetadataEmitter
                     scopeFrameSlots,
                     selectStatementSlots,
                     receiverSpillSlots,
+                    indexAssignmentValueSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5321,6 +5329,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5364,6 +5373,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5682,6 +5692,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -5705,6 +5716,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5744,6 +5756,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
@@ -6191,6 +6204,7 @@ internal sealed class ReflectionMetadataEmitter
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -6214,6 +6228,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 il);
 
@@ -6288,6 +6303,7 @@ internal sealed class ReflectionMetadataEmitter
                 scopeFrameSlots,
                 selectStatementSlots,
                 receiverSpillSlots,
+                indexAssignmentValueSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: structThis,
@@ -6499,6 +6515,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
+        Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         InstructionEncoder il)
     {
@@ -6601,6 +6618,23 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(receiver.Type);
             receiverSpillSlots[receiver] = slot;
+        }
+
+        // Issue #418 (P1-1): each index-assignment expression needs a scratch
+        // local typed as the value's type. The emit sites use dup + stloc tmp
+        // + store + ldloc tmp so the index/argument expressions are evaluated
+        // exactly once even though the assignment expression's result is the
+        // assigned value.
+        foreach (var ixa in CollectIndexAssignmentValueSpills(body))
+        {
+            if (indexAssignmentValueSlots.ContainsKey(ixa))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(ixa.Type);
+            indexAssignmentValueSlots[ixa] = slot;
         }
     }
 
@@ -8240,6 +8274,13 @@ internal sealed class ReflectionMetadataEmitter
     {
         var sink = new List<BoundIndexExpression>();
         new MapIndexReadCollector(sink).RewriteStatement((BoundStatement)root);
+        return sink;
+    }
+
+    private static IEnumerable<BoundExpression> CollectIndexAssignmentValueSpills(BoundNode root)
+    {
+        var sink = new List<BoundExpression>();
+        new IndexAssignmentValueSpillCollector(sink).RewriteStatement((BoundStatement)root);
         return sink;
     }
 
@@ -10017,6 +10058,32 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #418 (P1-1): collects every index-assignment expression so the body
+    // emitter can pre-allocate a scratch slot of the value's type. The emit sites
+    // use a dup + stloc tmp + store + ldloc tmp pattern to avoid re-evaluating
+    // the index/argument expressions when producing the assignment's result.
+    private sealed class IndexAssignmentValueSpillCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundExpression> sink;
+
+        public IndexAssignmentValueSpillCollector(List<BoundExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            this.sink.Add(node);
+            return base.RewriteIndexAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            this.sink.Add(node);
+            return base.RewriteClrIndexAssignmentExpression(node);
+        }
+    }
+
     private sealed class SelectSlots
     {
         public SelectSlots(
@@ -10077,6 +10144,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
         private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
+        private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
         private readonly ParameterSymbol structThisParameter;
         private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
@@ -10115,6 +10183,7 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
             Dictionary<BoundExpression, int> receiverSpillSlots,
+            Dictionary<BoundExpression, int> indexAssignmentValueSlots,
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
             ParameterSymbol structThisParameter = null,
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
@@ -10138,6 +10207,7 @@ internal sealed class ReflectionMetadataEmitter
             this.scopeFrameSlots = scopeFrameSlots;
             this.selectStatementSlots = selectStatementSlots;
             this.receiverSpillSlots = receiverSpillSlots;
+            this.indexAssignmentValueSlots = indexAssignmentValueSlots;
             this.goEnclosingScopes = goEnclosingScopes;
             this.structThisParameter = structThisParameter;
             this.asyncFieldMap = asyncFieldMap;
@@ -10504,15 +10574,19 @@ internal sealed class ReflectionMetadataEmitter
                     }
                     else
                     {
+                        // Issue #418 (P1-1): evaluate target/index/value exactly once.
+                        // dup + stloc tmp + stelem + ldloc tmp leaves the assigned
+                        // value on the stack as the expression's result without
+                        // re-evaluating the index expression (which may have side
+                        // effects, e.g. a function call).
+                        var tmp = this.indexAssignmentValueSlots[ixa];
                         this.EmitLoadVariable(ixa.Target);
                         this.EmitExpression(ixa.Index);
                         this.EmitExpression(ixa.Value);
+                        this.il.OpCode(ILOpCode.Dup);
+                        this.il.StoreLocal(tmp);
                         this.EmitStoreElement(ixa.Type);
-
-                        // Result of an assignment expression is the assigned value.
-                        this.EmitLoadVariable(ixa.Target);
-                        this.EmitExpression(ixa.Index);
-                        this.EmitLoadElement(ixa.Type);
+                        this.il.LoadLocal(tmp);
                     }
 
                     break;
@@ -12132,29 +12206,26 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitMapIndexAssignment(BoundIndexAssignmentExpression ixa)
         {
             // Phase 3.A.4 emit: `m[k] = v` lowers to `Dictionary<K,V>::set_Item(K, V)`.
-            // The expression result is the assigned value, so re-read via get_Item
-            // after the store — set_Item is void and we don't have a scratch slot
-            // for v here. The re-read uses get_Item (not TryGetValue) because the
-            // key is guaranteed to be present after the set.
+            // Issue #418 (P1-1): spill v to a temp before the callvirt so the
+            // expression's result (the assigned value) does not require a
+            // re-evaluation of k or a get_Item re-read. set_Item is void, so we
+            // dup the value just before the call, save the dup to a scratch
+            // local, then push it back as the expression result.
             var mapType = (MapTypeSymbol)ixa.Target.Type;
             var dictType = mapType.ClrType;
             var setItem = dictType.GetMethod("set_Item")
                 ?? throw new InvalidOperationException(
                     $"Dictionary type '{dictType.FullName}' has no set_Item method.");
-            var getItem = dictType.GetMethod("get_Item")
-                ?? throw new InvalidOperationException(
-                    $"Dictionary type '{dictType.FullName}' has no get_Item method.");
 
+            var tmp = this.indexAssignmentValueSlots[ixa];
             this.EmitLoadVariable(ixa.Target);
             this.EmitExpression(ixa.Index);
             this.EmitExpression(ixa.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(tmp);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(setItem));
-
-            this.EmitLoadVariable(ixa.Target);
-            this.EmitExpression(ixa.Index);
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(getItem));
+            this.il.LoadLocal(tmp);
         }
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)
@@ -13084,16 +13155,18 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0056 §2: span element write. `Span[T]` has no setter; its
             // indexer getter returns `ref T`. Obtain the managed pointer via
             // `get_Item`, then store the value through it (`stobj`/`stind.*`).
-            // The expression result re-reads the element (get_Item + load
-            // indirect), mirroring the array/CLR set_Item read-back below.
+            // Issue #418 (P1-1): spill v to a temp before the stobj so the
+            // expression's result (the assigned value) does not need a second
+            // get_Item that would re-evaluate the index arguments.
             if (setter == null)
             {
                 var refGetter = ixa.Indexer.GetGetMethod(nonPublic: false)
                     ?? throw new InvalidOperationException(
                         $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
                 var receiver = new BoundVariableExpression(null, ixa.Target);
+                var tmp = this.indexAssignmentValueSlots[ixa];
 
-                // store: <receiver-addr> <index...> get_Item(ref T) <value> stobj/stind
+                // store: <receiver-addr> <index...> get_Item(ref T) <value> dup stloc tmp stobj/stind
                 this.EmitInstanceReceiver(receiver);
                 foreach (var arg in ixa.Arguments)
                 {
@@ -13103,30 +13176,26 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(this.outer.GetMethodReference(refGetter));
                 this.EmitExpression(ixa.Value);
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.StoreLocal(tmp);
                 this.EmitStoreIndirect(ixa.Type);
 
-                // expression result: re-read the just-written element.
-                this.EmitInstanceReceiver(receiver);
-                foreach (var arg in ixa.Arguments)
-                {
-                    this.EmitExpression(arg);
-                }
-
-                this.il.OpCode(ILOpCode.Call);
-                this.il.Token(this.outer.GetMethodReference(refGetter));
-                this.EmitLoadIndirect(ixa.Type);
+                // expression result: the spilled value.
+                this.il.LoadLocal(tmp);
                 return;
             }
 
             // Phase 4 emit parity: indexer write. `d[k] = v` -> `callvirt set_Item(k, v)`.
-            // Like the array-index assignment path, the expression result is the
-            // assigned value, so re-read via `get_Item` after the store.
             // Issue #418 (P1-5): route through EmitInstanceReceiver so a
             // value-type target (`ldloca`) and reference-type target (`ldloc`)
             // are both addressed correctly. For value-type indexers we also
             // need `call` instead of `callvirt`.
+            // Issue #418 (P1-1): spill v to a temp before the call so the result
+            // is the assigned value without a re-read via get_Item (which would
+            // re-evaluate every index argument).
             var writeReceiver = new BoundVariableExpression(null, ixa.Target);
             var targetIsValueType = IsValueTypeSymbol(ixa.Target.Type);
+            var slot = this.indexAssignmentValueSlots[ixa];
 
             this.EmitInstanceReceiver(writeReceiver);
             foreach (var arg in ixa.Arguments)
@@ -13135,20 +13204,11 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             this.EmitExpression(ixa.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(slot);
             this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(setter));
-
-            this.EmitInstanceReceiver(writeReceiver);
-            foreach (var arg in ixa.Arguments)
-            {
-                this.EmitExpression(arg);
-            }
-
-            var getter = ixa.Indexer.GetGetMethod(nonPublic: false)
-                ?? throw new InvalidOperationException(
-                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public getter.");
-            this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(getter));
+            this.il.LoadLocal(slot);
         }
 
         private void EmitTupleLiteral(BoundTupleLiteralExpression tuple)
