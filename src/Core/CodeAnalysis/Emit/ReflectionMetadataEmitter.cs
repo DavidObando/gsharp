@@ -2756,6 +2756,78 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #409: determines whether a value-type instance method must keep
+    /// virtual method attributes because it participates in CLR vtable dispatch.
+    /// </summary>
+    private static bool RequiresVirtualOnValueType(FunctionSymbol function, StructSymbol receiverStruct)
+    {
+        if (function.IsOverride || function.OverriddenMethod != null)
+        {
+            return true;
+        }
+
+        return MethodImplicitlyImplementsInterface(receiverStruct, function);
+    }
+
+    /// <summary>
+    /// Determines whether a method on a class/struct implicitly implements an
+    /// interface method (same name, parameters, and return type).
+    /// </summary>
+    private static bool MethodImplicitlyImplementsInterface(StructSymbol structSym, FunctionSymbol method)
+    {
+        if (structSym.Interfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var iface in structSym.Interfaces)
+        {
+            if (iface.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ifaceMethod in iface.Methods)
+            {
+                if (MethodSignaturesMatch(ifaceMethod, method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MethodSignaturesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
+    {
+        if (interfaceMethod.Name != implementationMethod.Name || interfaceMethod.Type != implementationMethod.Type)
+        {
+            return false;
+        }
+
+        var interfaceParameters = CallableParameters(interfaceMethod);
+        var implementationParameters = CallableParameters(implementationMethod);
+        if (interfaceParameters.Length != implementationParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < interfaceParameters.Length; i++)
+        {
+            if (interfaceParameters[i].Type != implementationParameters[i].Type)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ImmutableArray<ParameterSymbol> CallableParameters(FunctionSymbol method)
+        => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
     /// ADR-0052: determines whether an event on a class/struct implicitly implements
     /// an interface event (same name on any implemented interface).
     /// </summary>
@@ -4700,6 +4772,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -4719,6 +4792,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -4753,6 +4827,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
             emitter.EmitBlock(body);
@@ -4974,6 +5049,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5003,6 +5079,7 @@ internal sealed class ReflectionMetadataEmitter
                     channelOpSlots,
                     scopeFrameSlots,
                     selectStatementSlots,
+                    receiverSpillSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5042,6 +5119,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5142,6 +5220,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5171,6 +5250,7 @@ internal sealed class ReflectionMetadataEmitter
                     channelOpSlots,
                     scopeFrameSlots,
                     selectStatementSlots,
+                    receiverSpillSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5192,6 +5272,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5234,6 +5315,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5551,6 +5633,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -5573,6 +5656,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5611,6 +5695,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
@@ -6057,6 +6142,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -6079,6 +6165,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -6152,6 +6239,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: structThis,
@@ -6211,11 +6299,16 @@ internal sealed class ReflectionMetadataEmitter
             : ToMethodVisibility(function.Accessibility);
 
         // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
-        // models open/override per ADR-0017:
+        // models open/override per ADR-0017 for classes:
         //   plain (neither):    Virtual | NewSlot | Final  (callvirt-safe, non-overridable)
         //   open:               Virtual | NewSlot          (overridable in derived)
         //   override (sealed):  Virtual | Final            (reuses base slot, no further override)
         //   open override:      Virtual                    (reuses base slot, still overridable)
+        //
+        // Issue #409 follow-up: plain instance methods on value-type StructSymbol
+        // receivers use the C#-conventional HideBySig-only shape. Value-type
+        // overrides and interface implementations still need virtual slots for
+        // CLR dispatch through the base/interface vtable.
         var methodAttrs = visibility | MethodAttributes.HideBySig;
 
         // Stream D: extension functions whose name follows the CLR `op_*`
@@ -6234,15 +6327,20 @@ internal sealed class ReflectionMetadataEmitter
 
         if (function.IsInstanceMethod)
         {
-            methodAttrs |= MethodAttributes.Virtual;
-            if (!function.IsOverride)
+            var receiverStruct = function.ReceiverType as StructSymbol;
+            var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
+            if (!receiverIsValueType || RequiresVirtualOnValueType(function, receiverStruct))
             {
-                methodAttrs |= MethodAttributes.NewSlot;
-            }
+                methodAttrs |= MethodAttributes.Virtual;
+                if (!function.IsOverride)
+                {
+                    methodAttrs |= MethodAttributes.NewSlot;
+                }
 
-            if (!function.IsOpen)
-            {
-                methodAttrs |= MethodAttributes.Final;
+                if (!function.IsOpen)
+                {
+                    methodAttrs |= MethodAttributes.Final;
+                }
             }
         }
         else
@@ -6352,6 +6450,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
         Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+        Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         InstructionEncoder il)
     {
@@ -6442,6 +6541,18 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(def.Type);
             defaultExpressionSlots[def] = slot;
+        }
+
+        foreach (var receiver in this.CollectReceiverSpills(body, function, locals))
+        {
+            if (receiverSpillSlots.ContainsKey(receiver))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(receiver.Type);
+            receiverSpillSlots[receiver] = slot;
         }
     }
 
@@ -8244,6 +8355,102 @@ internal sealed class ReflectionMetadataEmitter
         return sink;
     }
 
+    private IEnumerable<BoundExpression> CollectReceiverSpills(
+        BoundNode root,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        var sink = new List<BoundExpression>();
+        new ReceiverSpillCollector(this, function, locals, sink).RewriteStatement((BoundStatement)root);
+        return sink;
+    }
+
+    private bool NeedsRvalueReceiverSpill(
+        BoundExpression receiver,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (!IsValueTypeSymbol(receiver.Type))
+        {
+            return false;
+        }
+
+        if (receiver is BoundVariableExpression bve
+            && this.CanLoadVariableAddressForReceiverSpill(bve.Variable, function, locals))
+        {
+            return false;
+        }
+
+        if (receiver is BoundFieldAccessExpression fa
+            && this.structFieldDefs.ContainsKey(fa.Field)
+            && this.IsAddressableFieldAccessForReceiverSpill(fa, function, locals))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool CanLoadVariableAddressForReceiverSpill(
+        VariableSymbol variable,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (variable is ParameterSymbol ps
+            && function != null
+            && function.Parameters.Any(p => ReferenceEquals(p, ps)))
+        {
+            return true;
+        }
+
+        if (locals.ContainsKey(variable))
+        {
+            return true;
+        }
+
+        if (variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsAddressableFieldAccessForReceiverSpill(
+        BoundFieldAccessExpression fa,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (fa.Receiver == null)
+        {
+            return true;
+        }
+
+        if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
+        {
+            return true;
+        }
+
+        if (fa.Receiver.Type?.ClrType != null && !fa.Receiver.Type.ClrType.IsValueType)
+        {
+            return true;
+        }
+
+        if (fa.Receiver is BoundVariableExpression bv
+            && this.CanLoadVariableAddressForReceiverSpill(bv.Variable, function, locals))
+        {
+            return true;
+        }
+
+        if (fa.Receiver is BoundFieldAccessExpression nested
+            && this.structFieldDefs.ContainsKey(nested.Field))
+        {
+            return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals);
+        }
+
+        return false;
+    }
+
     private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
     {
         switch (node)
@@ -9948,6 +10155,108 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class ReceiverSpillCollector : BoundTreeRewriter
+    {
+        private readonly ReflectionMetadataEmitter outer;
+        private readonly FunctionSymbol function;
+        private readonly IReadOnlyDictionary<VariableSymbol, int> locals;
+        private readonly List<BoundExpression> sink;
+
+        public ReceiverSpillCollector(
+            ReflectionMetadataEmitter outer,
+            FunctionSymbol function,
+            IReadOnlyDictionary<VariableSymbol, int> locals,
+            List<BoundExpression> sink)
+        {
+            this.outer = outer;
+            this.function = function;
+            this.locals = locals;
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteImportedInstanceCallExpression(node);
+        }
+
+        protected override BoundExpression RewriteUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteUserInstanceCallExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrPropertyAccessExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrPropertyAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrEventSubscriptionExpression(node);
+        }
+
+        protected override BoundExpression RewriteEventSubscriptionExpression(BoundEventSubscriptionExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteEventSubscriptionExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrIndexExpression(BoundClrIndexExpression node)
+        {
+            this.AddIfNeeded(node.Target);
+            return base.RewriteClrIndexExpression(node);
+        }
+
+        protected override BoundExpression RewriteTupleElementAccessExpression(BoundTupleElementAccessExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteTupleElementAccessExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrMethodGroupExpression(node);
+        }
+
+        private void AddIfNeeded(BoundExpression receiver)
+        {
+            if (this.outer.NeedsRvalueReceiverSpill(receiver, this.function, this.locals))
+            {
+                this.sink.Add(receiver);
+            }
+        }
+    }
+
     private sealed class MapIndexReadCollector : BoundTreeRewriter
     {
         private readonly List<BoundIndexExpression> sink;
@@ -10027,6 +10336,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
         private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
+        private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
         private readonly ParameterSymbol structThisParameter;
         private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
@@ -10064,6 +10374,7 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+            Dictionary<BoundExpression, int> receiverSpillSlots,
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
             ParameterSymbol structThisParameter = null,
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
@@ -10086,6 +10397,7 @@ internal sealed class ReflectionMetadataEmitter
             this.channelOpSlots = channelOpSlots;
             this.scopeFrameSlots = scopeFrameSlots;
             this.selectStatementSlots = selectStatementSlots;
+            this.receiverSpillSlots = receiverSpillSlots;
             this.goEnclosingScopes = goEnclosingScopes;
             this.structThisParameter = structThisParameter;
             this.asyncFieldMap = asyncFieldMap;
@@ -10372,7 +10684,7 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                 {
-                    var receiverIsValueType = instCall.Receiver.Type?.ClrType?.IsValueType == true;
+                    var receiverIsValueType = IsValueTypeSymbol(instCall.Receiver.Type);
 
                     // A value-type receiver invoking a method it inherits from a
                     // reference base type (System.Object/ValueType/Enum) — e.g.
@@ -10400,29 +10712,6 @@ internal sealed class ReflectionMetadataEmitter
                         this.EmitExpression(instCall.Receiver);
                         this.il.OpCode(ILOpCode.Box);
                         this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
-                    }
-                    else if (useCall)
-                    {
-                        // The value-type instance method needs a managed pointer
-                        // as `this`. An addressable receiver (local/parameter)
-                        // yields its address directly; a computed rvalue (e.g.
-                        // `(a + b).ToString()`) has no address, so materialize one
-                        // via box + unbox — `unbox` returns a managed pointer to
-                        // the value stored in the freshly boxed copy.
-                        if (instCall.Receiver is BoundVariableExpression bve
-                            && this.TryLoadVariableAddress(bve.Variable))
-                        {
-                            // Address already on the stack.
-                        }
-                        else
-                        {
-                            this.EmitExpression(instCall.Receiver);
-                            var receiverTypeToken = this.outer.GetElementTypeToken(instCall.Receiver.Type);
-                            this.il.OpCode(ILOpCode.Box);
-                            this.il.Token(receiverTypeToken);
-                            this.il.OpCode(ILOpCode.Unbox);
-                            this.il.Token(receiverTypeToken);
-                        }
                     }
                     else
                     {
@@ -13422,8 +13711,14 @@ internal sealed class ReflectionMetadataEmitter
             // the common case where the receiver is a local/parameter, we can
             // emit `ldloca`/`ldarga`. Other shapes are not yet exercised by the
             // emit pipeline.
-            var clrType = receiver.Type?.ClrType;
-            if (clrType != null && clrType.IsValueType)
+            //
+            // Issue #409: user-defined struct symbols have ClrType == null
+            // until after emission, so a same-package receiver method like
+            // `func (p Point) Distance() int32` would fall through to a value
+            // load (`ldsfld`/`ldloc`) and pass garbage as `this` to the
+            // instance call (SIGSEGV at runtime). IsValueTypeSymbol recognises
+            // these symbol-only value types alongside enums and built-ins.
+            if (IsValueTypeSymbol(receiver.Type))
             {
                 if (receiver is BoundVariableExpression bve
                     && this.TryLoadVariableAddress(bve.Variable))
@@ -13440,16 +13735,97 @@ internal sealed class ReflectionMetadataEmitter
                 // struct's bits as the `this` pointer and corrupts the stack
                 // (AccessViolationException). The field signature already
                 // carries the real constructed-generic layout, so the address
-                // form is both correct and safe.
+                // form is both correct and safe — *as long as the containing
+                // field chain is itself addressable*. Otherwise `ldflda` on a
+                // value on the evaluation stack produces invalid IL
+                // (InvalidProgramException at JIT time).
                 if (receiver is BoundFieldAccessExpression fa
-                    && this.outer.structFieldDefs.ContainsKey(fa.Field))
+                    && this.outer.structFieldDefs.ContainsKey(fa.Field)
+                    && this.IsAddressableFieldAccess(fa))
                 {
                     this.EmitFieldAddress(fa);
                     return;
                 }
+
+                // Issue #409 follow-up: a value-type receiver computed as an
+                // rvalue (e.g. `makePoint(5, 6).Sum()` or
+                // `makeOuter().Inner.Sum()` or `(a + b).Method()`) has no
+                // addressable storage. Spill it to a pre-declared local and
+                // pass `ldloca` as `this`; this is valid for ordinary structs
+                // and by-ref-like `ref struct` values, which cannot be boxed.
+                this.EmitExpression(receiver);
+                if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
+                {
+                    throw new InvalidOperationException(
+                        $"No receiver spill slot was allocated for rvalue receiver of type '{receiver.Type}'.");
+                }
+
+                this.il.StoreLocal(slot);
+                this.il.LoadLocalAddress(slot);
+                return;
             }
 
             this.EmitExpression(receiver);
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> when <paramref name="fa"/> is addressable —
+        /// i.e. <c>ldflda</c> against its receiver yields a valid managed
+        /// pointer. Static fields are always addressable; instance fields on
+        /// class receivers are addressable (the receiver is an object
+        /// reference); instance fields on value-type receivers are addressable
+        /// only if the receiver itself is addressable (a variable, or another
+        /// addressable field access).
+        /// </summary>
+        private bool IsAddressableFieldAccess(BoundFieldAccessExpression fa)
+        {
+            if (fa.Receiver == null)
+            {
+                return true;
+            }
+
+            if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
+            {
+                return true;
+            }
+
+            if (fa.Receiver.Type?.ClrType != null && !fa.Receiver.Type.ClrType.IsValueType)
+            {
+                return true;
+            }
+
+            if (fa.Receiver is BoundVariableExpression bv && this.CanLoadVariableAddress(bv.Variable))
+            {
+                return true;
+            }
+
+            if (fa.Receiver is BoundFieldAccessExpression nested
+                && this.outer.structFieldDefs.ContainsKey(nested.Field))
+            {
+                return this.IsAddressableFieldAccess(nested);
+            }
+
+            return false;
+        }
+
+        private bool CanLoadVariableAddress(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.ContainsKey(ps))
+            {
+                return true;
+            }
+
+            if (this.locals.ContainsKey(variable))
+            {
+                return true;
+            }
+
+            if (variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryLoadVariableAddress(VariableSymbol variable)
@@ -13627,6 +14003,13 @@ internal sealed class ReflectionMetadataEmitter
             if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
             {
                 // address already on stack
+            }
+            else if (!receiverIsClass
+                && fa.Receiver is BoundFieldAccessExpression nested
+                && this.outer.structFieldDefs.ContainsKey(nested.Field)
+                && this.IsAddressableFieldAccess(nested))
+            {
+                this.EmitFieldAddress(nested);
             }
             else
             {

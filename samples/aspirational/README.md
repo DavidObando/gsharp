@@ -6,9 +6,8 @@ A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, 
 
 ## Current contents
 
-| Sample | Demonstrates | Blocker |
-| --- | --- | --- |
-| `MethodsWithReceivers.gs` | Same-package receiver declarations bound as methods on user-defined structs (Phase 6.4) | The emitted assembly crashes with SIGSEGV (exit 139) at runtime. |
+_None — every sample previously parked here has been promoted out as the emit
+backend caught up. See "Previously promoted samples" below for the history._
 
 ### Previously promoted samples
 
@@ -23,6 +22,7 @@ A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, 
 | `ExpressionEval.gs` | This PR | Sealed-interface type-pattern switch expressions |
 | `NullableFlow.gs` | This PR | Nullable flow analysis with pattern switch and `if` guard |
 | `Defer.gs` | #408 | Block-scoped `defer` and `using` cleanup convergence (Phase 7.1) |
+| `MethodsWithReceivers.gs` | #409 | Same-package receiver declarations bound as methods on user-defined structs (Phase 6.4) |
 
 ## When to add a sample here
 
