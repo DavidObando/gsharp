@@ -29,6 +29,20 @@ public class PrimitiveInterpreterTests
     [InlineData("10M * 7M", "70")]
     [InlineData("1L << 10", "1024")]
     [InlineData("1024L >> 2", "256")]
+
+    // Issue #421 (P2-2): Go semantics — count >= width yields 0.
+    [InlineData("1 << 33", "0")]
+    [InlineData("1 << 32", "0")]
+    [InlineData("100 >> 32", "0")]
+    [InlineData("1L << 64", "0")]
+    [InlineData("1L << 100", "0")]
+    [InlineData("1024L >> 64", "0")]
+    [InlineData("uint32(1) << 32", "0")]
+    [InlineData("uint64(1) << 64", "0")]
+
+    // Boundary: shift by exactly width-1 still works normally.
+    [InlineData("1 << 31", "-2147483648")]
+    [InlineData("uint32(1) << 31", "2147483648")]
     [InlineData("100L < 200L", "True")]
     [InlineData("100L == 100L", "True")]
     [InlineData("-42L", "-42")]

@@ -32,6 +32,28 @@ public class PrimitiveOperatorEmitTests
     [InlineData("int64", "100L ^ 6L", "98")]
     [InlineData("int64", "1L << 10", "1024")]
     [InlineData("int64", "1024L >> 2", "256")]
+
+    // Issue #421 (P2-2): Go semantics — count >= width yields 0 (not CLR's masked shift).
+    [InlineData("int32", "1 << 33", "0")]
+    [InlineData("int32", "1 << 32", "0")]
+    [InlineData("int32", "100 >> 32", "0")]
+    [InlineData("uint32", "uint32(1) << 32", "0")]
+    [InlineData("uint32", "uint32(100) >> 64", "0")]
+    [InlineData("int64", "1L << 64", "0")]
+    [InlineData("int64", "1L << 100", "0")]
+    [InlineData("int64", "1024L >> 64", "0")]
+    [InlineData("uint64", "uint64(1) << 64", "0")]
+    [InlineData("uint64", "uint64(1024) >> 64", "0")]
+
+    // Boundary: shift by exactly width-1 still works normally.
+    [InlineData("int32", "1 << 31", "-2147483648")]
+    [InlineData("int64", "1L << 63", "-9223372036854775808")]
+    [InlineData("uint32", "uint32(1) << 31", "2147483648")]
+    [InlineData("uint64", "uint64(1) << 63", "9223372036854775808")]
+
+    // Shift by 0 is identity.
+    [InlineData("int32", "42 << 0", "42")]
+    [InlineData("int64", "42L >> 0", "42")]
     public void Long_Operators_ProduceExpectedValue(string _, string expr, string expected)
     {
         Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
