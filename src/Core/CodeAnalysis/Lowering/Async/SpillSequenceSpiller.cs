@@ -247,6 +247,15 @@ public static class SpillSequenceSpiller
                 case BoundAssignmentExpression assign:
                     return SpillAssignment(assign);
 
+                case BoundFieldAssignmentExpression fieldAssign:
+                    return SpillFieldAssignment(fieldAssign);
+
+                case BoundIndexAssignmentExpression indexAssign:
+                    return SpillIndexAssignment(indexAssign);
+
+                case BoundUnaryExpression unary:
+                    return SpillUnary(unary);
+
                 case BoundUserInstanceCallExpression userInstance:
                     return SpillUserInstanceCall(userInstance);
 
@@ -653,6 +662,103 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(assign.Expression);
             var value = new BoundAssignmentExpression(null, assign.Variable, spilled.Value);
+            return new BoundSpillSequenceExpression(
+                null,
+                spilled.Locals,
+                spilled.SideEffects,
+                value);
+        }
+
+        private BoundSpillSequenceExpression SpillFieldAssignment(BoundFieldAssignmentExpression assign)
+        {
+            // Receiver is a VariableSymbol — already a stable local read, no spilling needed.
+            // Only the RHS Value can contain an await.
+            if (!AsyncBoundTreeQueries.HasAwait(assign.Value))
+            {
+                return Trivial(assign);
+            }
+
+            var spilled = SpillExpression(assign.Value);
+            var value = new BoundFieldAssignmentExpression(
+                null,
+                assign.Receiver,
+                assign.StructType,
+                assign.Field,
+                spilled.Value);
+            return new BoundSpillSequenceExpression(
+                null,
+                spilled.Locals,
+                spilled.SideEffects,
+                value);
+        }
+
+        private BoundSpillSequenceExpression SpillIndexAssignment(BoundIndexAssignmentExpression assign)
+        {
+            // Target is a VariableSymbol — already a stable local read.
+            // Index and Value can each contain an await.
+            var indexHasAwait = AsyncBoundTreeQueries.HasAwait(assign.Index);
+            var valueHasAwait = AsyncBoundTreeQueries.HasAwait(assign.Value);
+
+            if (!indexHasAwait && !valueHasAwait)
+            {
+                return Trivial(assign);
+            }
+
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            BoundExpression index;
+            if (indexHasAwait)
+            {
+                var spilledIndex = SpillExpression(assign.Index);
+                locals.AddRange(spilledIndex.Locals);
+                sideEffects.AddRange(spilledIndex.SideEffects);
+                index = spilledIndex.Value;
+            }
+            else
+            {
+                index = assign.Index;
+            }
+
+            // If the RHS has an await, the index must be stable across that suspension.
+            if (valueHasAwait && !IsPureOrConstant(index))
+            {
+                var indexTemp = MakeSpillTemp(index.Type);
+                locals.Add(indexTemp);
+                sideEffects.Add(new BoundVariableDeclaration(null, indexTemp, index));
+                index = new BoundVariableExpression(null, indexTemp);
+            }
+
+            BoundExpression rhs;
+            if (valueHasAwait)
+            {
+                var spilledValue = SpillExpression(assign.Value);
+                locals.AddRange(spilledValue.Locals);
+                sideEffects.AddRange(spilledValue.SideEffects);
+                rhs = spilledValue.Value;
+            }
+            else
+            {
+                rhs = assign.Value;
+            }
+
+            var value = new BoundIndexAssignmentExpression(null, assign.Target, index, rhs, assign.Type);
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                value);
+        }
+
+        private BoundSpillSequenceExpression SpillUnary(BoundUnaryExpression unary)
+        {
+            if (!AsyncBoundTreeQueries.HasAwait(unary.Operand))
+            {
+                return Trivial(unary);
+            }
+
+            var spilled = SpillExpression(unary.Operand);
+            var value = new BoundUnaryExpression(null, unary.Op, spilled.Value);
             return new BoundSpillSequenceExpression(
                 null,
                 spilled.Locals,
