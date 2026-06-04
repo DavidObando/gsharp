@@ -11464,6 +11464,25 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Short-circuit evaluation for logical `&&` and `||`: the right
+            // operand must not be evaluated when the left operand already
+            // determines the result. Emit a dup + conditional branch so the
+            // LHS value is reused as the result without evaluating the RHS.
+            if (b.Op.Kind == BoundBinaryOperatorKind.LogicalAnd ||
+                b.Op.Kind == BoundBinaryOperatorKind.LogicalOr)
+            {
+                var endLabel = this.il.DefineLabel();
+                this.EmitExpression(b.Left);
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.Branch(
+                    b.Op.Kind == BoundBinaryOperatorKind.LogicalAnd ? ILOpCode.Brfalse : ILOpCode.Brtrue,
+                    endLabel);
+                this.il.OpCode(ILOpCode.Pop);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(endLabel);
+                return;
+            }
+
             this.EmitExpression(b.Left);
             this.EmitExpression(b.Right);
             if (b.Left.Type == TypeSymbol.Decimal && b.Right.Type == TypeSymbol.Decimal)
@@ -11499,11 +11518,9 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.OpCode(isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr);
                     break;
                 case BoundBinaryOperatorKind.BitwiseAnd:
-                case BoundBinaryOperatorKind.LogicalAnd:
                     this.il.OpCode(ILOpCode.And);
                     break;
                 case BoundBinaryOperatorKind.BitwiseOr:
-                case BoundBinaryOperatorKind.LogicalOr:
                     this.il.OpCode(ILOpCode.Or);
                     break;
                 case BoundBinaryOperatorKind.BitwiseXor:
