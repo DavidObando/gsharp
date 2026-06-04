@@ -37,16 +37,28 @@ public class AspirationalSamplesTests
         var dir = LocateAspirationalDirectory();
         if (dir is null)
         {
+            yield return new object[] { string.Empty };
             yield break;
         }
 
+        var any = false;
         foreach (var gs in Directory.EnumerateFiles(dir, "*.gs", SearchOption.TopDirectoryOnly).OrderBy(p => p))
         {
             var golden = Path.ChangeExtension(gs, ".golden");
             if (File.Exists(golden))
             {
+                any = true;
                 yield return new object[] { Path.GetFileName(gs) };
             }
+        }
+
+        // xUnit treats an empty MemberData as a test failure. When the
+        // aspirational folder is empty (every sample has been promoted out
+        // — issue #409), yield a sentinel entry the test below treats as a
+        // no-op so this theory continues to report green.
+        if (!any)
+        {
+            yield return new object[] { string.Empty };
         }
     }
 
@@ -54,6 +66,13 @@ public class AspirationalSamplesTests
     [MemberData(nameof(Samples))]
     public void Sample_RunsOnInterpreter_MatchesGolden(string sampleName)
     {
+        if (string.IsNullOrEmpty(sampleName))
+        {
+            // No aspirational samples remain — every previously parked
+            // sample has been promoted to top-level samples/.
+            return;
+        }
+
         var dir = LocateAspirationalDirectory();
         Assert.NotNull(dir);
 

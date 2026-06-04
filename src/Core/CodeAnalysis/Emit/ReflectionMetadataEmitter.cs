@@ -13422,8 +13422,14 @@ internal sealed class ReflectionMetadataEmitter
             // the common case where the receiver is a local/parameter, we can
             // emit `ldloca`/`ldarga`. Other shapes are not yet exercised by the
             // emit pipeline.
-            var clrType = receiver.Type?.ClrType;
-            if (clrType != null && clrType.IsValueType)
+            //
+            // Issue #409: user-defined struct symbols have ClrType == null
+            // until after emission, so a same-package receiver method like
+            // `func (p Point) Distance() int32` would fall through to a value
+            // load (`ldsfld`/`ldloc`) and pass garbage as `this` to the
+            // instance call (SIGSEGV at runtime). IsValueTypeSymbol recognises
+            // these symbol-only value types alongside enums and built-ins.
+            if (IsValueTypeSymbol(receiver.Type))
             {
                 if (receiver is BoundVariableExpression bve
                     && this.TryLoadVariableAddress(bve.Variable))
@@ -13440,16 +13446,98 @@ internal sealed class ReflectionMetadataEmitter
                 // struct's bits as the `this` pointer and corrupts the stack
                 // (AccessViolationException). The field signature already
                 // carries the real constructed-generic layout, so the address
-                // form is both correct and safe.
+                // form is both correct and safe — *as long as the containing
+                // field chain is itself addressable*. Otherwise `ldflda` on a
+                // value on the evaluation stack produces invalid IL
+                // (InvalidProgramException at JIT time).
                 if (receiver is BoundFieldAccessExpression fa
-                    && this.outer.structFieldDefs.ContainsKey(fa.Field))
+                    && this.outer.structFieldDefs.ContainsKey(fa.Field)
+                    && this.IsAddressableFieldAccess(fa))
                 {
                     this.EmitFieldAddress(fa);
                     return;
                 }
+
+                // Issue #409: a value-type receiver computed as an rvalue
+                // (e.g. `makePoint(5, 6).Sum()` or `makeOuter().Inner.Sum()`
+                // or `(a + b).Method()`) has no addressable storage. Box the
+                // value to obtain a heap copy, then `unbox` to get a managed
+                // pointer to the boxed payload — this matches the
+                // BoundImportedInstanceCallExpression path and gives the
+                // instance method a valid `this`. The boxed copy means any
+                // mutation the callee performs on `this` is discarded, which
+                // is the same semantics CLR languages give for instance calls
+                // on rvalue value-type receivers.
+                this.EmitExpression(receiver);
+                var receiverTypeToken = this.outer.GetElementTypeToken(receiver.Type);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(receiverTypeToken);
+                this.il.OpCode(ILOpCode.Unbox);
+                this.il.Token(receiverTypeToken);
+                return;
             }
 
             this.EmitExpression(receiver);
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> when <paramref name="fa"/> is addressable —
+        /// i.e. <c>ldflda</c> against its receiver yields a valid managed
+        /// pointer. Static fields are always addressable; instance fields on
+        /// class receivers are addressable (the receiver is an object
+        /// reference); instance fields on value-type receivers are addressable
+        /// only if the receiver itself is addressable (a variable, or another
+        /// addressable field access).
+        /// </summary>
+        private bool IsAddressableFieldAccess(BoundFieldAccessExpression fa)
+        {
+            if (fa.Receiver == null)
+            {
+                return true;
+            }
+
+            if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
+            {
+                return true;
+            }
+
+            if (fa.Receiver.Type?.ClrType != null && !fa.Receiver.Type.ClrType.IsValueType)
+            {
+                return true;
+            }
+
+            if (fa.Receiver is BoundVariableExpression bv && this.CanLoadVariableAddress(bv.Variable))
+            {
+                return true;
+            }
+
+            if (fa.Receiver is BoundFieldAccessExpression nested
+                && this.outer.structFieldDefs.ContainsKey(nested.Field))
+            {
+                return this.IsAddressableFieldAccess(nested);
+            }
+
+            return false;
+        }
+
+        private bool CanLoadVariableAddress(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.ContainsKey(ps))
+            {
+                return true;
+            }
+
+            if (this.locals.ContainsKey(variable))
+            {
+                return true;
+            }
+
+            if (variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryLoadVariableAddress(VariableSymbol variable)
