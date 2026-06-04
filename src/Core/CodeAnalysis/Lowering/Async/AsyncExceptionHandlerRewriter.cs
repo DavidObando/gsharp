@@ -24,13 +24,19 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// <para><b>Pattern A — try/catch with await in catch:</b></para>
 /// <code>
 /// Exception pendingException = null;
+/// T? capture_i = null;                 // per-clause capture of original type
 /// try { body; }
-/// catch (Exception ex) { pendingException = ex; }
-/// if (pendingException != null) {
-///     T e = (T)pendingException;   // rebind original variable
-///     handlerBody;                 // await is now outside the handler
+/// catch (T e) { capture_i = e; pendingException = e; }   // KEEP ORIGINAL TYPE
+/// if (capture_i != null) {
+///     T e = capture_i;                 // rebind original variable
+///     handlerBody;                     // await is now outside the handler
 /// }
 /// </code>
+/// <para>Keeping the catch typed (instead of widening to <c>Exception</c>) is
+/// essential for correctness: it ensures the CLR catch dispatch only fires for
+/// the original handler's exception type, so subsequent catch arms — and the
+/// rethrow paths for unmatched exceptions — keep their original semantics
+/// (issue #419).</para>
 ///
 /// <para><b>Pattern B — try/finally with await in finally:</b></para>
 /// <code>
@@ -184,28 +190,51 @@ public static class AsyncExceptionHandlerRewriter
             TypeSymbol exceptionType)
         {
             // For each catch clause with await, replace the body with
-            // pendingException = ex; and emit the real body after the try.
+            //   capture_i = e; pendingException = e;
+            // and emit the real body after the try guarded by `if (capture_i != null)`.
+            // The catch clause KEEPS the original exception type so the CLR's
+            // catch dispatch matches only the intended type (issue #419 — without
+            // this, widening to System.Exception silently catches unrelated
+            // exceptions and shadows subsequent catch arms).
+            //
             // Catch clauses without await stay in-place.
             var newClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
-            var afterTryHandlers = ImmutableArray.CreateBuilder<(BoundCatchClause Original, BoundStatement Body)>();
+            var afterTryHandlers = new System.Collections.Generic.List<(BoundCatchClause Original, BoundStatement Body, LocalVariableSymbol Capture)>();
 
             foreach (var clause in catchClauses)
             {
                 if (AsyncBoundTreeQueries.HasAwait(clause.Body))
                 {
-                    // Replace body: pendingException = ex;
+                    // Per-clause capture local of nullable-of-original-type.
+                    // A reference-type nullable shares the CLR representation,
+                    // so this is a metadata-only annotation.
+                    var captureType = NullableTypeSymbol.Get(clause.ExceptionType);
+                    var captureLocal = new LocalVariableSymbol(
+                        $"<>catch_capture_{localOrdinal++}", isReadOnly: false, captureType);
+                    statements.Add(new BoundVariableDeclaration(
+                        null,
+                        captureLocal,
+                        new BoundLiteralExpression(null, null, TypeSymbol.Null)));
+
+                    // Replace body: capture_i = e; pendingException = e;
+                    var assignCapture = new BoundExpressionStatement(
+                        null,
+                        new BoundAssignmentExpression(
+                            null,
+                            captureLocal,
+                            new BoundVariableExpression(null, clause.Variable)));
                     var assignPending = new BoundExpressionStatement(
                         null,
                         new BoundAssignmentExpression(
                             null,
                             pendingExLocal,
                             new BoundVariableExpression(null, clause.Variable)));
-                    var catchAllClause = new BoundCatchClause(
-                        exceptionType,
+                    var typedCatchClause = new BoundCatchClause(
+                        clause.ExceptionType,
                         clause.Variable,
-                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignPending)));
-                    newClauses.Add(catchAllClause);
-                    afterTryHandlers.Add((clause, clause.Body));
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
+                    newClauses.Add(typedCatchClause);
+                    afterTryHandlers.Add((clause, clause.Body, captureLocal));
                 }
                 else
                 {
@@ -216,30 +245,34 @@ public static class AsyncExceptionHandlerRewriter
             var tryStmt = new BoundTryStatement(null, tryBody, newClauses.ToImmutable(), finallyBlock);
             statements.Add(tryStmt);
 
-            // After the try: if (pendingException != null) { T e = (T)pendingException; handlerBody; }
-            foreach (var (original, body) in afterTryHandlers)
+            // After the try: for each lifted clause emit
+            //   if (capture_i == null) goto endLabel;
+            //   T e = capture_i;
+            //   handlerBody;
+            //   endLabel:
+            // The per-clause null check ensures the handler body only runs when
+            // its specific catch fired.
+            foreach (var (original, body, captureLocal) in afterTryHandlers)
             {
                 var endLabel = MakeLabel("catch_end");
-                var pendingExRef = new BoundVariableExpression(null, pendingExLocal);
+                var captureRef = new BoundVariableExpression(null, captureLocal);
                 var nullLit = new BoundLiteralExpression(null, null, TypeSymbol.Null);
                 var condition = new BoundBinaryExpression(
                     null,
-                    pendingExRef,
+                    captureRef,
                     BoundBinaryOperator.Bind(
                         CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        pendingExLocal.Type,
+                        captureLocal.Type,
                         TypeSymbol.Null),
                     nullLit);
 
-                // Jump past the handler if pendingException == null
                 statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
 
-                // Rebind the original catch variable: T e = (T)pendingException;
-                // Since GSharp's catch variable type may be same as Exception, just assign directly.
+                // Rebind the original catch variable: T e = capture_i;
                 var rebind = new BoundVariableDeclaration(
                     null,
                     original.Variable,
-                    new BoundVariableExpression(null, pendingExLocal));
+                    new BoundVariableExpression(null, captureLocal));
                 statements.Add(rebind);
 
                 // Emit the handler body
@@ -268,28 +301,48 @@ public static class AsyncExceptionHandlerRewriter
             TypeSymbol exceptionType,
             bool anyCatchHasAwait)
         {
-            // Build inner try: original try body + original catches (without await ones)
-            // + a catch-all that stores into pendingException.
+            // Build inner try: original try body + original catches.
+            // Typed catches with await KEEP their original type (issue #419)
+            // and capture into a per-clause local plus pendingException so the
+            // post-finally lifted body can dispatch only when the typed catch
+            // actually fired. A final catch-all (Exception) captures any
+            // remaining exceptions into pendingException so the finally can
+            // run regardless.
             var innerClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
-            var liftedCatchHandlers = ImmutableArray.CreateBuilder<(BoundCatchClause Original, BoundStatement Body)>();
+            var liftedCatchHandlers = new System.Collections.Generic.List<(BoundCatchClause Original, BoundStatement Body, LocalVariableSymbol Capture)>();
 
             foreach (var clause in catchClauses)
             {
                 if (AsyncBoundTreeQueries.HasAwait(clause.Body))
                 {
-                    // Capture into pending and lift body after finally
+                    // Per-clause capture local of nullable-of-original-type.
+                    var captureType = NullableTypeSymbol.Get(clause.ExceptionType);
+                    var captureLocal = new LocalVariableSymbol(
+                        $"<>catch_capture_{localOrdinal++}", isReadOnly: false, captureType);
+                    statements.Add(new BoundVariableDeclaration(
+                        null,
+                        captureLocal,
+                        new BoundLiteralExpression(null, null, TypeSymbol.Null)));
+
+                    // Capture into per-clause local and into pending; lift body after finally.
+                    var assignCapture = new BoundExpressionStatement(
+                        null,
+                        new BoundAssignmentExpression(
+                            null,
+                            captureLocal,
+                            new BoundVariableExpression(null, clause.Variable)));
                     var assignPending = new BoundExpressionStatement(
                         null,
                         new BoundAssignmentExpression(
                             null,
                             pendingExLocal,
                             new BoundVariableExpression(null, clause.Variable)));
-                    var captureClause = new BoundCatchClause(
-                        exceptionType,
+                    var typedCatchClause = new BoundCatchClause(
+                        clause.ExceptionType,
                         clause.Variable,
-                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignPending)));
-                    innerClauses.Add(captureClause);
-                    liftedCatchHandlers.Add((clause, clause.Body));
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
+                    innerClauses.Add(typedCatchClause);
+                    liftedCatchHandlers.Add((clause, clause.Body, captureLocal));
                 }
                 else
                 {
@@ -314,18 +367,20 @@ public static class AsyncExceptionHandlerRewriter
             var innerTry = new BoundTryStatement(null, tryBody, innerClauses.ToImmutable(), finallyBlock: null);
             statements.Add(innerTry);
 
-            // Emit lifted catch handlers (for catch-with-await in try/catch/finally)
-            foreach (var (original, body) in liftedCatchHandlers)
+            // Emit lifted catch handlers (for catch-with-await in try/catch/finally).
+            // Each handler is guarded by its per-clause capture so it only runs
+            // when that specific typed catch actually fired.
+            foreach (var (original, body, captureLocal) in liftedCatchHandlers)
             {
                 var endLabel = MakeLabel("liftcatch_end");
-                var pendingExRef = new BoundVariableExpression(null, pendingExLocal);
+                var captureRef = new BoundVariableExpression(null, captureLocal);
                 var nullLit = new BoundLiteralExpression(null, null, TypeSymbol.Null);
                 var condition = new BoundBinaryExpression(
                     null,
-                    pendingExRef,
+                    captureRef,
                     BoundBinaryOperator.Bind(
                         CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        pendingExLocal.Type,
+                        captureLocal.Type,
                         TypeSymbol.Null),
                     nullLit);
 
@@ -334,7 +389,7 @@ public static class AsyncExceptionHandlerRewriter
                 var rebind = new BoundVariableDeclaration(
                     null,
                     original.Variable,
-                    new BoundVariableExpression(null, pendingExLocal));
+                    new BoundVariableExpression(null, captureLocal));
                 statements.Add(rebind);
 
                 if (body is BoundBlockStatement block)
