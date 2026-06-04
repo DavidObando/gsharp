@@ -19,6 +19,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering;
@@ -57,6 +58,14 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>();
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
     private readonly Dictionary<MethodInfo, MethodSpecificationHandle> methodSpecs = new Dictionary<MethodInfo, MethodSpecificationHandle>();
+
+    // Issue #420 (P3-7): cache for MethodSpec rows whose generic arguments include
+    // user-defined type symbols. The placeholder-closed MethodInfo is identical for
+    // all symbol arguments, so we must key by (MethodInfo, symbol arg list) with
+    // structural equality on the symbol array.
+    private readonly Dictionary<MethodSpecSymbolKey, MethodSpecificationHandle> methodSpecsWithSymbolArgs
+        = new Dictionary<MethodSpecSymbolKey, MethodSpecificationHandle>();
+
     private readonly Dictionary<ConstructorInfo, MemberReferenceHandle> ctorRefs = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
     private readonly Dictionary<FieldInfo, MemberReferenceHandle> fieldRefs = new Dictionary<FieldInfo, MemberReferenceHandle>();
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
@@ -8928,12 +8937,26 @@ internal sealed class ReflectionMetadataEmitter
 
         // The placeholder-closed MethodInfo is identical across distinct
         // user-type arguments (all close to <object>), so the cache must be keyed
-        // by the symbol arguments too. Only cache the plain (symbol-free) case.
+        // by the symbol arguments too. Issue #420 (P3-7): previously this case
+        // bypassed the cache entirely, producing duplicate MethodSpec rows when
+        // the same generic method was referenced multiple times with the same
+        // user-type generic args.
         var hasSymbolArgs = !typeArgSymbols.IsDefaultOrEmpty
             && typeArgSymbols.Any(s => s is StructSymbol or InterfaceSymbol or EnumSymbol);
-        if (!hasSymbolArgs && this.methodSpecs.TryGetValue(method, out var existing))
+        if (!hasSymbolArgs)
         {
-            return existing;
+            if (this.methodSpecs.TryGetValue(method, out var existing))
+            {
+                return existing;
+            }
+        }
+        else
+        {
+            var symbolKey = new MethodSpecSymbolKey(method, typeArgSymbols);
+            if (this.methodSpecsWithSymbolArgs.TryGetValue(symbolKey, out var existingSym))
+            {
+                return existingSym;
+            }
         }
 
         var openDef = method.GetGenericMethodDefinition();
@@ -8962,6 +8985,10 @@ internal sealed class ReflectionMetadataEmitter
         if (!hasSymbolArgs)
         {
             this.methodSpecs[method] = spec;
+        }
+        else
+        {
+            this.methodSpecsWithSymbolArgs[new MethodSpecSymbolKey(method, typeArgSymbols)] = spec;
         }
 
         return spec;
@@ -15134,6 +15161,58 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Ldnull);
                 this.il.StoreLocal(slot);
             }
+        }
+    }
+
+    // Issue #420 (P3-7): structural cache key for MethodSpec rows whose generic
+    // arguments include user-defined type symbols. Uses reference equality on the
+    // contained TypeSymbol entries (declared user types are interned per
+    // compilation), combined with structural equality on the array.
+    private readonly struct MethodSpecSymbolKey : IEquatable<MethodSpecSymbolKey>
+    {
+        private readonly MethodInfo method;
+        private readonly ImmutableArray<TypeSymbol> typeArgs;
+
+        public MethodSpecSymbolKey(MethodInfo method, ImmutableArray<TypeSymbol> typeArgs)
+        {
+            this.method = method;
+            this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
+        }
+
+        public bool Equals(MethodSpecSymbolKey other)
+        {
+            if (!ReferenceEquals(this.method, other.method))
+            {
+                return false;
+            }
+
+            if (this.typeArgs.Length != other.typeArgs.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < this.typeArgs.Length; i++)
+            {
+                if (!ReferenceEquals(this.typeArgs[i], other.typeArgs[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public override bool Equals(object obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = RuntimeHelpers.GetHashCode(this.method);
+            for (var i = 0; i < this.typeArgs.Length; i++)
+            {
+                hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
+            }
+
+            return hash;
         }
     }
 }
