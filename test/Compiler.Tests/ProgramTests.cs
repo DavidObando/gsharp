@@ -511,4 +511,53 @@ public class ProgramTests
         // so the closure handed to gsc is incomplete.
         return libPath;
     }
+
+    [Fact]
+    public void Main_WithRelativeOut_And_Debug_EmitsAbsolutePdbPathInCodeView()
+    {
+        // Regression for #421 (P2-8): a relative /out:<path> used to default
+        // the PDB sidecar to a relative path too, which then flowed into the
+        // CodeView debug directory entry verbatim. vsdbg/coreclr require an
+        // absolute PDB path to bind breakpoints — a relative one leaves the
+        // sidecar unresolvable from the debugger's working directory.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package RelOut\n\nfunc Main() {\n}\n");
+        var originalCwd = Directory.GetCurrentDirectory();
+        var tempCwd = Directory.CreateTempSubdirectory("gsc_relout_").FullName;
+        Directory.SetCurrentDirectory(tempCwd);
+        try
+        {
+            const string relativeOut = "RelOut.dll";
+            var exit = Program.Main(new[]
+            {
+                "/out:" + relativeOut,
+                "/target:library",
+                "/debug:portable",
+                sample,
+            });
+            Assert.Equal(0, exit);
+
+            var absoluteOut = Path.Combine(tempCwd, relativeOut);
+            var absolutePdb = Path.ChangeExtension(absoluteOut, ".pdb");
+            Assert.True(File.Exists(absoluteOut), "expected output assembly to exist");
+            Assert.True(File.Exists(absolutePdb), "expected sidecar PDB to exist");
+
+            using var peReader = new System.Reflection.PortableExecutable.PEReader(
+                new MemoryStream(File.ReadAllBytes(absoluteOut)));
+            var cv = peReader.ReadDebugDirectory()
+                .Single(e => e.Type == System.Reflection.PortableExecutable.DebugDirectoryEntryType.CodeView);
+            var data = peReader.ReadCodeViewDebugDirectoryData(cv);
+
+            Assert.True(
+                Path.IsPathRooted(data.Path),
+                $"expected absolute CodeView PDB path, got: {data.Path}");
+            Assert.EndsWith("RelOut.pdb", data.Path, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalCwd);
+            try { Directory.Delete(tempCwd, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
 }

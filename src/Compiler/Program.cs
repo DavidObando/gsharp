@@ -192,8 +192,16 @@ public class Program
             if (string.IsNullOrEmpty(pdbOutputPath))
             {
                 pdbOutputPath = Path.ChangeExtension(outputPath, ".pdb");
-                compilation.DebugInformation.PdbFilePath = pdbOutputPath;
             }
+
+            // Resolve to an absolute path so the CodeView entry recorded in
+            // the PE points at a rooted sidecar location. Debuggers (vsdbg/
+            // coreclr) require an absolute PDB path to bind breakpoints; a
+            // relative /out:<path> would otherwise leave the sidecar
+            // reference unresolvable from the debugger's working directory.
+            // Mirrors the source-path fix in commit 34002ff.
+            pdbOutputPath = Path.GetFullPath(pdbOutputPath);
+            compilation.DebugInformation.PdbFilePath = pdbOutputPath;
 
             var pdbDir = Path.GetDirectoryName(pdbOutputPath);
             if (!string.IsNullOrEmpty(pdbDir))
