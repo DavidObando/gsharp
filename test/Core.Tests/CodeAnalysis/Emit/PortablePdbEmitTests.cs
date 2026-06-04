@@ -784,6 +784,63 @@ func main() {
     }
 
     [Fact]
+    public void CodeView_PdbPath_Is_Absolute_For_Sidecar_When_PdbFilePath_Is_Relative()
+    {
+        // Regression for #421 (P2-8): a relative /pdb:<path> (or a relative
+        // /out:<path> that defaults the PDB beside it) used to flow into the
+        // CodeView entry verbatim, leaving vsdbg unable to locate the sidecar
+        // from its working directory. The emitter must root the path.
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions
+            {
+                Format = DebugInformationFormat.Portable,
+                PdbFilePath = Path.Combine("relative", "sub", "out.pdb"),
+            },
+        };
+        var result = compilation.Emit(peStream, pdbStream, null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
+        var cv = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.CodeView);
+        var data = peReader.ReadCodeViewDebugDirectoryData(cv);
+
+        Assert.True(Path.IsPathRooted(data.Path), $"expected rooted CodeView path, got: {data.Path}");
+        Assert.EndsWith("out.pdb", data.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CodeView_PdbPath_Is_Bare_Filename_For_Embedded_When_PdbFilePath_Has_Directory()
+    {
+        // For embedded format the CodeView path is conventionally just the
+        // bare ".pdb" file name (no directory) because the consumer reads the
+        // PDB blob out of the PE itself. A directory portion would be
+        // misleading and inconsistent with csc.
+        var peStream = new MemoryStream();
+        var pdbStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(SimpleProgram, "main.gs")))
+        {
+            DebugInformation = new DebugInformationOptions
+            {
+                Format = DebugInformationFormat.Embedded,
+                PdbFilePath = Path.Combine(Path.GetTempPath(), "some", "dir", "embedded.pdb"),
+            },
+        };
+        var result = compilation.Emit(peStream, pdbStream, null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        using var peReader = new PEReader(new MemoryStream(peStream.ToArray()));
+        var cv = peReader.ReadDebugDirectory()
+            .Single(e => e.Type == DebugDirectoryEntryType.CodeView);
+        var data = peReader.ReadCodeViewDebugDirectoryData(cv);
+
+        Assert.Equal("embedded.pdb", data.Path);
+    }
+
+    [Fact]
     public void CodeView_Pdb_ContentId_Matches_Sidecar_PdbId()
     {
         var (pe, pdbBytes) = EmitWith(new DebugInformationOptions { Format = DebugInformationFormat.Portable });

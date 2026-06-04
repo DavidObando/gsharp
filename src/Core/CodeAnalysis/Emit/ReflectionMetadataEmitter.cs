@@ -1460,11 +1460,22 @@ internal sealed class ReflectionMetadataEmitter
             // CodeView: identifies the PDB the runtime/debugger should fetch.
             // For embedded format the path is conventionally just the bare
             // pdb file name (no directory) because the consumer reads it out
-            // of the PE itself; for sidecar it can be a full path supplied
-            // via /pdb:<path>, else the bare ".pdb" suffix of the PE name.
-            var codeViewPath = !string.IsNullOrEmpty(this.debugInformation.PdbFilePath)
-                ? this.debugInformation.PdbFilePath
-                : (this.assemblyNameOverride ?? this.program.PackageName ?? "module") + ".pdb";
+            // of the PE itself; for sidecar it must be an absolute path so
+            // vsdbg/coreclr can locate the sidecar regardless of the
+            // debugger's working directory. A relative path here would leave
+            // breakpoints unbound. Mirrors the source-path fix in 34002ff.
+            string codeViewPath;
+            if (!string.IsNullOrEmpty(this.debugInformation.PdbFilePath))
+            {
+                codeViewPath = isEmbedded
+                    ? Path.GetFileName(this.debugInformation.PdbFilePath)
+                    : Path.GetFullPath(this.debugInformation.PdbFilePath);
+            }
+            else
+            {
+                codeViewPath = (this.assemblyNameOverride ?? this.program.PackageName ?? "module") + ".pdb";
+            }
+
             debugDirectory.AddCodeViewEntry(
                 pdbPath: codeViewPath,
                 pdbContentId: pdbContentId,
