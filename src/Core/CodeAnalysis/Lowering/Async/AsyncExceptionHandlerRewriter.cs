@@ -44,7 +44,10 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// try { body; }
 /// catch (Exception ex) { pendingException = ex; }
 /// finallyBody;   // await is now outside the finally region
-/// if (pendingException != null) { throw pendingException; }
+/// if (pendingException != null) {
+///     System.Runtime.ExceptionServices.ExceptionDispatchInfo
+///         .Capture(pendingException).Throw();   // preserve original stack trace (#418)
+/// }
 /// </code>
 ///
 /// <para><b>Deferred:</b> Pending-branch dispatch for <c>return</c>/<c>goto</c>/
@@ -441,8 +444,52 @@ public static class AsyncExceptionHandlerRewriter
                 nullLitFinal);
 
             statements.Add(new BoundConditionalGotoStatement(null, rethrowEndLabel, rethrowCondition, jumpIfTrue: true));
-            statements.Add(new BoundThrowStatement(null, new BoundVariableExpression(null, pendingExLocal)));
+
+            // Rethrow via ExceptionDispatchInfo.Capture(pendingException).Throw() so the
+            // original throw site (stack trace, watson bucketing) is preserved across the
+            // async lift. Using a bare `throw pendingException` would reset the stack
+            // trace and defeat production diagnostics (issue #418 P1-11).
+            statements.Add(BuildEdiCaptureThrow(new BoundVariableExpression(null, pendingExLocal), exceptionType));
             statements.Add(new BoundLabelStatement(null, rethrowEndLabel));
+        }
+
+        /// <summary>
+        /// Builds the lowered statement
+        /// <c>ExceptionDispatchInfo.Capture(<paramref name="exceptionExpr"/>).Throw();</c>.
+        /// Used by the async-rethrow path so that an exception captured into a
+        /// pending-exception local is re-raised with its original stack trace,
+        /// matching the semantics of an unrewritten <c>throw;</c> inside a CLR
+        /// finally handler.
+        /// </summary>
+        /// <param name="exceptionExpr">Expression producing the exception to rethrow.</param>
+        /// <param name="exceptionType">The bound <see cref="System.Exception"/> type symbol.</param>
+        /// <returns>A bound expression statement invoking <c>Capture(...).Throw()</c>.</returns>
+        private static BoundStatement BuildEdiCaptureThrow(BoundExpression exceptionExpr, TypeSymbol exceptionType)
+        {
+            var ediType = typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo);
+            var captureMethod = ediType.GetMethod(
+                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
+                new[] { typeof(Exception) });
+            var throwMethod = ediType.GetMethod(
+                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
+                Type.EmptyTypes);
+
+            var ediClass = new ImportedClassSymbol(ediType, declaration: null);
+            var captureFn = new ImportedFunctionSymbol(captureMethod.Name, ediClass, captureMethod, declaration: null);
+
+            var captureCall = new BoundImportedCallExpression(
+                null,
+                captureFn,
+                ImmutableArray.Create(exceptionExpr));
+
+            var throwCall = new BoundImportedInstanceCallExpression(
+                null,
+                captureCall,
+                throwMethod,
+                TypeSymbol.Void,
+                ImmutableArray<BoundExpression>.Empty);
+
+            return new BoundExpressionStatement(null, throwCall);
         }
 
         private static bool CatchesChanged(
