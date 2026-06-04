@@ -240,6 +240,163 @@ func main() {
 
         Assert.True(foundLine4, "Expected a visible sequence point on source line 4.");
     }
+
+    /// <summary>
+    /// Issue #421 P2-12: Visual Studio and Rider have been reported to bind F5
+    /// breakpoints flakily when the first sequence-point record of a method is
+    /// the hidden 0xfeefee marker. Every method that emits any visible
+    /// sequence point must therefore have a non-hidden first record.
+    /// </summary>
+    [Fact]
+    public void EveryMethod_FirstSequencePoint_IsNonHidden_WhenAnyVisible()
+    {
+        const string source = @"package main
+
+func add(a int32, b int32) int32 {
+    return a + b
+}
+
+func main() {
+    let x = 1
+    let y = 2
+    let z = add(x, y)
+}
+";
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source, "prog.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream, pdbStream, null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        foreach (var handle in reader.MethodDebugInformation)
+        {
+            var info = reader.GetMethodDebugInformation(handle);
+            if (info.SequencePointsBlob.IsNil)
+            {
+                continue;
+            }
+
+            System.Reflection.Metadata.SequencePoint? first = null;
+            var anyVisible = false;
+            foreach (var p in info.GetSequencePoints())
+            {
+                if (first is null)
+                {
+                    first = p;
+                }
+
+                if (!p.IsHidden)
+                {
+                    anyVisible = true;
+                }
+            }
+
+            if (anyVisible)
+            {
+                Assert.NotNull(first);
+                Assert.False(first.Value.IsHidden, "First sequence point of a method with visible points must not be hidden (issue #421 P2-12).");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #421 P2-12: Compiling an async function used to produce a
+    /// MoveNext sequence-points blob whose first record was the synthesised
+    /// hidden state-dispatch prologue. With <c>MethodDebugInformation.Document</c>
+    /// also nil (no point carries a usable document) the encoded blob was
+    /// outright invalid — Portable PDB readers mis-parsed the first record as
+    /// a document-record marker and threw <see cref="System.BadImageFormatException"/>
+    /// (&quot;Invalid handle&quot;). Verify the PDB is now iterable for every method
+    /// and any visible first record is non-hidden.
+    /// </summary>
+    [Fact]
+    public void AsyncMoveNext_PdbBlob_IsIterable_AndFirstVisibleIsNonHidden()
+    {
+        const string source = @"package main
+import System
+import System.Threading.Tasks
+
+async func compute() int32 {
+    let a = await Task.FromResult(10)
+    let b = await Task.FromResult(32)
+    return a + b
+}
+
+func main() {
+}
+";
+        using var peStream = new MemoryStream();
+        using var pdbStream = new MemoryStream();
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source, "async.gs")))
+        {
+            DebugInformation = new DebugInformationOptions { Format = DebugInformationFormat.Portable },
+        };
+        var result = compilation.Emit(peStream, pdbStream, null);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
+
+        pdbStream.Position = 0;
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+        var reader = provider.GetMetadataReader();
+
+        peStream.Position = 0;
+        using var peReader = new System.Reflection.PortableExecutable.PEReader(peStream);
+        var peMeta = peReader.GetMetadataReader();
+
+        var sawMoveNext = false;
+        foreach (var methodHandle in reader.MethodDebugInformation)
+        {
+            var row = MetadataTokens.GetRowNumber(methodHandle);
+            var methodDef = MetadataTokens.MethodDefinitionHandle(row);
+            var method = peMeta.GetMethodDefinition(methodDef);
+            var name = peMeta.GetString(method.Name);
+            if (name == "MoveNext")
+            {
+                sawMoveNext = true;
+            }
+
+            var info = reader.GetMethodDebugInformation(methodHandle);
+            if (info.SequencePointsBlob.IsNil)
+            {
+                continue;
+            }
+
+            System.Reflection.Metadata.SequencePoint? first = null;
+            var anyVisible = false;
+
+            // The mere act of iterating must not throw — readers used to fault
+            // on the all-hidden / nil-document blob the emitter previously
+            // produced for MoveNext.
+            foreach (var p in info.GetSequencePoints())
+            {
+                if (first is null)
+                {
+                    first = p;
+                }
+
+                if (!p.IsHidden)
+                {
+                    anyVisible = true;
+                }
+            }
+
+            if (anyVisible)
+            {
+                Assert.NotNull(first);
+                Assert.False(first.Value.IsHidden, $"First sequence point of '{name}' must not be hidden when any visible record is present (issue #421 P2-12).");
+            }
+        }
+
+        Assert.True(sawMoveNext, "Expected at least one MoveNext method in the emitted PE.");
+    }
 }
 
 public class PortablePdbPhase5Tests
