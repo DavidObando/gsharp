@@ -8,7 +8,6 @@ A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, 
 
 | Sample | Demonstrates | Blocker |
 | --- | --- | --- |
-| `Defer.gs` | Block-scoped `defer` and `using` cleanup convergence (Phase 7.1) | Deferred functions are not executed by the emit backend; only the `using` body output appears. |
 | `MethodsWithReceivers.gs` | Same-package receiver declarations bound as methods on user-defined structs (Phase 6.4) | The emitted assembly crashes with SIGSEGV (exit 139) at runtime. |
 
 ### Previously promoted samples
@@ -23,6 +22,7 @@ A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, 
 | `Exhaustiveness.gs` | This PR | Exhaustive enum switch expressions (no `default` needed) |
 | `ExpressionEval.gs` | This PR | Sealed-interface type-pattern switch expressions |
 | `NullableFlow.gs` | This PR | Nullable flow analysis with pattern switch and `if` guard |
+| `Defer.gs` | #408 | Block-scoped `defer` and `using` cleanup convergence (Phase 7.1) |
 
 ## When to add a sample here
 
