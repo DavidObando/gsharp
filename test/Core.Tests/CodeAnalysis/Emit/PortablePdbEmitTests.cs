@@ -558,6 +558,47 @@ func main() {
         Assert.Contains("B", names);
         Assert.Contains("C", names);
     }
+
+    /// <summary>
+    /// Issue #421 (P2-11): a <c>null</c> string constant must produce a
+    /// well-formed <c>LocalConstant</c> blob (<c>ELEMENT_TYPE_STRING</c>
+    /// followed by the <c>0xFF</c> sentinel per Portable PDB spec §II.23.2)
+    /// rather than being silently dropped. Drives the private
+    /// <c>EncodeLocalConstantSignature</c> encoder directly via reflection
+    /// because the source language has no surface syntax for a typed
+    /// <c>const</c> initialised to <c>nil</c>.
+    /// </summary>
+    [Fact]
+    public void Null_String_Constant_Is_Encoded_As_NullString_Sentinel()
+    {
+        var emitter = new PortablePdbEmitter(new DebugInformationOptions { Format = DebugInformationFormat.Portable });
+        var method = typeof(PortablePdbEmitter).GetMethod(
+            "EncodeLocalConstantSignature",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var nullHandle = (BlobHandle)method.Invoke(emitter, new object[] { null });
+
+        // The pre-fix code matched `case string str:` (which never matches
+        // null) and fell through to `default: return default`, producing a
+        // nil BlobHandle that the caller then dropped — so the LocalConstant
+        // row never reached the PDB. A non-nil handle here proves the
+        // regression is fixed.
+        Assert.False(nullHandle.IsNil, "null constant must produce a non-nil signature blob (regression: previously fell through to default and was dropped)");
+
+        // A sibling non-null string still produces its own distinct blob —
+        // confirms the null path didn't accidentally collapse onto the
+        // empty-string encoding.
+        var emptyHandle = (BlobHandle)method.Invoke(emitter, new object[] { string.Empty });
+        Assert.False(emptyHandle.IsNil);
+        Assert.NotEqual(nullHandle, emptyHandle);
+
+        // Equal blobs deduplicate through GetOrAddBlob, so two null encodings
+        // must round-trip to the same handle — i.e. the encoder is
+        // deterministic, not accidentally emitting per-call garbage.
+        var secondNullHandle = (BlobHandle)method.Invoke(emitter, new object[] { null });
+        Assert.Equal(nullHandle, secondNullHandle);
+    }
 }
 
 internal static class PortablePdbEmitterTestHelpers

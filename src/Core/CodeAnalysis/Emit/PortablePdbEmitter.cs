@@ -640,15 +640,20 @@ internal sealed class PortablePdbEmitter
                 break;
             case string str:
                 blob.WriteByte(0x0E); // ELEMENT_TYPE_STRING
-                if (str is null)
-                {
-                    blob.WriteByte(0xFF);
-                }
-                else
-                {
-                    blob.WriteBytes(Encoding.Unicode.GetBytes(str));
-                }
-
+                blob.WriteBytes(Encoding.Unicode.GetBytes(str));
+                break;
+            case null:
+                // Portable PDB spec §II.23.2: a null string constant is encoded
+                // as ELEMENT_TYPE_STRING followed by the single-byte sentinel
+                // 0xFF (a real empty string has zero trailing bytes; the 0xFF
+                // sentinel can never appear at the start of a valid UTF-16
+                // payload because it would imply a half code unit). Without a
+                // tracked declared type we treat any null constant as a null
+                // string reference — matching what debuggers expect for the
+                // common `const s = nil` case and avoiding the silent dropping
+                // of the LocalConstant row.
+                blob.WriteByte(0x0E); // ELEMENT_TYPE_STRING
+                blob.WriteByte(0xFF);
                 break;
             default:
                 return default;
