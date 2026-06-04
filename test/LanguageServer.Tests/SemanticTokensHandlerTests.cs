@@ -220,6 +220,52 @@ public class SemanticTokensHandlerTests
         Assert.Equal(TokenTypeIndex("Variable"), aRef.Value.TokenType);
     }
 
+    [Fact]
+    public void Tokenize_InterpolatedStringInClassMethodWithSharedBlock_ClassifiesHole()
+    {
+        // Regression: a class declaration that includes a `shared { … }` block previously caused
+        // SyntaxNode.Span (reflection-based first/last child) to truncate the struct's span to the
+        // end of the shared block's closing brace, because SharedBlock was enumerated last by
+        // reflection (it is declared as `{ get; set; }` after CloseBraceToken). That truncation
+        // hid descendants of the struct from position-based traversals, including the language
+        // server's interpolated-string hole detection — collapsing the whole literal into a
+        // single String token with no hole highlighting.
+        const string source =
+            "type Person class {\n" +
+            "    shared {\n" +
+            "        prop CallCount int32\n" +
+            "    }\n" +
+            "    public prop Name string\n" +
+            "    public prop Age int32\n" +
+            "    func ToString() string {\n" +
+            "        return \"Name: ${Name}, Age: ${this.Age}\"\n" +
+            "    }\n" +
+            "}\n";
+
+        var content = LanguageServerTestHelpers.Content(source);
+        var tokens = GetTokens(content);
+
+        // Line 7 holds: `        return "Name: ${Name}, Age: ${this.Age}"`.
+        // "Name" hole identifier sits at column 24, length 4.
+        var nameHole = FindToken(tokens, 7, 24, 4);
+        Assert.NotNull(nameHole);
+        Assert.Equal(TokenTypeIndex("Property"), nameHole.Value.TokenType);
+
+        // String filler must exist between the two holes; it must NOT cover the hole identifier
+        // region. The text `}, Age: ${` sits at columns 28..37 (length 10).
+        var middleFiller = FindToken(tokens, 7, 28, 10);
+        Assert.NotNull(middleFiller);
+        Assert.Equal(TokenTypeIndex("String"), middleFiller.Value.TokenType);
+
+        // No single String token may cover the entire literal — that is the bug signature.
+        var stringIndex = TokenTypeIndex("String");
+        var literalStart = 15; // column of the opening quote on line 7
+        Assert.DoesNotContain(
+            tokens,
+            t => t.Line == 7 && t.TokenType == stringIndex && t.Character == literalStart && t.Length > 10);
+    }
+
+
     private static int TokenTypeIndex(string name)
     {
         for (var i = 0; i < SemanticTokensHandler.TokenTypes.Length; i++)
