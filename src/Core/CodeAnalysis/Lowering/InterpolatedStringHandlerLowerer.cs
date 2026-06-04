@@ -253,6 +253,31 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
     }
 
     /// <summary>
+    /// Issue #418 (P1-9): for user handlers that require a per-append gate
+    /// (<c>out bool shouldAppend</c> or bool-returning append methods), each
+    /// hole expression must be evaluated lazily inside the gated block. This
+    /// helper recursively lowers each hole value <em>without</em> pre-spilling
+    /// to leading temps; awaiting holes are spilled into temps inside the gated
+    /// block by <see cref="MakeAppendStatement"/>.
+    /// </summary>
+    private ImmutableArray<BoundInterpolatedStringPart> LowerHoleValuesInPlace(BoundInterpolatedStringExpression node)
+    {
+        var lowered = ImmutableArray.CreateBuilder<BoundInterpolatedStringPart>(node.Parts.Length);
+        foreach (var part in node.Parts)
+        {
+            if (part.IsLiteral)
+            {
+                lowered.Add(part);
+                continue;
+            }
+
+            lowered.Add(part.WithValue(this.RewriteExpression(part.Value)));
+        }
+
+        return lowered.ToImmutable();
+    }
+
+    /// <summary>
     /// Issue #368: lowers an interpolated string targeting a user-defined
     /// <c>[InterpolatedStringHandler]</c> parameter. Constructs the handler with
     /// <c>(literalLength, formattedCount, ...forwarded args [, out bool shouldAppend])</c>,
@@ -268,10 +293,34 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
         var handlerLocal = new LocalVariableSymbol($"<>interp{this.counter++}", isReadOnly: false, handlerSymbol);
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
-        // Issue #368: pre-evaluate any await-containing hole values into leading
-        // temporaries before the handler is constructed (see PrepareParts).
-        var (parts, leading) = this.PrepareParts(node);
-        statements.AddRange(leading);
+        var appendLiteral = FindAppendLiteral(handlerClrType);
+
+        // Issue #418 (P1-9): when the handler ctor produces an `out bool shouldAppend`
+        // or some append method returns `bool`, every per-append call (including
+        // evaluation of the hole expression) must be gated behind that running
+        // condition. The spec requires lazy evaluation of holes — setting
+        // shouldAppend = false in the ctor must skip both the AppendFormatted call
+        // and the side effects of the hole expression itself (e.g. an `await`).
+        var appendsReturnBool = AppendsReturnBool(handlerClrType, appendLiteral);
+        var needsGate = info.HasTrailingOutBool || appendsReturnBool;
+
+        // When gating is needed we cannot pre-spill holes into leading temps
+        // because that evaluates them before the ctor decides shouldAppend.
+        // Instead, recursively lower the hole values in place and defer any
+        // await-spill into the gated block (see MakeAppendStatement). Without
+        // gating, the existing PrepareParts pre-spill preserves ref-struct
+        // safety across awaits.
+        ImmutableArray<BoundInterpolatedStringPart> parts;
+        if (needsGate)
+        {
+            parts = this.LowerHoleValuesInPlace(node);
+        }
+        else
+        {
+            ImmutableArray<BoundStatement> leading;
+            (parts, leading) = this.PrepareParts(node);
+            statements.AddRange(leading);
+        }
 
         // Build the constructor argument list: (literalLength, formattedCount,
         // ...forwarded args [, &shouldAppend]).
@@ -310,14 +359,6 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             ctorRefKinds);
         statements.Add(new BoundVariableDeclaration(node.Syntax, handlerLocal, construct));
 
-        var appendLiteral = FindAppendLiteral(handlerClrType);
-
-        // Determine whether append calls must be gated by a running condition:
-        // either the constructor produced an `out bool shouldAppend`, or some
-        // append method returns `bool` (the short-circuit handler shape).
-        var appendsReturnBool = AppendsReturnBool(handlerClrType, appendLiteral);
-        var needsGate = info.HasTrailingOutBool || appendsReturnBool;
-
         LocalVariableSymbol continueLocal = null;
         if (needsGate)
         {
@@ -348,6 +389,19 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             else
             {
                 var value = part.Value;
+
+                // Issue #418: when gating, an await inside the hole must not run
+                // before the gate is checked. Defer the spill into the gated block
+                // so the temp is initialized only when the gate allows the append.
+                ImmutableArray<BoundStatement> holeLeading = ImmutableArray<BoundStatement>.Empty;
+                if (needsGate && Async.AsyncBoundTreeQueries.HasAwait(value))
+                {
+                    var holeTmp = new LocalVariableSymbol($"<>hole{this.counter++}", isReadOnly: false, value.Type);
+                    holeLeading = ImmutableArray.Create<BoundStatement>(
+                        new BoundVariableDeclaration(null, holeTmp, value));
+                    value = new BoundVariableExpression(null, holeTmp);
+                }
+
                 var (method, typeArguments) = this.ResolveUserAppendFormatted(handlerClrType, part, value.Type);
 
                 var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
@@ -370,6 +424,9 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
                     arguments.ToImmutable(),
                     argumentRefKinds: default,
                     typeArgumentSymbols: typeArguments);
+
+                statements.Add(this.MakeAppendStatement(node.Syntax, appendCall, continueLocal, holeLeading));
+                continue;
             }
 
             statements.Add(this.MakeAppendStatement(node.Syntax, appendCall, continueLocal));
@@ -384,14 +441,33 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
     /// condition (<paramref name="continueLocal"/>) is still <c>true</c>. When
     /// the append returns <c>bool</c> its result updates the condition. When no
     /// gating is required the call is emitted unconditionally.
+    /// <para>
+    /// Issue #418 (P1-9): any <paramref name="holeLeading"/> statements
+    /// (hole-evaluation spills produced for awaiting holes when gating is in
+    /// effect) are emitted <em>inside</em> the gated block so the hole
+    /// expression is evaluated only when the gate allows the append.
+    /// </para>
     /// </summary>
-    private BoundStatement MakeAppendStatement(SyntaxNode syntax, BoundExpression appendCall, LocalVariableSymbol continueLocal)
+    private BoundStatement MakeAppendStatement(
+        SyntaxNode syntax,
+        BoundExpression appendCall,
+        LocalVariableSymbol continueLocal,
+        ImmutableArray<BoundStatement> holeLeading = default)
     {
         var returnsBool = appendCall.Type?.ClrType == typeof(bool);
+        var leading = holeLeading.IsDefault ? ImmutableArray<BoundStatement>.Empty : holeLeading;
 
         if (continueLocal == null)
         {
-            return new BoundExpressionStatement(syntax, appendCall);
+            if (leading.IsEmpty)
+            {
+                return new BoundExpressionStatement(syntax, appendCall);
+            }
+
+            var unguarded = ImmutableArray.CreateBuilder<BoundStatement>(leading.Length + 1);
+            unguarded.AddRange(leading);
+            unguarded.Add(new BoundExpressionStatement(syntax, appendCall));
+            return new BoundBlockStatement(syntax, unguarded.ToImmutable());
         }
 
         BoundStatement inner = returnsBool
@@ -403,6 +479,7 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
         // BoundIfStatement introduced here would never be lowered for emit:
         //
         //   gotoFalse <>cont end
+        //   [hole-leading spills (issue #418)]
         //   <append (maybe assigns <>cont)>
         //   end:
         var endLabel = new BoundLabel($"<>appendEnd{this.counter++}");
@@ -412,9 +489,13 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             new BoundVariableExpression(null, continueLocal),
             jumpIfTrue: false);
         var endLabelStatement = new BoundLabelStatement(null, endLabel);
-        return new BoundBlockStatement(
-            syntax,
-            ImmutableArray.Create<BoundStatement>(gotoFalse, inner, endLabelStatement));
+
+        var block = ImmutableArray.CreateBuilder<BoundStatement>(2 + leading.Length + 1);
+        block.Add(gotoFalse);
+        block.AddRange(leading);
+        block.Add(inner);
+        block.Add(endLabelStatement);
+        return new BoundBlockStatement(syntax, block.ToImmutable());
     }
 
     private (MethodInfo Method, ImmutableArray<TypeSymbol> TypeArguments) ResolveUserAppendFormatted(
