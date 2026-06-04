@@ -162,6 +162,74 @@ Console.WriteLine(msg)
         Assert.DoesNotContain("[str:", output);
     }
 
+    /// <summary>
+    /// Issue #418 (P1-9): when the handler ctor sets <c>shouldAppend = false</c>,
+    /// hole expressions must NOT be evaluated. Prior to the fix the lowering
+    /// pre-spilled every hole containing an <c>await</c> into a temp before
+    /// the ctor ran, so the awaiting side effect (here, incrementing
+    /// <c>HoleEvaluations</c>) fired even when the gate disabled appends.
+    /// </summary>
+    [Fact]
+    public void OutBool_Gated_Handler_Disabled_Does_Not_Evaluate_Awaiting_Holes()
+    {
+        const string Source = @"package HandlerGatedOffNoEval
+import System.Threading.Tasks
+import GSharp.Core.Tests.Fixtures
+
+InterpolationHarness.ResetHoleEvaluations()
+
+async func runDisabled() string {
+    return InterpolationHarness.Gated(false, ""y=${await InterpolationHarness.BumpAndReturnAsync(9)}"")
+}
+
+var t = runDisabled()
+t.Wait()
+";
+        var evaluations = CompileAndReadHoleEvaluations(Source, "HandlerGatedOffNoEvalTest");
+        Assert.Equal(0, evaluations);
+    }
+
+    /// <summary>
+    /// Issue #418 (P1-9) sanity check: when the gate is enabled, awaiting holes
+    /// must still be evaluated exactly once per append.
+    /// </summary>
+    [Fact]
+    public void OutBool_Gated_Handler_Enabled_Evaluates_Awaiting_Holes_Once()
+    {
+        const string Source = @"package HandlerGatedOnEvalOnce
+import System.Threading.Tasks
+import GSharp.Core.Tests.Fixtures
+
+InterpolationHarness.ResetHoleEvaluations()
+
+async func runEnabled() string {
+    return InterpolationHarness.Gated(true, ""a=${await InterpolationHarness.BumpAndReturnAsync(1)} b=${await InterpolationHarness.BumpAndReturnAsync(2)}"")
+}
+
+var t = runEnabled()
+t.Wait()
+";
+        var evaluations = CompileAndReadHoleEvaluations(Source, "HandlerGatedOnEvalOnceTest");
+        Assert.Equal(2, evaluations);
+    }
+
+    /// <summary>
+    /// Issue #418 (P1-9): non-await holes already evaluated lazily inside the
+    /// gated block; verify that behavior remains correct after the refactor.
+    /// </summary>
+    [Fact]
+    public void OutBool_Gated_Handler_Disabled_Does_Not_Evaluate_Plain_Holes()
+    {
+        const string Source = @"package HandlerGatedOffPlainNoEval
+import GSharp.Core.Tests.Fixtures
+
+InterpolationHarness.ResetHoleEvaluations()
+let msg = InterpolationHarness.Gated(false, ""y=${InterpolationHarness.BumpAndReturn(9)}"")
+";
+        var evaluations = CompileAndReadHoleEvaluations(Source, "HandlerGatedOffPlainNoEvalTest");
+        Assert.Equal(0, evaluations);
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, object? Value) EvaluateNamed(string source, string variableName)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -213,5 +281,19 @@ Console.WriteLine(msg)
         {
             loadContext.Unload();
         }
+    }
+
+    /// <summary>
+    /// Issue #418 (P1-9): compiles and runs the G# source, then reads the
+    /// host-process value of <see cref="GSharp.Core.Tests.Fixtures.InterpolationHarness.HoleEvaluations"/>
+    /// to assert how many hole expressions actually executed. The collectible
+    /// ALC resolves the fixture assembly through the default ALC, so the
+    /// counter is shared between the generated assembly and the host test.
+    /// </summary>
+    private static int CompileAndReadHoleEvaluations(string source, string contextName)
+    {
+        GSharp.Core.Tests.Fixtures.InterpolationHarness.ResetHoleEvaluations();
+        CompileAndRun(source, contextName);
+        return GSharp.Core.Tests.Fixtures.InterpolationHarness.HoleEvaluations;
     }
 }

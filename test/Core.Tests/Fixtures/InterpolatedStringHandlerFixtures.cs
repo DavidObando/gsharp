@@ -97,6 +97,28 @@ public sealed class InterpolationLog
 /// <summary>Static consuming APIs for the issue #368 handler fixtures.</summary>
 public static class InterpolationHarness
 {
+    /// <summary>
+    /// Issue #418 (P1-9): observes side effects of interpolated-string hole
+    /// expressions. Tests increment this counter inside a hole and then verify
+    /// it stays at zero when the handler gate (shouldAppend = false) skips
+    /// the appends — proving holes are evaluated lazily, after the ctor.
+    /// </summary>
+    public static int HoleEvaluations;
+
+    public static int BumpAndReturn(int value)
+    {
+        System.Threading.Interlocked.Increment(ref HoleEvaluations);
+        return value;
+    }
+
+    public static System.Threading.Tasks.Task<int> BumpAndReturnAsync(int value)
+    {
+        System.Threading.Interlocked.Increment(ref HoleEvaluations);
+        return System.Threading.Tasks.Task.FromResult(value);
+    }
+
+    public static void ResetHoleEvaluations() => HoleEvaluations = 0;
+
     public static string Format(string prefix, [InterpolatedStringHandlerArgument("prefix")] PrefixedInterpolatedStringHandler handler)
         => handler.ToString();
 
