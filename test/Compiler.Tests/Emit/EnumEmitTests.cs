@@ -153,6 +153,99 @@ public class EnumEmitTests
         Assert.Equal(color, pick.ReturnType);
     }
 
+    [Fact]
+    public void Enum_Literal_Field_Type_Is_Enum_TypeDef_With_Preceding_Structs()
+    {
+        // Issue #420 (P3-8): the literal field signatures must reference the
+        // enum's own TypeDef. Previously this handle was computed
+        // speculatively from GetRowCount(TypeDef)+1 before the row was
+        // added; this test exercises the case where multiple structs (with
+        // their own field rows) are emitted before the enum so a row-count
+        // off-by-one would surface as a wrong literal field type.
+        var source = """
+            package P
+            import System
+
+            type S1 data struct {
+                A int32
+                B int32
+            }
+            type S2 data struct {
+                X int32
+                Y int32
+                Z int32
+            }
+            type S3 data struct {
+                N int32
+            }
+
+            type Color enum { Red, Green, Blue }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var color = assembly.GetTypes().Single(t => t.Name == "Color");
+
+        // value__ is int32; literal members must be typed as Color itself.
+        var literalFields = color.GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral)
+            .ToArray();
+        Assert.Equal(3, literalFields.Length);
+        foreach (var lit in literalFields)
+        {
+            Assert.Equal(color, lit.FieldType);
+        }
+
+        // Reading the values via reflection must work (CLR validates the
+        // literal field signature points at the enum's actual TypeDef).
+        var red = Enum.Parse(color, "Red");
+        var green = Enum.Parse(color, "Green");
+        var blue = Enum.Parse(color, "Blue");
+        Assert.Equal(0, Convert.ToInt32(red));
+        Assert.Equal(1, Convert.ToInt32(green));
+        Assert.Equal(2, Convert.ToInt32(blue));
+    }
+
+    [Fact]
+    public void Multiple_Enums_Each_Use_Their_Own_TypeDef_For_Literals()
+    {
+        // If TypeDef handles were computed speculatively and the emit order
+        // changed, two adjacent enums could end up with their literal fields
+        // typed against the wrong sibling enum. Verify each enum's literals
+        // resolve to that enum's own TypeDef.
+        var source = """
+            package P
+            import System
+
+            type A enum { A0, A1 }
+            type B enum { B0, B1, B2 }
+            type C enum { C0 }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var a = assembly.GetTypes().Single(t => t.Name == "A");
+        var b = assembly.GetTypes().Single(t => t.Name == "B");
+        var c = assembly.GetTypes().Single(t => t.Name == "C");
+
+        foreach (var lit in a.GetFields(BindingFlags.Public | BindingFlags.Static).Where(f => f.IsLiteral))
+        {
+            Assert.Equal(a, lit.FieldType);
+        }
+
+        foreach (var lit in b.GetFields(BindingFlags.Public | BindingFlags.Static).Where(f => f.IsLiteral))
+        {
+            Assert.Equal(b, lit.FieldType);
+        }
+
+        foreach (var lit in c.GetFields(BindingFlags.Public | BindingFlags.Static).Where(f => f.IsLiteral))
+        {
+            Assert.Equal(c, lit.FieldType);
+        }
+
+        Assert.Equal(new[] { "A0", "A1" }, Enum.GetNames(a));
+        Assert.Equal(new[] { "B0", "B1", "B2" }, Enum.GetNames(b));
+        Assert.Equal(new[] { "C0" }, Enum.GetNames(c));
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_enum_emit_").FullName;
