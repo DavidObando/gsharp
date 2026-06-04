@@ -583,7 +583,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConversionExpression(null, node.Type, expression);
+        return new BoundConversionExpression(null, node.Type, expression, node.IsChecked);
     }
 
     /// <summary>Rewrites a bound await expression (Phase 5.1).</summary>
