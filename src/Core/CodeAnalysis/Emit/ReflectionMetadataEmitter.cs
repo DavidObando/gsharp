@@ -13825,6 +13825,21 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.EmitExpression(methodGroup.Receiver);
 
+                // Issue #420 (P3-1): the delegate ctor signature is
+                // `(object target, IntPtr ptr)` and `ldvirtftn` requires an
+                // object reference on the stack. The binder currently rejects
+                // method-group conversions whose receiver is a value type, but
+                // if that gate ever loosens (or a future codepath constructs
+                // a `BoundClrMethodGroupExpression` with a struct receiver),
+                // emitting the raw value would produce unverifiable IL that
+                // silently corrupts the stack. Defensively box value-type
+                // receivers so the emitted sequence stays verifiable.
+                if (IsValueTypeSymbol(methodGroup.Receiver.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
+                }
+
                 if (method.IsVirtual && !method.IsFinal)
                 {
                     this.il.OpCode(ILOpCode.Dup);
