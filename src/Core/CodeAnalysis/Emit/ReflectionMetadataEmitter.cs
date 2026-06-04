@@ -13156,6 +13156,26 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Issue #420 (P3-4): the non-static paths below emit the receiver
+            // twice — once for the `stfld`, and once again after the store to
+            // reload the field for the expression result. This is only safe
+            // when evaluating `fas.Value` cannot mutate `fas.Receiver`. For
+            // class receivers a re-assignment of the receiver variable in the
+            // value expression would make the post-store reload observe the
+            // mutated reference and read the field off the wrong object; for
+            // struct receivers the address would still be stable, but a
+            // self-write inside `fas.Value` would race with `stfld`. Today the
+            // binder (Binder.BindFieldAssignmentExpression) does not produce
+            // such shapes: nested `BoundAssignmentExpression` writing back to
+            // the same receiver variable is not a pattern the front end emits
+            // for field-assignment values. The assertion below makes that
+            // invariant explicit so any future binder change that introduces
+            // self-mutating value expressions trips loudly in Debug instead of
+            // silently miscompiling.
+            Debug.Assert(
+                !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
+                $"EmitFieldAssignment: value expression for field '{fas.Field.Name}' must not reassign the receiver variable '{fas.Receiver.Name}'.");
+
             // Class field assignment: load the reference, evaluate the value,
             // stfld through the reference. Re-load the receiver + ldfld to
             // leave the new value on the stack as the expression result.
@@ -13222,6 +13242,46 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
+        }
+
+        // Issue #420 (P3-4): debug-only check used by EmitFieldAssignment to
+        // assert the binder never feeds a value expression that reassigns the
+        // field-assignment receiver variable. Looks for any
+        // BoundAssignmentExpression whose target is the same VariableSymbol as
+        // the receiver. Conservative — false positives are fine because this
+        // is a debug-only assertion guarding a code-gen invariant.
+        private static bool ValueExpressionMutatesReceiver(BoundExpression value, VariableSymbol receiver)
+        {
+            if (value == null || receiver == null)
+            {
+                return false;
+            }
+
+            var detector = new ReceiverMutationDetector(receiver);
+            detector.Visit(value);
+            return detector.Found;
+        }
+
+        private sealed class ReceiverMutationDetector : BoundTreeWalker
+        {
+            private readonly VariableSymbol receiver;
+
+            public ReceiverMutationDetector(VariableSymbol receiver)
+            {
+                this.receiver = receiver;
+            }
+
+            public bool Found { get; private set; }
+
+            protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+            {
+                if (ReferenceEquals(node.Variable, this.receiver))
+                {
+                    this.Found = true;
+                }
+
+                base.VisitAssignmentExpression(node);
+            }
         }
 
         // ADR-0051 Phase 6: emit IL for BoundPropertyAccessExpression (computed properties).
