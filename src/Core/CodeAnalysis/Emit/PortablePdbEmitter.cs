@@ -146,7 +146,7 @@ internal sealed class PortablePdbEmitter
         if (this.options.EmbedAllSources && sourceBytes.Length > 0)
         {
             var embedBlob = new BlobBuilder();
-            embedBlob.WriteInt32(0);
+            embedBlob.WriteUInt32(0);
             embedBlob.WriteBytes(sourceBytes);
             this.pdbMetadata.AddCustomDebugInformation(
                 parent: handle,

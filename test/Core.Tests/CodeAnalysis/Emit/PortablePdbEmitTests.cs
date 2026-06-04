@@ -812,6 +812,41 @@ func main() {
     }
 
     [Fact]
+    public void EmbeddedSource_FormatMarker_Is_Unsigned_Zero_Bytes()
+    {
+        // Per ECMA Portable PDB spec § "EmbeddedSource", the format marker is
+        // an unsigned 4-byte little-endian integer prefix where 0 means the
+        // payload is the raw, uncompressed source. Regression guard for #420
+        // (P3-12): ensure the emitter writes the marker via WriteUInt32 so the
+        // four leading bytes are exactly 0x00,0x00,0x00,0x00 and the value
+        // round-trips as an unsigned integer.
+        var (_, pdb) = EmitWith(new DebugInformationOptions
+        {
+            Format = DebugInformationFormat.Portable,
+            EmbedAllSources = true,
+        });
+
+        var rows = FindCdi(pdb, PortablePdbEmitterTestHelpers.EmbeddedSourceKind);
+        Assert.NotEmpty(rows);
+
+        foreach (var (_, value) in rows)
+        {
+            var blob = pdb.GetBlobBytes(value);
+            Assert.True(blob.Length >= 4);
+            Assert.Equal(0x00, blob[0]);
+            Assert.Equal(0x00, blob[1]);
+            Assert.Equal(0x00, blob[2]);
+            Assert.Equal(0x00, blob[3]);
+
+            var unsignedMarker = (uint)blob[0]
+                | ((uint)blob[1] << 8)
+                | ((uint)blob[2] << 16)
+                | ((uint)blob[3] << 24);
+            Assert.Equal(0u, unsignedMarker);
+        }
+    }
+
+    [Fact]
     public void EmbeddedSource_Parent_Is_A_Document_Row()
     {
         var (_, pdb) = EmitWith(new DebugInformationOptions
