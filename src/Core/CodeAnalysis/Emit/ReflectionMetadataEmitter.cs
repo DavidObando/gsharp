@@ -4772,6 +4772,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -4791,6 +4792,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -4825,6 +4827,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
             emitter.EmitBlock(body);
@@ -5046,6 +5049,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5075,6 +5079,7 @@ internal sealed class ReflectionMetadataEmitter
                     channelOpSlots,
                     scopeFrameSlots,
                     selectStatementSlots,
+                    receiverSpillSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5114,6 +5119,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5214,6 +5220,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
             var constValues = new Dictionary<VariableSymbol, object>();
 
@@ -5243,6 +5250,7 @@ internal sealed class ReflectionMetadataEmitter
                     channelOpSlots,
                     scopeFrameSlots,
                     selectStatementSlots,
+                    receiverSpillSlots,
                     goEnclosingScopes,
                     il);
             }
@@ -5264,6 +5272,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5306,6 +5315,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues);
 
@@ -5623,6 +5633,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -5645,6 +5656,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -5683,6 +5695,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
@@ -6129,6 +6142,7 @@ internal sealed class ReflectionMetadataEmitter
             var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
             var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
             var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
@@ -6151,6 +6165,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 il);
 
@@ -6224,6 +6239,7 @@ internal sealed class ReflectionMetadataEmitter
                 channelOpSlots,
                 scopeFrameSlots,
                 selectStatementSlots,
+                receiverSpillSlots,
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: structThis,
@@ -6434,6 +6450,7 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
         Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+        Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         InstructionEncoder il)
     {
@@ -6524,6 +6541,18 @@ internal sealed class ReflectionMetadataEmitter
             var slot = localTypes.Count;
             localTypes.Add(def.Type);
             defaultExpressionSlots[def] = slot;
+        }
+
+        foreach (var receiver in this.CollectReceiverSpills(body, function, locals))
+        {
+            if (receiverSpillSlots.ContainsKey(receiver))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(receiver.Type);
+            receiverSpillSlots[receiver] = slot;
         }
     }
 
@@ -8326,6 +8355,102 @@ internal sealed class ReflectionMetadataEmitter
         return sink;
     }
 
+    private IEnumerable<BoundExpression> CollectReceiverSpills(
+        BoundNode root,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        var sink = new List<BoundExpression>();
+        new ReceiverSpillCollector(this, function, locals, sink).RewriteStatement((BoundStatement)root);
+        return sink;
+    }
+
+    private bool NeedsRvalueReceiverSpill(
+        BoundExpression receiver,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (!IsValueTypeSymbol(receiver.Type))
+        {
+            return false;
+        }
+
+        if (receiver is BoundVariableExpression bve
+            && this.CanLoadVariableAddressForReceiverSpill(bve.Variable, function, locals))
+        {
+            return false;
+        }
+
+        if (receiver is BoundFieldAccessExpression fa
+            && this.structFieldDefs.ContainsKey(fa.Field)
+            && this.IsAddressableFieldAccessForReceiverSpill(fa, function, locals))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool CanLoadVariableAddressForReceiverSpill(
+        VariableSymbol variable,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (variable is ParameterSymbol ps
+            && function != null
+            && function.Parameters.Any(p => ReferenceEquals(p, ps)))
+        {
+            return true;
+        }
+
+        if (locals.ContainsKey(variable))
+        {
+            return true;
+        }
+
+        if (variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsAddressableFieldAccessForReceiverSpill(
+        BoundFieldAccessExpression fa,
+        FunctionSymbol function,
+        IReadOnlyDictionary<VariableSymbol, int> locals)
+    {
+        if (fa.Receiver == null)
+        {
+            return true;
+        }
+
+        if (fa.Receiver.Type is StructSymbol rs && rs.IsClass)
+        {
+            return true;
+        }
+
+        if (fa.Receiver.Type?.ClrType != null && !fa.Receiver.Type.ClrType.IsValueType)
+        {
+            return true;
+        }
+
+        if (fa.Receiver is BoundVariableExpression bv
+            && this.CanLoadVariableAddressForReceiverSpill(bv.Variable, function, locals))
+        {
+            return true;
+        }
+
+        if (fa.Receiver is BoundFieldAccessExpression nested
+            && this.structFieldDefs.ContainsKey(nested.Field))
+        {
+            return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals);
+        }
+
+        return false;
+    }
+
     private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
     {
         switch (node)
@@ -10030,6 +10155,108 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    private sealed class ReceiverSpillCollector : BoundTreeRewriter
+    {
+        private readonly ReflectionMetadataEmitter outer;
+        private readonly FunctionSymbol function;
+        private readonly IReadOnlyDictionary<VariableSymbol, int> locals;
+        private readonly List<BoundExpression> sink;
+
+        public ReceiverSpillCollector(
+            ReflectionMetadataEmitter outer,
+            FunctionSymbol function,
+            IReadOnlyDictionary<VariableSymbol, int> locals,
+            List<BoundExpression> sink)
+        {
+            this.outer = outer;
+            this.function = function;
+            this.locals = locals;
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteImportedInstanceCallExpression(node);
+        }
+
+        protected override BoundExpression RewriteUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteUserInstanceCallExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrPropertyAccessExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrPropertyAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrEventSubscriptionExpression(node);
+        }
+
+        protected override BoundExpression RewriteEventSubscriptionExpression(BoundEventSubscriptionExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteEventSubscriptionExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrIndexExpression(BoundClrIndexExpression node)
+        {
+            this.AddIfNeeded(node.Target);
+            return base.RewriteClrIndexExpression(node);
+        }
+
+        protected override BoundExpression RewriteTupleElementAccessExpression(BoundTupleElementAccessExpression node)
+        {
+            this.AddIfNeeded(node.Receiver);
+            return base.RewriteTupleElementAccessExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewriteClrMethodGroupExpression(node);
+        }
+
+        private void AddIfNeeded(BoundExpression receiver)
+        {
+            if (this.outer.NeedsRvalueReceiverSpill(receiver, this.function, this.locals))
+            {
+                this.sink.Add(receiver);
+            }
+        }
+    }
+
     private sealed class MapIndexReadCollector : BoundTreeRewriter
     {
         private readonly List<BoundIndexExpression> sink;
@@ -10109,6 +10336,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
         private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
+        private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
         private readonly ParameterSymbol structThisParameter;
         private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
@@ -10146,6 +10374,7 @@ internal sealed class ReflectionMetadataEmitter
             Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+            Dictionary<BoundExpression, int> receiverSpillSlots,
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
             ParameterSymbol structThisParameter = null,
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
@@ -10168,6 +10397,7 @@ internal sealed class ReflectionMetadataEmitter
             this.channelOpSlots = channelOpSlots;
             this.scopeFrameSlots = scopeFrameSlots;
             this.selectStatementSlots = selectStatementSlots;
+            this.receiverSpillSlots = receiverSpillSlots;
             this.goEnclosingScopes = goEnclosingScopes;
             this.structThisParameter = structThisParameter;
             this.asyncFieldMap = asyncFieldMap;
@@ -10454,7 +10684,7 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                 {
-                    var receiverIsValueType = instCall.Receiver.Type?.ClrType?.IsValueType == true;
+                    var receiverIsValueType = IsValueTypeSymbol(instCall.Receiver.Type);
 
                     // A value-type receiver invoking a method it inherits from a
                     // reference base type (System.Object/ValueType/Enum) — e.g.
@@ -10482,29 +10712,6 @@ internal sealed class ReflectionMetadataEmitter
                         this.EmitExpression(instCall.Receiver);
                         this.il.OpCode(ILOpCode.Box);
                         this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
-                    }
-                    else if (useCall)
-                    {
-                        // The value-type instance method needs a managed pointer
-                        // as `this`. An addressable receiver (local/parameter)
-                        // yields its address directly; a computed rvalue (e.g.
-                        // `(a + b).ToString()`) has no address, so materialize one
-                        // via box + unbox — `unbox` returns a managed pointer to
-                        // the value stored in the freshly boxed copy.
-                        if (instCall.Receiver is BoundVariableExpression bve
-                            && this.TryLoadVariableAddress(bve.Variable))
-                        {
-                            // Address already on the stack.
-                        }
-                        else
-                        {
-                            this.EmitExpression(instCall.Receiver);
-                            var receiverTypeToken = this.outer.GetElementTypeToken(instCall.Receiver.Type);
-                            this.il.OpCode(ILOpCode.Box);
-                            this.il.Token(receiverTypeToken);
-                            this.il.OpCode(ILOpCode.Unbox);
-                            this.il.Token(receiverTypeToken);
-                        }
                     }
                     else
                     {
@@ -13540,22 +13747,21 @@ internal sealed class ReflectionMetadataEmitter
                     return;
                 }
 
-                // Issue #409: a value-type receiver computed as an rvalue
-                // (e.g. `makePoint(5, 6).Sum()` or `makeOuter().Inner.Sum()`
-                // or `(a + b).Method()`) has no addressable storage. Box the
-                // value to obtain a heap copy, then `unbox` to get a managed
-                // pointer to the boxed payload — this matches the
-                // BoundImportedInstanceCallExpression path and gives the
-                // instance method a valid `this`. The boxed copy means any
-                // mutation the callee performs on `this` is discarded, which
-                // is the same semantics CLR languages give for instance calls
-                // on rvalue value-type receivers.
+                // Issue #409 follow-up: a value-type receiver computed as an
+                // rvalue (e.g. `makePoint(5, 6).Sum()` or
+                // `makeOuter().Inner.Sum()` or `(a + b).Method()`) has no
+                // addressable storage. Spill it to a pre-declared local and
+                // pass `ldloca` as `this`; this is valid for ordinary structs
+                // and by-ref-like `ref struct` values, which cannot be boxed.
                 this.EmitExpression(receiver);
-                var receiverTypeToken = this.outer.GetElementTypeToken(receiver.Type);
-                this.il.OpCode(ILOpCode.Box);
-                this.il.Token(receiverTypeToken);
-                this.il.OpCode(ILOpCode.Unbox);
-                this.il.Token(receiverTypeToken);
+                if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
+                {
+                    throw new InvalidOperationException(
+                        $"No receiver spill slot was allocated for rvalue receiver of type '{receiver.Type}'.");
+                }
+
+                this.il.StoreLocal(slot);
+                this.il.LoadLocalAddress(slot);
                 return;
             }
 
@@ -13797,6 +14003,13 @@ internal sealed class ReflectionMetadataEmitter
             if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
             {
                 // address already on stack
+            }
+            else if (!receiverIsClass
+                && fa.Receiver is BoundFieldAccessExpression nested
+                && this.outer.structFieldDefs.ContainsKey(nested.Field)
+                && this.IsAddressableFieldAccess(nested))
+            {
+                this.EmitFieldAddress(nested);
             }
             else
             {

@@ -149,11 +149,70 @@ public class UserStructMethodEmitTests
     }
 
     [Fact]
-    public void Method_On_Rvalue_Receiver_Round_Trips()
+    public void RefStruct_Method_On_Rvalue_Receiver_Round_Trips()
+    {
+        var source = """
+            package P
+            import System
+
+            type Wrap ref struct {
+                V int32
+            }
+
+            func (w Wrap) Show() int32 {
+                return w.V
+            }
+
+            func make() Wrap {
+                return Wrap{V: 99}
+            }
+
+            public var result = make().Show()
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, null);
+
+        Assert.Equal(99, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void Imported_RefStruct_Method_On_Rvalue_Receiver_Round_Trips()
+    {
+        var source = """
+            package P
+            import System
+
+            public var result = 0
+
+            func run() {
+                var s = System.MemoryExtensions.AsSpan("hello")
+                result = s.Slice(0, 3).Length
+            }
+
+            run()
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, null);
+
+        Assert.Equal(3, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void Method_On_Rvalue_Receiver_Preserves_Existing_NonRefStruct_Behavior()
     {
         // The receiver `makePoint(...)` is an rvalue with no addressable
-        // storage. The emitter must box+unbox to materialise a managed
-        // pointer to a heap copy.
+        // storage. The emitter spills it to a local and passes `ldloca` as
+        // the instance method's managed `this` pointer.
         var source = """
             package P
             import System
@@ -226,7 +285,7 @@ public class UserStructMethodEmitTests
         // The receiver `makeOuter().I` is a field access whose outer is
         // an rvalue (a call result). `ldflda I` against a value on the
         // stack is invalid IL (InvalidProgramException); the emitter must
-        // fall back to box+unbox of the whole field chain.
+        // spill the whole field-chain value to a local and pass its address.
         var source = """
             package P
             import System
@@ -302,7 +361,7 @@ public class UserStructMethodEmitTests
     public void Method_On_Array_Index_Receiver_Round_Trips()
     {
         // An array element is an rvalue when read with `arr[i]`. The
-        // emitter routes this through box+unbox; the call's return value
+        // emitter routes this through a local spill; the call's return value
         // is observed but mutations on `this` would not propagate to
         // `arr[i]` (consistent with the CLR semantics for rvalue
         // receivers).
