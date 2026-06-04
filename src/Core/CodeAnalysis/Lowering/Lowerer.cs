@@ -25,6 +25,20 @@ public sealed class Lowerer : BoundTreeRewriter
 
     private int labelCount;
 
+    // Issue #419 (P0-2): nesting depth of the try / catch / finally regions
+    // currently being lowered. ECMA-335 forbids `ret` from inside a protected
+    // region; the only legal exit is `leave`. When the depth is positive, any
+    // BoundReturnStatement encountered is rewritten to store its value into a
+    // synthetic temp local (if non-void) and `goto` a synthetic method-exit
+    // label placed lexically OUTSIDE every protected region. The emitter
+    // already translates a goto crossing a protected-region boundary into the
+    // CIL `leave` opcode, so this rewrite is enough to keep the generated IL
+    // verifiable.
+    private int tryNestingDepth;
+    private LocalVariableSymbol returnValueLocal;
+    private BoundLabel methodExitLabel;
+    private bool hasRewrittenReturnsInProtectedRegions;
+
     private Lowerer(StructSymbol declaringType = null)
     {
         this.declaringType = declaringType;
@@ -39,6 +53,7 @@ public sealed class Lowerer : BoundTreeRewriter
     {
         var lowerer = new Lowerer();
         var result = lowerer.RewriteStatement(statement);
+        result = lowerer.WrapWithMethodExitEpilogue(result);
         return Flatten(result);
     }
 
@@ -55,7 +70,82 @@ public sealed class Lowerer : BoundTreeRewriter
     {
         var lowerer = new Lowerer(declaringType);
         var result = lowerer.RewriteStatement(statement);
+        result = lowerer.WrapWithMethodExitEpilogue(result);
         return Flatten(result);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Issue #419 (P0-2): tracks try / catch / finally nesting depth so
+    /// <see cref="RewriteReturnStatement(BoundReturnStatement)"/> can detect a
+    /// return that crosses a protected-region boundary and rewrite it into a
+    /// store-to-temp + goto-exit pair. ECMA-335 forbids emitting <c>ret</c>
+    /// from inside a protected region; the only legal exit is <c>leave</c>,
+    /// which the emitter produces automatically for a goto whose target lies
+    /// outside the innermost protected region.
+    /// </remarks>
+    protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+    {
+        this.tryNestingDepth++;
+        try
+        {
+            return base.RewriteTryStatement(node);
+        }
+        finally
+        {
+            this.tryNestingDepth--;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Issue #419 (P0-2): rewrites <c>return</c> statements that appear
+    /// lexically inside a try / catch / finally region. The original
+    /// <c>BoundReturnStatement</c> is replaced with a store to a synthetic
+    /// temp local (omitted when the return is value-less) followed by a goto
+    /// to the synthesized method-exit label. The emitter's protected-region
+    /// goto handling then translates the goto into the CIL <c>leave</c> the
+    /// runtime requires. The matching label + final <c>return $tmp;</c>
+    /// epilogue is appended by <c>WrapWithMethodExitEpilogue</c>.
+    /// </remarks>
+    protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
+    {
+        var rewritten = (BoundReturnStatement)base.RewriteReturnStatement(node);
+        if (this.tryNestingDepth == 0)
+        {
+            return rewritten;
+        }
+
+        this.hasRewrittenReturnsInProtectedRegions = true;
+        if (this.methodExitLabel == null)
+        {
+            this.methodExitLabel = GenerateLabel();
+        }
+
+        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (rewritten.Expression != null)
+        {
+            // First non-void return seen — bind the temp's type. Subsequent
+            // value-returning rewrites reuse the same local; the binder has
+            // already enforced a single return type for the enclosing
+            // function, so all expressions are assignment-compatible with it.
+            if (this.returnValueLocal == null)
+            {
+                this.returnValueLocal = new LocalVariableSymbol(
+                    "$returnTemp",
+                    isReadOnly: false,
+                    type: rewritten.Expression.Type);
+            }
+
+            var assignment = new BoundAssignmentExpression(
+                null,
+                this.returnValueLocal,
+                rewritten.Expression);
+            stmts.Add(new BoundExpressionStatement(null, assignment));
+        }
+
+        stmts.Add(new BoundGotoStatement(null, this.methodExitLabel));
+        return new BoundBlockStatement(null, stmts.ToImmutable());
     }
 
     /// <inheritdoc/>
@@ -836,5 +926,42 @@ public sealed class Lowerer : BoundTreeRewriter
     {
         var name = $"Label{++labelCount}";
         return new BoundLabel(name);
+    }
+
+    /// <summary>
+    /// Issue #419 (P0-2): when at least one return was rewritten as a goto by
+    /// <see cref="RewriteReturnStatement(BoundReturnStatement)"/>, append the
+    /// synthetic method-exit label and a terminating <c>return</c> that
+    /// reloads the temp (or has no expression for void-returning functions).
+    /// The temp is declared at the very top of the method so the emitter's
+    /// locals collector allocates a slot for it; the <c>default(T)</c>
+    /// initializer makes the slot definitely-assigned and avoids verifier
+    /// complaints on unreachable fall-through paths.
+    /// </summary>
+    private BoundStatement WrapWithMethodExitEpilogue(BoundStatement body)
+    {
+        if (!this.hasRewrittenReturnsInProtectedRegions)
+        {
+            return body;
+        }
+
+        var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (this.returnValueLocal != null)
+        {
+            stmts.Add(new BoundVariableDeclaration(
+                null,
+                this.returnValueLocal,
+                new BoundDefaultExpression(null, this.returnValueLocal.Type)));
+        }
+
+        stmts.Add(body);
+        stmts.Add(new BoundLabelStatement(null, this.methodExitLabel));
+
+        BoundExpression retExpr = this.returnValueLocal == null
+            ? null
+            : new BoundVariableExpression(null, this.returnValueLocal);
+        stmts.Add(new BoundReturnStatement(null, retExpr));
+
+        return new BoundBlockStatement(null, stmts.ToImmutable());
     }
 }
