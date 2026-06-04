@@ -168,7 +168,73 @@ public class GlobalVariableEmitTests
         Assert.Equal(2, (int)counter!.GetValue(null)!);
     }
 
+    [Fact]
+    public void TopLevel_Var_Read_And_Written_From_EntryPoint_Round_Trips_Through_Static_Field()
+    {
+        // Issue #408 regression: top-level statements compiled into <Main>$
+        // must read and write a global through ldsfld/stsfld, not allocate a
+        // local slot. Symptom before the fix: a top-level `var x = "a"` would
+        // emit `stloc.0` in <Main>$, so a mutation done by a function (which
+        // correctly uses stsfld) was invisible to subsequent <Main>$ reads.
+        var source = """
+            package P
+            import System
+
+            public var trace = ""
+
+            public func bump() {
+                trace = trace + "x,"
+            }
+
+            bump()
+            bump()
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+
+        Assert.NotNull(entry);
+        Assert.NotNull(traceField);
+
+        entry!.Invoke(null, null);
+
+        Assert.Equal("x,x,", (string)traceField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void TopLevel_Var_Address_From_EntryPoint_Uses_Ldsflda()
+    {
+        // Issue #408 regression sibling: a top-level `&counter` (e.g. passed
+        // to Interlocked.CompareExchange) must use ldsflda, not ldloca, when
+        // emitted from <Main>$.
+        var source = """
+            package P
+            import System
+            import System.Threading
+
+            public var counter = 0
+            Interlocked.CompareExchange(&counter, 7, 0)
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var counterField = program.GetField("counter", BindingFlags.Public | BindingFlags.Static);
+
+        Assert.NotNull(entry);
+        Assert.NotNull(counterField);
+
+        entry!.Invoke(null, null);
+
+        Assert.Equal(7, (int)counterField!.GetValue(null)!);
+    }
+
     private static Assembly CompileToAssembly(string source)
+        => CompileToAssembly(source, target: "library");
+
+    private static Assembly CompileToAssembly(string source, string target)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_global_emit_").FullName;
         var srcPath = Path.Combine(tempDir, "test.gs");
@@ -187,7 +253,7 @@ public class GlobalVariableEmitTests
             compileExit = Program.Main(new[]
             {
                 "/out:" + outPath,
-                "/target:library",
+                "/target:" + target,
                 "/targetframework:net10.0",
                 srcPath,
             });

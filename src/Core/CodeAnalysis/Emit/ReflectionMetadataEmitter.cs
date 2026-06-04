@@ -6453,7 +6453,7 @@ internal sealed class ReflectionMetadataEmitter
     //   * one object-typed scratch slot per TypePattern under any arm,
     //   * arm-local TypePattern.Variable slots, and
     //   * any locals declared inside arm body BoundBlockStatements.
-    private static void CollectPatternSwitchSlots(
+    private void CollectPatternSwitchSlots(
         ImmutableArray<BoundStatement> statements,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
@@ -6482,7 +6482,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static void WalkForPatternSwitches(
+    private void WalkForPatternSwitches(
         BoundStatement statement,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
@@ -6516,7 +6516,13 @@ internal sealed class ReflectionMetadataEmitter
                             foreach (var inner in armBlock.Statements)
                             {
                                 // Issue #216: const decls have no IL slot.
-                                if (inner is BoundVariableDeclaration decl && decl.ConstantValue == null && !locals.ContainsKey(decl.Variable))
+                                // Issue #191: top-level globals are emitted as static
+                                // fields on <Program>; do not allocate a local slot
+                                // for them when they appear inside a switch arm.
+                                if (inner is BoundVariableDeclaration decl
+                                    && decl.ConstantValue == null
+                                    && !locals.ContainsKey(decl.Variable)
+                                    && !(decl.Variable is GlobalVariableSymbol gvDecl && this.globalFieldDefs.ContainsKey(gvDecl)))
                                 {
                                     locals[decl.Variable] = localTypes.Count;
                                     localTypes.Add(decl.Variable.Type);
@@ -6568,7 +6574,11 @@ internal sealed class ReflectionMetadataEmitter
                 break;
             case BoundVariableDeclaration vd:
                 // Issue #216: compile-time const bindings are inlined — no IL slot.
-                if (vd.ConstantValue == null && !locals.ContainsKey(vd.Variable))
+                // Issue #191: top-level globals are emitted as static fields on
+                // <Program>; do not allocate a local slot for them here.
+                if (vd.ConstantValue == null
+                    && !locals.ContainsKey(vd.Variable)
+                    && !(vd.Variable is GlobalVariableSymbol gvVd && this.globalFieldDefs.ContainsKey(gvVd)))
                 {
                     locals[vd.Variable] = localTypes.Count;
                     localTypes.Add(vd.Variable.Type);
@@ -6767,7 +6777,7 @@ internal sealed class ReflectionMetadataEmitter
     // discovered switch expression gets a result temp + discriminant temp
     // pre-allocated and its arms recurse so type-pattern scratches and
     // arm-locals are also reserved.
-    private static void WalkExpressionForSwitches(
+    private void WalkExpressionForSwitches(
         BoundExpression expression,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
@@ -6855,7 +6865,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static void WalkPatternForSwitchExpressions(
+    private void WalkPatternForSwitchExpressions(
         BoundPattern pattern,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
@@ -13466,6 +13476,16 @@ internal sealed class ReflectionMetadataEmitter
             if (this.locals.TryGetValue(variable, out var slot))
             {
                 this.il.LoadLocalAddress(slot);
+                return true;
+            }
+
+            // Issue #408 / #191: top-level globals are emitted as static fields
+            // on <Program>; their address is taken with ldsflda.
+            if (variable is GlobalVariableSymbol gv
+                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+            {
+                this.il.OpCode(ILOpCode.Ldsflda);
+                this.il.Token(fieldHandle);
                 return true;
             }
 
