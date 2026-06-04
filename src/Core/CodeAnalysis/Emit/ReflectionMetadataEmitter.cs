@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -6596,6 +6597,7 @@ internal sealed class ReflectionMetadataEmitter
 
             var slot = localTypes.Count;
             localTypes.Add(literal.StructType);
+            Debug.Assert(!structLiteralSlots.ContainsKey(literal), "Bound struct literal node aliased across emit positions; rekey structLiteralSlots by (node, parentContext) if lowering ever shares nodes.");
             structLiteralSlots[literal] = slot;
         }
 
@@ -6606,6 +6608,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             var slot = localTypes.Count;
             localTypes.Add(idx.Type);
+            Debug.Assert(!mapIndexSlots.ContainsKey(idx), "Bound map index expression aliased across emit positions; rekey mapIndexSlots by (node, parentContext) if lowering ever shares nodes.");
             mapIndexSlots[idx] = slot;
         }
 
@@ -6626,6 +6629,7 @@ internal sealed class ReflectionMetadataEmitter
 
             var slot = localTypes.Count;
             localTypes.Add(def.Type);
+            Debug.Assert(!defaultExpressionSlots.ContainsKey(def), "Bound default expression aliased across emit positions; rekey defaultExpressionSlots by (node, parentContext) if lowering ever shares nodes.");
             defaultExpressionSlots[def] = slot;
         }
 
