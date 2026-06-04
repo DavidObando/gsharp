@@ -512,11 +512,11 @@ internal sealed class PortablePdbEmitter
 
     /// <summary>
     /// Encodes a method's sequence-point blob per Portable PDB spec § "Sequence
-    /// points blob". The header writes a zero <c>LocalSignatureToken</c> in
-    /// Phase 4 — real values land in Phase 5 when local-scope rows are
-    /// populated. When every visible record shares
-    /// <paramref name="primaryDocument"/> the <c>InitialDocument</c> field is
-    /// omitted (single-document optimisation).
+    /// points blob". The header writes the method's <c>LocalSignatureToken</c>
+    /// (the <c>StandaloneSignature</c> metadata token for the locals blob, or
+    /// 0 when the method has no locals) as a compressed unsigned integer. When
+    /// every visible record shares <paramref name="primaryDocument"/> the
+    /// <c>InitialDocument</c> field is omitted (single-document optimisation).
     /// </summary>
     private static void EncodeSequencePoints(
         BlobBuilder blob,
@@ -524,9 +524,10 @@ internal sealed class PortablePdbEmitter
         DocumentHandle primaryDocument,
         StandaloneSignatureHandle localSignatureToken)
     {
-        // LocalSignatureToken — full 32-bit metadata token (0 when the method
-        // has no locals). Phase 5 wires the real value through so the
-        // debugger's locals window can deserialise slot types.
+        // LocalSignatureToken — the StandaloneSignature metadata token for the
+        // method's locals (0 when the method has no locals), written as a
+        // compressed unsigned integer so the debugger's locals window can
+        // deserialise slot types.
         var tokenValue = localSignatureToken.IsNil ? 0 : MetadataTokens.GetToken(localSignatureToken);
         blob.WriteCompressedInteger(tokenValue);
 
