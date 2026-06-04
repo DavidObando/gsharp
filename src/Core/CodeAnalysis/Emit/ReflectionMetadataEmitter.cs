@@ -3601,6 +3601,29 @@ internal sealed class ReflectionMetadataEmitter
     {
         var enumTypeRef = this.GetTypeReference(this.coreEnumType);
 
+        // P3-8 (#420): emit the TypeDef row *before* its FieldDef rows so the
+        // literal-field signatures can refer to the enum's actual TypeDef
+        // handle returned by AddTypeDefinition, rather than a speculative
+        // row-count+1 value that breaks silently if the emit order ever
+        // changes. The TypeDef's fieldList must still point at the first
+        // FieldDef row that will belong to this enum, which is the next row
+        // about to be added — we capture it via GetRowCount + 1 here and
+        // assert below that the first AddFieldDefinition call matches.
+        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.metadata.GetRowCount(TableIndex.Field) + 1);
+
+        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
+            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
+            | MapTypeAccessibility(enumSym.Accessibility);
+
+        var enumTypeDef = this.metadata.AddTypeDefinition(
+            attributes: typeAttrs,
+            @namespace: this.metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
+            name: this.metadata.GetOrAddString(enumSym.Name),
+            baseType: enumTypeRef,
+            fieldList: firstFieldHandle,
+            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
+        this.enumTypeDefs[enumSym] = enumTypeDef;
+
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
         var valueFieldSigBlob = new BlobBuilder();
         new BlobEncoder(valueFieldSigBlob).FieldSignature().Int32();
@@ -3608,24 +3631,21 @@ internal sealed class ReflectionMetadataEmitter
             attributes: FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName,
             name: this.metadata.GetOrAddString("value__"),
             signature: this.metadata.GetOrAddBlob(valueFieldSigBlob));
+        if (valueFieldHandle != firstFieldHandle)
+        {
+            throw new InvalidOperationException(
+                $"Enum '{enumSym.Name}' value__ FieldDef row {MetadataTokens.GetRowNumber(valueFieldHandle)} did not match the fieldList row {MetadataTokens.GetRowNumber(firstFieldHandle)} stamped on its TypeDef. This indicates another emitter inserted FieldDef rows between TypeDef creation and field emission.");
+        }
 
         // Fields 2..N: one public static literal field per member, signature
         // is the enum's own typedef (the standard CLR convention for enum
         // literals). The Constant row is added below after all field rows
         // have been emitted so they remain in increasing parent-token order.
         var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
-        TypeDefinitionHandle enumTypeDef = default;
-
-        // The literal-field signature references the enum's own TypeDef; we
-        // need to reserve the TypeDef handle first so the FieldSig encoder
-        // can refer to it. AddTypeDefinition is monotone, so the next-row
-        // handle gives us the soon-to-be-emitted handle.
-        var pendingTypeDef = MetadataTokens.TypeDefinitionHandle(this.metadata.GetRowCount(TableIndex.TypeDef) + 1);
-
         foreach (var member in enumSym.Members)
         {
             var memberSigBlob = new BlobBuilder();
-            new BlobEncoder(memberSigBlob).FieldSignature().Type(pendingTypeDef, isValueType: true);
+            new BlobEncoder(memberSigBlob).FieldSignature().Type(enumTypeDef, isValueType: true);
             var memberFieldHandle = this.metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
                 name: this.metadata.GetOrAddString(member.Name),
@@ -3633,19 +3653,6 @@ internal sealed class ReflectionMetadataEmitter
             memberFieldHandles.Add(memberFieldHandle);
             this.enumMemberFieldDefs[member] = memberFieldHandle;
         }
-
-        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
-            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | MapTypeAccessibility(enumSym.Accessibility);
-
-        enumTypeDef = this.metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: this.metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
-            name: this.metadata.GetOrAddString(enumSym.Name),
-            baseType: enumTypeRef,
-            fieldList: valueFieldHandle,
-            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.enumTypeDefs[enumSym] = enumTypeDef;
 
         // Constant rows must be added in increasing parent FieldDefinition
         // order; iterating the literal fields in declaration order naturally
