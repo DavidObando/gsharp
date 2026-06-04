@@ -252,6 +252,44 @@ public class HoverHandlerTests
         Assert.DoesNotContain("overload", hover.Contents.ToString(), System.StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ComputeHover_ThisKeyword_InsideClassMethod_ResolvesToReceiver()
+    {
+        const string source = "package P\ntype Person class {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        // Hover on 'this' should resolve to the implicit receiver parameter.
+        var hoverThis = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "this"));
+        Assert.NotNull(hoverThis);
+        Assert.Contains("Person", hoverThis.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_MemberAccess_ViaThis_InsideClassMethod()
+    {
+        const string source = "package P\ntype Person class {\n    prop Name string\n    func ToString() string {\n        return \"${this.Name}\"\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        // Hover on 'Name' in 'this.Name' should resolve to the property.
+        var hoverName = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
+        Assert.NotNull(hoverName);
+        Assert.Contains("Name", hoverName.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("string", hoverName.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_ImplicitThis_BarePropertyName_InsideClassMethod()
+    {
+        const string source = "package P\ntype Person class {\n    prop Name string\n    prop Age int32\n    func Greet() string {\n        return Name\n    }\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        // Hover on bare 'Name' inside method body should resolve to the property via implicit this.
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Name", 1));
+        Assert.NotNull(hover);
+        Assert.Contains("Name", hover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("string", hover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
     private static ReferenceResolver CreateReferencePackResolver()
     {
         var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);

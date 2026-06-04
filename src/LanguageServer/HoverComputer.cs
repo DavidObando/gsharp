@@ -276,6 +276,18 @@ public static class HoverComputer
             }
         }
 
+        // Case 3: implicit this — bare identifier inside a struct/class method body
+        // that matches a member of the enclosing type (e.g. `Name` instead of `this.Name`).
+        var enclosingStruct = FindEnclosingStructSymbol(tree, compilation, token);
+        if (enclosingStruct != null)
+        {
+            var member = LookupMemberOnStruct(enclosingStruct, token.Text);
+            if (member != null)
+            {
+                return member;
+            }
+        }
+
         return null;
     }
 
@@ -284,6 +296,36 @@ public static class HoverComputer
         return FindNodes<FieldAssignmentExpressionSyntax>(root)
             .Where(f => MatchesToken(f.FieldIdentifier, token))
             .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Finds the <see cref="StructSymbol"/> for the struct/class whose method body
+    /// encloses <paramref name="token"/>, if any. Used for implicit-this resolution.
+    /// </summary>
+    private static StructSymbol FindEnclosingStructSymbol(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    {
+        // Find the innermost StructDeclarationSyntax whose span contains the token.
+        var enclosingDecl = FindNodes<StructDeclarationSyntax>(tree.Root)
+            .Where(s => s.Span.Start <= token.Span.Start && token.Span.End <= s.Span.End)
+            .OrderBy(s => s.Span.Length)
+            .FirstOrDefault();
+
+        if (enclosingDecl == null)
+        {
+            return null;
+        }
+
+        // Ensure the token is inside a method body, not in the struct's own declarations.
+        var insideMethod = enclosingDecl.Methods
+            .Any(m => m.Body != null && m.Body.Span.Start <= token.Span.Start && token.Span.End <= m.Body.Span.End);
+        if (!insideMethod)
+        {
+            return null;
+        }
+
+        // Resolve the struct declaration to its symbol.
+        var structSymbol = SemanticLookup.ResolveSymbol(compilation, enclosingDecl.Identifier) as StructSymbol;
+        return structSymbol;
     }
 
     /// <summary>
