@@ -53,14 +53,14 @@ public class CompoundAssignmentTests
         var tree = SyntaxTree.Parse(SourceText.From("func F() {\n var x = 1\n x += 2\n }\n"));
         Assert.Empty(tree.Diagnostics);
 
-        // Find the assignment expression inside the function body.
-        var assignment = Find<AssignmentExpressionSyntax>(tree.Root);
-        Assert.NotNull(assignment);
-        Assert.Equal(SyntaxKind.EqualsToken, assignment.EqualsToken.Kind);
-        var binary = Assert.IsType<BinaryExpressionSyntax>(assignment.Expression);
-        Assert.Equal(SyntaxKind.PlusToken, binary.OperatorToken.Kind);
-        var leftName = Assert.IsType<NameExpressionSyntax>(binary.Left);
-        Assert.Equal(assignment.IdentifierToken.Text, leftName.IdentifierToken.Text);
+        // Since `x += 2` now parses as an EventSubscriptionExpressionSyntax
+        // (the binder distinguishes events from compound assignment), verify
+        // the parse structure reflects the new representation.
+        var eventSub = Find<EventSubscriptionExpressionSyntax>(tree.Root);
+        Assert.NotNull(eventSub);
+        Assert.Equal(SyntaxKind.PlusEqualsToken, eventSub.OperatorToken.Kind);
+        var lhs = Assert.IsType<NameExpressionSyntax>(eventSub.LeftHandSide);
+        Assert.Equal("x", lhs.IdentifierToken.Text);
     }
 
     private static T Find<T>(SyntaxNode node)
