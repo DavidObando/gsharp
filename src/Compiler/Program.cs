@@ -106,6 +106,67 @@ public class Program
         return Emit(compilation, parsed);
     }
 
+    // Tokenizes a single response-file line, splitting on whitespace while
+    // respecting double-quote delimiters. Quotes are stripped from the
+    // resulting tokens but the content between them (including spaces) is
+    // preserved as a single token. A doubled quote ("") inside a quoted
+    // section emits a literal quote character. Behavior matches what csc /
+    // dotnet build accept for response files.
+    internal static List<string> TokenizeResponseFileLine(string line)
+    {
+        var tokens = new List<string>();
+        if (string.IsNullOrEmpty(line))
+        {
+            return tokens;
+        }
+
+        var sb = new StringBuilder();
+        bool inQuotes = false;
+        bool hasToken = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+
+            if (c == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    // Escaped quote inside a quoted section.
+                    sb.Append('"');
+                    hasToken = true;
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                    hasToken = true;
+                }
+            }
+            else if (!inQuotes && char.IsWhiteSpace(c))
+            {
+                if (hasToken)
+                {
+                    tokens.Add(sb.ToString());
+                    sb.Clear();
+                    hasToken = false;
+                }
+            }
+            else
+            {
+                sb.Append(c);
+                hasToken = true;
+            }
+        }
+
+        if (hasToken)
+        {
+            tokens.Add(sb.ToString());
+        }
+
+        return tokens;
+    }
+
     private static void ReportMissingTransitiveReferences(ReferenceResolver references, CommandLineArgs args)
     {
         if (references is null || references.MissingTransitiveReferences.IsDefaultOrEmpty)
@@ -608,7 +669,10 @@ public class Program
                         continue;
                     }
 
-                    result.Add(trimmed);
+                    foreach (var token in TokenizeResponseFileLine(trimmed))
+                    {
+                        result.Add(token);
+                    }
                 }
             }
             else

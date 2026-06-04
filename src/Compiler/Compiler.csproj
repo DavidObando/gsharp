@@ -13,4 +13,8 @@
     <ProjectReference Include="@(GsharpCore)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Compiler.Tests" />
+  </ItemGroup>
+
 </Project>

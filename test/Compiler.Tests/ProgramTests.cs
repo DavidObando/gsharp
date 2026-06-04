@@ -154,6 +154,94 @@ public class ProgramTests
     }
 
     [Fact]
+    public void TokenizeResponseFileLine_SplitsOnWhitespace()
+    {
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("/out:foo.dll /target:library a.gs");
+        Assert.Equal(new[] { "/out:foo.dll", "/target:library", "a.gs" }, tokens);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_RespectsDoubleQuotes()
+    {
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("/out:\"bin/my app.dll\" a.gs");
+        Assert.Equal(new[] { "/out:bin/my app.dll", "a.gs" }, tokens);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_QuotedTokenContainingSpaces()
+    {
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("\"path with spaces/foo.gs\"");
+        Assert.Equal(new[] { "path with spaces/foo.gs" }, tokens);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_EmptyAndWhitespaceLines()
+    {
+        Assert.Empty(GSharp.Compiler.Program.TokenizeResponseFileLine(string.Empty));
+        Assert.Empty(GSharp.Compiler.Program.TokenizeResponseFileLine("   \t  "));
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_EscapedDoubleQuoteInsideQuotes()
+    {
+        // Inside a quoted segment, "" represents a literal quote.
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("\"a\"\"b\" c");
+        Assert.Equal(new[] { "a\"b", "c" }, tokens);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_AdjacentQuotedAndUnquoted()
+    {
+        // /out:"my app.dll" should yield a single token /out:my app.dll.
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("/out:\"my app.dll\"");
+        Assert.Single(tokens);
+        Assert.Equal("/out:my app.dll", tokens[0]);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_MultipleSpacesAndTabs()
+    {
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("  a\tb   c  ");
+        Assert.Equal(new[] { "a", "b", "c" }, tokens);
+    }
+
+    [Fact]
+    public void TokenizeResponseFileLine_EmptyQuotedStringYieldsEmptyToken()
+    {
+        // "" on its own is a deliberate empty argument.
+        var tokens = GSharp.Compiler.Program.TokenizeResponseFileLine("a \"\" b");
+        Assert.Equal(new[] { "a", string.Empty, "b" }, tokens);
+    }
+
+    [Fact]
+    public void Main_WithResponseFile_HandlesQuotedPathWithSpaces()
+    {
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_rsp_quoted_").FullName;
+        var spaceDir = Path.Combine(tempDir, "out put");
+        Directory.CreateDirectory(spaceDir);
+        var outPath = Path.Combine(spaceDir, "P.dll");
+        var rspPath = Path.Combine(tempDir, "args.rsp");
+        File.WriteAllLines(rspPath, new[]
+        {
+            $"/out:\"{outPath}\" /target:library",
+            $"\"{sample}\"",
+        });
+        try
+        {
+            var exit = GSharp.Compiler.Program.Main(new[] { "@" + rspPath });
+            Assert.Equal(0, exit);
+            Assert.True(File.Exists(outPath), $"expected output at '{outPath}'");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
     public void Main_WithSyntaxError_ReturnsErrorExitCode()
     {
         var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
