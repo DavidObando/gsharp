@@ -8231,7 +8231,11 @@ internal sealed class ReflectionMetadataEmitter
                         this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
-                            if (!locals.ContainsKey(clause.Variable))
+                            // Issue #420 (P3-6): tolerate an elided catch variable
+                            // in the local-slot pre-pass (the corresponding emit-
+                            // time path in EmitCatchClauses emits a defensive
+                            // `pop` to maintain stack balance).
+                            if (clause.Variable != null && !locals.ContainsKey(clause.Variable))
                             {
                                 locals[clause.Variable] = localTypes.Count;
                                 localTypes.Add(clause.Variable.Type);
@@ -11810,6 +11814,27 @@ internal sealed class ReflectionMetadataEmitter
                 $"Variable '{variable.Name}' has no local slot or parameter index in the current method.");
         }
 
+        private bool HasStorageSlot(VariableSymbol variable)
+        {
+            if (variable is ParameterSymbol ps && this.parameters.ContainsKey(ps))
+            {
+                return true;
+            }
+
+            if (this.locals.ContainsKey(variable))
+            {
+                return true;
+            }
+
+            if (variable is GlobalVariableSymbol gv
+                && this.outer.globalFieldDefs.ContainsKey(gv))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
         private void EmitStoreVariable(VariableSymbol variable)
         {
             if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
@@ -12150,7 +12175,22 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.MarkLabel(handlerStart);
 
                 // Stack contains the caught exception; store into the catch variable.
-                this.EmitStoreVariable(clause.Variable);
+                // Issue #420 (P3-6): the binder is currently expected to always
+                // provide a catch variable with an allocated slot, but if a future
+                // binder pass elides an unused catch variable (or leaves it without
+                // a slot) we still need to consume the exception object the CLR
+                // pushed onto the evaluation stack on entry to the handler --
+                // otherwise the handler starts with an unbalanced stack and the
+                // generated IL becomes unverifiable. Defensively emit `pop` in
+                // that case instead of dereferencing a null variable.
+                if (clause.Variable is null || !this.HasStorageSlot(clause.Variable))
+                {
+                    this.il.OpCode(ILOpCode.Pop);
+                }
+                else
+                {
+                    this.EmitStoreVariable(clause.Variable);
+                }
 
                 this.EmitProtectedRegion((BoundBlockStatement)clause.Body);
                 this.il.Branch(ILOpCode.Leave, leaveTarget);
