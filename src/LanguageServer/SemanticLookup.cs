@@ -344,6 +344,20 @@ public static class SemanticLookup
                     declarations,
                     aggregate.Declaration.Methods.Select(m => m.Identifier),
                     aggregate.Methods.Concat(aggregate.StaticMethods));
+
+                // Register parameters and implicit 'this' for struct/class methods
+                // so that hover, go-to-definition, etc. work inside method bodies.
+                foreach (var method in aggregate.Methods.Concat(aggregate.StaticMethods))
+                {
+                    if (method.Declaration != null)
+                    {
+                        MapParameters(method.Declaration, method.Parameters, declarations, localDeclarations);
+                        if (method.ThisParameter != null)
+                        {
+                            GetLocals(localDeclarations, method.Declaration)[method.ThisParameter.Name] = method.ThisParameter;
+                        }
+                    }
+                }
             }
         }
 
