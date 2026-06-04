@@ -12960,6 +12960,37 @@ internal sealed class ReflectionMetadataEmitter
             //   ldloc scratch;
             //   (value type) unbox.any | (ref type) leave as-is;
             //   stloc Variable
+            //
+            // Issue #420 (P3-2): the strategy above is INVALID when the
+            // pattern target is `Nullable<T>` over a value type (i.e.
+            // `NullableTypeSymbol` wrapping a CLR value type, which
+            // `GetElementTypeToken` tokenises as `System.Nullable<T>`).
+            // ECMA-335 §I.8.2.4 / §III.4.32 gives `Nullable<T>` special
+            // boxing semantics: a non-null nullable boxes as a boxed `T`
+            // (not as a boxed `Nullable<T>`), and a null nullable boxes
+            // as the null reference. Consequently `isinst Nullable<T>`
+            // is effectively never true at run time — a boxed value
+            // either presents as `T` (matching `case T`) or as null.
+            // Nullable-over-reference-type, by contrast, tokenises as
+            // the bare underlying reference type and is handled
+            // correctly by the strategy above.
+            //
+            // The binder today does not narrow a type pattern onto a
+            // `Nullable<value-type>` target (type patterns narrow on the
+            // underlying type), so this branch is unreachable from
+            // surface syntax; this guard exists so that any future binder
+            // change that lifts that restriction is forced to revisit the
+            // emit strategy before this branch is entered with malformed
+            // assumptions.
+            if (tp.TargetType is NullableTypeSymbol nullableTarget
+                && nullableTarget.UnderlyingType?.ClrType is { IsValueType: true })
+            {
+                throw new InvalidOperationException(
+                    $"Type-pattern emit does not support a Nullable<T> target type ('{tp.TargetType.Name}') over a value type. " +
+                    "Per ECMA-335 the CLR boxes Nullable<T> as a boxed T (or null), so 'isinst Nullable<T>' " +
+                    "would never match the boxed value; revisit EmitTypePattern before allowing this shape (issue #420 / P3-2).");
+            }
+
             var scratch = this.typePatternScratchSlots[tp];
             loadValue();
 
