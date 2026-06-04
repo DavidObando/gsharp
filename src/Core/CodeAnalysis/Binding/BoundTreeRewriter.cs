@@ -1574,7 +1574,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundNullConditionalAccessExpression(null, receiver, node.Capture, whenNotNull, node.Type);
+        return new BoundNullConditionalAccessExpression(null, receiver, node.Capture, whenNotNull, node.Type, node.ResultSlot);
     }
 
     /// <summary>Rewrites a tuple literal (Phase 4.5).</summary>
