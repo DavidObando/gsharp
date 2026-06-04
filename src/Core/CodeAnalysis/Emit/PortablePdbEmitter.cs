@@ -245,10 +245,29 @@ internal sealed class PortablePdbEmitter
             if (this.recordedMethods.TryGetValue(rid, out var rec) && rec.Points.Count > 0)
             {
                 var primaryDoc = FindPrimaryDocument(rec.Points);
-                var blobBuilder = new BlobBuilder();
-                EncodeSequencePoints(blobBuilder, rec.Points, primaryDoc, rec.LocalSignatureToken);
-                var blobHandle = this.pdbMetadata.GetOrAddBlob(blobBuilder);
-                this.pdbMetadata.AddMethodDebugInformation(primaryDoc, blobHandle);
+
+                // P2-12 (issue #421): When no point carries a usable document
+                // (every record is the synthesised 0xfeefee hidden marker), we
+                // cannot legally emit a sequence-points blob: the spec
+                // requires either MethodDebugInformation.Document or an
+                // InitialDocument prefix in the blob, and we have neither. A
+                // blob without InitialDocument plus a nil Document column
+                // causes Portable PDB readers to mis-parse the very first
+                // record as a document-record (δIL=0 marker) and throw
+                // "Invalid handle". Drop the blob — the method's LocalScope /
+                // LocalVariable / LocalConstant rows still flow through Step 3
+                // below so the debugger's locals window keeps working.
+                if (primaryDoc.IsNil)
+                {
+                    this.pdbMetadata.AddMethodDebugInformation(default, default);
+                }
+                else
+                {
+                    var blobBuilder = new BlobBuilder();
+                    EncodeSequencePoints(blobBuilder, rec.Points, primaryDoc, rec.LocalSignatureToken);
+                    var blobHandle = this.pdbMetadata.GetOrAddBlob(blobBuilder);
+                    this.pdbMetadata.AddMethodDebugInformation(primaryDoc, blobHandle);
+                }
             }
             else
             {
@@ -519,8 +538,34 @@ internal sealed class PortablePdbEmitter
         var prevStartColumn = 0;
         var firstRecord = true;
 
-        foreach (var p in points)
+        // P2-12 (issue #421): Debuggers (Visual Studio, Rider) reportedly bind
+        // F5 breakpoints flakily when the first sequence-point record of a
+        // method is hidden (the 0xfeefee marker). Skip any leading hidden
+        // points so the first emitted record always carries a real
+        // line/column. Methods that are entirely hidden still emit their full
+        // (hidden-only) sequence, preserving prior behaviour where there is
+        // nothing user-visible to anchor on.
+        var startIndex = 0;
+        var hasVisible = false;
+        for (var i = 0; i < points.Count; i++)
         {
+            if (!points[i].IsHidden)
+            {
+                hasVisible = true;
+                startIndex = i;
+                break;
+            }
+        }
+
+        if (!hasVisible)
+        {
+            startIndex = 0;
+        }
+
+        for (var idx = startIndex; idx < points.Count; idx++)
+        {
+            var p = points[idx];
+
             // δIL — first record encodes the absolute IL offset, the rest the
             // delta from the previous record. The spec forbids two records
             // sharing the same IL offset; the BodyEmitter is responsible for
