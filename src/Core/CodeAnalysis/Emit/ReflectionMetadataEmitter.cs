@@ -96,6 +96,12 @@ internal sealed class ReflectionMetadataEmitter
     // ADR-0051 Phase 6: property accessor method handles for PropertyDef + MethodSemantics emission.
     private readonly Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)> propertyAccessorHandles = new Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)>();
 
+    // Issue #418 (P1-7): tracks TypeDefs that already had a PropertyMap row emitted, so the
+    // static-property emission path can decide whether to add its own PropertyMap without
+    // relying on symbol-level heuristics (which fail when instance properties are declared
+    // but all skipped during emission, leaving the static PropertyDef rows orphaned).
+    private readonly HashSet<TypeDefinitionHandle> typesWithPropertyMap = new HashSet<TypeDefinitionHandle>();
+
     // ADR-0052: event accessor method handles for EventDef + MethodSemantics emission.
     // Issue #257: extended with optional Raise handle.
     private readonly Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)> eventAccessorHandles = new Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)>();
@@ -2116,6 +2122,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!firstPropDef.IsNil)
         {
             this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
@@ -2326,10 +2333,17 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
-        // Only add if no instance properties already created a PropertyMap for this type.
-        if (!firstPropDef.IsNil && structSym.Properties.IsDefaultOrEmpty)
+        // Issue #418 (P1-7): only add a PropertyMap here if the instance-property
+        // emission path (EmitPropertyAccessors) didn't already add one. Using
+        // structSym.Properties.IsDefaultOrEmpty was incorrect — instance properties
+        // may be declared but all skipped during emission (e.g., computed property
+        // whose getter symbol has no entry in program.Functions), leaving no
+        // PropertyMap. Without this row the static PropertyDef rows would be
+        // orphaned and violate ECMA-335 §II.22.35.
+        if (!firstPropDef.IsNil && !this.typesWithPropertyMap.Contains(typeDefHandle))
         {
             this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
@@ -4546,6 +4560,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!firstPropDef.IsNil)
         {
             this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
