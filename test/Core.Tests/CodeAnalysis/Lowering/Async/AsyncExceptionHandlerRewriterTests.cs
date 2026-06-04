@@ -472,4 +472,114 @@ ImmutableArray.Create<BoundStatement>(
         Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
         Assert.Same(ExceptionType, rewrittenTry.CatchClauses[1].ExceptionType);
     }
+
+    // ----------------------------------------------------------------------
+    // Issue #418 P1-11: the auto-rethrow at the tail of a try/finally-with-await
+    // rewrite must preserve the original stack trace by going through
+    // ExceptionDispatchInfo.Capture(...).Throw() instead of `throw ex;`.
+    // ----------------------------------------------------------------------
+
+    [Fact]
+    public void TryFinally_WithAwaitInFinally_RethrowsViaExceptionDispatchInfo_NotBareThrow()
+    {
+        // Arrange: try { x = 1 } finally { await ... }
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var finallyBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, awaitExpr)));
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert: the auto-rethrow at the tail must NOT be a BoundThrowStatement
+        // (which would lower to `throw ex` and reset the stack trace). It must
+        // call ExceptionDispatchInfo.Capture(pendingException).Throw().
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var allStmts = FlattenStatements(innerBlock).ToArray();
+
+        // No BoundThrowStatement should be present anywhere in the rewritten body —
+        // the only throw-shaped operation should be the EDI Throw() instance call.
+        Assert.DoesNotContain(allStmts, s => s is BoundThrowStatement);
+
+        // Locate the EDI Throw() call.
+        var ediThrowCalls = allStmts
+            .OfType<BoundExpressionStatement>()
+            .Select(es => es.Expression)
+            .OfType<BoundImportedInstanceCallExpression>()
+            .Where(ic => ic.Method.DeclaringType == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)
+                         && ic.Method.Name == nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw))
+            .ToArray();
+        Assert.Single(ediThrowCalls);
+
+        // The receiver must be ExceptionDispatchInfo.Capture(pendingException).
+        var receiverCall = Assert.IsType<BoundImportedCallExpression>(ediThrowCalls[0].Receiver);
+        Assert.Equal(nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture), receiverCall.Function.Method.Name);
+        Assert.Equal(typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo), receiverCall.Function.Method.DeclaringType);
+
+        // Capture must take a single Exception-typed argument: the pendingException local.
+        var arg = Assert.Single(receiverCall.Arguments);
+        var pendingRef = Assert.IsType<BoundVariableExpression>(arg);
+        Assert.Contains("<>pending_ex_", pendingRef.Variable.Name);
+    }
+
+    [Fact]
+    public void TryCatchFinally_WithAwait_RethrowUsesExceptionDispatchInfo()
+    {
+        // Arrange: try { x = 1 } catch (e) { x = 2 } finally { await b }
+        // The rewriter must lift the finally and emit an EDI-based rethrow at the
+        // tail, NOT a bare `throw pendingException`.
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var e = new LocalVariableSymbol("e", false, ExceptionType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var catchBody = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 2)))));
+        var catchClause = new BoundCatchClause(ExceptionType, e, catchBody);
+        var awaitB = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var finallyBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitB)));
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), finallyBlock);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert: no bare BoundThrowStatement in the rewritten body; EDI Throw() exists.
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var allStmts = FlattenStatements(innerBlock).ToArray();
+        Assert.DoesNotContain(allStmts, s => s is BoundThrowStatement);
+        Assert.Contains(
+            allStmts.OfType<BoundExpressionStatement>().Select(s => s.Expression).OfType<BoundImportedInstanceCallExpression>(),
+            ic => ic.Method.DeclaringType == typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo)
+                  && ic.Method.Name == nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw));
+    }
+
+    /// <summary>
+    /// Recursively yields all <see cref="BoundStatement"/> nodes in a block,
+    /// descending into nested <see cref="BoundBlockStatement"/>s. Used so tests
+    /// can assert on the absence of specific statement kinds anywhere in the
+    /// rewritten body regardless of nesting introduced by the rewriter.
+    /// </summary>
+    private static System.Collections.Generic.IEnumerable<BoundStatement> FlattenStatements(BoundBlockStatement block)
+    {
+        foreach (var stmt in block.Statements)
+        {
+            yield return stmt;
+            if (stmt is BoundBlockStatement nested)
+            {
+                foreach (var inner in FlattenStatements(nested))
+                {
+                    yield return inner;
+                }
+            }
+        }
+    }
 }
