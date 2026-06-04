@@ -10048,6 +10048,33 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Walks an arbitrary bound sub-tree and records every BoundLabelStatement
+    // label it discovers. Implemented as a BoundTreeRewriter subclass so it
+    // automatically descends through every statement and expression kind
+    // (including BoundBlockExpression, BoundSpillSequenceExpression, etc.)
+    // without having to enumerate them by hand. The rewriter is used purely
+    // as a visitor — its returned nodes are discarded.
+    private sealed class ExpressionBlockLabelCollector : BoundTreeRewriter
+    {
+        private readonly HashSet<BoundLabel> sink;
+
+        public ExpressionBlockLabelCollector(HashSet<BoundLabel> sink)
+        {
+            this.sink = sink;
+        }
+
+        public void Visit(BoundExpression expression)
+        {
+            this.RewriteExpression(expression);
+        }
+
+        protected override BoundStatement RewriteLabelStatement(BoundLabelStatement node)
+        {
+            this.sink.Add(node.Label);
+            return node;
+        }
+    }
+
     private sealed class LambdaCollector : BoundTreeRewriter
     {
         private readonly List<BoundFunctionLiteralExpression> sink;
@@ -12081,13 +12108,47 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundScopeStatement sc:
                     CollectLabels(sc.Body, sink);
                     return;
+                case BoundExpressionStatement es:
+                    CollectLabelsInExpression(es.Expression, sink);
+                    return;
+                case BoundConditionalGotoStatement cg:
+                    CollectLabelsInExpression(cg.Condition, sink);
+                    return;
+                case BoundReturnStatement rs:
+                    CollectLabelsInExpression(rs.Expression, sink);
+                    return;
                 default:
                     // All other structured statements (if/for/while/...) are
                     // flattened to BoundGotoStatement/BoundConditionalGotoStatement
-                    // by Lowerer before reaching the emitter, so there are no
-                    // hidden BoundLabelStatements to discover.
+                    // by Lowerer before reaching the emitter. However, any
+                    // statement that carries a BoundExpression may transitively
+                    // contain a BoundBlockExpression (interpolated-string handler
+                    // gate, null-conditional capture, switch-expression spill,
+                    // ...) whose statement list introduces BoundLabelStatements.
+                    // Those labels are registered in this.labels by
+                    // EmitBlockExpression, but if they are not added here the
+                    // EmitBranch crossesRegion heuristic emits an illegal Leave
+                    // for a same-region goto (issue #418 / P1-4). Use a generic
+                    // walker as a safety net for any statement kind that might
+                    // carry an expression-position block.
+                    var stmtWalker = new ExpressionBlockLabelCollector(sink);
+                    stmtWalker.RewriteStatement(statement);
                     return;
             }
+        }
+
+        // Recursively collects BoundLabelStatement labels that live inside a
+        // BoundExpression sub-tree. This is the inverse-side of CollectLabels
+        // for expression-position blocks (BoundBlockExpression et al.).
+        private static void CollectLabelsInExpression(BoundExpression expression, HashSet<BoundLabel> sink)
+        {
+            if (expression == null)
+            {
+                return;
+            }
+
+            var walker = new ExpressionBlockLabelCollector(sink);
+            walker.Visit(expression);
         }
 
         private void EmitBranch(BoundLabel target, BoundExpression conditional, bool jumpIfTrue)
