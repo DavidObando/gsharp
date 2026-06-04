@@ -30,4 +30,12 @@ public class LocalVariableSymbol : VariableSymbol
 
     /// <inheritdoc/>
     public override SymbolKind Kind => SymbolKind.LocalVariable;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this local carries the <c>scoped</c> modifier
+    /// (ADR-0058 / issue #376) or has inherited function-local escape scope from its initializer.
+    /// When <see langword="true"/>, returning this variable's value from a ref-struct-returning
+    /// function is rejected.
+    /// </summary>
+    public virtual bool IsScoped { get; set; }
 }

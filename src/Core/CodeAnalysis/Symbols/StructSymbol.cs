@@ -571,7 +571,7 @@ public sealed class StructSymbol : TypeSymbol
             var b = ImmutableArray.CreateBuilder<ParameterSymbol>(definition.PrimaryConstructorParameters.Length);
             foreach (var p in definition.PrimaryConstructorParameters)
             {
-                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst)));
+                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst), isScoped: p.IsScoped));
             }
 
             substitutedPrimary = b.MoveToImmutable();

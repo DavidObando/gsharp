@@ -126,6 +126,14 @@ public sealed class Binder
             {
                 scope.TryDeclareVariable(function.ThisParameter);
 
+                // ADR-0058 / issue #376: for ref struct instance methods, the implicit
+                // `this` parameter has function-local safe-to-escape by default (scoped).
+                // Only [UnscopedRef] relaxes this, allowing `this` to be returned.
+                if (TypeSymbol.IsByRefLike(function.ReceiverType) && !HasUnscopedRefAnnotation(function))
+                {
+                    function.ThisParameter.IsScoped = true;
+                }
+
                 // Phase 3.B.3 sub-step 2b: expose each field on the receiver
                 // as a bare name inside the method body. Field access lowers
                 // to `this.<field>` at name resolution time.
@@ -1021,7 +1029,15 @@ public sealed class Binder
                     continue;
                 }
 
-                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier));
+                // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type —
+                // CLR metadata does not permit ELEMENT_TYPE_BYREF in FieldDef signatures.
+                if (paramType is ByRefTypeSymbol byRefParamType)
+                {
+                    Diagnostics.ReportPointerTypeCannotBeFieldType(paramSyntax.Identifier.Location, byRefParamType.Name);
+                    continue;
+                }
+
+                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped));
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
 
@@ -1050,6 +1066,14 @@ public sealed class Binder
             if (!syntax.IsRef && TypeSymbol.IsByRefLike(fieldType))
             {
                 Diagnostics.ReportByRefLikeEscape(fieldSyntax.Identifier.Location, fieldType, $"be used as the type of field '{fieldName}'");
+                continue;
+            }
+
+            // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type —
+            // CLR metadata does not permit ELEMENT_TYPE_BYREF in FieldDef signatures.
+            if (fieldType is ByRefTypeSymbol byRefFieldType)
+            {
+                Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefFieldType.Name);
                 continue;
             }
 
@@ -1314,7 +1338,7 @@ public sealed class Binder
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                         }
                     }
 
@@ -1728,6 +1752,13 @@ public sealed class Binder
                     continue;
                 }
 
+                // ADR-0039 §4 / ADR-0058: a managed pointer (*T) cannot be a field type.
+                if (fieldType is ByRefTypeSymbol byRefStaticFieldType)
+                {
+                    Diagnostics.ReportPointerTypeCannotBeFieldType(fieldSyntax.Identifier.Location, byRefStaticFieldType.Name);
+                    continue;
+                }
+
                 var fieldAccessibility = ResolveAccessibility(fieldSyntax.AccessibilityModifier);
                 var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: false, isStatic: true);
 
@@ -1804,7 +1835,7 @@ public sealed class Binder
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                         }
                     }
 
@@ -2306,7 +2337,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
                 }
             }
 
@@ -2546,7 +2577,7 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier);
+                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped);
                     parameters.Add(parameter);
                     parameterSymbolBySyntax[pIndex] = parameter;
                 }
@@ -3208,6 +3239,22 @@ public sealed class Binder
 
         var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
         var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly, variableType, accessibility);
+
+        // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
+        // or infer function-local escape scope from the initializer (STE data-flow propagation).
+        if (variable is LocalVariableSymbol localVar)
+        {
+            if (syntax.IsScoped)
+            {
+                localVar.IsScoped = true;
+            }
+            else if ((TypeSymbol.IsByRefLike(variableType) || variableType is ByRefTypeSymbol) && convertedInitializer != null)
+            {
+                // Infer scoped from initializer: if the initializer is rooted in a
+                // scoped variable, the new local inherits function-local STE/RSTE.
+                localVar.IsScoped = HasFunctionLocalEscapeScope(convertedInitializer);
+            }
+        }
 
         // Issue #367: a by-ref-like (`ref struct`) local is legal in an ordinary
         // function, but an async function or an iterator hoists every local into
@@ -5504,6 +5551,31 @@ public sealed class Binder
             }
         }
 
+        if (expression != null)
+        {
+            // ADR-0039 §4 / ADR-0058: a managed-pointer (*T) value cannot be returned from
+            // a function — the callee's stack frame (containing the pointed-to variable) is
+            // invalid after the function returns. Diagnose with GS9004.
+            if (expression.Type is ByRefTypeSymbol)
+            {
+                Diagnostics.ReportByRefCannotEscape(
+                    syntax.Expression.Location,
+                    "a managed pointer (*T) cannot be returned from a function; managed references must not outlive their declaring scope");
+            }
+
+            // ADR-0058 / issue #376: a ref struct value with function-local escape scope
+            // cannot be returned. This covers:
+            // - direct reference to a `scoped` parameter or local
+            // - value derived from a scoped source through constructor, member access, etc.
+            if (TypeSymbol.IsByRefLike(expression.Type) && HasFunctionLocalEscapeScope(expression))
+            {
+                Diagnostics.ReportByRefLikeEscape(
+                    syntax.Expression.Location,
+                    expression.Type,
+                    "be returned from a function (value has function-local safe-to-escape scope due to a `scoped` source)");
+            }
+        }
+
         return new BoundReturnStatement(syntax, expression);
     }
 
@@ -6276,12 +6348,22 @@ public sealed class Binder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier));
+            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped));
             parameterTypes.Add(ptype);
         }
 
         var returnType = syntax.ReturnTypeClause != null ? BindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
+
+        // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
+        // because CLR Func<> delegates cannot carry by-ref type arguments.
+        if (returnType is ByRefTypeSymbol && syntax.ReturnTypeClause != null)
+        {
+            Diagnostics.ReportByRefCannotEscape(
+                syntax.ReturnTypeClause.Location,
+                "a managed pointer (*T) cannot be the return type of a function literal");
+            returnType = TypeSymbol.Error;
+        }
 
         // For async lambdas, the observable return type (from the caller's
         // perspective) is Task or Task<T>, matching top-level async functions —
@@ -6321,11 +6403,19 @@ public sealed class Binder
         // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
         // closure; the capture would hoist it into a heap-allocated display
         // class, which the CLR forbids.
+        // ADR-0058 / issue #376: a managed-pointer (*T / ByRefTypeSymbol) local also
+        // cannot be captured — the closure may outlive the pointed-to variable.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
             {
                 Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
+            }
+            else if (capturedVariable.Type is ByRefTypeSymbol)
+            {
+                Diagnostics.ReportByRefCannotEscape(
+                    syntax.Location,
+                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
             }
         }
 
@@ -10285,6 +10375,121 @@ public sealed class Binder
         return HasInModifier(getter.ReturnParameter.GetRequiredCustomModifiers());
     }
 
+    // ADR-0058 / issue #376: determines whether a bound expression has function-local
+    // safe-to-escape scope. Used by the return-statement check and by STE propagation
+    // through initializers to detect when a ref struct value is rooted in a scoped source.
+    private static bool HasFunctionLocalEscapeScope(BoundExpression expression)
+    {
+        switch (expression)
+        {
+            // Direct reference to a scoped variable (parameter or local).
+            case BoundVariableExpression varExpr:
+                return varExpr.Variable is LocalVariableSymbol local && local.IsScoped;
+
+            // Conversion (implicit/explicit) preserves STE of the inner expression.
+            case BoundConversionExpression conv:
+                return HasFunctionLocalEscapeScope(conv.Expression);
+
+            // User-defined constructor: if any argument is a scoped ref struct, the
+            // result inherits function-local STE (conservative).
+            case BoundConstructorCallExpression ctor:
+                foreach (var arg in ctor.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            // CLR constructor call: same conservative rule.
+            case BoundClrConstructorCallExpression clrCtor:
+                foreach (var arg in clrCtor.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            // Field/member access on a scoped receiver: if the receiver is scoped
+            // and the result type is a ref struct, the result is also function-local.
+            case BoundFieldAccessExpression fieldAccess:
+                if (fieldAccess.Receiver != null && TypeSymbol.IsByRefLike(fieldAccess.Receiver.Type))
+                {
+                    return HasFunctionLocalEscapeScope(fieldAccess.Receiver);
+                }
+
+                return false;
+
+            // User instance call (method on a user struct): if the receiver is scoped
+            // and the result is a ref struct, the result inherits function-local STE.
+            case BoundUserInstanceCallExpression userCall:
+                if (userCall.Receiver != null && TypeSymbol.IsByRefLike(userCall.Receiver.Type)
+                    && HasFunctionLocalEscapeScope(userCall.Receiver))
+                {
+                    return true;
+                }
+
+                foreach (var arg in userCall.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            // Imported (CLR) instance call: same rule as user instance call.
+            case BoundImportedInstanceCallExpression importedCall:
+                if (importedCall.Receiver != null && TypeSymbol.IsByRefLike(importedCall.Receiver.Type)
+                    && HasFunctionLocalEscapeScope(importedCall.Receiver))
+                {
+                    return true;
+                }
+
+                foreach (var arg in importedCall.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            // Static/imported calls: check arguments only.
+            case BoundCallExpression call:
+                foreach (var arg in call.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            case BoundImportedCallExpression importedStatic:
+                foreach (var arg in importedStatic.Arguments)
+                {
+                    if (TypeSymbol.IsByRefLike(arg.Type) && HasFunctionLocalEscapeScope(arg))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
     private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)
     {
         indexer = null;
@@ -11006,7 +11211,7 @@ public sealed class Binder
             }
             else
             {
-                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
             }
         }
 
@@ -11190,6 +11395,53 @@ public sealed class Binder
             if (annotation.NameSegments[0].Text == "Attribute")
             {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0058 / issue #376: returns true if a function declaration carries the
+    /// <c>@UnscopedRef</c> annotation, which relaxes the implicit <c>scoped</c>
+    /// on a ref struct instance method's <c>this</c> parameter.
+    /// </summary>
+    private static bool HasUnscopedRefAnnotation(FunctionSymbol function)
+    {
+        var declaration = function.Declaration;
+        if (declaration == null)
+        {
+            return false;
+        }
+
+        var annotations = declaration.Annotations;
+        if (annotations.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var annotation in annotations)
+        {
+            if (annotation.Target != null)
+            {
+                continue;
+            }
+
+            if (annotation.NameSegments.Length == 1 && annotation.NameSegments[0].Text == "UnscopedRef")
+            {
+                return true;
+            }
+
+            // Also accept the fully qualified name.
+            if (annotation.NameSegments.Length >= 2)
+            {
+                var fullName = string.Concat(annotation.NameSegments.Select(s => s.Text));
+                if (fullName == "UnscopedRef" || fullName == "UnscopedRefAttribute"
+                    || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRef"
+                    || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute")
+                {
+                    return true;
+                }
             }
         }
 

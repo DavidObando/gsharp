@@ -1610,6 +1610,17 @@ public class Parser
         // ADR-0047: parameter-level annotations precede the identifier.
         var annotations = ParseAnnotations();
 
+        // ADR-0058 / issue #376: optional `scoped` contextual modifier precedes the identifier.
+        // Disambiguate: `scoped` is only a modifier when followed by another identifier (the
+        // parameter name). If the current token IS the parameter name (no following identifier),
+        // treat it as the identifier, not as a modifier.
+        SyntaxToken scopedModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            scopedModifier = NextToken();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
@@ -1618,7 +1629,9 @@ public class Parser
         }
 
         var type = ParseTypeClause();
-        return new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
+        var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
+        parameter.ScopedModifier = scopedModifier;
+        return parameter;
     }
 
     private TypeClauseSyntax ParseTypeClause()
@@ -2234,6 +2247,16 @@ public class Parser
             return new NamedDeconstructionStatementSyntax(syntaxTree, keyword, openBrace, fields, closeBrace, equalsTok, init);
         }
 
+        // ADR-0058 / issue #376: optional `scoped` contextual modifier between the
+        // keyword and the identifier. Disambiguate: `scoped` is only a modifier when
+        // followed by another identifier (the variable name).
+        SyntaxToken scopedModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            scopedModifier = NextToken();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
 
@@ -2246,7 +2269,7 @@ public class Parser
             && typeClause != null
             && Current.Kind != SyntaxKind.EqualsToken)
         {
-            return new VariableDeclarationSyntax(
+            var decl = new VariableDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
                 keyword,
@@ -2254,11 +2277,15 @@ public class Parser
                 typeClause,
                 equalsToken: null,
                 initializer: null);
+            decl.ScopedModifier = scopedModifier;
+            return decl;
         }
 
         var equals = MatchToken(SyntaxKind.EqualsToken);
         var initializer = ParseExpression();
-        return new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
+        var result = new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
+        result.ScopedModifier = scopedModifier;
+        return result;
     }
 
     private SeparatedSyntaxList<NamedDeconstructionFieldSyntax> ParseNamedDeconstructionFields()
