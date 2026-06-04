@@ -133,22 +133,31 @@ ImmutableArray.Create<BoundStatement>(
         var innerBlock = result.Statements[0] as BoundBlockStatement;
         Assert.NotNull(innerBlock);
 
-        // Pending exception declaration
+        // Pending exception declaration is first.
         Assert.IsType<BoundVariableDeclaration>(innerBlock.Statements[0]);
 
-        // Try statement with modified catch (just stores exception)
-        Assert.IsType<BoundTryStatement>(innerBlock.Statements[1]);
-        var rewrittenTry = (BoundTryStatement)innerBlock.Statements[1];
+        // Find the (single) rewritten try statement. Issue #419: the rewriter
+        // now also emits a per-clause capture local before the try, so the try
+        // is no longer at a fixed index — locate it instead.
+        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
         Assert.Single(rewrittenTry.CatchClauses);
 
-        // The catch body should be a block containing an assignment (pendingEx = e)
+        // The rewritten catch keeps the ORIGINAL exception type (no widening
+        // to System.Exception) so the CLR catch dispatch only matches the
+        // intended type (issue #419).
+        Assert.Same(ExceptionType, rewrittenTry.CatchClauses[0].ExceptionType);
+
+        // The catch body should be a block of assignments
+        // (capture_i = e; pendingException = e;)
         var catchBodyRewritten = rewrittenTry.CatchClauses[0].Body;
         var catchBlock = Assert.IsType<BoundBlockStatement>(catchBodyRewritten);
-        Assert.Single(catchBlock.Statements);
+        Assert.Equal(2, catchBlock.Statements.Length);
         Assert.IsType<BoundExpressionStatement>(catchBlock.Statements[0]);
+        Assert.IsType<BoundExpressionStatement>(catchBlock.Statements[1]);
 
         // The await should be outside the try (in the lifted handler section)
-        var afterTry = innerBlock.Statements.Skip(2).ToArray();
+        var tryIndex = innerBlock.Statements.IndexOf(rewrittenTry);
+        var afterTry = innerBlock.Statements.Skip(tryIndex + 1).ToArray();
         Assert.True(afterTry.Any(s => AsyncBoundTreeQueries.HasAwait(s)),
             "Await should be lifted outside the try/catch region.");
     }
@@ -260,5 +269,207 @@ ImmutableArray.Create<BoundStatement>(
 
         // Assert: the finally body is lifted (pattern B applies)
         Assert.NotSame(body, result);
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #419: typed catch with await must keep its original exception type
+    // so the CLR catch dispatch only fires for matching exceptions.
+    // ----------------------------------------------------------------------
+
+    /// <summary>
+    /// A struct-class derived from <see cref="System.Exception"/> used to stand
+    /// in for a custom typed catch in the rewriter tests.
+    /// </summary>
+    private static TypeSymbol MakeDerivedExceptionType()
+    {
+        // ArgumentException is a real subtype of Exception in the host runtime,
+        // making it a convenient typed-catch target for structural assertions.
+        return TypeSymbol.FromClrType(typeof(System.ArgumentException));
+    }
+
+    [Fact]
+    public void TryCatch_TypedCatch_WithAwait_KeepsOriginalCatchType()
+    {
+        // Arrange: try { x = 1 } catch (e ArgumentException) { await ... }
+        // The rewriter must NOT widen this to catch (Exception); otherwise an
+        // InvalidOperationException would also be swallowed.
+        var argExType = MakeDerivedExceptionType();
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var e = new LocalVariableSymbol("e", false, argExType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBody = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, awaitExpr)));
+        var catchClause = new BoundCatchClause(argExType, e, catchBody);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), null);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
+        Assert.Single(rewrittenTry.CatchClauses);
+        // The catch type must remain the ORIGINAL ArgumentException — never
+        // widened to System.Exception.
+        Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
+        Assert.NotSame(ExceptionType, rewrittenTry.CatchClauses[0].ExceptionType);
+    }
+
+    [Fact]
+    public void TryCatch_MultipleTypedCatches_WithAwait_KeepEachOriginalType()
+    {
+        // Arrange: catch (a ArgumentException) { await } catch (g Exception) { await }
+        // Both clauses must remain typed: the CLR's in-order dispatch handles
+        // the discriminative routing, and each lifted handler runs only for
+        // its own exception type.
+        var argExType = MakeDerivedExceptionType();
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var a = new LocalVariableSymbol("a", false, argExType);
+        var g = new LocalVariableSymbol("g", false, ExceptionType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitA = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBodyA = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitA)));
+        var catchA = new BoundCatchClause(argExType, a, catchBodyA);
+        var awaitG = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBodyG = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitG)));
+        var catchG = new BoundCatchClause(ExceptionType, g, catchBodyG);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchA, catchG), null);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
+        Assert.Equal(2, rewrittenTry.CatchClauses.Length);
+        Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
+        Assert.Same(ExceptionType, rewrittenTry.CatchClauses[1].ExceptionType);
+    }
+
+    [Fact]
+    public void TryCatch_TypedCatchWithAwait_FollowedByGeneralCatch_PreservesFallthrough()
+    {
+        // Arrange: catch (a ArgumentException) { await }   <- with await
+        //          catch (g Exception) { x = 2 }           <- without await; stays in place
+        // The general catch must remain reachable: prior to the fix, the
+        // ArgumentException clause was widened to Exception and shadowed it.
+        var argExType = MakeDerivedExceptionType();
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var a = new LocalVariableSymbol("a", false, argExType);
+        var g = new LocalVariableSymbol("g", false, ExceptionType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitA = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBodyA = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitA)));
+        var catchA = new BoundCatchClause(argExType, a, catchBodyA);
+        var catchBodyG = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 2)))));
+        var catchG = new BoundCatchClause(ExceptionType, g, catchBodyG);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchA, catchG), null);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
+        Assert.Equal(2, rewrittenTry.CatchClauses.Length);
+
+        // First clause: typed catch with await — keeps ArgumentException type
+        // and body is the capture/pending assignments (not the original body).
+        Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
+        var typedBody = Assert.IsType<BoundBlockStatement>(rewrittenTry.CatchClauses[0].Body);
+        Assert.All(typedBody.Statements, s => Assert.IsType<BoundExpressionStatement>(s));
+
+        // Second clause: stays in place untouched (its body is the original).
+        Assert.Same(ExceptionType, rewrittenTry.CatchClauses[1].ExceptionType);
+        Assert.Same(catchBodyG, rewrittenTry.CatchClauses[1].Body);
+    }
+
+    [Fact]
+    public void TryCatch_TypedCatchWithAwait_DispatchUsesPerClauseCaptureNotPending()
+    {
+        // The post-try lifted handler must check a per-clause capture local
+        // (not the shared pendingException) so that when the catch-all (or
+        // another catch) sets pendingException to an unrelated exception, the
+        // handler does not erroneously run.
+        var argExType = MakeDerivedExceptionType();
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var e = new LocalVariableSymbol("e", false, argExType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitExpr = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBody = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitExpr)));
+        var catchClause = new BoundCatchClause(argExType, e, catchBody);
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), null);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+
+        // Should have a per-clause capture local declared before the try.
+        var declsBeforeTry = innerBlock.Statements
+            .TakeWhile(s => s is not BoundTryStatement)
+            .OfType<BoundVariableDeclaration>()
+            .ToArray();
+        Assert.Contains(declsBeforeTry, d => d.Variable.Name.StartsWith("<>catch_capture_", System.StringComparison.Ordinal));
+        Assert.Contains(declsBeforeTry, d => d.Variable.Name.StartsWith("<>pending_ex_", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TryCatchFinally_TypedCatchWithAwait_KeepsTypedDispatch()
+    {
+        // Pattern B (finally has await) must still keep the typed catch's
+        // original exception type. The trailing catch-all (Exception) is the
+        // pattern-required capture for the finally; the typed catch retains
+        // its narrow type ahead of it.
+        var argExType = MakeDerivedExceptionType();
+        var x = new LocalVariableSymbol("x", false, TypeSymbol.Int32);
+        var e = new LocalVariableSymbol("e", false, argExType);
+        var tryBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, new BoundAssignmentExpression(null, x, new BoundLiteralExpression(null, 1)))));
+        var awaitA = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var catchBody = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitA)));
+        var catchClause = new BoundCatchClause(argExType, e, catchBody);
+        var awaitF = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var finallyBlock = new BoundBlockStatement(null,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, awaitF)));
+        var tryStmt = new BoundTryStatement(null, tryBlock, ImmutableArray.Create(catchClause), finallyBlock);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(tryStmt));
+
+        // Act
+        var result = AsyncExceptionHandlerRewriter.Rewrite(body);
+
+        // Assert
+        var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
+        Assert.Null(rewrittenTry.FinallyBlock);
+
+        // Two clauses: typed [ArgumentException] then catch-all [Exception]
+        // (the catch-all is the finally-pattern capture).
+        Assert.Equal(2, rewrittenTry.CatchClauses.Length);
+        Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
+        Assert.Same(ExceptionType, rewrittenTry.CatchClauses[1].ExceptionType);
     }
 }
