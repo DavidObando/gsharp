@@ -11478,6 +11478,36 @@ internal sealed class ReflectionMetadataEmitter
             // Phase 3.C.3: `?:` (NullCoalesce). Short-circuit on the left.
             if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
             {
+                // P3-5 / Issue #420: `dup; brtrue` is only legal for object
+                // references and primitive integers — it is invalid IL for
+                // struct stack values. If the left operand's stack type is a
+                // value type (raw struct/enum, or `Nullable<T>` over a value
+                // type), this short-circuit pattern emits invalid IL the
+                // moment the binder/encoder lets such expressions through.
+                //
+                // Today the encoder rejects nullable user-defined structs/
+                // enums (see EncodeTypeSymbol), so the only reachable risky
+                // case is `Nullable<primitive>` (e.g. `int? ?? 5`). When
+                // nullable value types are wired up end-to-end the correct
+                // strategy is to spill the left to a local and emit a
+                // `call Nullable<T>::get_HasValue` / `call get_ValueOrDefault`
+                // pair, or to box before the brtrue. Until that is in place,
+                // fail fast with a clear diagnostic instead of producing
+                // PEVerify-rejected IL.
+                var leftType = b.Left.Type;
+                if (IsValueTypeSymbol(leftType))
+                {
+                    var assertMsg = "Null-coalesce `??` emit uses `dup; brtrue` which is illegal IL for value-type stack values "
+                        + "(struct, enum, or Nullable<valueType>). This path needs a HasValue/ValueOrDefault "
+                        + "(or box-before-brtrue) strategy when nullable value types are wired up end-to-end. "
+                        + $"Left operand type was '{leftType?.Name}'.";
+                    System.Diagnostics.Debug.Assert(false, assertMsg);
+                    throw new NotSupportedException(
+                        $"Null-coalesce '??' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
+                        + "The current `dup; brtrue` short-circuit is invalid IL for struct stack values; a HasValue/ValueOrDefault "
+                        + "(or box-before-brtrue) emit path is required when nullable value types are supported.");
+                }
+
                 this.EmitExpression(b.Left);
                 this.il.OpCode(ILOpCode.Dup);
                 var done = this.il.DefineLabel();
