@@ -997,6 +997,21 @@ internal sealed class ReflectionMetadataEmitter
 
         var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
 
+        // Issue #456: enumeration of `program.Functions` walks a
+        // Dictionary<FunctionSymbol, ...> whose hash buckets depend on
+        // FunctionSymbol identity, which is not stable across Compilation
+        // instances. Two functions with identical signatures (e.g.
+        // `func f(int32) int32` and `func g(int32) int32`) can therefore
+        // be assigned MethodDef rows in flipped order across runs, breaking
+        // byte-deterministic emit. Sort each bucket by source declaration
+        // position (with Name as a stable tiebreaker for synthesized
+        // functions that share or lack a Declaration) so the MethodDef
+        // table is emitted in the same order every run.
+        foreach (var pkgKey in functionsByPackage.Keys.ToList())
+        {
+            functionsByPackage[pkgKey].Sort(FunctionEmitOrderComparer.Instance);
+        }
+
         // Phase 4 emit parity (E1): non-capture function literals are attached
         // to the entry-point package's <Program> container as ordinary static
         // methods. Capture-bearing literals were already redirected into
@@ -10077,6 +10092,81 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.sink.Add(node);
             return node;
+        }
+    }
+
+    /// <summary>
+    /// Issue #456: deterministic ordering for FunctionSymbols emitted into
+    /// the MethodDef table. Sort first by the function's source declaration
+    /// start (so user-visible order matches source order), then by name
+    /// (Ordinal) for synthesized helpers that lack a Declaration or share a
+    /// span. This guarantees byte-identical MethodDef layout across
+    /// Compilation instances, which is required for byte-deterministic emit
+    /// (cf. <see cref="DebugInformationOptions.Deterministic"/>).
+    /// </summary>
+    private sealed class FunctionEmitOrderComparer : IComparer<FunctionSymbol>
+    {
+        public static readonly FunctionEmitOrderComparer Instance = new FunctionEmitOrderComparer();
+
+        private FunctionEmitOrderComparer()
+        {
+        }
+
+        public int Compare(FunctionSymbol x, FunctionSymbol y)
+        {
+            if (ReferenceEquals(x, y))
+            {
+                return 0;
+            }
+
+            if (x is null)
+            {
+                return -1;
+            }
+
+            if (y is null)
+            {
+                return 1;
+            }
+
+            int xPos = x.Declaration?.Span.Start ?? int.MaxValue;
+            int yPos = y.Declaration?.Span.Start ?? int.MaxValue;
+            int cmp = xPos.CompareTo(yPos);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = string.CompareOrdinal(x.Name ?? string.Empty, y.Name ?? string.Empty);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            // Final tiebreaker for distinct-but-otherwise-equal symbols (e.g.
+            // synthesized partial-method shadows): fall back to a stable
+            // signature string so equal-named overloads get a deterministic
+            // order even when source positions and names coincide.
+            return string.CompareOrdinal(FormatSignature(x), FormatSignature(y));
+        }
+
+        private static string FormatSignature(FunctionSymbol fn)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(fn.Type?.Name ?? "?");
+            sb.Append('(');
+            for (int i = 0; i < fn.Parameters.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+
+                sb.Append(fn.Parameters[i].Type?.Name ?? "?");
+            }
+
+            sb.Append(')');
+            return sb.ToString();
         }
     }
 
