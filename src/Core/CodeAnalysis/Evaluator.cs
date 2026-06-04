@@ -1800,7 +1800,42 @@ public sealed class Evaluator
         _ => throw new InvalidOperationException($"Unsupported ^ on {l?.GetType()} and {r?.GetType()}"),
     };
 
-    private static object NumericShl(object l, int r) => l switch
+    // Issue #421 (P2-2): Go semantics for shift operations. The C# `<<` and
+    // `>>` operators mask the shift count to log2(width) low bits, matching
+    // ECMA-335 `shl`/`shr`. G# follows Go, where a shift count >= the
+    // operand's natural width yields zero. Match the emitter's behavior so
+    // interpreter results agree with compiled output.
+    private static int BitWidthOf(object l) => l switch
+    {
+        sbyte _ => 8,
+        byte _ => 8,
+        short _ => 16,
+        ushort _ => 16,
+        int _ => 32,
+        uint _ => 32,
+        long _ => 64,
+        ulong _ => 64,
+        nint _ => IntPtr.Size * 8,
+        nuint _ => IntPtr.Size * 8,
+        _ => 32,
+    };
+
+    private static object ZeroOfShape(object l) => l switch
+    {
+        sbyte _ => (sbyte)0,
+        byte _ => (byte)0,
+        short _ => (short)0,
+        ushort _ => (ushort)0,
+        int _ => 0,
+        uint _ => 0u,
+        long _ => 0L,
+        ulong _ => 0UL,
+        nint _ => (nint)0,
+        nuint _ => (nuint)0,
+        _ => 0,
+    };
+
+    private static object NumericShl(object l, int r) => (r < 0 || r >= BitWidthOf(l)) ? ZeroOfShape(l) : l switch
     {
         int li => li << r,
         long li => li << r,
@@ -1815,7 +1850,7 @@ public sealed class Evaluator
         _ => throw new InvalidOperationException($"Unsupported << on {l?.GetType()}"),
     };
 
-    private static object NumericShr(object l, int r) => l switch
+    private static object NumericShr(object l, int r) => (r < 0 || r >= BitWidthOf(l)) ? ZeroOfShape(l) : l switch
     {
         int li => li >> r,
         long li => li >> r,
