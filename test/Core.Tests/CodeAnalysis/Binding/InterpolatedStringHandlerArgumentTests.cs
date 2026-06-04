@@ -99,6 +99,69 @@ Console.WriteLine(msg)
         Assert.DoesNotContain("y=9", output);
     }
 
+    /// <summary>
+    /// Issue #418 (P1-10): a string-typed hole must select
+    /// <c>AppendFormatted(string)</c>, not the first reflected overload (which
+    /// happens to be <c>AppendFormatted(int)</c> on this fixture). Pre-fix,
+    /// the lowerer's value-blind first-match would either pick the int overload
+    /// (invalid IL: <c>string</c> argument supplied where <c>int</c> is
+    /// expected) or generate an <c>InvalidCastException</c> at run time.
+    /// </summary>
+    [Fact]
+    public void TypedAppend_String_Hole_Picks_String_Overload()
+    {
+        const string Source = @"package HandlerTypedStr
+import System
+import GSharp.Core.Tests.Fixtures
+
+let s = ""hello""
+let msg = InterpolationHarness.Typed(""P:"", ""v=${s}"")
+Console.WriteLine(msg)
+";
+        var output = CompileAndRun(Source, "HandlerTypedStrTest");
+        Assert.Contains("P:v=[str:hello]", output);
+        Assert.DoesNotContain("[int:", output);
+        Assert.DoesNotContain("[T:", output);
+    }
+
+    /// <summary>Issue #418 (P1-10): an int-typed hole must select <c>AppendFormatted(int)</c>.</summary>
+    [Fact]
+    public void TypedAppend_Int_Hole_Picks_Int_Overload()
+    {
+        const string Source = @"package HandlerTypedInt
+import System
+import GSharp.Core.Tests.Fixtures
+
+let msg = InterpolationHarness.Typed(""P:"", ""v=${42}"")
+Console.WriteLine(msg)
+";
+        var output = CompileAndRun(Source, "HandlerTypedIntTest");
+        Assert.Contains("P:v=[int:42]", output);
+        Assert.DoesNotContain("[str:", output);
+        Assert.DoesNotContain("[T:", output);
+    }
+
+    /// <summary>
+    /// Issue #418 (P1-10): a hole whose static type matches neither the
+    /// <c>int</c> nor the <c>string</c> overload must fall through to the
+    /// generic <c>AppendFormatted&lt;T&gt;</c>.
+    /// </summary>
+    [Fact]
+    public void TypedAppend_Bool_Hole_Picks_Generic_Overload()
+    {
+        const string Source = @"package HandlerTypedBool
+import System
+import GSharp.Core.Tests.Fixtures
+
+let msg = InterpolationHarness.Typed(""P:"", ""v=${true}"")
+Console.WriteLine(msg)
+";
+        var output = CompileAndRun(Source, "HandlerTypedBoolTest");
+        Assert.Contains("P:v=[T:True]", output);
+        Assert.DoesNotContain("[int:", output);
+        Assert.DoesNotContain("[str:", output);
+    }
+
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, object? Value) EvaluateNamed(string source, string variableName)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

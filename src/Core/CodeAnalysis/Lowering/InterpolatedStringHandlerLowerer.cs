@@ -424,8 +424,19 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
         var wantFormat = part.Format != null;
         var extra = (wantAlign ? 1 : 0) + (wantFormat ? 1 : 0);
 
-        MethodInfo best = null;
-        MethodInfo valueOnly = null;
+        // Collect every AppendFormatted overload whose arity and trailing
+        // alignment/format shape match the hole. Trailing-parameter shape is
+        // checked here (rather than via overload resolution on synthetic int /
+        // string arg types) because the supplied alignment/format pair is a
+        // literal pattern, not a value to coerce, and matches a handler
+        // overload only when its parameter types are *exactly* `int` /
+        // `string`. We intentionally do not pre-filter on the value parameter
+        // type: the right overload for the hole is selected by C#-style
+        // overload resolution below, so that e.g.
+        // `AppendFormatted(string)` wins over `AppendFormatted<T>(T)` for a
+        // `string` value (issue #418, P1-10).
+        var shapeCandidates = ImmutableArray.CreateBuilder<MethodInfo>();
+        MethodInfo anyAppendFormatted = null;
         foreach (var method in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
             if (method.Name != "AppendFormatted")
@@ -433,17 +444,9 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
                 continue;
             }
 
+            anyAppendFormatted ??= method;
+
             var ps = method.GetParameters();
-            if (ps.Length == 0)
-            {
-                continue;
-            }
-
-            if (ps.Length == 1 && valueOnly == null)
-            {
-                valueOnly = method;
-            }
-
             if (ps.Length != 1 + extra)
             {
                 continue;
@@ -464,15 +467,102 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
 
             if (ok)
             {
-                best = method;
-                break;
+                shapeCandidates.Add(method);
             }
         }
 
-        best ??= valueOnly ?? handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .First(m => m.Name == "AppendFormatted");
+        // Issue #418 (P1-10): when the value has a known CLR type, run the
+        // same C# "better function member" overload resolution used for
+        // BoundCallExpression so the value's static type drives the choice.
+        // Without this, a handler exposing both `AppendFormatted(int)` and
+        // `AppendFormatted(string)` would return the first reflected match
+        // regardless of the hole's type, producing invalid IL or an
+        // InvalidCastException at run time.
+        var valueClr = holeType?.ClrType;
+        if (shapeCandidates.Count > 0 && valueClr != null)
+        {
+            var argTypes = new System.Type[1 + extra];
+            argTypes[0] = valueClr;
+            var ai = 1;
+            if (wantAlign)
+            {
+                argTypes[ai++] = typeof(int);
+            }
 
-        return CloseGenericAppend(best, holeType);
+            if (wantFormat)
+            {
+                argTypes[ai] = typeof(string);
+            }
+
+            var resolution = OverloadResolution.Resolve<MethodInfo>(shapeCandidates, argTypes);
+            MethodInfo picked = null;
+            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                picked = resolution.Best;
+            }
+            else if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+            {
+                // C# §7.5.3.2 tie-break: a non-generic member is better than
+                // a generic one. The shared OverloadResolution.Resolve does
+                // not yet implement this, so apply it locally so e.g.
+                // `AppendFormatted(string)` beats `AppendFormatted<T>(T)` when
+                // both are applicable for a `string` hole.
+                MethodInfo nonGeneric = null;
+                foreach (var m in resolution.Ambiguous)
+                {
+                    if (!m.IsGenericMethod)
+                    {
+                        if (nonGeneric == null)
+                        {
+                            nonGeneric = m;
+                        }
+                        else
+                        {
+                            nonGeneric = null;
+                            break;
+                        }
+                    }
+                }
+
+                picked = nonGeneric;
+            }
+
+            if (picked != null)
+            {
+                return picked.IsGenericMethod && !picked.IsGenericMethodDefinition
+                    ? (picked, default)
+                    : CloseGenericAppend(picked, holeType);
+            }
+        }
+
+        // Fallback path (issue #418): used when the value has no live CLR type
+        // (a user-defined symbol type) or when no shape-matching overload was
+        // found. Mirror the prior "first match wins" behaviour but at least
+        // prefer a shape-matching candidate when available so the alignment /
+        // format slots are honoured.
+        MethodInfo fallback = null;
+        if (shapeCandidates.Count > 0)
+        {
+            fallback = shapeCandidates[0];
+        }
+        else
+        {
+            // No shape match — pick the first 1-arg AppendFormatted (the
+            // value-only overload), then any AppendFormatted, as a last
+            // resort.
+            foreach (var method in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (method.Name == "AppendFormatted" && method.GetParameters().Length == 1)
+                {
+                    fallback = method;
+                    break;
+                }
+            }
+
+            fallback ??= anyAppendFormatted;
+        }
+
+        return CloseGenericAppend(fallback, holeType);
     }
 
     private static (MethodInfo Method, ImmutableArray<TypeSymbol> TypeArguments) CloseGenericAppend(MethodInfo open, TypeSymbol holeType)
