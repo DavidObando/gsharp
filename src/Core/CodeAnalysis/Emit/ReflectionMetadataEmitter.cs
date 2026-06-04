@@ -54,8 +54,11 @@ internal sealed class ReflectionMetadataEmitter
     private readonly MetadataBuilder metadata = new MetadataBuilder();
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private AssemblyReferenceHandle systemRuntimeAssemblyRef;
-    private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>();
-    private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>();
+    // Issue #420 (P3-9): key by TypeIdentityComparer so that the same logical
+    // type reached through different MetadataLoadContext paths collapses to
+    // one TypeRef row instead of producing duplicates.
+    private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>(TypeIdentityComparer.Instance);
+    private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>(TypeIdentityComparer.Instance);
     private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
     private readonly Dictionary<MethodInfo, MethodSpecificationHandle> methodSpecs = new Dictionary<MethodInfo, MethodSpecificationHandle>();
 
