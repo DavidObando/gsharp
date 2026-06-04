@@ -13719,6 +13719,17 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(dynamicInvoke));
+
+            // Issue #418 (P1-6): Delegate.DynamicInvoke always returns object.
+            // For an erased void-returning delegate (`func(T)` with no return),
+            // the BoundIndirectCallExpression.Type is Void, so the surrounding
+            // BoundExpressionStatement skips its usual Pop and the boxed result
+            // would linger on the stack, producing invalid IL at the next
+            // ret/leave. Absorb the unused object here.
+            if (call.FunctionType.ReturnType == TypeSymbol.Void)
+            {
+                this.il.OpCode(ILOpCode.Pop);
+            }
         }
 
         private void EmitInstanceReceiver(BoundExpression receiver)
