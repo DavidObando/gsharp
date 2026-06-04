@@ -12716,6 +12716,19 @@ internal sealed class ReflectionMetadataEmitter
         {
             loadValue();
             this.EmitExpression(rp.Value);
+
+            // For unsigned/char discriminants the signed opcodes mis-order
+            // values whose high bit is set (e.g. uint.MaxValue would compare
+            // as -1 under Clt). Always use the *_un variants.
+            //
+            // For float/double, match the IEEE-aware lowering Roslyn uses
+            // for C# relational operators: NaN must compare unordered with
+            // every value, so strict `<`/`>` keep the signed Clt/Cgt (which
+            // return 0 when an operand is NaN), but `<=`/`>=` — which we
+            // synthesize as `!(a > b)` / `!(a < b)` — must use the _un
+            // forms so the negation produces false for NaN instead of true.
+            bool isUnsigned = IsUnsignedOrChar(rp.Type);
+            bool isFloat = rp.Type == TypeSymbol.Float32 || rp.Type == TypeSymbol.Float64;
             switch (rp.Op.Kind)
             {
                 case BoundBinaryOperatorKind.Equals:
@@ -12727,18 +12740,18 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
                 case BoundBinaryOperatorKind.Less:
-                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
                     break;
                 case BoundBinaryOperatorKind.LessOrEquals:
-                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                     this.il.LoadConstantI4(0);
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
                 case BoundBinaryOperatorKind.Greater:
-                    this.il.OpCode(ILOpCode.Cgt);
+                    this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
                     break;
                 case BoundBinaryOperatorKind.GreaterOrEquals:
-                    this.il.OpCode(ILOpCode.Clt);
+                    this.il.OpCode(isUnsigned || isFloat ? ILOpCode.Clt_un : ILOpCode.Clt);
                     this.il.LoadConstantI4(0);
                     this.il.OpCode(ILOpCode.Ceq);
                     break;
