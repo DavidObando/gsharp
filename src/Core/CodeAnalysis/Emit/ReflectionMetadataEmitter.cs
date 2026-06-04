@@ -7,6 +7,7 @@
 #pragma warning disable SA1117 // parameters on same line
 #pragma warning disable SA1214 // readonly fields before non-readonly
 #pragma warning disable SA1515 // single-line comment preceded by blank line
+#pragma warning disable SA1201 // method should not follow a class (this file mixes private helper classes inline with methods)
 
 using System;
 using System.Collections.Generic;
@@ -6653,142 +6654,240 @@ internal sealed class ReflectionMetadataEmitter
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         BoundScopeStatement currentScope)
     {
-        switch (statement)
+        // Issue #418 (P1-3): the legacy bespoke switch missed many expression
+        // kinds (tuple/map literals, ?., CLR calls/indexers/properties,
+        // indirect calls, nested switch expressions, etc.). Use a default-
+        // recurse walker so every BoundExpression kind is visited and any
+        // nested pattern switch / switch expression / channel op / scope /
+        // select gets its slot pre-allocated.
+        var allocator = new PatternSwitchSlotAllocator(
+            this,
+            locals,
+            localTypes,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            goEnclosingScopes,
+            currentScope);
+        allocator.Visit(statement);
+    }
+
+    private void WalkExpressionForSwitches(
+        BoundExpression expression,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        BoundScopeStatement currentScope)
+    {
+        if (expression == null)
         {
-            case BoundPatternSwitchStatement ps:
+            return;
+        }
+
+        // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale —
+        // delegate to the comprehensive walker.
+        var allocator = new PatternSwitchSlotAllocator(
+            this,
+            locals,
+            localTypes,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            goEnclosingScopes,
+            currentScope);
+        allocator.Visit(expression);
+    }
+
+    private void WalkPatternForSwitchExpressions(
+        BoundPattern pattern,
+        Dictionary<VariableSymbol, int> locals,
+        List<TypeSymbol> localTypes,
+        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        BoundScopeStatement currentScope)
+    {
+        if (pattern == null)
+        {
+            return;
+        }
+
+        // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale.
+        var allocator = new PatternSwitchSlotAllocator(
+            this,
+            locals,
+            localTypes,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            goEnclosingScopes,
+            currentScope);
+        allocator.Visit(pattern);
+    }
+
+    private sealed class PatternSwitchSlotAllocator : BoundTreeWalker
+    {
+        private readonly ReflectionMetadataEmitter outer;
+        private readonly Dictionary<VariableSymbol, int> locals;
+        private readonly List<TypeSymbol> localTypes;
+        private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
+        private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
+        private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
+        private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
+        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
+        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
+        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
+        private BoundScopeStatement currentScope;
+
+        public PatternSwitchSlotAllocator(
+            ReflectionMetadataEmitter outer,
+            Dictionary<VariableSymbol, int> locals,
+            List<TypeSymbol> localTypes,
+            Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
+            Dictionary<BoundTypePattern, int> typePatternScratchSlots,
+            Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
+            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
+            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
+            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
+            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+            BoundScopeStatement currentScope)
+        {
+            this.outer = outer;
+            this.locals = locals;
+            this.localTypes = localTypes;
+            this.patternSwitchSlots = patternSwitchSlots;
+            this.typePatternScratchSlots = typePatternScratchSlots;
+            this.switchExpressionSlots = switchExpressionSlots;
+            this.channelOpSlots = channelOpSlots;
+            this.scopeFrameSlots = scopeFrameSlots;
+            this.selectStatementSlots = selectStatementSlots;
+            this.goEnclosingScopes = goEnclosingScopes;
+            this.currentScope = currentScope;
+        }
+
+        protected override void VisitPatternSwitchStatement(BoundPatternSwitchStatement node)
+        {
+            if (!this.patternSwitchSlots.ContainsKey(node))
+            {
+                var discriminantSlot = this.localTypes.Count;
+                this.localTypes.Add(node.Discriminant.Type);
+                this.patternSwitchSlots[node] = discriminantSlot;
+            }
+
+            VisitExpression(node.Discriminant);
+            foreach (var arm in node.Arms)
+            {
+                if (arm.Pattern != null)
                 {
-                    var discriminantSlot = localTypes.Count;
-                    localTypes.Add(ps.Discriminant.Type);
-                    patternSwitchSlots[ps] = discriminantSlot;
-                    WalkExpressionForSwitches(ps.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                    foreach (var arm in ps.Arms)
-                    {
-                        if (arm.Pattern != null)
-                        {
-                            AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                            WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                        }
-
-                        if (arm.Body is BoundBlockStatement armBlock)
-                        {
-                            foreach (var inner in armBlock.Statements)
-                            {
-                                // Issue #216: const decls have no IL slot.
-                                // Issue #191: top-level globals are emitted as static
-                                // fields on <Program>; do not allocate a local slot
-                                // for them when they appear inside a switch arm.
-                                if (inner is BoundVariableDeclaration decl
-                                    && decl.ConstantValue == null
-                                    && !locals.ContainsKey(decl.Variable)
-                                    && !(decl.Variable is GlobalVariableSymbol gvDecl && this.globalFieldDefs.ContainsKey(gvDecl)))
-                                {
-                                    locals[decl.Variable] = localTypes.Count;
-                                    localTypes.Add(decl.Variable.Type);
-                                }
-
-                                WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                            }
-                        }
-                        else
-                        {
-                            WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                        }
-                    }
-
-                    break;
+                    AllocatePatternBindings(arm.Pattern, this.locals, this.localTypes, this.typePatternScratchSlots);
+                    VisitPattern(arm.Pattern);
                 }
 
-            case BoundBlockStatement block:
-                foreach (var inner in block.Statements)
+                VisitStatement(arm.Body);
+            }
+        }
+
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
+        {
+            // Issue #216: const decls have no IL slot.
+            // Issue #191: top-level globals are emitted as static fields on
+            // <Program>; do not allocate a local slot for them when they
+            // appear nested inside a switch arm / scope.
+            if (node.ConstantValue == null
+                && !this.locals.ContainsKey(node.Variable)
+                && !(node.Variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv)))
+            {
+                this.locals[node.Variable] = this.localTypes.Count;
+                this.localTypes.Add(node.Variable.Type);
+            }
+
+            base.VisitVariableDeclaration(node);
+        }
+
+        protected override void VisitGoStatement(BoundGoStatement node)
+        {
+            if (this.currentScope != null)
+            {
+                this.goEnclosingScopes[node] = this.currentScope;
+            }
+
+            base.VisitGoStatement(node);
+        }
+
+        protected override void VisitScopeStatement(BoundScopeStatement node)
+        {
+            AllocateScopeFrameSlots(node, this.localTypes, this.scopeFrameSlots);
+            var saved = this.currentScope;
+            this.currentScope = node;
+            try
+            {
+                base.VisitScopeStatement(node);
+            }
+            finally
+            {
+                this.currentScope = saved;
+            }
+        }
+
+        protected override void VisitSelectStatement(BoundSelectStatement node)
+        {
+            AllocateSelectSlots(node, this.locals, this.localTypes, this.selectStatementSlots);
+            base.VisitSelectStatement(node);
+        }
+
+        protected override void VisitChannelSendStatement(BoundChannelSendStatement node)
+        {
+            AllocateChannelSendSlots(node, this.localTypes, this.channelOpSlots);
+            base.VisitChannelSendStatement(node);
+        }
+
+        protected override void VisitChannelReceiveExpression(BoundChannelReceiveExpression node)
+        {
+            AllocateChannelReceiveSlots(node, this.localTypes, this.channelOpSlots);
+            base.VisitChannelReceiveExpression(node);
+        }
+
+        protected override void VisitSwitchExpression(BoundSwitchExpression node)
+        {
+            if (!this.switchExpressionSlots.ContainsKey(node))
+            {
+                var resultSlot = this.localTypes.Count;
+                this.localTypes.Add(node.Type);
+                var discrSlot = this.localTypes.Count;
+                this.localTypes.Add(node.Discriminant.Type);
+                this.switchExpressionSlots[node] = (resultSlot, discrSlot);
+            }
+
+            VisitExpression(node.Discriminant);
+            foreach (var arm in node.Arms)
+            {
+                if (arm.Pattern != null)
                 {
-                    WalkForPatternSwitches(inner, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
+                    AllocatePatternBindings(arm.Pattern, this.locals, this.localTypes, this.typePatternScratchSlots);
+                    VisitPattern(arm.Pattern);
                 }
 
-                break;
-            case BoundIfStatement ifs:
-                WalkExpressionForSwitches(ifs.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                WalkForPatternSwitches(ifs.ThenStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                if (ifs.ElseStatement != null)
-                {
-                    WalkForPatternSwitches(ifs.ElseStatement, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundTryStatement tryStmt:
-                WalkForPatternSwitches(tryStmt.TryBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                foreach (var clause in tryStmt.CatchClauses)
-                {
-                    WalkForPatternSwitches(clause.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                if (tryStmt.FinallyBlock != null)
-                {
-                    WalkForPatternSwitches(tryStmt.FinallyBlock, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundExpressionStatement es:
-                WalkExpressionForSwitches(es.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundVariableDeclaration vd:
-                // Issue #216: compile-time const bindings are inlined — no IL slot.
-                // Issue #191: top-level globals are emitted as static fields on
-                // <Program>; do not allocate a local slot for them here.
-                if (vd.ConstantValue == null
-                    && !locals.ContainsKey(vd.Variable)
-                    && !(vd.Variable is GlobalVariableSymbol gvVd && this.globalFieldDefs.ContainsKey(gvVd)))
-                {
-                    locals[vd.Variable] = localTypes.Count;
-                    localTypes.Add(vd.Variable.Type);
-                }
-
-                WalkExpressionForSwitches(vd.Initializer, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundReturnStatement rs:
-                if (rs.Expression != null)
-                {
-                    WalkExpressionForSwitches(rs.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundConditionalGotoStatement cg:
-                WalkExpressionForSwitches(cg.Condition, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundGoStatement go:
-                if (currentScope != null)
-                {
-                    goEnclosingScopes[go] = currentScope;
-                }
-
-                WalkExpressionForSwitches(go.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundScopeStatement scope:
-                AllocateScopeFrameSlots(scope, localTypes, scopeFrameSlots);
-                WalkForPatternSwitches(scope.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, scope);
-                break;
-            case BoundSelectStatement select:
-                AllocateSelectSlots(select, locals, localTypes, selectStatementSlots);
-                foreach (var arm in select.Cases)
-                {
-                    if (arm.Channel != null)
-                    {
-                        WalkExpressionForSwitches(arm.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                    }
-
-                    if (arm.Value != null)
-                    {
-                        WalkExpressionForSwitches(arm.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                    }
-
-                    WalkForPatternSwitches(arm.Body, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundChannelSendStatement chs:
-                AllocateChannelSendSlots(chs, localTypes, channelOpSlots);
-                WalkExpressionForSwitches(chs.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                WalkExpressionForSwitches(chs.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
+                VisitExpression(arm.Result);
+            }
         }
     }
 
@@ -6927,138 +7026,6 @@ internal sealed class ReflectionMetadataEmitter
             whenAnyTaskSlot,
             whenAnyAwaiterSlot,
             completedTaskSlot);
-    }
-
-    // Walks any BoundExpression to discover nested BoundSwitchExpression nodes
-    // (which can appear in let initializers, return values, call arguments,
-    // arm result expressions of an enclosing switch expression, etc.). Each
-    // discovered switch expression gets a result temp + discriminant temp
-    // pre-allocated and its arms recurse so type-pattern scratches and
-    // arm-locals are also reserved.
-    private void WalkExpressionForSwitches(
-        BoundExpression expression,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
-    {
-        if (expression == null)
-        {
-            return;
-        }
-
-        switch (expression)
-        {
-            case BoundSwitchExpression sx:
-                if (!switchExpressionSlots.ContainsKey(sx))
-                {
-                    var resultSlot = localTypes.Count;
-                    localTypes.Add(sx.Type);
-                    var discrSlot = localTypes.Count;
-                    localTypes.Add(sx.Discriminant.Type);
-                    switchExpressionSlots[sx] = (resultSlot, discrSlot);
-                }
-
-                WalkExpressionForSwitches(sx.Discriminant, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                foreach (var arm in sx.Arms)
-                {
-                    if (arm.Pattern != null)
-                    {
-                        AllocatePatternBindings(arm.Pattern, locals, localTypes, typePatternScratchSlots);
-                        WalkPatternForSwitchExpressions(arm.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                    }
-
-                    WalkExpressionForSwitches(arm.Result, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundBinaryExpression be:
-                WalkExpressionForSwitches(be.Left, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                WalkExpressionForSwitches(be.Right, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundUnaryExpression ue:
-                WalkExpressionForSwitches(ue.Operand, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundAssignmentExpression ae:
-                WalkExpressionForSwitches(ae.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundCallExpression ce:
-                foreach (var a in ce.Arguments)
-                {
-                    WalkExpressionForSwitches(a, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundConversionExpression cv:
-                WalkExpressionForSwitches(cv.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundBlockExpression bex:
-                foreach (var s in bex.Statements)
-                {
-                    WalkForPatternSwitches(s, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                WalkExpressionForSwitches(bex.Expression, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundChannelReceiveExpression chr:
-                AllocateChannelReceiveSlots(chr, localTypes, channelOpSlots);
-                WalkExpressionForSwitches(chr.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundChannelCloseExpression chc:
-                WalkExpressionForSwitches(chc.Channel, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundMakeChannelExpression mkCh:
-                if (mkCh.Capacity != null)
-                {
-                    WalkExpressionForSwitches(mkCh.Capacity, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-        }
-    }
-
-    private void WalkPatternForSwitchExpressions(
-        BoundPattern pattern,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
-    {
-        switch (pattern)
-        {
-            case BoundConstantPattern cp:
-                WalkExpressionForSwitches(cp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundRelationalPattern rp:
-                WalkExpressionForSwitches(rp.Value, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                break;
-            case BoundPropertyPattern pp:
-                foreach (var f in pp.Fields)
-                {
-                    WalkPatternForSwitchExpressions(f.Pattern, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-            case BoundListPattern lp:
-                foreach (var e in lp.Elements)
-                {
-                    WalkPatternForSwitchExpressions(e, locals, localTypes, patternSwitchSlots, typePatternScratchSlots, switchExpressionSlots, channelOpSlots, scopeFrameSlots, selectStatementSlots, goEnclosingScopes, currentScope);
-                }
-
-                break;
-        }
     }
 
     private static void AllocatePatternBindings(
@@ -8102,141 +8069,22 @@ internal sealed class ReflectionMetadataEmitter
 
     private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
     {
-        switch (node)
+        new StructLiteralCollector(sink).Visit(node);
+    }
+
+    private sealed class StructLiteralCollector : BoundTreeWalker
+    {
+        private readonly List<BoundStructLiteralExpression> sink;
+
+        public StructLiteralCollector(List<BoundStructLiteralExpression> sink)
         {
-            case BoundStructLiteralExpression literal:
-                sink.Add(literal);
-                foreach (var init in literal.Initializers)
-                {
-                    WalkForStructLiterals(init.Value, sink);
-                }
+            this.sink = sink;
+        }
 
-                break;
-            case BoundBlockExpression blockExpr:
-                foreach (var statement in blockExpr.Statements)
-                {
-                    WalkForStructLiterals(statement, sink);
-                }
-
-                WalkForStructLiterals(blockExpr.Expression, sink);
-                break;
-            case BoundFieldAccessExpression fa:
-                if (fa.Receiver != null)
-                {
-                    WalkForStructLiterals(fa.Receiver, sink);
-                }
-
-                break;
-            case BoundFieldAssignmentExpression fas:
-                WalkForStructLiterals(fas.Value, sink);
-                break;
-            case BoundExpressionStatement es:
-                WalkForStructLiterals(es.Expression, sink);
-                break;
-            case BoundVariableDeclaration decl:
-                WalkForStructLiterals(decl.Initializer, sink);
-                break;
-            case BoundReturnStatement ret:
-                if (ret.Expression != null)
-                {
-                    WalkForStructLiterals(ret.Expression, sink);
-                }
-
-                break;
-            case BoundConditionalGotoStatement cg:
-                WalkForStructLiterals(cg.Condition, sink);
-                break;
-            case BoundAssignmentExpression a:
-                WalkForStructLiterals(a.Expression, sink);
-                break;
-            case BoundUnaryExpression u:
-                WalkForStructLiterals(u.Operand, sink);
-                break;
-            case BoundBinaryExpression b:
-                WalkForStructLiterals(b.Left, sink);
-                WalkForStructLiterals(b.Right, sink);
-                break;
-            case BoundCallExpression c:
-                foreach (var arg in c.Arguments)
-                {
-                    WalkForStructLiterals(arg, sink);
-                }
-
-                break;
-            case BoundImportedCallExpression ic:
-                foreach (var arg in ic.Arguments)
-                {
-                    WalkForStructLiterals(arg, sink);
-                }
-
-                break;
-            case BoundImportedInstanceCallExpression iic:
-                WalkForStructLiterals(iic.Receiver, sink);
-                foreach (var arg in iic.Arguments)
-                {
-                    WalkForStructLiterals(arg, sink);
-                }
-
-                break;
-            case BoundUserInstanceCallExpression uic:
-                WalkForStructLiterals(uic.Receiver, sink);
-                foreach (var arg in uic.Arguments)
-                {
-                    WalkForStructLiterals(arg, sink);
-                }
-
-                break;
-            case BoundConstructorCallExpression cce:
-                foreach (var arg in cce.Arguments)
-                {
-                    WalkForStructLiterals(arg, sink);
-                }
-
-                break;
-            case BoundConversionExpression conv:
-                WalkForStructLiterals(conv.Expression, sink);
-                break;
-            case BoundArrayCreationExpression arr:
-                foreach (var e in arr.Elements)
-                {
-                    WalkForStructLiterals(e, sink);
-                }
-
-                break;
-            case BoundIndexExpression ix:
-                WalkForStructLiterals(ix.Target, sink);
-                WalkForStructLiterals(ix.Index, sink);
-                break;
-            case BoundIndexAssignmentExpression ixa:
-                WalkForStructLiterals(ixa.Index, sink);
-                WalkForStructLiterals(ixa.Value, sink);
-                break;
-            case BoundTryStatement t:
-                foreach (var st in ((BoundBlockStatement)t.TryBlock).Statements)
-                {
-                    WalkForStructLiterals(st, sink);
-                }
-
-                foreach (var clause in t.CatchClauses)
-                {
-                    foreach (var st in ((BoundBlockStatement)clause.Body).Statements)
-                    {
-                        WalkForStructLiterals(st, sink);
-                    }
-                }
-
-                if (t.FinallyBlock != null)
-                {
-                    foreach (var st in ((BoundBlockStatement)t.FinallyBlock).Statements)
-                    {
-                        WalkForStructLiterals(st, sink);
-                    }
-                }
-
-                break;
-            case BoundThrowStatement th:
-                WalkForStructLiterals(th.Expression, sink);
-                break;
+        protected override void VisitStructLiteralExpression(BoundStructLiteralExpression node)
+        {
+            this.sink.Add(node);
+            base.VisitStructLiteralExpression(node);
         }
     }
 
@@ -8500,127 +8348,22 @@ internal sealed class ReflectionMetadataEmitter
 
     private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
     {
-        switch (node)
+        new AppendCollector(sink).Visit(node);
+    }
+
+    private sealed class AppendCollector : BoundTreeWalker
+    {
+        private readonly List<BoundAppendExpression> sink;
+
+        public AppendCollector(List<BoundAppendExpression> sink)
         {
-            case BoundAppendExpression app:
-                sink.Add(app);
-                WalkForAppends(app.Slice, sink);
-                WalkForAppends(app.Element, sink);
-                break;
-            case BoundBlockExpression blockExpr:
-                foreach (var statement in blockExpr.Statements)
-                {
-                    WalkForAppends(statement, sink);
-                }
+            this.sink = sink;
+        }
 
-                WalkForAppends(blockExpr.Expression, sink);
-                break;
-            case BoundLenExpression len:
-                WalkForAppends(len.Operand, sink);
-                break;
-            case BoundTypeOfExpression:
-                break;
-            case BoundCapExpression cap:
-                WalkForAppends(cap.Operand, sink);
-                break;
-            case BoundBlockStatement blk:
-                foreach (var s in blk.Statements)
-                {
-                    WalkForAppends(s, sink);
-                }
-
-                break;
-            case BoundExpressionStatement es:
-                WalkForAppends(es.Expression, sink);
-                break;
-            case BoundVariableDeclaration vd:
-                WalkForAppends(vd.Initializer, sink);
-                break;
-            case BoundIfStatement ifs:
-                WalkForAppends(ifs.Condition, sink);
-                WalkForAppends(ifs.ThenStatement, sink);
-                if (ifs.ElseStatement != null)
-                {
-                    WalkForAppends(ifs.ElseStatement, sink);
-                }
-
-                break;
-            case BoundReturnStatement rs:
-                if (rs.Expression != null)
-                {
-                    WalkForAppends(rs.Expression, sink);
-                }
-
-                break;
-            case BoundTryStatement t:
-                WalkForAppends(t.TryBlock, sink);
-                foreach (var clause in t.CatchClauses)
-                {
-                    WalkForAppends(clause.Body, sink);
-                }
-
-                if (t.FinallyBlock != null)
-                {
-                    WalkForAppends(t.FinallyBlock, sink);
-                }
-
-                break;
-            case BoundThrowStatement th:
-                WalkForAppends(th.Expression, sink);
-                break;
-            case BoundConditionalGotoStatement cg:
-                WalkForAppends(cg.Condition, sink);
-                break;
-            case BoundAssignmentExpression a:
-                WalkForAppends(a.Expression, sink);
-                break;
-            case BoundUnaryExpression u:
-                WalkForAppends(u.Operand, sink);
-                break;
-            case BoundBinaryExpression b:
-                WalkForAppends(b.Left, sink);
-                WalkForAppends(b.Right, sink);
-                break;
-            case BoundCallExpression c:
-                foreach (var arg in c.Arguments)
-                {
-                    WalkForAppends(arg, sink);
-                }
-
-                break;
-            case BoundImportedCallExpression ic:
-                foreach (var arg in ic.Arguments)
-                {
-                    WalkForAppends(arg, sink);
-                }
-
-                break;
-            case BoundImportedInstanceCallExpression iic:
-                WalkForAppends(iic.Receiver, sink);
-                foreach (var arg in iic.Arguments)
-                {
-                    WalkForAppends(arg, sink);
-                }
-
-                break;
-            case BoundConversionExpression conv:
-                WalkForAppends(conv.Expression, sink);
-                break;
-            case BoundArrayCreationExpression arr:
-                foreach (var e in arr.Elements)
-                {
-                    WalkForAppends(e, sink);
-                }
-
-                break;
-            case BoundIndexExpression ix:
-                WalkForAppends(ix.Target, sink);
-                WalkForAppends(ix.Index, sink);
-                break;
-            case BoundIndexAssignmentExpression ixa:
-                WalkForAppends(ixa.Index, sink);
-                WalkForAppends(ixa.Value, sink);
-                break;
+        protected override void VisitAppendExpression(BoundAppendExpression node)
+        {
+            this.sink.Add(node);
+            base.VisitAppendExpression(node);
         }
     }
 
@@ -8633,122 +8376,22 @@ internal sealed class ReflectionMetadataEmitter
 
     private static void WalkForNullConditional(BoundNode node, List<BoundNullConditionalAccessExpression> sink)
     {
-        switch (node)
+        new NullConditionalCollector(sink).Visit(node);
+    }
+
+    private sealed class NullConditionalCollector : BoundTreeWalker
+    {
+        private readonly List<BoundNullConditionalAccessExpression> sink;
+
+        public NullConditionalCollector(List<BoundNullConditionalAccessExpression> sink)
         {
-            case BoundNullConditionalAccessExpression nc:
-                sink.Add(nc);
-                WalkForNullConditional(nc.Receiver, sink);
-                WalkForNullConditional(nc.WhenNotNull, sink);
-                break;
-            case BoundBlockExpression blockExpr:
-                foreach (var statement in blockExpr.Statements)
-                {
-                    WalkForNullConditional(statement, sink);
-                }
+            this.sink = sink;
+        }
 
-                WalkForNullConditional(blockExpr.Expression, sink);
-                break;
-            case BoundBlockStatement blk:
-                foreach (var s in blk.Statements)
-                {
-                    WalkForNullConditional(s, sink);
-                }
-
-                break;
-            case BoundExpressionStatement es:
-                WalkForNullConditional(es.Expression, sink);
-                break;
-            case BoundVariableDeclaration vd:
-                WalkForNullConditional(vd.Initializer, sink);
-                break;
-            case BoundIfStatement ifs:
-                WalkForNullConditional(ifs.Condition, sink);
-                WalkForNullConditional(ifs.ThenStatement, sink);
-                if (ifs.ElseStatement != null)
-                {
-                    WalkForNullConditional(ifs.ElseStatement, sink);
-                }
-
-                break;
-            case BoundReturnStatement rs:
-                if (rs.Expression != null)
-                {
-                    WalkForNullConditional(rs.Expression, sink);
-                }
-
-                break;
-            case BoundConditionalGotoStatement cg:
-                WalkForNullConditional(cg.Condition, sink);
-                break;
-            case BoundThrowStatement th:
-                WalkForNullConditional(th.Expression, sink);
-                break;
-            case BoundTryStatement t:
-                WalkForNullConditional(t.TryBlock, sink);
-                foreach (var clause in t.CatchClauses)
-                {
-                    WalkForNullConditional(clause.Body, sink);
-                }
-
-                if (t.FinallyBlock != null)
-                {
-                    WalkForNullConditional(t.FinallyBlock, sink);
-                }
-
-                break;
-            case BoundAssignmentExpression a:
-                WalkForNullConditional(a.Expression, sink);
-                break;
-            case BoundUnaryExpression u:
-                WalkForNullConditional(u.Operand, sink);
-                break;
-            case BoundBinaryExpression b:
-                WalkForNullConditional(b.Left, sink);
-                WalkForNullConditional(b.Right, sink);
-                break;
-            case BoundCallExpression c:
-                foreach (var arg in c.Arguments)
-                {
-                    WalkForNullConditional(arg, sink);
-                }
-
-                break;
-            case BoundImportedCallExpression ic:
-                foreach (var arg in ic.Arguments)
-                {
-                    WalkForNullConditional(arg, sink);
-                }
-
-                break;
-            case BoundImportedInstanceCallExpression iic:
-                WalkForNullConditional(iic.Receiver, sink);
-                foreach (var arg in iic.Arguments)
-                {
-                    WalkForNullConditional(arg, sink);
-                }
-
-                break;
-            case BoundUserInstanceCallExpression uic:
-                WalkForNullConditional(uic.Receiver, sink);
-                foreach (var arg in uic.Arguments)
-                {
-                    WalkForNullConditional(arg, sink);
-                }
-
-                break;
-            case BoundConversionExpression conv:
-                WalkForNullConditional(conv.Expression, sink);
-                break;
-            case BoundFieldAccessExpression fa:
-                if (fa.Receiver != null)
-                {
-                    WalkForNullConditional(fa.Receiver, sink);
-                }
-
-                break;
-            case BoundFieldAssignmentExpression fas:
-                WalkForNullConditional(fas.Value, sink);
-                break;
+        protected override void VisitNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
+        {
+            this.sink.Add(node);
+            base.VisitNullConditionalAccessExpression(node);
         }
     }
 
@@ -12284,7 +11927,16 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitAppend(BoundAppendExpression app)
         {
-            var slots = this.appendSlots[app];
+            // Issue #418 (P1-3): name the bound-node context in the message
+            // when a slot is missing so a regression in a pre-pass walker
+            // surfaces an actionable error instead of a generic KeyNotFound.
+            if (!this.appendSlots.TryGetValue(app, out var slots))
+            {
+                throw new InvalidOperationException(
+                    $"Append expression for slice type '{app.SliceType?.Name}' has no preallocated slot. "
+                    + "A walker pre-pass failed to descend into the parent bound-node kind.");
+            }
+
             var element = app.SliceType.ElementType;
             var elementToken = this.outer.GetElementTypeToken(element);
 
