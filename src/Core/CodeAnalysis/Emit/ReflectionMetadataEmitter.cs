@@ -13643,7 +13643,14 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInstanceReceiver(access.Receiver);
             }
 
-            var receiverIsValueType = !isStatic && access.Receiver.Type?.ClrType?.IsValueType == true;
+            // Issue #454: use IsValueTypeSymbol — same predicate that
+            // EmitInstanceReceiver uses — so user-declared structs (ClrType
+            // null until emission completes) are recognised as value-type
+            // receivers and dispatched via `call` instead of `callvirt`.
+            // EmitInstanceReceiver already loaded `ldloca` for them; emitting
+            // `callvirt` against a value-type method with a managed-pointer
+            // receiver produces invalid IL.
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(access.Receiver.Type);
             switch (access.Member)
             {
                 case PropertyInfo property:
@@ -13689,7 +13696,7 @@ internal sealed class ReflectionMetadataEmitter
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
 
-            var receiverIsValueType = !isStatic && assn.Receiver.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(assn.Receiver.Type);
             switch (assn.Member)
             {
                 case PropertyInfo property:
@@ -13718,7 +13725,7 @@ internal sealed class ReflectionMetadataEmitter
             // Stream B′ emit parity: `+=` / `-=` calls the event's add_X /
             // remove_X accessor. Both accessors are void-returning.
             var isStatic = subscription.Receiver == null;
-            var receiverIsValueType = !isStatic && subscription.Receiver.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(subscription.Receiver.Type);
 
             if (!isStatic)
             {
@@ -13862,7 +13869,7 @@ internal sealed class ReflectionMetadataEmitter
             var getter = idx.Indexer.GetGetMethod(nonPublic: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
-            var receiverIsValueType = idx.Target.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = IsValueTypeSymbol(idx.Target.Type);
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
         }
