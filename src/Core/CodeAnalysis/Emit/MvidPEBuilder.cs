@@ -69,9 +69,12 @@ internal sealed class MvidPEBuilder : ManagedPEBuilder
         var baseSections = base.CreateSections();
         var builder = ImmutableArray.CreateBuilder<Section>(baseSections.Length + 1);
 
+        // Append .mvid after the base sections so the final order matches the
+        // conventional Roslyn layout (.text / .rsrc / .reloc / .mvid). Placing
+        // .mvid first is spec-legal but uncommon and can confuse older tooling.
+        builder.AddRange(baseSections);
         builder.Add(new Section(MvidSectionName, SectionCharacteristics.MemRead | SectionCharacteristics.ContainsInitializedData | SectionCharacteristics.MemDiscardable));
 
-        builder.AddRange(baseSections);
         return builder.MoveToImmutable();
     }
 
