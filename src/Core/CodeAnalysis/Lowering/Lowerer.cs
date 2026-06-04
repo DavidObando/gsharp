@@ -793,12 +793,43 @@ public sealed class Lowerer : BoundTreeRewriter
             return null;
         }
 
-        if (!typeof(System.IDisposable).IsAssignableFrom(clrType))
+        System.Reflection.MethodInfo disposeMethod = null;
+
+        // Pattern-based dispose for struct enumerators: prefer the type's
+        // own public parameterless Dispose() so we get a direct `call` on
+        // a managed pointer to the struct (no boxing). This matches how
+        // Roslyn lowers `foreach` over List<T>/Dictionary<K,V> etc., and
+        // is important because the IDisposable-typed call would box the
+        // enumerator on every iteration of an enclosing loop nest.
+        if (clrType.IsValueType)
         {
-            return null;
+            var ownDispose = clrType.GetMethod(
+                "Dispose",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+            if (ownDispose != null && ownDispose.ReturnType == typeof(void))
+            {
+                disposeMethod = ownDispose;
+            }
         }
 
-        var disposeMethod = typeof(System.IDisposable).GetMethod("Dispose", System.Type.EmptyTypes);
+        // Fall back to the IDisposable interface dispatch when the
+        // enumerator is a reference type, or when it is a value type that
+        // implements IDisposable only via explicit interface. (The latter
+        // boxes — but pattern-based dispose simply isn't available for
+        // those.)
+        if (disposeMethod == null)
+        {
+            if (!typeof(System.IDisposable).IsAssignableFrom(clrType))
+            {
+                return null;
+            }
+
+            disposeMethod = typeof(System.IDisposable).GetMethod("Dispose", System.Type.EmptyTypes);
+        }
+
         if (disposeMethod == null)
         {
             return null;
