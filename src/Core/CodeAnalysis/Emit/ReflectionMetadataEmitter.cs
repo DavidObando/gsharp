@@ -10206,6 +10206,29 @@ internal sealed class ReflectionMetadataEmitter
             return base.RewriteClrPropertyAssignmentExpression(node);
         }
 
+        // Issue #418 (P1-5): G# computed/auto properties also need the spill
+        // infrastructure when the receiver is a non-addressable struct rvalue
+        // (e.g. `makePoint(5, 6).Sum`, `getOuter().Inner.Length`).
+        protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewritePropertyAccessExpression(node);
+        }
+
+        protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        {
+            if (node.Receiver != null)
+            {
+                this.AddIfNeeded(node.Receiver);
+            }
+
+            return base.RewritePropertyAssignmentExpression(node);
+        }
+
         protected override BoundExpression RewriteClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
         {
             if (node.Receiver != null)
@@ -12973,16 +12996,13 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            // Load receiver.
+            // Load receiver. Issue #418 (P1-5): route through
+            // EmitInstanceReceiver so non-variable struct receivers
+            // (method-call results, indexer reads, tuple elements, etc.) are
+            // spilled to a temp and addressed via `ldloca` rather than left as
+            // a value on the stack (unverifiable / SIGSEGV).
             var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
-            if (!receiverIsClass && access.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
-            {
-                // address loaded
-            }
-            else
-            {
-                this.EmitExpression(access.Receiver);
-            }
+            this.EmitInstanceReceiver(access.Receiver);
 
             this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
             this.il.Token(handles.Getter.Value);
@@ -13010,30 +13030,19 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            // Load receiver, emit value, call setter.
+            // Load receiver, emit value, call setter. Issue #418 (P1-5):
+            // route through EmitInstanceReceiver so non-variable struct
+            // receivers spill to a temp and pass `ldloca` as `this` instead
+            // of leaving a value on the stack.
             var receiverIsClass = assn.Receiver.Type is StructSymbol rs && rs.IsClass;
-            if (!receiverIsClass && assn.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
-            {
-                // address loaded
-            }
-            else
-            {
-                this.EmitExpression(assn.Receiver);
-            }
+            this.EmitInstanceReceiver(assn.Receiver);
 
             this.EmitExpression(assn.Value);
             this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
             this.il.Token(handles.Setter.Value);
 
             // Re-load the assigned value as the expression result via the getter.
-            if (!receiverIsClass && assn.Receiver is BoundVariableExpression bv2 && this.TryLoadVariableAddress(bv2.Variable))
-            {
-                // address loaded
-            }
-            else
-            {
-                this.EmitExpression(assn.Receiver);
-            }
+            this.EmitInstanceReceiver(assn.Receiver);
 
             this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
             this.il.Token(handles.Getter.Value);
@@ -13352,17 +13361,24 @@ internal sealed class ReflectionMetadataEmitter
             // Phase 4 emit parity: indexer write. `d[k] = v` -> `callvirt set_Item(k, v)`.
             // Like the array-index assignment path, the expression result is the
             // assigned value, so re-read via `get_Item` after the store.
-            this.EmitLoadVariable(ixa.Target);
+            // Issue #418 (P1-5): route through EmitInstanceReceiver so a
+            // value-type target (`ldloca`) and reference-type target (`ldloc`)
+            // are both addressed correctly. For value-type indexers we also
+            // need `call` instead of `callvirt`.
+            var writeReceiver = new BoundVariableExpression(null, ixa.Target);
+            var targetIsValueType = IsValueTypeSymbol(ixa.Target.Type);
+
+            this.EmitInstanceReceiver(writeReceiver);
             foreach (var arg in ixa.Arguments)
             {
                 this.EmitExpression(arg);
             }
 
             this.EmitExpression(ixa.Value);
-            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(setter));
 
-            this.EmitLoadVariable(ixa.Target);
+            this.EmitInstanceReceiver(writeReceiver);
             foreach (var arg in ixa.Arguments)
             {
                 this.EmitExpression(arg);
@@ -13371,7 +13387,7 @@ internal sealed class ReflectionMetadataEmitter
             var getter = ixa.Indexer.GetGetMethod(nonPublic: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public getter.");
-            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
         }
 
