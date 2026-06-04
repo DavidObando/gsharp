@@ -37,9 +37,34 @@ public abstract class SyntaxNode
     {
         get
         {
-            var first = GetChildren().First().Span;
-            var last = GetChildren().Last().Span;
-            return TextSpan.FromBounds(first.Start, last.End);
+            // Compute the bounding span from min(start) and max(end) across all children, rather
+            // than the first/last child in reflection order. The reflection-based enumeration in
+            // GetChildren() returns properties in C# declaration order, which is not always the
+            // source order: nodes that expose `{ get; set; }` properties assigned by the parser
+            // after construction (e.g. StructDeclarationSyntax.SharedBlock) are enumerated after
+            // the structural CloseBraceToken even though they sit inside the braces. Using
+            // first/last in that case truncates the span and breaks position-based traversals
+            // such as the language server's interpolated-string hole detection.
+            var hasChild = false;
+            var start = int.MaxValue;
+            var end = int.MinValue;
+            foreach (var child in GetChildren())
+            {
+                var childSpan = child.Span;
+                if (childSpan.Start < start)
+                {
+                    start = childSpan.Start;
+                }
+
+                if (childSpan.End > end)
+                {
+                    end = childSpan.End;
+                }
+
+                hasChild = true;
+            }
+
+            return hasChild ? TextSpan.FromBounds(start, end) : new TextSpan(0, 0);
         }
     }
 
