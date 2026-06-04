@@ -130,6 +130,12 @@ internal sealed class ReflectionMetadataEmitter
     // Issue #256: cached open MemberRef for Interlocked.CompareExchange<T>(ref T, T, T).
     private MemberReferenceHandle? interlockedCompareExchangeOpenRef;
 
+    // Issue #420 (P3-11): cached MemberRefs for IsReadOnlyAttribute/IsByRefLikeAttribute/ObsoleteAttribute ctors,
+    // so repeated emission of these markers doesn't create duplicate MemberRef rows.
+    private MemberReferenceHandle? isReadOnlyAttributeCtorRef;
+    private MemberReferenceHandle? isByRefLikeAttributeCtorRef;
+    private MemberReferenceHandle? obsoleteAttributeStringBoolCtorRef;
+
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
     // Each lambda's synthetic FunctionSymbol is registered alongside user
@@ -3746,19 +3752,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="typeHandle">The inline struct TypeDef handle.</param>
     private void EmitIsReadOnlyAttribute(TypeDefinitionHandle typeHandle)
     {
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
-            ? resolved
-            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        var ctorRef = this.metadata.AddMemberReference(
-            attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+        var ctorRef = this.GetIsReadOnlyAttributeCtorRef();
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
@@ -3768,6 +3762,29 @@ internal sealed class ReflectionMetadataEmitter
             parent: typeHandle,
             constructor: ctorRef,
             value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    private MemberReferenceHandle GetIsReadOnlyAttributeCtorRef()
+    {
+        if (this.isReadOnlyAttributeCtorRef.HasValue)
+        {
+            return this.isReadOnlyAttributeCtorRef.Value;
+        }
+
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.isReadOnlyAttributeCtorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+        return this.isReadOnlyAttributeCtorRef.Value;
     }
 
     /// <summary>
@@ -3786,20 +3803,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="typeHandle">The ref-struct TypeDef handle.</param>
     private void EmitIsByRefLikeAttribute(TypeDefinitionHandle typeHandle)
     {
-        // IsByRefLikeAttribute() — parameterless ctor, no fixed/named args.
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
-            ? resolved
-            : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        var ctorRef = this.metadata.AddMemberReference(
-            attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+        var ctorRef = this.GetIsByRefLikeAttributeCtorRef();
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
@@ -3810,8 +3814,50 @@ internal sealed class ReflectionMetadataEmitter
             constructor: ctorRef,
             value: this.metadata.GetOrAddBlob(valueBlob));
 
-        // Obsolete("Types with embedded references are not supported in this
-        // version of your compiler.", true) — the C# compiler's guard marker.
+        var obsoleteCtorRef = this.GetObsoleteAttributeStringBoolCtorRef();
+
+        var obsoleteBlob = new BlobBuilder();
+        obsoleteBlob.WriteUInt16(0x0001);
+        obsoleteBlob.WriteSerializedString("Types with embedded references are not supported in this version of your compiler.");
+        obsoleteBlob.WriteByte(1);
+        obsoleteBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: obsoleteCtorRef,
+            value: this.metadata.GetOrAddBlob(obsoleteBlob));
+    }
+
+    private MemberReferenceHandle GetIsByRefLikeAttributeCtorRef()
+    {
+        if (this.isByRefLikeAttributeCtorRef.HasValue)
+        {
+            return this.isByRefLikeAttributeCtorRef.Value;
+        }
+
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
+        var attrTypeRef = this.GetTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.isByRefLikeAttributeCtorRef = this.metadata.AddMemberReference(
+            attrTypeRef,
+            this.metadata.GetOrAddString(".ctor"),
+            this.metadata.GetOrAddBlob(ctorSig));
+        return this.isByRefLikeAttributeCtorRef.Value;
+    }
+
+    private MemberReferenceHandle GetObsoleteAttributeStringBoolCtorRef()
+    {
+        if (this.obsoleteAttributeStringBoolCtorRef.HasValue)
+        {
+            return this.obsoleteAttributeStringBoolCtorRef.Value;
+        }
+
         var obsoleteType = this.references.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
             ? obsoleteResolved
             : typeof(System.ObsoleteAttribute);
@@ -3825,21 +3871,11 @@ internal sealed class ReflectionMetadataEmitter
                 p.AddParameter().Type().Boolean();
             });
 
-        var obsoleteCtorRef = this.metadata.AddMemberReference(
+        this.obsoleteAttributeStringBoolCtorRef = this.metadata.AddMemberReference(
             obsoleteTypeRef,
             this.metadata.GetOrAddString(".ctor"),
             this.metadata.GetOrAddBlob(obsoleteCtorSig));
-
-        var obsoleteBlob = new BlobBuilder();
-        obsoleteBlob.WriteUInt16(0x0001);
-        obsoleteBlob.WriteSerializedString("Types with embedded references are not supported in this version of your compiler.");
-        obsoleteBlob.WriteByte(1);
-        obsoleteBlob.WriteUInt16(0);
-
-        this.metadata.AddCustomAttribute(
-            parent: typeHandle,
-            constructor: obsoleteCtorRef,
-            value: this.metadata.GetOrAddBlob(obsoleteBlob));
+        return this.obsoleteAttributeStringBoolCtorRef.Value;
     }
 
     /// <summary>
