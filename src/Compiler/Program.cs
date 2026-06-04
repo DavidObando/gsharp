@@ -129,15 +129,6 @@ public class Program
         }
     }
 
-    private static int ReportFatalIOError(Exception ex)
-    {
-        // Emit in the csc-compatible "gsc: error GS9999: <message>" form so
-        // the SDK BuildTask's diagnostic regex surfaces it as a structured
-        // MSBuild error rather than an opaque process crash.
-        Console.Error.WriteLine($"gsc: error GS9999: {ex.Message}");
-        return Error;
-    }
-
     // Tokenizes a single response-file line, splitting on whitespace while
     // respecting double-quote delimiters. Quotes are stripped from the
     // resulting tokens but the content between them (including spaces) is
@@ -197,6 +188,15 @@ public class Program
         }
 
         return tokens;
+    }
+
+    private static int ReportFatalIOError(Exception ex)
+    {
+        // Emit in the csc-compatible "gsc: error GS9999: <message>" form so
+        // the SDK BuildTask's diagnostic regex surfaces it as a structured
+        // MSBuild error rather than an opaque process crash.
+        Console.Error.WriteLine($"gsc: error GS9999: {ex.Message}");
+        return Error;
     }
 
     private static void ReportMissingTransitiveReferences(ReferenceResolver references, CommandLineArgs args)
