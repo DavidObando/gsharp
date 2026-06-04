@@ -10825,12 +10825,23 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0044 numeric conversion lattice. Any pair of numeric CLR
             // primitives (sbyte/byte/short/ushort/int/uint/long/ulong/nint/
             // nuint/float/double/decimal/char) gets a typed IL conversion.
-            if (TryEmitNumericConversion(from, to))
+            // Issue #421 P2-5: route a checked conversion through the
+            // overflow-trapping `conv.ovf.*` variants when requested.
+            if (TryEmitNumericConversion(from, to, conv.IsChecked))
             {
                 return;
             }
 
-            if (to?.ClrType == typeof(object) && IsValueTypeSymbol(from))
+            // Issue #421 P2-5: enum ⇄ numeric (and enum ⇄ enum) conversions.
+            // CLR enums share storage with their underlying primitive, so we
+            // simply re-route through the numeric lattice substituting the
+            // underlying type on whichever side carries the enum.
+            if (TryEmitEnumConversion(from, to, conv.IsChecked))
+            {
+                return;
+            }
+
+            if ((to?.ClrType == typeof(object) || IsInterfaceTargetType(to)) && IsValueTypeSymbol(from))
             {
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(this.outer.GetElementTypeToken(from));
@@ -10838,7 +10849,12 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // ADR-0045 explicit unbox: `(T)objectValue` for a value type T.
-            if (from?.ClrType == typeof(object) && to?.ClrType != null && to.ClrType.IsValueType)
+            // Issue #421 P2-5: also fire when the source is an interface
+            // reference (user-declared `InterfaceSymbol` or any CLR
+            // interface), since a boxed value type held in an interface
+            // slot needs `unbox.any` to surface as its native value type.
+            if ((from?.ClrType == typeof(object) || IsInterfaceSourceType(from))
+                && to?.ClrType != null && to.ClrType.IsValueType)
             {
                 this.il.OpCode(ILOpCode.Unbox_any);
                 this.il.Token(this.outer.GetElementTypeToken(to));
@@ -10913,8 +10929,11 @@ internal sealed class ReflectionMetadataEmitter
         // ADR-0044 numeric conversions. Maps the from/to CLR pair to the
         // appropriate `conv.*` opcode or, for `decimal`, to the matching
         // implicit/explicit operator method. Returns true when an emission
-        // was made.
-        private bool TryEmitNumericConversion(TypeSymbol fromSym, TypeSymbol toSym)
+        // was made. Issue #421 P2-5: when <paramref name="isChecked"/> is
+        // true the narrowing is emitted with the overflow-trapping
+        // `conv.ovf.*` opcodes so values that don't fit the target throw
+        // <see cref="System.OverflowException"/> instead of truncating.
+        private bool TryEmitNumericConversion(TypeSymbol fromSym, TypeSymbol toSym, bool isChecked = false)
         {
             var from = fromSym?.ClrType;
             var to = toSym?.ClrType;
@@ -10934,6 +10953,11 @@ internal sealed class ReflectionMetadataEmitter
             if (to == typeof(decimal) || from == typeof(decimal))
             {
                 return TryEmitDecimalConversion(from, to);
+            }
+
+            if (isChecked)
+            {
+                return TryEmitCheckedNumericConversion(from, to);
             }
 
             // Stack-type bookkeeping: anything narrower than i4 is widened to
@@ -11059,6 +11083,196 @@ internal sealed class ReflectionMetadataEmitter
 
             return false;
         }
+
+        // Issue #421 P2-5: emit a checked numeric narrowing using the
+        // overflow-trapping `conv.ovf.*` opcodes. The `_un` variants are
+        // selected when the *source* representation is unsigned (the
+        // overflow check then treats the input as unsigned and the output
+        // as the target's signedness).
+        //
+        // Floats have no `conv.ovf.r4 / r8`; checked float widening / float
+        // → float narrowing is identical to the unchecked form, so we fall
+        // back to `conv.r4 / conv.r8` for those targets. Source-is-float
+        // narrowings to an integral still get `conv.ovf.*` so a NaN or
+        // out-of-range float traps as overflow per ECMA-335.
+        private bool TryEmitCheckedNumericConversion(Type from, Type to)
+        {
+            var sourceUnsigned = IsUnsignedClrType(from);
+            ILOpCode? op = null;
+
+            if (to == typeof(sbyte))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_i1_un : ILOpCode.Conv_ovf_i1;
+            }
+            else if (to == typeof(byte))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_u1_un : ILOpCode.Conv_ovf_u1;
+            }
+            else if (to == typeof(short))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_i2_un : ILOpCode.Conv_ovf_i2;
+            }
+            else if (to == typeof(ushort) || to == typeof(char))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_u2_un : ILOpCode.Conv_ovf_u2;
+            }
+            else if (to == typeof(int))
+            {
+                // From a same-size signed source the value already fits, but
+                // from a same-size unsigned source we still need the check
+                // (`uint` → `int` traps for values > Int32.MaxValue).
+                if (from == typeof(int))
+                {
+                    return true;
+                }
+
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_i4_un : ILOpCode.Conv_ovf_i4;
+            }
+            else if (to == typeof(uint))
+            {
+                if (from == typeof(uint))
+                {
+                    return true;
+                }
+
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_u4_un : ILOpCode.Conv_ovf_u4;
+            }
+            else if (to == typeof(long))
+            {
+                // A signed widening (i1/i2/i4 → i8) needs `conv.i8` (not
+                // `conv.ovf.i8`) because it can't overflow; the same holds
+                // for the identity i8 → i8. An unsigned source widening to
+                // long uses `conv.ovf.i8.un` to trap on the >Int64.MaxValue
+                // boundary; an unsigned same-size widening (uint → long) is
+                // safe but the `_un` variant still trivially succeeds.
+                if (from == typeof(long))
+                {
+                    return true;
+                }
+
+                if (sourceUnsigned)
+                {
+                    op = ILOpCode.Conv_ovf_i8_un;
+                }
+                else if (from == typeof(float) || from == typeof(double))
+                {
+                    op = ILOpCode.Conv_ovf_i8;
+                }
+                else
+                {
+                    // Signed integral widening cannot overflow; emit the
+                    // plain widening opcode.
+                    op = ILOpCode.Conv_i8;
+                }
+            }
+            else if (to == typeof(ulong))
+            {
+                if (from == typeof(ulong))
+                {
+                    return true;
+                }
+
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_u8_un : ILOpCode.Conv_ovf_u8;
+            }
+            else if (to == typeof(nint))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_i_un : ILOpCode.Conv_ovf_i;
+            }
+            else if (to == typeof(nuint))
+            {
+                op = sourceUnsigned ? ILOpCode.Conv_ovf_u_un : ILOpCode.Conv_ovf_u;
+            }
+            else if (to == typeof(float))
+            {
+                op = ILOpCode.Conv_r4;
+            }
+            else if (to == typeof(double))
+            {
+                op = ILOpCode.Conv_r8;
+            }
+
+            if (op == null)
+            {
+                return false;
+            }
+
+            this.il.OpCode(op.Value);
+            return true;
+        }
+
+        // Issue #421 P2-5: enum ⇄ numeric (and enum ⇄ enum). CLR enum
+        // storage is identical to the underlying integral, so we route the
+        // conversion through the numeric lattice using the underlying type
+        // on whichever side carries the enum.
+        private bool TryEmitEnumConversion(TypeSymbol from, TypeSymbol to, bool isChecked)
+        {
+            var fromUnderlying = GetEnumUnderlyingTypeSymbol(from);
+            var toUnderlying = GetEnumUnderlyingTypeSymbol(to);
+
+            if (fromUnderlying == null && toUnderlying == null)
+            {
+                return false;
+            }
+
+            var effectiveFrom = fromUnderlying ?? from;
+            var effectiveTo = toUnderlying ?? to;
+
+            // If the underlying primitives are identical (e.g. `Color` enum
+            // ↔ int32, or one int-backed enum ↔ another int-backed enum)
+            // the IL representation is the same and we emit nothing — the
+            // i4 already on the stack is the result.
+            if (effectiveFrom?.ClrType != null && effectiveTo?.ClrType != null
+                && effectiveFrom.ClrType == effectiveTo.ClrType)
+            {
+                return true;
+            }
+
+            return TryEmitNumericConversion(effectiveFrom, effectiveTo, isChecked);
+        }
+
+        private static TypeSymbol GetEnumUnderlyingTypeSymbol(TypeSymbol type)
+        {
+            if (type is EnumSymbol enumSym)
+            {
+                return enumSym.UnderlyingType;
+            }
+
+            var clr = type?.ClrType;
+            if (clr != null && clr.IsEnum)
+            {
+                // Loaded via a MetadataLoadContext or normal load: use the
+                // CLR's own underlying-type API, then map back to a
+                // TypeSymbol for the numeric lattice.
+                var underlying = System.Enum.GetUnderlyingType(clr);
+                return TypeSymbol.FromClrType(underlying);
+            }
+
+            return null;
+        }
+
+        private static bool IsInterfaceTargetType(TypeSymbol type)
+        {
+            if (type is InterfaceSymbol)
+            {
+                return true;
+            }
+
+            return type?.ClrType != null && type.ClrType.IsInterface;
+        }
+
+        private static bool IsInterfaceSourceType(TypeSymbol type)
+        {
+            if (type is InterfaceSymbol)
+            {
+                return true;
+            }
+
+            return type?.ClrType != null && type.ClrType.IsInterface;
+        }
+
+        private static bool IsUnsignedClrType(Type t)
+            => t == typeof(byte) || t == typeof(ushort) || t == typeof(uint)
+                || t == typeof(ulong) || t == typeof(nuint) || t == typeof(char);
 
         private static bool IsNumericClrType(Type t)
             => t == typeof(sbyte) || t == typeof(byte)

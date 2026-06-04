@@ -204,6 +204,16 @@ public sealed class Conversion
             }
         }
 
+        // Issue #421 P2-5: user-defined and imported enums convert to/from
+        // their underlying numeric primitive, and one enum converts to
+        // another. Mirrors C# §10.2.4: every enum⇄numeric direction is an
+        // explicit conversion (even enum→its own underlying), since enum
+        // identity is intentionally distinct from the integral identity.
+        if (TryClassifyEnumConversion(from, to, out var enumConversion))
+        {
+            return enumConversion;
+        }
+
         // ADR-0044 numeric lattice. Both operands must be CLR primitives in
         // the numeric set; the widening map decides implicit vs. explicit.
         // Decimal narrowings (decimal → int etc.) and signed/unsigned
@@ -262,6 +272,31 @@ public sealed class Conversion
         if (from?.ClrType == typeof(object) && to?.ClrType != null && to.ClrType.IsValueType)
         {
             return Conversion.Explicit;
+        }
+
+        // Issue #421 P2-5: an interface-typed reference holding a boxed
+        // value type unboxes back to that value type via an explicit cast
+        // (`MyStruct(iface)`). On the CLR this lowers to `unbox.any`. We
+        // accept either a user-declared interface (InterfaceSymbol, whose
+        // own ClrType is null) or an imported CLR interface (e.g.
+        // System.IComparable). Mirrors C# §10.3.5.
+        if (IsInterfaceLikeType(from) && to?.ClrType != null && to.ClrType.IsValueType)
+        {
+            return Conversion.Explicit;
+        }
+
+        // Issue #421 P2-5: a value-typed expression implicitly boxes to any
+        // interface it implements. The IL is a single `box <T>` followed by
+        // a reference-level interface upcast (which is a no-op since the
+        // boxed object's type implements the interface). User-declared
+        // value structs reach this path once they participate in the
+        // interface relation; imported value types (e.g. `int32`
+        // implementing `System.IComparable`) use the CLR's
+        // `IsAssignableFrom` check.
+        if (IsValueTypeLikeFrom(from) && IsInterfaceLikeType(to)
+            && IsValueTypeAssignableToInterface(from, to))
+        {
+            return Conversion.Implicit;
         }
 
         // Reference upcast: a class implicitly converts to any interface in
@@ -360,5 +395,112 @@ public sealed class Conversion
         var fullName = type.FullName;
         return string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
             || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
+    }
+
+    // Issue #421 P2-5: enum⇄numeric and enum⇄enum conversions. Both
+    // directions are explicit per C# §10.3.3 / §10.3.4 — the binder must
+    // permit them so the cast syntax (`int32(myEnum)`) reaches the emitter,
+    // which then routes them through the underlying numeric primitive.
+    private static bool TryClassifyEnumConversion(TypeSymbol from, TypeSymbol to, out Conversion conversion)
+    {
+        var fromIsEnum = IsEnumLikeType(from);
+        var toIsEnum = IsEnumLikeType(to);
+
+        if (!fromIsEnum && !toIsEnum)
+        {
+            conversion = Conversion.None;
+            return false;
+        }
+
+        // enum → enum (any pair, including the same enum). Identity already
+        // returned above, so this only fires for distinct enum types.
+        if (fromIsEnum && toIsEnum)
+        {
+            conversion = Conversion.Explicit;
+            return true;
+        }
+
+        // enum → numeric primitive.
+        if (fromIsEnum && to?.ClrType?.FullName is string toName && NumericClrFullNames.Contains(toName))
+        {
+            conversion = Conversion.Explicit;
+            return true;
+        }
+
+        // numeric primitive → enum.
+        if (toIsEnum && from?.ClrType?.FullName is string fromName && NumericClrFullNames.Contains(fromName))
+        {
+            conversion = Conversion.Explicit;
+            return true;
+        }
+
+        conversion = Conversion.None;
+        return false;
+    }
+
+    private static bool IsEnumLikeType(TypeSymbol type)
+    {
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType?.IsEnum == true;
+    }
+
+    private static bool IsInterfaceLikeType(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType?.IsInterface == true;
+    }
+
+    private static bool IsValueTypeLikeFrom(TypeSymbol type)
+    {
+        // User structs (non-class StructSymbol) and user enums are CLR value
+        // types even though their symbols carry no ClrType.
+        if (type is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType != null && type.ClrType.IsValueType;
+    }
+
+    private static bool IsValueTypeAssignableToInterface(TypeSymbol from, TypeSymbol to)
+    {
+        // User-declared struct → user-declared interface: walk the struct's
+        // declared interface list.
+        if (from is StructSymbol fromStruct && to is InterfaceSymbol toInterface)
+        {
+            foreach (var i in fromStruct.Interfaces)
+            {
+                if (i == toInterface)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Either side imported / CLR-typed: defer to the CLR's own
+        // assignability check.
+        var fromClr = from?.ClrType;
+        var toClr = to?.ClrType;
+        if (fromClr != null && toClr != null)
+        {
+            return ClrTypeUtilities.IsAssignableByName(toClr, fromClr);
+        }
+
+        return false;
     }
 }
