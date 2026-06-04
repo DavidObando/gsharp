@@ -648,4 +648,81 @@ public class ProgramTests
             try { File.Delete(sample); } catch { }
         }
     }
+
+    [Fact]
+    public void Main_OutputPathInUnwritableLocation_ReportsErrorAndExitsNonZero()
+    {
+        // Direct /out at a path whose containing directory cannot be created
+        // (an existing FILE acts as a non-directory parent). On every OS this
+        // makes Directory.CreateDirectory throw IOException, which previously
+        // propagated out of Main and crashed gsc. The fix wraps Main with a
+        // catch that reports GS9999 and returns Error.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var blocker = Path.Combine(Path.GetTempPath(), $"gs_blocker_{System.Guid.NewGuid():N}");
+        File.WriteAllText(blocker, "not a directory");
+        var outPath = Path.Combine(blocker, "sub", "P.dll");
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            int exit = -42;
+            var ex = Record.Exception(() =>
+            {
+                exit = Program.Main(new[] { "/out:" + outPath, "/target:library", sample });
+            });
+            Assert.Null(ex);
+            Assert.NotEqual(0, exit);
+            var stderr = errWriter.ToString();
+            Assert.Contains("GS9999", stderr);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { File.Delete(blocker); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_OutputPathIsExistingDirectory_ReportsErrorAndExitsNonZero()
+    {
+        // Pointing /out at an existing directory makes File.Create throw
+        // UnauthorizedAccessException (Windows) or IOException (Unix). Both
+        // must be caught and surfaced as a structured GS9999 error.
+        var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
+        File.WriteAllText(sample, "package P\n");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_io_err_").FullName;
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        try
+        {
+            int exit = -42;
+            var ex = Record.Exception(() =>
+            {
+                // /out: points at the directory itself (not a file inside it).
+                exit = Program.Main(new[] { "/out:" + tempDir, "/target:library", sample });
+            });
+            Assert.Null(ex);
+            Assert.NotEqual(0, exit);
+            var stderr = errWriter.ToString();
+            Assert.Contains("GS9999", stderr);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+        }
+    }
 }

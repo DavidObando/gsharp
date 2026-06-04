@@ -53,6 +53,14 @@ public class Program
             Console.Error.WriteLine(ex.Message);
             return Error;
         }
+        catch (IOException ex)
+        {
+            return ReportFatalIOError(ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return ReportFatalIOError(ex);
+        }
 
         if (parsed.SourceFiles.Count == 0)
         {
@@ -60,50 +68,74 @@ public class Program
             return Error;
         }
 
-        var syntaxTrees = new List<SyntaxTree>(parsed.SourceFiles.Count);
-        foreach (var path in parsed.SourceFiles)
+        try
         {
-            if (!File.Exists(path))
+            var syntaxTrees = new List<SyntaxTree>(parsed.SourceFiles.Count);
+            foreach (var path in parsed.SourceFiles)
             {
-                Console.Error.WriteLine($"Unable to find specified file {path}");
-                return Error;
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine($"Unable to find specified file {path}");
+                    return Error;
+                }
+
+                // Resolve to an absolute path so the document name recorded in the
+                // PDB is rooted. Debuggers (vsdbg/coreclr) match on-disk breakpoints
+                // against the PDB document name; a relative name leaves source
+                // unresolvable, which surfaces as a phantom tab with
+                // "Could not load source ...: Incorrect format of 'source' message."
+                var fullPath = Path.GetFullPath(path);
+                syntaxTrees.Add(SyntaxTree.Load(fullPath));
             }
 
-            // Resolve to an absolute path so the document name recorded in the
-            // PDB is rooted. Debuggers (vsdbg/coreclr) match on-disk breakpoints
-            // against the PDB document name; a relative name leaves source
-            // unresolvable, which surfaces as a phantom tab with
-            // "Could not load source ...: Incorrect format of 'source' message."
-            var fullPath = Path.GetFullPath(path);
-            syntaxTrees.Add(SyntaxTree.Load(fullPath));
-        }
+            var references = parsed.References.Count > 0
+                ? ReferenceResolver.WithReferences(parsed.References)
+                : null;
 
-        var references = parsed.References.Count > 0
-            ? ReferenceResolver.WithReferences(parsed.References)
-            : null;
+            ReportMissingTransitiveReferences(references, parsed);
 
-        ReportMissingTransitiveReferences(references, parsed);
-
-        var compilation = new Compilation(references, syntaxTrees.ToArray())
-        {
-            ImplicitSystemImport = parsed.ImplicitSystemImport,
-            DebugInformation =
+            var compilation = new Compilation(references, syntaxTrees.ToArray())
             {
-                Format = parsed.DebugFormat,
-                PdbFilePath = parsed.PdbPath,
-                SourceLinkFilePath = parsed.SourceLinkPath,
-                Deterministic = parsed.Deterministic,
-                EmbedAllSources = parsed.EmbedAllSources,
-            },
-        };
+                ImplicitSystemImport = parsed.ImplicitSystemImport,
+                DebugInformation =
+                {
+                    Format = parsed.DebugFormat,
+                    PdbFilePath = parsed.PdbPath,
+                    SourceLinkFilePath = parsed.SourceLinkPath,
+                    Deterministic = parsed.Deterministic,
+                    EmbedAllSources = parsed.EmbedAllSources,
+                },
+            };
 
-        if (parsed.OutputPath is null)
-        {
-            // Legacy / no-output mode: interpret the program (back-compat).
-            return Interpret(compilation, parsed);
+            if (parsed.OutputPath is null)
+            {
+                // Legacy / no-output mode: interpret the program (back-compat).
+                return Interpret(compilation, parsed);
+            }
+
+            return Emit(compilation, parsed);
         }
+        catch (IOException ex)
+        {
+            // I/O failures during source loading, directory creation, output
+            // file creation, or assembly emit must surface as a structured
+            // diagnostic with a non-zero exit code rather than crashing gsc.
+            return ReportFatalIOError(ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Permission-denied while reading sources or writing outputs.
+            return ReportFatalIOError(ex);
+        }
+    }
 
-        return Emit(compilation, parsed);
+    private static int ReportFatalIOError(Exception ex)
+    {
+        // Emit in the csc-compatible "gsc: error GS9999: <message>" form so
+        // the SDK BuildTask's diagnostic regex surfaces it as a structured
+        // MSBuild error rather than an opaque process crash.
+        Console.Error.WriteLine($"gsc: error GS9999: {ex.Message}");
+        return Error;
     }
 
     // Tokenizes a single response-file line, splitting on whitespace while
