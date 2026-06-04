@@ -274,6 +274,129 @@ public class SpillSequenceSpillerTests
         Assert.Same(body, result);
     }
 
+    [Fact]
+    public void Unary_Expression_With_Await_Operand_Spills_Operand()
+    {
+        // Arrange: -(await t)
+        var op = BoundUnaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32);
+        var awaitOperand = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var unary = new BoundUnaryExpression(null, op, awaitOperand);
+        var decl = new BoundVariableDeclaration(
+            null,
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32),
+            unary);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
+
+        // Act
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        // Assert: the await is lifted to a spill temp before the final decl.
+        Assert.NotSame(body, result);
+        Assert.True(result.Statements.Length >= 2, "Expected spill statements before the final declaration.");
+
+        // The first spill temp's initializer should be the await.
+        var firstDecl = Assert.IsType<BoundVariableDeclaration>(result.Statements[0]);
+        Assert.StartsWith(GeneratedNames.SpillTempPrefix, firstDecl.Variable.Name);
+        Assert.IsType<BoundAwaitExpression>(firstDecl.Initializer);
+
+        // The final declaration's initializer is a unary expression whose operand
+        // is a variable read (the spill temp), not the original await.
+        var lastDecl = Assert.IsType<BoundVariableDeclaration>(result.Statements[^1]);
+        var unaryOut = Assert.IsType<BoundUnaryExpression>(lastDecl.Initializer);
+        Assert.IsType<BoundVariableExpression>(unaryOut.Operand);
+    }
+
+    [Fact]
+    public void Unary_Expression_Without_Await_Returns_Trivial()
+    {
+        // Arrange: -literal (no await).
+        var op = BoundUnaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32);
+        var unary = new BoundUnaryExpression(null, op, new BoundLiteralExpression(null, 5));
+        var decl = new BoundVariableDeclaration(
+            null,
+            new LocalVariableSymbol("x", false, TypeSymbol.Int32),
+            unary);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(decl));
+
+        // Act
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        // Assert: unchanged because there's no await anywhere.
+        Assert.Same(body, result);
+    }
+
+    [Fact]
+    public void Index_Assignment_With_Await_RHS_Spills_Value()
+    {
+        // Arrange: arr[0] = await t  (Target is a VariableSymbol)
+        var arr = new LocalVariableSymbol("arr", false, ArrayTypeSymbol.Get(TypeSymbol.Int32, 3));
+        var awaitVal = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var ixa = new BoundIndexAssignmentExpression(
+            null,
+            arr,
+            new BoundLiteralExpression(null, 0),
+            awaitVal,
+            TypeSymbol.Int32);
+        var stmt = new BoundExpressionStatement(null, ixa);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(stmt));
+
+        // Act
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        // Assert: a spill temp for the await result is introduced, then the
+        // final index assignment uses the temp as its value (no embedded await).
+        Assert.NotSame(body, result);
+        var spillCount = 0;
+        BoundIndexAssignmentExpression finalIxa = null;
+        foreach (var s in result.Statements)
+        {
+            if (s is BoundVariableDeclaration d
+                && d.Variable.Name.StartsWith(GeneratedNames.SpillTempPrefix))
+            {
+                spillCount++;
+            }
+
+            if (s is BoundExpressionStatement es && es.Expression is BoundIndexAssignmentExpression fix)
+            {
+                finalIxa = fix;
+            }
+        }
+
+        Assert.True(spillCount >= 1, "Expected at least one spill temp for the await.");
+        Assert.NotNull(finalIxa);
+        Assert.IsNotType<BoundAwaitExpression>(finalIxa!.Value);
+    }
+
+    [Fact]
+    public void Index_Assignment_With_Await_In_Index_And_Value_Spills_Both()
+    {
+        // Arrange: arr[await t1] = await t2  — index must be stabilized to a
+        // temp because the RHS await suspends after the index is computed.
+        var arr = new LocalVariableSymbol("arr", false, ArrayTypeSymbol.Get(TypeSymbol.Int32, 3));
+        var awaitIdx = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var awaitVal = new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), TypeSymbol.Int32);
+        var ixa = new BoundIndexAssignmentExpression(null, arr, awaitIdx, awaitVal, TypeSymbol.Int32);
+        var stmt = new BoundExpressionStatement(null, ixa);
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(stmt));
+
+        // Act
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        // Assert: at least two spill temps (index await + value await).
+        Assert.NotSame(body, result);
+        var spillCount = 0;
+        foreach (var s in result.Statements)
+        {
+            if (s is BoundVariableDeclaration d
+                && d.Variable.Name.StartsWith(GeneratedNames.SpillTempPrefix))
+            {
+                spillCount++;
+            }
+        }
+
+        Assert.True(spillCount >= 2, $"Expected at least 2 spill temps but got {spillCount}.");
+    }
+
     private static BoundCallExpression MakeCall(string name, TypeSymbol returnType)
     {
         var func = new FunctionSymbol(

@@ -294,6 +294,7 @@ public static class MoveNextBodyRewriter
         {
             private readonly RewriteContext ctx;
             private readonly TryDispatchPlan tryDispatch;
+            private int aliasOrdinal;
 
             public InnerRewriter(RewriteContext ctx, TryDispatchPlan tryDispatch)
             {
@@ -391,13 +392,107 @@ public static class MoveNextBodyRewriter
             {
                 var rewrittenValue = RewriteExpression(node.Value);
 
-                // If the receiver is the hoisted `this` (instance method on a closure),
-                // we cannot represent a nested field store with the current node shape.
-                // For read-only capture access this path won't be hit; defer full
-                // write-through support for captured vars in async lambdas.
+                // If the receiver is hoisted into a state-machine field, the
+                // BoundFieldAssignmentExpression node shape can't reference the
+                // field directly (Receiver is VariableSymbol).
+                if (node.Receiver != null
+                    && TryGetHoistedField(node.Receiver, out var recvField))
+                {
+                    if (node.StructType.IsClass)
+                    {
+                        // Class receiver — reference type. Alias the hoisted field
+                        // to a fresh local and store through it.
+                        var aliasLocal = new LocalVariableSymbol(
+                            "<>recv_alias_" + (aliasOrdinal++),
+                            isReadOnly: false,
+                            node.Receiver.Type);
+                        var decl = new BoundVariableDeclaration(null, aliasLocal, ctx.ReadField(recvField));
+                        var newAssign = new BoundFieldAssignmentExpression(
+                            null,
+                            aliasLocal,
+                            node.StructType,
+                            node.Field,
+                            rewrittenValue);
+                        return new BoundBlockExpression(
+                            null,
+                            ImmutableArray.Create<BoundStatement>(decl),
+                            newAssign);
+                    }
+                    else
+                    {
+                        // Value-type struct receiver. A read into a local would
+                        // capture a copy; we must write the mutated copy back into
+                        // the hoisted state-machine field for the change to persist.
+                        var copyLocal = new LocalVariableSymbol(
+                            "<>recv_copy_" + (aliasOrdinal++),
+                            isReadOnly: false,
+                            node.Receiver.Type);
+                        var copyDecl = new BoundVariableDeclaration(null, copyLocal, ctx.ReadField(recvField));
+                        var innerAssign = new BoundFieldAssignmentExpression(
+                            null,
+                            copyLocal,
+                            node.StructType,
+                            node.Field,
+                            rewrittenValue);
+                        var writeBack = new BoundExpressionStatement(
+                            null,
+                            ctx.WriteField(recvField, new BoundVariableExpression(null, copyLocal)));
+                        var resultRead = new BoundFieldAccessExpression(
+                            null,
+                            new BoundVariableExpression(null, copyLocal),
+                            node.StructType,
+                            node.Field);
+                        return new BoundBlockExpression(
+                            null,
+                            ImmutableArray.Create<BoundStatement>(
+                                copyDecl,
+                                new BoundExpressionStatement(null, innerAssign),
+                                writeBack),
+                            resultRead);
+                    }
+                }
+
                 if (rewrittenValue != node.Value)
                 {
                     return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, rewrittenValue);
+                }
+
+                return node;
+            }
+
+            protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+            {
+                var rewrittenIndex = RewriteExpression(node.Index);
+                var rewrittenValue = RewriteExpression(node.Value);
+
+                // If the target (array/slice/map) is hoisted into a state-machine
+                // field, the BoundIndexAssignmentExpression shape can't reference
+                // the field directly (Target is VariableSymbol). Arrays/slices/maps
+                // are reference types, so aliasing the hoisted field into a fresh
+                // local lets us perform the index store through that local; the
+                // mutation lands on the same underlying array.
+                if (TryGetHoistedField(node.Target, out var targetField))
+                {
+                    var aliasLocal = new LocalVariableSymbol(
+                        "<>arr_alias_" + (aliasOrdinal++),
+                        isReadOnly: false,
+                        node.Target.Type);
+                    var decl = new BoundVariableDeclaration(null, aliasLocal, ctx.ReadField(targetField));
+                    var newAssign = new BoundIndexAssignmentExpression(
+                        null,
+                        aliasLocal,
+                        rewrittenIndex,
+                        rewrittenValue,
+                        node.Type);
+                    return new BoundBlockExpression(
+                        null,
+                        ImmutableArray.Create<BoundStatement>(decl),
+                        newAssign);
+                }
+
+                if (rewrittenIndex != node.Index || rewrittenValue != node.Value)
+                {
+                    return new BoundIndexAssignmentExpression(null, node.Target, rewrittenIndex, rewrittenValue, node.Type);
                 }
 
                 return node;
