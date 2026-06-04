@@ -73,11 +73,26 @@ Console.WriteLine(r)
         var compilation = new Compilation(tree);
         using var peStream = new MemoryStream();
 
-        // The guard fires twice — `Debug.Assert(false, ...)` in Debug builds
-        // raises a DebugAssertException; release builds skip the assertion
-        // and surface the NotSupportedException instead. Accept either, and
-        // verify the diagnostic explains the value-type / dup-brtrue issue.
-        var ex = Record.Exception(() => compilation.Emit(peStream));
+        // The guard fires twice. In Debug builds `Debug.Assert(false, ...)`
+        // raises a DebugAssertException, which escapes `Compilation.Emit`
+        // because the `catch when (ex is NotSupportedException || ...)` filter
+        // does not match it. In Release builds the assert is a no-op, so the
+        // subsequent `throw new NotSupportedException(...)` is caught by that
+        // filter and surfaced as a GS9998 emit diagnostic on the returned
+        // EmitResult. Accept either shape, and in both cases verify the
+        // diagnostic explains the value-type / dup-brtrue issue.
+        string message;
+        var ex = Record.Exception(() =>
+        {
+            var result = compilation.Emit(peStream);
+            if (!result.Success)
+            {
+                // Re-throw the emit-time NotSupportedException surfaced as a
+                // diagnostic so the test below can assert on its message.
+                var diag = result.Diagnostics.FirstOrDefault(d => d.IsError);
+                throw new NotSupportedException(diag?.Message ?? "<no diagnostic message>");
+            }
+        });
         Assert.NotNull(ex);
 
         var actual = ex!;
@@ -92,8 +107,9 @@ Console.WriteLine(r)
         Assert.True(
             actual is NotSupportedException || typeName == "DebugAssertException",
             $"expected NotSupportedException or DebugAssertException, got {actual.GetType().FullName}: {actual.Message}");
-        Assert.Contains("Null-coalesce", actual.Message, StringComparison.Ordinal);
-        Assert.Contains("value-type", actual.Message, StringComparison.Ordinal);
+        message = actual.Message;
+        Assert.Contains("Null-coalesce", message, StringComparison.Ordinal);
+        Assert.Contains("value-type", message, StringComparison.Ordinal);
     }
 
     private static string CompileLoadInvokeCaptureStdout(string source, string contextName)
