@@ -7393,10 +7393,7 @@ internal sealed class ReflectionMetadataEmitter
                     null,
                     TypeSymbol.FromClrType(typeof(object)),
                     new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrentObject.ThisParameter), smClass, currentField))))));
-            this.lambdaBodies[dispose] = Lowerer.Lower(new BoundBlockStatement(null,
-                ImmutableArray.Create<BoundStatement>(
-                new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, dispose.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
-                new BoundReturnStatement(null, null))));
+            this.lambdaBodies[dispose] = IteratorMoveNextBodyBuilder.BuildDisposeBody(plan, stateField, dispose.ThisParameter, smClass, fieldMap);
             this.lambdaBodies[reset] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
                 new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
