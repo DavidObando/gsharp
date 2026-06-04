@@ -740,7 +740,84 @@ public sealed class Lowerer : BoundTreeRewriter
         statements.Add(new BoundLabelStatement(node.Syntax, startLabel));
         statements.Add(new BoundConditionalGotoStatement(node.Syntax, bodyLabel, moveNextCallFactory(enumeratorExpr), jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(node.Syntax, node.BreakLabel));
+
+        // Wrap the iteration in try-finally so the enumerator is disposed
+        // on early break, return, or exception — matching C# foreach. We
+        // only emit the disposer when the enumerator implements IDisposable
+        // (e.g. all synthesized iterator state machines do). The enumerator
+        // variable declaration is moved into an outer scope so its handle
+        // is still in scope in the finally.
+        //
+        // We skip the wrap when the loop body itself contains a yield or
+        // await: in those cases the enclosing function is rewritten as an
+        // iterator or async state machine, and that pipeline does not yet
+        // generally handle protected regions around its suspension points.
+        // Avoiding the wrap here preserves the pre-existing behavior for
+        // those callers while still adding Dispose coverage for the common
+        // case (plain foreach over an enumerable).
+        var disposeCall = TryBuildEnumeratorDisposeCall(enumeratorSymbol);
+        if (disposeCall != null && !BodyContainsYieldOrAwait(node.Body))
+        {
+            // Outer block:
+            //   var $enum = coll.GetEnumerator();
+            //   try { ... loop body ... } finally { $enum.Dispose(); }
+            var loopStatements = statements.ToImmutable();
+
+            // Drop the enumeratorDecl from the loop body — it lives outside the try.
+            // (It was added at index 0.)
+            var withoutEnumDecl = ImmutableArray.CreateRange(System.Linq.Enumerable.Skip(loopStatements, 1));
+
+            var tryBlock = new BoundBlockStatement(node.Syntax, withoutEnumDecl);
+            var finallyBlock = new BoundBlockStatement(
+                node.Syntax,
+                ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(node.Syntax, disposeCall)));
+            var tryFinally = new BoundTryStatement(
+                node.Syntax,
+                tryBlock,
+                ImmutableArray<BoundCatchClause>.Empty,
+                finallyBlock);
+
+            return new BoundBlockStatement(
+                node.Syntax,
+                ImmutableArray.Create<BoundStatement>(enumeratorDecl, tryFinally));
+        }
+
         return new BoundBlockStatement(node.Syntax, statements.ToImmutable());
+    }
+
+    private static BoundExpression TryBuildEnumeratorDisposeCall(LocalVariableSymbol enumeratorSymbol)
+    {
+        var clrType = enumeratorSymbol.Type?.ClrType;
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        if (!typeof(System.IDisposable).IsAssignableFrom(clrType))
+        {
+            return null;
+        }
+
+        var disposeMethod = typeof(System.IDisposable).GetMethod("Dispose", System.Type.EmptyTypes);
+        if (disposeMethod == null)
+        {
+            return null;
+        }
+
+        var receiver = new BoundVariableExpression(null, enumeratorSymbol);
+        return new BoundImportedInstanceCallExpression(
+            null,
+            receiver,
+            disposeMethod,
+            TypeSymbol.Void,
+            ImmutableArray<BoundExpression>.Empty);
+    }
+
+    private static bool BodyContainsYieldOrAwait(BoundStatement body)
+    {
+        var walker = new YieldOrAwaitDetector();
+        walker.RewriteStatement(body);
+        return walker.Found;
     }
 
     private static bool TryBuildGetEnumeratorCall(
@@ -963,5 +1040,22 @@ public sealed class Lowerer : BoundTreeRewriter
         stmts.Add(new BoundReturnStatement(null, retExpr));
 
         return new BoundBlockStatement(null, stmts.ToImmutable());
+    }
+
+    private sealed class YieldOrAwaitDetector : BoundTreeRewriter
+    {
+        public bool Found { get; private set; }
+
+        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        {
+            this.Found = true;
+            return node;
+        }
+
+        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        {
+            this.Found = true;
+            return node;
+        }
     }
 }
