@@ -12112,7 +12112,11 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.Branch(ILOpCode.Leave, leaveTarget);
                 this.il.MarkLabel(handlerEnd);
 
-                var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(clause.ExceptionType.ClrType);
+                // Issue #421 (P2-6): user-defined exception classes have ClrType == null
+                // at emit time, so fall back to the emitter's user-defined type registry
+                // via GetElementTypeToken (which handles both CLR-backed and source-defined
+                // types) instead of dereferencing ClrType directly.
+                var catchTypeHandle = this.outer.GetElementTypeToken(clause.ExceptionType);
                 this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
             }
         }
