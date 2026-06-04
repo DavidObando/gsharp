@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -664,5 +667,108 @@ Console.WriteLine(""subscribed"")
 ";
         var output = CompileLoadInvokeCaptureStdout(source, "SharedBlock-StaticEvent");
         Assert.Contains("subscribed", output);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 8. Issue #418 (P1-7): PropertyMap must not orphan static PropertyDef rows
+    // when instance properties are declared.  Even if every declared instance
+    // property is skipped during emission (so no instance PropertyDef row is
+    // produced), the static emission path must still add a PropertyMap row
+    // pointing at the first static PropertyDef. Without it, the static rows
+    // are unreachable from any TypeDef, violating ECMA-335 §II.22.35.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StaticProperty_OnTypeWithInstanceProperty_IsReachableViaReflection()
+    {
+        // Sanity check for the mixed instance + static scenario.  Both the
+        // instance auto-property and the static auto-property must be
+        // reflectable, which requires a valid PropertyMap row for the type.
+        var source = @"package MixedProps
+import System
+
+type Mixed class {
+    prop Name string
+    shared {
+        prop Counter int32
+    }
+}
+
+Mixed.Counter = 7
+var m = Mixed{}
+m.Name = ""hello""
+Console.WriteLine(m.Name)
+Console.WriteLine(Mixed.Counter)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "P1-7-MixedProps");
+        Assert.Contains("hello", output);
+        Assert.Contains("7", output);
+    }
+
+    [Fact]
+    public void StaticProperty_OnTypeWithoutInstanceProperty_EmitsExactlyOnePropertyMapRow()
+    {
+        // Verifies the static-only case keeps producing exactly one PropertyMap
+        // row pointing at the static PropertyDef.  Guards against regressions
+        // in the new typesWithPropertyMap tracking introduced for issue #418.
+        var source = @"package StaticOnlyProp
+import System
+
+type Config class {
+    shared {
+        prop Name string
+    }
+}
+
+Config.Name = ""world""
+Console.WriteLine(Config.Name)
+";
+        using var peStream = new MemoryStream();
+        var result = Compile(source, peStream);
+        Assert.True(result.Success);
+
+        peStream.Position = 0;
+        using var peReader = new PEReader(peStream);
+        var md = peReader.GetMetadataReader();
+
+        // Exactly one PropertyMap row for the static property on Config.
+        var pmRows = md.GetTableRowCount(TableIndex.PropertyMap);
+        Assert.Equal(1, pmRows);
+
+        // Exactly one PropertyDef row (the static one).
+        var pdRows = md.GetTableRowCount(TableIndex.Property);
+        Assert.Equal(1, pdRows);
+    }
+
+    [Fact]
+    public void StaticAndInstanceProperty_OnSameType_EmitsExactlyOnePropertyMapRow()
+    {
+        // When a type declares both instance and static properties, exactly
+        // one PropertyMap row must exist, pointing at the first (instance)
+        // PropertyDef.  Both PropertyDef rows belong to the same type via
+        // ECMA-335 §II.22.35 contiguity.
+        var source = @"package MixedPropsShape
+import System
+
+type Mixed class {
+    prop Name string
+    shared {
+        prop Counter int32
+    }
+}
+";
+        using var peStream = new MemoryStream();
+        var result = Compile(source, peStream);
+        Assert.True(result.Success);
+
+        peStream.Position = 0;
+        using var peReader = new PEReader(peStream);
+        var md = peReader.GetMetadataReader();
+
+        var pmRows = md.GetTableRowCount(TableIndex.PropertyMap);
+        Assert.Equal(1, pmRows);
+
+        var pdRows = md.GetTableRowCount(TableIndex.Property);
+        Assert.Equal(2, pdRows);
     }
 }
