@@ -42,9 +42,9 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public bool IsVariadic { get; }
 
     /// <summary>
-    /// Gets a value indicating whether this parameter carries the <c>scoped</c> modifier (ADR-0058 / issue #376).
+    /// Gets or sets a value indicating whether this parameter carries the <c>scoped</c> modifier (ADR-0058 / issue #376).
     /// When <see langword="true"/>, the parameter's safe-to-escape scope is restricted to the
     /// current function body and it may not be directly returned from a ref-struct-returning function.
     /// </summary>
-    public bool IsScoped { get; }
+    public override bool IsScoped { get; set; }
 }

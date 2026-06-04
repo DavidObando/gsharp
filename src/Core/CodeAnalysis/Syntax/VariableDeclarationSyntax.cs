@@ -84,6 +84,15 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     public SyntaxToken Keyword { get; }
 
     /// <summary>
+    /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
+    /// When non-null, the local's safe-to-escape scope is restricted to the current function body.
+    /// </summary>
+    public SyntaxToken ScopedModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this declaration carries the <c>scoped</c> modifier (ADR-0058).</summary>
+    public bool IsScoped => ScopedModifier != null;
+
+    /// <summary>
     /// Gets the variable identifier.
     /// </summary>
     public SyntaxToken Identifier { get; }

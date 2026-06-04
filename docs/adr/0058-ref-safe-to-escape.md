@@ -76,27 +76,39 @@ The `scoped` modifier on a local variable declaration is parsed but has no addit
 | GS9006 | Declaring a struct or class field with `*T` type. |
 | GS0219 (extension) | Returning a `ref struct` value that directly references a `scoped` parameter. |
 
-### 6. STE / RSTE deferred to a follow-up
+### 6. STE / RSTE — full implementation
 
-Full data-flow tracking of `safe-to-escape` and `ref-safe-to-escape` scopes (covering initializer-derived lifetimes, constructor expressions, struct member access, nested field reads) and full `[UnscopedRef]` enforcement remain deferred. The `scoped` modifier and `[UnscopedRef]` attribute are surfaced now so user code can use the syntax; the binder enforces only the direct-parameter-return case.
+Data-flow tracking of `safe-to-escape` and `ref-safe-to-escape` scopes is implemented via single-pass conservative propagation:
+
+- **Variables** (`LocalVariableSymbol`) carry an `IsScoped` flag indicating function-local escape scope.
+- **Initializer propagation**: when a ref struct (or `*T`) local is initialized from a scoped source (parameter, local, constructor call, member access on a scoped receiver), it inherits function-local STE.
+- **Return validation**: the return-statement check uses `HasFunctionLocalEscapeScope()` which recursively inspects the expression tree for scoped roots — covering direct variable references, conversions, constructor calls, field access, and method calls.
+- **`[UnscopedRef]` enforcement**: the implicit `this` parameter of a `ref struct` instance method is marked `IsScoped = true` by default; the `@UnscopedRef` annotation relaxes this. Without `@UnscopedRef`, returning `this` or a ref struct field of `this` from a ref struct method produces GS0219.
+- **`scoped` on locals**: parsed as `let scoped x T = expr` / `var scoped x T = expr`. Enforced identically to scoped parameters.
+- **`scoped` on `*T` parameters**: restricts the managed pointer's RSTE. The existing GS9004 already prevents returning `*T`; the additional enforcement is STE/RSTE propagation to derived locals.
 
 ## Consequences
 
 **New capabilities:**
 - User code can annotate parameters with `scoped` to document and enforce that a ref struct parameter will not escape.
+- User code can annotate local variable declarations with `scoped` (`let scoped x = ...`) for the same restriction.
 - Managed-pointer (`*T`) escape scenarios that previously compiled silently now produce clear diagnostics.
-- The `[UnscopedRef]` attribute can be applied to struct methods; it round-trips to metadata.
+- The `@UnscopedRef` annotation can be applied to ref struct methods to allow returning `this`.
+- STE propagation catches indirect escapes: `let x = scopedParam; return x` is correctly rejected.
 
 **Breaking changes:**
 - Any code that returned a `*T` (ByRefTypeSymbol) value, captured one in a closure, or declared a `*T` field now fails with GS9004 / GS9006. Such code was memory-unsafe and was never supported; the diagnostics surface an existing correctness gap.
-- Returning a `scoped` ref struct parameter now fails with GS0219. This is a new restriction; previously the binder accepted such returns without checking.
+- Returning a `scoped` ref struct parameter or local now fails with GS0219. This is a new restriction; previously the binder accepted such returns without checking.
+- Ref struct instance methods can no longer return `this` (or ref struct fields of `this`) without `@UnscopedRef`. This matches C#'s default behavior.
 
 **Existing test impact:**
-- No existing tests exercise ByRef return, ByRef closure capture, or ByRef fields (the diagnostics were unreachable). All 2 000+ existing tests continue to pass.
+- No existing tests exercise ByRef return, ByRef closure capture, or ByRef fields (the diagnostics were unreachable). All existing tests continue to pass.
 
-## Follow-ups
+## Follow-ups (completed)
 
-- Full data-flow STE propagation through initializers, constructors, and member access.
-- Full RSTE for `ref` returns and `[UnscopedRef]` enforcement.
-- `scoped ref` compound modifier (currently only `scoped` on value parameters is checked; `scoped` on a `*T` parameter restricts RSTE in the full model).
-- `scoped` on local variable declarations (enforcement).
+All items previously deferred have been implemented:
+
+- ✅ Full data-flow STE propagation through initializers, constructors, and member access.
+- ✅ Full RSTE for `ref` returns and `[UnscopedRef]` enforcement.
+- ✅ `scoped ref` compound modifier (`scoped` on a `*T` parameter restricts RSTE).
+- ✅ `scoped` on local variable declarations (enforcement).

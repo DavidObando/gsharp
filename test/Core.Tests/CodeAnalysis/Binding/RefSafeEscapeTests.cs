@@ -312,6 +312,220 @@ func passThrough(a Acc) Acc {
     }
 
     // -----------------------------------------------------------------------
+    // scoped on local variable declarations (Phase 1)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ScopedLocal_RefStruct_Returned_Reports_GS0219()
+    {
+        var source = @"
+import System
+func bad() ReadOnlySpan[int32] {
+    var scoped s ReadOnlySpan[int32]
+    return s
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void ScopedLocal_RefStruct_NotReturned_IsLegal()
+    {
+        var source = @"
+import System
+func ok() int32 {
+    var scoped s ReadOnlySpan[int32]
+    return s.Length
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void ScopedLocal_Let_RefStruct_Returned_Reports_GS0219()
+    {
+        var source = @"
+import System
+func bad(data ReadOnlySpan[int32]) ReadOnlySpan[int32] {
+    let scoped local = data
+    return local
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void Scoped_UsableAsLocalIdentifier()
+    {
+        // `scoped` used as a variable name (let scoped = 42) should still work
+        // when not followed by another identifier that forms a name.
+        var source = @"
+let scoped = 42
+";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        Assert.DoesNotContain(tree.Diagnostics, d => d.IsError);
+    }
+
+    // -----------------------------------------------------------------------
+    // STE propagation through initializers (Phase 2)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void STE_Propagation_LocalInitFromScopedParam_Reports_GS0219()
+    {
+        // `let x = scopedParam` → x inherits function-local STE → cannot return x
+        var source = @"
+import System
+func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
+    let x = s
+    return x
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void STE_Propagation_LocalInitFromNonScopedParam_IsLegal()
+    {
+        var source = @"
+import System
+func ok(s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
+    let x = s
+    return x
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void STE_Propagation_ThroughConversion_Reports_GS0219()
+    {
+        // Implicit conversion preserves STE.
+        var source = @"
+import System
+func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
+    var x ReadOnlySpan[int32] = s
+    return x
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    // -----------------------------------------------------------------------
+    // [UnscopedRef] and ref struct methods (Phase 3)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void RefStructMethod_ReturnsThis_Reports_GS0219()
+    {
+        // In a ref struct method, `this` is implicitly scoped.
+        // Returning a field that is itself a ref struct should be caught.
+        var source = @"
+package P
+type MySpan ref struct {
+    Value int32
+}
+func (s MySpan) getSelf() MySpan {
+    return s
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void RefStructMethod_ReturnsNonRefStructField_IsLegal()
+    {
+        // Returning a non-ref-struct field from a ref struct method is fine.
+        var source = @"
+package P
+type MySpan ref struct {
+    Value int32
+}
+func (s MySpan) getValue() int32 {
+    return Value
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void RefStructMethod_WithUnscopedRef_ReturnsThis_IsLegal()
+    {
+        // @UnscopedRef relaxes the implicit scoped on `this`.
+        var source = @"
+package P
+type MySpan ref struct {
+    Value int32
+}
+@UnscopedRef
+func (s MySpan) getSelf() MySpan {
+    return s
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    [Fact]
+    public void NonRefStructMethod_ReturnsThis_IsLegal()
+    {
+        // Non-ref-struct methods don't have implicit scoped on `this`.
+        var source = @"
+package P
+type Builder struct {
+    Count int32
+}
+func (b Builder) copy() Builder {
+    return b
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    // -----------------------------------------------------------------------
+    // scoped ref (*T) parameter (Phase 4)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ScopedByRefParam_CannotBeReturned_GS9004()
+    {
+        // A scoped *T parameter still triggers GS9004 on return (the scoped
+        // adds RSTE restriction, but GS9004 already prevents all *T returns).
+        var source = @"
+package P
+func bad(scoped p *int32) *int32 {
+    return p
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS9004");
+    }
+
+    [Fact]
+    public void ScopedByRefParam_UsedLocally_IsLegal()
+    {
+        // Using a scoped *T parameter locally (dereferencing) is fine.
+        var source = @"
+package P
+func read(scoped p *int32) int32 {
+    return *p
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS9004");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
