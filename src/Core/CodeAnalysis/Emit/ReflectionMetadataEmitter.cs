@@ -2756,6 +2756,78 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #409: determines whether a value-type instance method must keep
+    /// virtual method attributes because it participates in CLR vtable dispatch.
+    /// </summary>
+    private static bool RequiresVirtualOnValueType(FunctionSymbol function, StructSymbol receiverStruct)
+    {
+        if (function.IsOverride || function.OverriddenMethod != null)
+        {
+            return true;
+        }
+
+        return MethodImplicitlyImplementsInterface(receiverStruct, function);
+    }
+
+    /// <summary>
+    /// Determines whether a method on a class/struct implicitly implements an
+    /// interface method (same name, parameters, and return type).
+    /// </summary>
+    private static bool MethodImplicitlyImplementsInterface(StructSymbol structSym, FunctionSymbol method)
+    {
+        if (structSym.Interfaces.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var iface in structSym.Interfaces)
+        {
+            if (iface.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var ifaceMethod in iface.Methods)
+            {
+                if (MethodSignaturesMatch(ifaceMethod, method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MethodSignaturesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
+    {
+        if (interfaceMethod.Name != implementationMethod.Name || interfaceMethod.Type != implementationMethod.Type)
+        {
+            return false;
+        }
+
+        var interfaceParameters = CallableParameters(interfaceMethod);
+        var implementationParameters = CallableParameters(implementationMethod);
+        if (interfaceParameters.Length != implementationParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < interfaceParameters.Length; i++)
+        {
+            if (interfaceParameters[i].Type != implementationParameters[i].Type)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ImmutableArray<ParameterSymbol> CallableParameters(FunctionSymbol method)
+        => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
     /// ADR-0052: determines whether an event on a class/struct implicitly implements
     /// an interface event (same name on any implemented interface).
     /// </summary>
@@ -6211,11 +6283,16 @@ internal sealed class ReflectionMetadataEmitter
             : ToMethodVisibility(function.Accessibility);
 
         // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
-        // models open/override per ADR-0017:
+        // models open/override per ADR-0017 for classes:
         //   plain (neither):    Virtual | NewSlot | Final  (callvirt-safe, non-overridable)
         //   open:               Virtual | NewSlot          (overridable in derived)
         //   override (sealed):  Virtual | Final            (reuses base slot, no further override)
         //   open override:      Virtual                    (reuses base slot, still overridable)
+        //
+        // Issue #409 follow-up: plain instance methods on value-type StructSymbol
+        // receivers use the C#-conventional HideBySig-only shape. Value-type
+        // overrides and interface implementations still need virtual slots for
+        // CLR dispatch through the base/interface vtable.
         var methodAttrs = visibility | MethodAttributes.HideBySig;
 
         // Stream D: extension functions whose name follows the CLR `op_*`
@@ -6234,15 +6311,20 @@ internal sealed class ReflectionMetadataEmitter
 
         if (function.IsInstanceMethod)
         {
-            methodAttrs |= MethodAttributes.Virtual;
-            if (!function.IsOverride)
+            var receiverStruct = function.ReceiverType as StructSymbol;
+            var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
+            if (!receiverIsValueType || RequiresVirtualOnValueType(function, receiverStruct))
             {
-                methodAttrs |= MethodAttributes.NewSlot;
-            }
+                methodAttrs |= MethodAttributes.Virtual;
+                if (!function.IsOverride)
+                {
+                    methodAttrs |= MethodAttributes.NewSlot;
+                }
 
-            if (!function.IsOpen)
-            {
-                methodAttrs |= MethodAttributes.Final;
+                if (!function.IsOpen)
+                {
+                    methodAttrs |= MethodAttributes.Final;
+                }
             }
         }
         else

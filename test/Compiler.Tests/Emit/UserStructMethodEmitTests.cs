@@ -27,6 +27,54 @@ namespace GSharp.Compiler.Tests.Emit;
 public class UserStructMethodEmitTests
 {
     [Fact]
+    public void Plain_Struct_Method_Emits_Without_Virtual()
+    {
+        var source = """
+            package P
+
+            type Point struct {
+                X int32
+            }
+
+            func (p Point) Foo() int32 {
+                return p.X
+            }
+            """;
+
+        var assembly = CompileToAssembly(source, target: "library");
+        var point = assembly.GetTypes().Single(t => t.Name == "Point");
+        var foo = point.GetMethod("Foo", BindingFlags.Public | BindingFlags.Instance);
+
+        Assert.NotNull(foo);
+        Assert.False(foo!.IsVirtual);
+        Assert.False(foo.IsFinal);
+        Assert.False((foo.Attributes & MethodAttributes.NewSlot) != 0);
+    }
+
+    [Fact]
+    public void Class_Method_Still_Emits_Virtual_NewSlot_Final()
+    {
+        var source = """
+            package P
+
+            type Greeter class {
+                func Greet() int32 {
+                    return 42
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source, target: "library");
+        var greeter = assembly.GetTypes().Single(t => t.Name == "Greeter");
+        var greet = greeter.GetMethod("Greet", BindingFlags.Public | BindingFlags.Instance);
+
+        Assert.NotNull(greet);
+        Assert.True(greet!.IsVirtual);
+        Assert.True(greet.IsFinal);
+        Assert.True((greet.Attributes & MethodAttributes.NewSlot) != 0);
+    }
+
+    [Fact]
     public void Method_On_Global_Variable_Receiver_Round_Trips()
     {
         // The receiver `p` is a top-level `let`, which is emitted as a
