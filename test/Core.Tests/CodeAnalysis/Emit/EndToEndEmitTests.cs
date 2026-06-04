@@ -340,4 +340,57 @@ Console.WriteLine(add(2, 3))
         using var runtimePe = new PEReader(peStream, PEStreamOptions.LeaveOpen);
         Assert.NotEqual(0, runtimePe.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress);
     }
+
+    /// <summary>
+    /// Issue #420 (P3-14): reference assemblies must emit PE sections in the
+    /// conventional Roslyn order (.text / .rsrc / .reloc / .mvid). Placing the
+    /// .mvid section first is spec-legal but uncommon and can surprise older
+    /// tooling that walks sections positionally.
+    /// </summary>
+    [Fact]
+    public void Emit_Reference_Assembly_Has_Conventional_Section_Order_With_Mvid_Last()
+    {
+        const string Source = @"package RefAsmSections
+import System
+func add(a int32, b int32) int32 { return a + b }
+Console.WriteLine(add(2, 3))
+";
+        using var peStream = new MemoryStream();
+        using var refStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream, refStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        refStream.Position = 0;
+        using var refPe = new PEReader(refStream, PEStreamOptions.LeaveOpen);
+
+        var sectionNames = refPe.PEHeaders.SectionHeaders
+            .Select(s => s.Name)
+            .ToArray();
+
+        // .text must come first; .mvid must be present and must be the last
+        // section in the table (after .text/.rsrc/.reloc).
+        Assert.Contains(".text", sectionNames);
+        Assert.Contains(".mvid", sectionNames);
+        Assert.Equal(".text", sectionNames[0]);
+        Assert.Equal(".mvid", sectionNames[sectionNames.Length - 1]);
+
+        // If .rsrc and/or .reloc are present they must precede .mvid; this
+        // pins the conventional .text / .rsrc / .reloc / .mvid layout.
+        var mvidIndex = Array.IndexOf(sectionNames, ".mvid");
+        var rsrcIndex = Array.IndexOf(sectionNames, ".rsrc");
+        var relocIndex = Array.IndexOf(sectionNames, ".reloc");
+        if (rsrcIndex >= 0)
+        {
+            Assert.True(rsrcIndex < mvidIndex, ".rsrc must precede .mvid");
+        }
+
+        if (relocIndex >= 0)
+        {
+            Assert.True(relocIndex < mvidIndex, ".reloc must precede .mvid");
+        }
+    }
 }
