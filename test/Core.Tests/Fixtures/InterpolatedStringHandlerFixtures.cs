@@ -102,4 +102,35 @@ public static class InterpolationHarness
 
     public static string Gated(bool enabled, [InterpolatedStringHandlerArgument("enabled")] GatedInterpolatedStringHandler handler)
         => handler.ToString();
+
+    public static string Typed(string prefix, [InterpolatedStringHandlerArgument("prefix")] TypedAppendInterpolatedStringHandler handler)
+        => handler.ToString();
+}
+
+/// <summary>
+/// Issue #418 (P1-10) fixture: a handler whose <c>AppendFormatted</c> overloads
+/// are deliberately type-discriminated so the lowerer's overload resolution can
+/// be observed. Each overload tags its appended text so a test can assert which
+/// one was picked for a given hole's static type.
+/// </summary>
+[InterpolatedStringHandler]
+public struct TypedAppendInterpolatedStringHandler
+{
+    private readonly StringBuilder builder;
+
+    public TypedAppendInterpolatedStringHandler(int literalLength, int formattedCount, string prefix)
+    {
+        this.builder = new StringBuilder(prefix.Length + literalLength);
+        this.builder.Append(prefix);
+    }
+
+    public void AppendLiteral(string s) => this.builder.Append(s);
+
+    public void AppendFormatted(int value) => this.builder.Append("[int:").Append(value).Append(']');
+
+    public void AppendFormatted(string value) => this.builder.Append("[str:").Append(value).Append(']');
+
+    public void AppendFormatted<T>(T value) => this.builder.Append("[T:").Append(value?.ToString()).Append(']');
+
+    public override string ToString() => this.builder.ToString();
 }
