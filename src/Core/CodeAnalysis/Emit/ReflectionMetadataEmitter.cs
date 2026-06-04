@@ -6636,6 +6636,28 @@ internal sealed class ReflectionMetadataEmitter
             localTypes.Add(ixa.Type);
             indexAssignmentValueSlots[ixa] = slot;
         }
+
+        // Issue #418 (P1-2): property and CLR-property assignments yield the
+        // assigned value as their expression result. Previously the emitter
+        // re-evaluated the receiver and called the getter to produce that
+        // result, evaluating any side-effecting receiver expression twice
+        // (e.g. `Make().P = v` invoked `Make()` for the setter, then again
+        // for the getter). Pre-allocate a value-typed local for each such
+        // assignment so the emitter can `dup; stloc tmp; call set_X; ldloc
+        // tmp` instead. The slot is keyed by the assignment expression so it
+        // does not collide with receiver-spill entries (which are keyed by
+        // the receiver subexpression).
+        foreach (var assn in CollectAssignmentValueSpills(body))
+        {
+            if (receiverSpillSlots.ContainsKey(assn))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(assn.Type);
+            receiverSpillSlots[assn] = slot;
+        }
     }
 
     // Phase B: walks the bound body to find every BoundPatternSwitchStatement
@@ -8295,6 +8317,18 @@ internal sealed class ReflectionMetadataEmitter
     {
         var sink = new List<BoundExpression>();
         new ReceiverSpillCollector(this, function, locals, sink).RewriteStatement((BoundStatement)root);
+        return sink;
+    }
+
+    // Issue #418 (P1-2): collect every property and CLR-property assignment
+    // expression in the body. The slot allocator pairs each with a temp local
+    // so the emitter can spill the assigned value (`dup; stloc tmp; setter;
+    // ldloc tmp`) instead of re-evaluating the receiver and calling the
+    // getter to recover the expression result.
+    private static IEnumerable<BoundExpression> CollectAssignmentValueSpills(BoundNode root)
+    {
+        var sink = new List<BoundExpression>();
+        new AssignmentValueSpillCollector(sink).RewriteStatement((BoundStatement)root);
         return sink;
     }
 
@@ -10078,6 +10112,32 @@ internal sealed class ReflectionMetadataEmitter
         {
             this.sink.Add(node);
             return base.RewriteClrIndexAssignmentExpression(node);
+        }
+    }
+
+    // Issue #418 (P1-2): walker that collects every BoundPropertyAssignment /
+    // BoundClrPropertyAssignment expression so the slot allocator can give
+    // each one a value-temp local for the dup/stloc spill described in
+    // CollectAssignmentValueSpills.
+    private sealed class AssignmentValueSpillCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundExpression> sink;
+
+        public AssignmentValueSpillCollector(List<BoundExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        {
+            this.sink.Add(node);
+            return base.RewritePropertyAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+        {
+            this.sink.Add(node);
+            return base.RewriteClrPropertyAssignmentExpression(node);
         }
     }
 
@@ -12845,16 +12905,26 @@ internal sealed class ReflectionMetadataEmitter
                     $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
             }
 
+            // Issue #418 (P1-2): spill the assigned value to a temp so the
+            // expression result (`dup; stloc tmp; ... ; ldloc tmp`) does not
+            // require a second getter call — which would also re-evaluate any
+            // side-effecting receiver. Static and instance paths share the
+            // same dup/stloc/ldloc pattern.
+            if (!this.receiverSpillSlots.TryGetValue(assn, out var valueSlot))
+            {
+                throw new InvalidOperationException(
+                    $"No value-spill slot was allocated for property assignment to '{assn.Property.Name}'.");
+            }
+
             // Issue #263: static property assignment — no receiver.
             if (assn.Receiver == null)
             {
                 this.EmitExpression(assn.Value);
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.StoreLocal(valueSlot);
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(handles.Setter.Value);
-
-                // Re-load the assigned value as the expression result via the getter.
-                this.il.OpCode(ILOpCode.Call);
-                this.il.Token(handles.Getter.Value);
+                this.il.LoadLocal(valueSlot);
                 return;
             }
 
@@ -12866,14 +12936,14 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitInstanceReceiver(assn.Receiver);
 
             this.EmitExpression(assn.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(valueSlot);
             this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
             this.il.Token(handles.Setter.Value);
 
-            // Re-load the assigned value as the expression result via the getter.
-            this.EmitInstanceReceiver(assn.Receiver);
-
-            this.il.OpCode(receiverIsClass ? ILOpCode.Callvirt : ILOpCode.Call);
-            this.il.Token(handles.Getter.Value);
+            // Expression result: the value we just stored — no second receiver
+            // evaluation, no getter call.
+            this.il.LoadLocal(valueSlot);
         }
 
         private void EmitClrConstructorCall(BoundClrConstructorCallExpression ctorCall)
@@ -12940,15 +13010,26 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitClrPropertyAssignment(BoundClrPropertyAssignmentExpression assn)
         {
             // Stream B emit parity: property/field write on a CLR receiver.
-            // The expression result is the assigned value, so we re-read the
-            // member after the store (matches BoundClrIndexAssignment shape).
+            // Issue #418 (P1-2): the expression result is the assigned value.
+            // Spill the value to a pre-allocated temp via `dup; stloc` so we
+            // can produce the result with `ldloc` instead of re-evaluating the
+            // receiver and calling the getter — the previous shape called any
+            // side-effecting receiver expression (e.g. `Make().P = v`) twice.
             var isStatic = assn.Receiver == null;
+            if (!this.receiverSpillSlots.TryGetValue(assn, out var valueSlot))
+            {
+                throw new InvalidOperationException(
+                    $"No value-spill slot was allocated for CLR property assignment to '{assn.Member.Name}'.");
+            }
+
             if (!isStatic)
             {
                 this.EmitInstanceReceiver(assn.Receiver);
             }
 
             this.EmitExpression(assn.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(valueSlot);
 
             var receiverIsValueType = !isStatic && assn.Receiver.Type?.ClrType?.IsValueType == true;
             switch (assn.Member)
@@ -12969,26 +13050,9 @@ internal sealed class ReflectionMetadataEmitter
                         $"CLR member '{assn.Member.GetType().Name}' is not yet supported by the emitter.");
             }
 
-            // Re-load the assigned value so the expression yields it.
-            if (!isStatic)
-            {
-                this.EmitInstanceReceiver(assn.Receiver);
-            }
-
-            switch (assn.Member)
-            {
-                case PropertyInfo property2:
-                    var getter2 = property2.GetGetMethod(nonPublic: false)
-                        ?? throw new InvalidOperationException(
-                            $"Property '{property2.DeclaringType?.FullName}.{property2.Name}' has no public getter.");
-                    this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-                    this.il.Token(this.outer.GetMethodReference(getter2));
-                    break;
-                case FieldInfo field2:
-                    this.il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
-                    this.il.Token(this.outer.GetFieldReference(field2));
-                    break;
-            }
+            // Expression result: the value we just stored. No second receiver
+            // evaluation, no getter call.
+            this.il.LoadLocal(valueSlot);
         }
 
         private void EmitClrEventSubscription(BoundClrEventSubscriptionExpression subscription)

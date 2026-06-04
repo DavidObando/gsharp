@@ -209,8 +209,10 @@ public class UserStructPropertyEmitTests
             public var result = h.V = 21
             """;
 
-        // assignment expression yields the value re-read via getter -> 42
-        Assert.Equal(42, RunAndGetIntResult(source));
+        // Issue #418 (P1-2): assignment expression yields the spilled assigned
+        // value (21), not a getter re-read — matches Roslyn semantics and
+        // avoids double-evaluating the receiver / re-invoking the getter.
+        Assert.Equal(21, RunAndGetIntResult(source));
     }
 
     private static int RunAndGetIntResult(string source)
