@@ -141,19 +141,28 @@ public sealed class Binder
                 // also accessible via bare name. Derived shadowing wins.
                 if (function.ReceiverType is StructSymbol receiverStruct)
                 {
-                    var seenFields = new HashSet<string>();
+                    var seenMembers = new HashSet<string>();
                     for (var t = receiverStruct; t != null; t = t.BaseClass)
                     {
-                        if (t.Fields.IsDefaultOrEmpty)
+                        if (!t.Fields.IsDefaultOrEmpty)
                         {
-                            continue;
+                            foreach (var fld in t.Fields)
+                            {
+                                if (seenMembers.Add(fld.Name))
+                                {
+                                    scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
+                                }
+                            }
                         }
 
-                        foreach (var fld in t.Fields)
+                        if (!t.Properties.IsDefaultOrEmpty)
                         {
-                            if (seenFields.Add(fld.Name))
+                            foreach (var prop in t.Properties)
                             {
-                                scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
+                                if (seenMembers.Add(prop.Name))
+                                {
+                                    scope.TryDeclareVariable(new ImplicitPropertyVariableSymbol(function.ThisParameter, t, prop));
+                                }
                             }
                         }
                     }
@@ -6015,6 +6024,28 @@ public sealed class Binder
                 implicitStaticField.Field);
         }
 
+        // Bare property name inside an instance method body resolves to
+        // `this.<property>` (analogous to implicit field access).
+        if (variable is ImplicitPropertyVariableSymbol implicitProp)
+        {
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitProp.Property,
+                $"{implicitProp.StructType.Name}.{implicitProp.Property.Name}");
+
+            if (!implicitProp.Property.HasGetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.IdentifierToken.Location, implicitProp.Property.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundPropertyAccessExpression(
+                null,
+                new BoundVariableExpression(null, implicitProp.Receiver),
+                implicitProp.StructType,
+                implicitProp.Property);
+        }
+
         return new BoundVariableExpression(null, variable, TryGetNarrowedType(variable));
     }
 
@@ -6077,6 +6108,29 @@ public sealed class Binder
 
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
             return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
+        }
+
+        // Bare property name assignment inside an instance method body resolves
+        // to `this.<property> = value` (analogous to implicit field assignment).
+        if (variable is ImplicitPropertyVariableSymbol implicitProp)
+        {
+            if (!implicitProp.Property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            }
+
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitProp.Property,
+                $"{implicitProp.StructType.Name}.{implicitProp.Property.Name}");
+
+            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
+            return new BoundPropertyAssignmentExpression(
+                null,
+                new BoundVariableExpression(null, implicitProp.Receiver),
+                implicitProp.StructType,
+                implicitProp.Property,
+                convertedValue);
         }
 
         if (variable.IsReadOnly)
@@ -6580,8 +6634,16 @@ public sealed class Binder
 
     private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
     {
+        // Bare identifier `EventName += handler` / `EventName -= handler`:
+        // the parser now emits this form for all `id +=/-=` patterns. Try to
+        // resolve as an event on the implicit `this`; if not an event, fall
+        // back to compound assignment semantics (`x += 1`).
+        if (syntax.LeftHandSide is NameExpressionSyntax bareName)
+        {
+            return BindBareEventOrCompoundAssignment(bareName, syntax);
+        }
+
         // Stream B′: `lhs.Event += handler` / `lhs.Event -= handler`.
-        // The parser guarantees LeftHandSide is an AccessorExpressionSyntax.
         if (syntax.LeftHandSide is not AccessorExpressionSyntax accessor)
         {
             Diagnostics.ReportUnableToFindMember(syntax.LeftHandSide.Location, syntax.OperatorToken.Text);
@@ -6682,6 +6744,114 @@ public sealed class Binder
         }
 
         return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
+    }
+
+    /// <summary>
+    /// Handles a bare `identifier += expr` / `identifier -= expr` that the parser
+    /// emitted as an <see cref="EventSubscriptionExpressionSyntax"/> with a
+    /// <see cref="NameExpressionSyntax"/> LHS. Resolves as:
+    /// 1. An event subscription on the implicit <c>this</c> if the name matches an event.
+    /// 2. A compound assignment fallback (<c>x += 1</c>) otherwise.
+    /// </summary>
+    private BoundExpression BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)
+    {
+        var name = bareName.IdentifierToken.Text;
+        var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
+
+        // Try implicit `this` event: walk the receiver type's events (including inherited).
+        if (function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
+        {
+            for (var t = receiverStruct; t != null; t = t.BaseClass)
+            {
+                if (t.Events.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                var ev = t.Events.FirstOrDefault(e => e.Name == name);
+                if (ev != null)
+                {
+                    var receiver = new BoundVariableExpression(null, function.ThisParameter);
+                    var handler = BindExpression(syntax.Value);
+                    return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
+                }
+            }
+        }
+
+        // Not an event: fall back to compound assignment semantics.
+        // Reconstruct `name = name +/- rhs` as the parser used to do.
+        var boundRhs = BindExpression(syntax.Value);
+        var variable = BindVariableReference(name, bareName.IdentifierToken.Location);
+        if (variable == null)
+        {
+            return boundRhs;
+        }
+
+        // Synthesize the binary expression: variable op rhs.
+        var leftExpr = BindNameExpressionCore(bareName);
+        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        var leftType = leftExpr.Type;
+        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, leftType, boundRhs.Type);
+        if (op == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, leftType, boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var binaryResult = new BoundBinaryExpression(null, leftExpr, op, boundRhs);
+        var convertedResult = BindConversion(syntax.Value.Location, binaryResult, leftType);
+
+        // Route through the correct assignment path depending on variable kind.
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            if (implicitField.Field.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            }
+
+            return new BoundFieldAssignmentExpression(null, implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedResult);
+        }
+
+        if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
+        {
+            if (implicitStaticField.Field.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            }
+
+            return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
+        }
+
+        if (variable is ImplicitPropertyVariableSymbol implicitProp)
+        {
+            if (!implicitProp.Property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            }
+
+            return new BoundPropertyAssignmentExpression(
+                null,
+                new BoundVariableExpression(null, implicitProp.Receiver),
+                implicitProp.StructType,
+                implicitProp.Property,
+                convertedResult);
+        }
+
+        if (variable.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+        }
+
+        return new BoundAssignmentExpression(null, variable, convertedResult);
+    }
+
+    /// <summary>
+    /// Binds a name expression to produce its bound form without side effects
+    /// (used by compound assignment fallback to read the current value).
+    /// </summary>
+    private BoundExpression BindNameExpressionCore(NameExpressionSyntax syntax)
+    {
+        return BindNameExpression(syntax);
     }
 
     private static bool IsSignatureCompatibleWithDelegate(FunctionTypeSymbol fn, Type delegateType)
@@ -7537,6 +7707,17 @@ public sealed class Binder
         var symbol = scope.TryLookupSymbol(syntax.Identifier.Text);
         if (symbol == null)
         {
+            // Implicit `this`: if we are inside an instance method body and the
+            // name matches a sibling method on the receiver type, dispatch via
+            // `this.<method>(args)` automatically.
+            if (this.function?.ThisParameter != null
+                && this.function.ReceiverType is StructSymbol implicitReceiverStruct
+                && implicitReceiverStruct.TryGetMethodIncludingInherited(syntax.Identifier.Text, out var implicitMethod))
+            {
+                var implicitReceiver = new BoundVariableExpression(null, this.function.ThisParameter);
+                return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax);
+            }
+
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
             return new BoundErrorExpression(null);
         }
