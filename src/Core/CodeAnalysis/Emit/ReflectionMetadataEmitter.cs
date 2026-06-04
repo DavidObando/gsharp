@@ -12630,6 +12630,18 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Issue #421 (P2-3): `decimal` is a struct; per ECMA-335 §III.4
+            // `ceq` is undefined on struct operands. Route through
+            // `decimal.op_Equality` to produce verifiable IL.
+            if (valueType == TypeSymbol.Decimal)
+            {
+                loadValue();
+                this.EmitExpression(cp.Value);
+                this.TryEmitDecimalBinary(BoundBinaryOperatorKind.Equals);
+                this.il.Branch(ILOpCode.Brfalse, failLabel);
+                return;
+            }
+
             // int / bool / other primitives lowered to ceq + brfalse.
             loadValue();
             this.EmitExpression(cp.Value);
