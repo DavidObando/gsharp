@@ -162,6 +162,215 @@ y, new BoundBinaryExpression(
     }
 
     [Fact]
+    public void RefLocal_To_ArrayElement_WithSideEffectingTarget_HoistsTargetOnce()
+    {
+        // Issue #418 / P1-12: `ref int x = ref Arr()[Idx()]; *x = 1; *x = 2;`
+        // The old hoister inlined the operand at every use, evaluating Arr()
+        // and Idx() once per use. The fix hoists each side-effecting subpart
+        // into a single temp local at the ref-init site so every use re-derives
+        // the lvalue from the same evaluated state.
+        var idxMethod = typeof(System.Array).GetMethod("GetLength")!; // any MethodInfo will do — we just need something non-trivial as `target`/`index`.
+        var arrType = TypeSymbol.FromClrType(typeof(int[]));
+
+        // Use BoundClrStaticCall to fabricate Arr() and Idx().
+        var arrCallType = arrType;
+        var idxCallType = TypeSymbol.Int32;
+
+        // Reuse a real static method whose signature happens to match: we only
+        // care about reference equality through the rewriter; runtime semantics
+        // aren't exercised by the unit test. System.Array.Empty<int>() returns int[].
+        var arrFactoryMethod = typeof(System.Array).GetMethod(nameof(System.Array.Empty))!.MakeGenericMethod(typeof(int));
+
+        // System.Environment.TickCount is an int property — too awkward. Use Math.Abs(int) as Idx().
+        var idxFactoryMethod = typeof(System.Math).GetMethod(nameof(System.Math.Abs), new[] { typeof(int) })!;
+
+        var arrCall = new BoundClrStaticCallExpression(
+            null,
+            arrFactoryMethod,
+            arrCallType,
+            ImmutableArray<BoundExpression>.Empty);
+
+        var idxCall = new BoundClrStaticCallExpression(
+            null,
+            idxFactoryMethod,
+            idxCallType,
+            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, 3)));
+
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
+        var indexExpr = new BoundIndexExpression(null, arrCall, idxCall, TypeSymbol.Int32);
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, indexExpr));
+
+        // Two uses of *slot — the original bug would have evaluated arrCall and
+        // idxCall twice.
+        var use1 = new BoundExpressionStatement(null, new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot)));
+        var use2 = new BoundExpressionStatement(null, new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot)));
+
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, use1, use2));
+
+        var result = RefInitializationHoister.Rewrite(body);
+        var stmts = result.Statements;
+
+        // Statement 0: prelude block declaring two temps (one for arrCall, one for idxCall).
+        var prelude = Assert.IsType<BoundBlockStatement>(stmts[0]);
+        Assert.Equal(2, prelude.Statements.Length);
+
+        var t0Decl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
+        var t1Decl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[1]);
+        Assert.Same(arrCall, t0Decl.Initializer);
+        Assert.Same(idxCall, t1Decl.Initializer);
+
+        // Statements 1 and 2: each use is `temp0[temp1]` — same temp symbols, not the original calls.
+        BoundIndexExpression ReadUse(BoundStatement s)
+        {
+            var es = Assert.IsType<BoundExpressionStatement>(s);
+            return Assert.IsType<BoundIndexExpression>(es.Expression);
+        }
+
+        var idx1 = ReadUse(stmts[1]);
+        var idx2 = ReadUse(stmts[2]);
+
+        Assert.Same(t0Decl.Variable, ((BoundVariableExpression)idx1.Target).Variable);
+        Assert.Same(t1Decl.Variable, ((BoundVariableExpression)idx1.Index).Variable);
+        Assert.Same(t0Decl.Variable, ((BoundVariableExpression)idx2.Target).Variable);
+        Assert.Same(t1Decl.Variable, ((BoundVariableExpression)idx2.Index).Variable);
+
+        // Crucially: the call expressions appear EXACTLY ONCE across the whole
+        // rewritten body — in the prelude. Repeated references would indicate
+        // the side-effect-duplication bug.
+        int CountSubtreeRefs(BoundExpression needle, BoundStatement haystack)
+        {
+            int count = 0;
+            void Visit(object n)
+            {
+                if (n is null)
+                {
+                    return;
+                }
+
+                if (ReferenceEquals(n, needle))
+                {
+                    count++;
+                    return;
+                }
+
+                switch (n)
+                {
+                    case BoundBlockStatement b:
+                        foreach (var s in b.Statements) Visit(s);
+                        break;
+                    case BoundVariableDeclaration vd:
+                        Visit(vd.Initializer);
+                        break;
+                    case BoundExpressionStatement es:
+                        Visit(es.Expression);
+                        break;
+                    case BoundIndexExpression ix:
+                        Visit(ix.Target);
+                        Visit(ix.Index);
+                        break;
+                    case BoundAddressOfExpression ao:
+                        Visit(ao.Operand);
+                        break;
+                    case BoundDereferenceExpression de:
+                        Visit(de.Operand);
+                        break;
+                }
+            }
+
+            Visit(haystack);
+            return count;
+        }
+
+        Assert.Equal(1, CountSubtreeRefs(arrCall, result));
+        Assert.Equal(1, CountSubtreeRefs(idxCall, result));
+    }
+
+    [Fact]
+    public void RefLocal_To_FieldAccess_WithSideEffectingReceiver_HoistsReceiverOnce()
+    {
+        // ref int x = ref GetObj().field; *x = 1; *x = 2;
+        // The receiver call must be evaluated exactly once.
+        var field = new FieldSymbol("value", TypeSymbol.Int32, Accessibility.Public);
+        var structType = new StructSymbol("MyStruct", ImmutableArray.Create(field), Accessibility.Public, null, "test");
+
+        // Synthesize a side-effecting "GetObj()" via a static CLR call. The runtime
+        // type doesn't have to match — the rewriter is purely syntactic.
+        var dummyMethod = typeof(System.Math).GetMethod(nameof(System.Math.Abs), new[] { typeof(int) })!;
+        var receiverCall = new BoundClrStaticCallExpression(
+            null,
+            dummyMethod,
+            structType,
+            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, 0)));
+
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
+        var fa = new BoundFieldAccessExpression(null, receiverCall, structType, field);
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, fa));
+
+        var use1 = new BoundExpressionStatement(null, new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot)));
+        var use2 = new BoundExpressionStatement(null, new BoundDereferenceExpression(null, new BoundVariableExpression(null, slot)));
+
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, use1, use2));
+
+        var result = RefInitializationHoister.Rewrite(body);
+
+        // Prelude: one temp local holding the receiver call result.
+        var prelude = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        Assert.Single(prelude.Statements);
+        var tempDecl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
+        Assert.Same(receiverCall, tempDecl.Initializer);
+
+        // Each use reads `temp.value` — same temp, never the original call.
+        for (int i = 1; i <= 2; i++)
+        {
+            var es = Assert.IsType<BoundExpressionStatement>(result.Statements[i]);
+            var faExpr = Assert.IsType<BoundFieldAccessExpression>(es.Expression);
+            Assert.Same(tempDecl.Variable, ((BoundVariableExpression)faExpr.Receiver).Variable);
+            Assert.Same(field, faExpr.Field);
+        }
+    }
+
+    [Fact]
+    public void RefLocal_BareUseWithSideEffectingOperand_HoistsAtDeclarationSite()
+    {
+        // ref int x = ref Arr()[i];  PassByRef(x); PassByRef(x);
+        // The bare use must produce `&temp[i]` not `&Arr()[i]` repeated.
+        var arrFactory = typeof(System.Array).GetMethod(nameof(System.Array.Empty))!.MakeGenericMethod(typeof(int));
+        var arrCall = new BoundClrStaticCallExpression(
+            null,
+            arrFactory,
+            TypeSymbol.FromClrType(typeof(int[])),
+            ImmutableArray<BoundExpression>.Empty);
+
+        var i = new LocalVariableSymbol("i", isReadOnly: false, TypeSymbol.Int32);
+        var slot = new LocalVariableSymbol("slot", isReadOnly: false, ByRefTypeSymbol.Get(TypeSymbol.Int32));
+
+        var indexExpr = new BoundIndexExpression(null, arrCall, new BoundVariableExpression(null, i), TypeSymbol.Int32);
+        var declSlot = new BoundVariableDeclaration(null, slot, new BoundAddressOfExpression(null, indexExpr));
+
+        var bareUse1 = new BoundExpressionStatement(null, new BoundVariableExpression(null, slot));
+        var bareUse2 = new BoundExpressionStatement(null, new BoundVariableExpression(null, slot));
+
+        var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, bareUse1, bareUse2));
+        var result = RefInitializationHoister.Rewrite(body);
+
+        // Prelude: one temp (for arrCall). `i` is a trivially repeatable BoundVariableExpression.
+        var prelude = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
+        Assert.Single(prelude.Statements);
+        var tempDecl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
+        Assert.Same(arrCall, tempDecl.Initializer);
+
+        // Each bare use should be &temp[i].
+        for (int k = 1; k <= 2; k++)
+        {
+            var es = Assert.IsType<BoundExpressionStatement>(result.Statements[k]);
+            var addr = Assert.IsType<BoundAddressOfExpression>(es.Expression);
+            var idx = Assert.IsType<BoundIndexExpression>(addr.Operand);
+            Assert.Same(tempDecl.Variable, ((BoundVariableExpression)idx.Target).Variable);
+            Assert.Same(i, ((BoundVariableExpression)idx.Index).Variable);
+        }
+    }
+
+    [Fact]
     public void BareRefLocalUsage_ReplacedWithAddressOf()
     {
         // If a ref local is used without dereference (e.g., passed to a ref param),
