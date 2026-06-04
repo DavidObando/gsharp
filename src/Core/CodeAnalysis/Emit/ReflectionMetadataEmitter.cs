@@ -5535,6 +5535,17 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, TypeDefinitionHandle typeDef)
     {
+        // Issue #420 (P3-10): the IL below uses `unbox` to obtain a managed pointer
+        // to the inline struct's field after `isinst`. `unbox` is only legal on
+        // value types; if reference-type structs/records are ever introduced,
+        // this helper must switch to `castclass` (and skip the boxed indirection
+        // entirely). Assert the value-type assumption explicitly so a future
+        // reference-type StructSymbol fails loudly in Debug builds instead of
+        // silently producing invalid IL.
+        Debug.Assert(
+            !structSym.IsClass,
+            "Equals(object) emit assumes value-type struct; reference-type records require castclass instead of unbox");
+
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         if (!this.metadataOnly)
         {
