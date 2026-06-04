@@ -9000,7 +9000,24 @@ public sealed class Binder
         scope = scope.Parent;
 
         var resultType = whenNotNull.Type is NullableTypeSymbol ? whenNotNull.Type : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
-        return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, resultType);
+
+        // P2-7 / Issue #421: when the access result is a value type, the
+        // bound result type is `Nullable<T>` but the not-null branch pushes
+        // a raw `T` and the nil branch would push `null`. The emitter needs
+        // a typed temp slot to materialize `default(Nullable<T>)` for the
+        // nil branch (initobj) and to host the wrapped value for the
+        // not-null branch (newobj `Nullable<T>::.ctor(!0)`). We allocate
+        // that synthetic slot here so the emit pre-pass can give it a
+        // local index alongside the capture local.
+        LocalVariableSymbol resultSlot = null;
+        if (whenNotNull.Type is not NullableTypeSymbol
+            && whenNotNull.Type?.ClrType is { IsValueType: true })
+        {
+            var resultSlotName = "$nres_" + nullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+        }
+
+        return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, resultType, resultSlot);
     }
 
     private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)

@@ -6553,6 +6553,16 @@ internal sealed class ReflectionMetadataEmitter
                 locals[nc.Capture] = localTypes.Count;
                 localTypes.Add(nc.Capture.Type);
             }
+
+            // P2-7 / Issue #421: value-type access results need a
+            // Nullable<T> result slot so the nil branch can emit
+            // `ldloca; initobj Nullable<T>; ldloc` and so the not-null
+            // branch can wrap the raw T via `newobj Nullable<T>::.ctor(!0)`.
+            if (nc.ResultSlot != null && !locals.ContainsKey(nc.ResultSlot))
+            {
+                locals[nc.ResultSlot] = localTypes.Count;
+                localTypes.Add(nc.ResultSlot.Type);
+            }
         }
 
         foreach (var append in CollectAppends(body))
@@ -8469,6 +8479,18 @@ internal sealed class ReflectionMetadataEmitter
 
     private EntityHandle GetElementTypeToken(TypeSymbol element)
     {
+        // P2-7 / Issue #421: nullable over a value type tokenises as
+        // System.Nullable<T>. NullableTypeSymbol over a reference type
+        // continues to share the underlying CLR type (handled below by
+        // the `element.ClrType != null` branch via the NullableTypeSymbol
+        // ctor that copies `underlying.ClrType`).
+        if (element is NullableTypeSymbol nullableElement
+            && nullableElement.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr)
+        {
+            var nullableClr = typeof(System.Nullable<>).MakeGenericType(nullableInnerClr);
+            return this.GetTypeHandleForMember(nullableClr);
+        }
+
         if (element == TypeSymbol.Int32)
         {
             return this.GetTypeReference(this.coreInt32Type);
@@ -9145,16 +9167,27 @@ internal sealed class ReflectionMetadataEmitter
         if (type is NullableTypeSymbol nullable)
         {
             var inner = nullable.UnderlyingType;
+
+            // P2-7 / Issue #421: nullable over a value type encodes as
+            // System.Nullable<T> (generic instantiation). We support inner
+            // types backed by a CLR value type (primitives, BCL value types).
+            if (inner?.ClrType is { IsValueType: true } innerClrVt)
+            {
+                var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClrVt);
+                this.EncodeClrType(encoder, nullableClr);
+                return;
+            }
+
             if (inner is StructSymbol nestedStruct && !nestedStruct.IsClass)
             {
                 throw new NotSupportedException(
-                    $"Nullable value-type signatures for '{inner.Name}?' are not yet supported by the emitter.");
+                    $"Nullable user-defined struct '{inner.Name}?' is not yet supported by the emitter.");
             }
 
-            if (inner == TypeSymbol.Int32 || inner == TypeSymbol.Bool || (inner?.ClrType != null && inner.ClrType.IsValueType))
+            if (inner is EnumSymbol nestedEnum)
             {
                 throw new NotSupportedException(
-                    $"Nullable value-type signatures for '{inner?.Name}?' are not yet supported by the emitter.");
+                    $"Nullable user-defined enum '{nestedEnum.Name}?' is not yet supported by the emitter.");
             }
 
             EncodeTypeSymbol(encoder, inner);
@@ -12479,6 +12512,43 @@ internal sealed class ReflectionMetadataEmitter
             var end = this.il.DefineLabel();
             var nonNull = this.il.DefineLabel();
             this.il.Branch(ILOpCode.Brtrue, nonNull);
+
+            if (nc.ResultSlot != null)
+            {
+                // P2-7 / Issue #421: value-type access result. The bound type
+                // is Nullable<T> but the access sub-tree pushes a raw T. The
+                // nil branch must materialize `default(Nullable<T>)` and the
+                // not-null branch must wrap T via `Nullable<T>::.ctor(!0)`
+                // so both branches leave the same Nullable<T> stack shape.
+                var slot = this.locals[nc.ResultSlot];
+                var nullableType = (NullableTypeSymbol)nc.Type;
+                var innerClr = nullableType.UnderlyingType.ClrType
+                    ?? throw new InvalidOperationException(
+                        $"Null-conditional value-type result '{nullableType.UnderlyingType.Name}' has no CLR type.");
+                var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClr);
+
+                // nil branch: ldloca slot; initobj Nullable<T>; ldloc slot
+                this.il.LoadLocalAddress(slot);
+                this.il.OpCode(ILOpCode.Initobj);
+                this.il.Token(this.outer.GetTypeHandleForMember(nullableClr));
+                this.il.LoadLocal(slot);
+                this.il.Branch(ILOpCode.Br, end);
+
+                // not-null branch: produce T, then newobj Nullable<T>::.ctor(!0)
+                this.il.MarkLabel(nonNull);
+                this.EmitExpression(nc.WhenNotNull);
+                var ctor = nullableClr.GetConstructor(new[] { innerClr })
+                    ?? throw new InvalidOperationException(
+                        $"Nullable<{innerClr.FullName}> has no single-arg constructor.");
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(ctor));
+
+                this.il.MarkLabel(end);
+                return;
+            }
+
+            // Reference-typed access result: nullable<ref> shares the CLR
+            // representation of T, so ldnull is a valid Nullable<T> value.
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.Branch(ILOpCode.Br, end);
             this.il.MarkLabel(nonNull);

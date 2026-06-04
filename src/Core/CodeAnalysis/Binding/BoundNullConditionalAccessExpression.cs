@@ -35,18 +35,23 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
     /// <paramref name="capture"/> standing in for the receiver.</param>
     /// <param name="type">The result type — always a
     /// <see cref="NullableTypeSymbol"/>.</param>
+    /// <param name="resultSlot">Optional synthetic local that the emitter
+    /// uses to materialize <c>default(Nullable&lt;T&gt;)</c> when the access
+    /// result is a value type. Null for reference-typed results.</param>
     public BoundNullConditionalAccessExpression(
         SyntaxNode syntax,
         BoundExpression receiver,
         VariableSymbol capture,
         BoundExpression whenNotNull,
-        TypeSymbol type)
+        TypeSymbol type,
+        VariableSymbol resultSlot = null)
         : base(syntax)
     {
         Receiver = receiver;
         Capture = capture;
         WhenNotNull = whenNotNull;
         Type = type;
+        ResultSlot = resultSlot;
     }
 
     /// <inheritdoc/>
@@ -63,4 +68,11 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
 
     /// <summary>Gets the access expression evaluated when the receiver is non-nil.</summary>
     public BoundExpression WhenNotNull { get; }
+
+    /// <summary>
+    /// Gets the synthetic temp slot used to materialize <c>default(Nullable&lt;T&gt;)</c>
+    /// in the nil branch when the access result is a value type. Null when the
+    /// result is a reference type (the nil branch then just pushes <c>ldnull</c>).
+    /// </summary>
+    public VariableSymbol ResultSlot { get; }
 }
