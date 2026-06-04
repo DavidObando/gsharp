@@ -17,20 +17,26 @@ public static class CodeLensComputer
 {
     public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null)
     {
-        var tree = content.SyntaxTree;
-        var text = tree.Text;
         var lenses = new List<CodeLens>();
 
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation;
         try
         {
             compilation = content.Project?.GetCompilation()
-                ?? new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree);
+                ?? new GSharp.Core.CodeAnalysis.Compilation.Compilation(content.SyntaxTree);
         }
         catch
         {
             return lenses;
         }
+
+        // SemanticLookup.ResolveSymbol matches identifier tokens by reference equality, so the
+        // tree we iterate must be the exact instance the project compilation was built from.
+        // Diagnostic pulls reparse the file via ProjectState.UpdateFile, which replaces the tree
+        // held by the project after DocumentContent was cached — leaving content.SyntaxTree stale
+        // relative to the cached compilation. Prefer the project's current tree for this file so
+        // member-identifier lookups (which have no name-based fallback in SemanticModel) succeed.
+        var tree = ResolveProjectTree(content, uri) ?? content.SyntaxTree;
 
         foreach (var member in tree.Root.Members)
         {
@@ -59,6 +65,15 @@ public static class CodeLensComputer
                     AddMemberLenses(compilation, lenses, structDecl.Properties.Select(p => p.Identifier), uri);
                     AddMemberLenses(compilation, lenses, structDecl.Events.Select(e => e.Identifier), uri);
                     AddMemberLenses(compilation, lenses, structDecl.Methods.Select(m => m.Identifier), uri);
+
+                    if (structDecl.SharedBlock != null)
+                    {
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Fields.Select(f => f.Identifier), uri);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Properties.Select(p => p.Identifier), uri);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Events.Select(e => e.Identifier), uri);
+                        AddMemberLenses(compilation, lenses, structDecl.SharedBlock.Methods.Select(m => m.Identifier), uri);
+                    }
+
                     break;
                 case EnumDeclarationSyntax enumDecl:
                     var enumSymbol = SemanticLookup.ResolveSymbol(compilation, enumDecl.Identifier);
@@ -84,6 +99,29 @@ public static class CodeLensComputer
                     AddMemberLenses(compilation, lenses, ifaceDecl.Properties.Select(p => p.Identifier), uri);
                     AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri);
                     break;
+                case TypeAliasDeclarationSyntax typeAlias:
+                    var aliasSymbol = SemanticLookup.ResolveSymbol(compilation, typeAlias.Identifier);
+                    if (aliasSymbol != null)
+                    {
+                        var refCount = SemanticLookup.FindReferences(compilation, aliasSymbol).Count() - 1;
+                        var range = SemanticLookup.ToRange(typeAlias.Identifier);
+                        lenses.Add(CreateReferenceLens(range, refCount, uri));
+                    }
+
+                    break;
+                case GlobalStatementSyntax globalStatement:
+                    if (globalStatement.Statement is VariableDeclarationSyntax varDecl)
+                    {
+                        var varSymbol = SemanticLookup.ResolveSymbol(compilation, varDecl.Identifier);
+                        if (varSymbol != null)
+                        {
+                            var refCount = SemanticLookup.FindReferences(compilation, varSymbol).Count() - 1;
+                            var range = SemanticLookup.ToRange(varDecl.Identifier);
+                            lenses.Add(CreateReferenceLens(range, refCount, uri));
+                        }
+                    }
+
+                    break;
             }
         }
 
@@ -98,6 +136,11 @@ public static class CodeLensComputer
     {
         foreach (var identifier in identifiers)
         {
+            if (identifier == null || identifier.IsMissing)
+            {
+                continue;
+            }
+
             var symbol = SemanticLookup.ResolveSymbol(compilation, identifier);
             if (symbol != null)
             {
@@ -121,5 +164,21 @@ public static class CodeLensComputer
                 Arguments = new object[] { uri, range.Start },
             },
         };
+    }
+
+    private static GSharp.Core.CodeAnalysis.Syntax.SyntaxTree ResolveProjectTree(DocumentContent content, string uri)
+    {
+        if (content.Project == null || string.IsNullOrEmpty(uri))
+        {
+            return null;
+        }
+
+        var filePath = DocumentUri.From(uri)?.GetFileSystemPath();
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return null;
+        }
+
+        return content.Project.TryGetSyntaxTree(filePath, out var projectTree) ? projectTree : null;
     }
 }

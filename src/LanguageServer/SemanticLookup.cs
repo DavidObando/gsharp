@@ -56,7 +56,7 @@ public static class SemanticLookup
 
     public static Symbol ResolveSymbol(Compilation compilation, SyntaxToken identifierToken)
     {
-        if (identifierToken == null || identifierToken.Kind != SyntaxKind.IdentifierToken)
+        if (identifierToken == null || identifierToken.IsMissing || identifierToken.Kind != SyntaxKind.IdentifierToken)
         {
             return null;
         }
@@ -330,19 +330,42 @@ public static class SemanticLookup
                     declarations[aggregate.Declaration.Fields[i].Identifier] = aggregate.Fields[i];
                 }
 
+                var allPropertyIdentifiers = aggregate.Declaration.Properties.Select(p => p.Identifier);
+                var allEventIdentifiers = aggregate.Declaration.Events.Select(e => e.Identifier);
+                var allMethodIdentifiers = aggregate.Declaration.Methods.Select(m => m.Identifier);
+
+                if (aggregate.Declaration.SharedBlock != null)
+                {
+                    allPropertyIdentifiers = allPropertyIdentifiers.Concat(aggregate.Declaration.SharedBlock.Properties.Select(p => p.Identifier));
+                    allEventIdentifiers = allEventIdentifiers.Concat(aggregate.Declaration.SharedBlock.Events.Select(e => e.Identifier));
+                    allMethodIdentifiers = allMethodIdentifiers.Concat(aggregate.Declaration.SharedBlock.Methods.Select(m => m.Identifier));
+
+                    if (!aggregate.StaticFields.IsDefaultOrEmpty)
+                    {
+                        for (var si = 0; si < aggregate.Declaration.SharedBlock.Fields.Length && si < aggregate.StaticFields.Length; si++)
+                        {
+                            var fieldId = aggregate.Declaration.SharedBlock.Fields[si].Identifier;
+                            if (fieldId != null)
+                            {
+                                declarations[fieldId] = aggregate.StaticFields[si];
+                            }
+                        }
+                    }
+                }
+
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Properties.Select(p => p.Identifier),
+                    allPropertyIdentifiers,
                     aggregate.Properties.Concat(aggregate.StaticProperties));
 
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Events.Select(e => e.Identifier),
+                    allEventIdentifiers,
                     aggregate.Events.Concat(aggregate.StaticEvents));
 
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Methods.Select(m => m.Identifier),
+                    allMethodIdentifiers,
                     aggregate.Methods.Concat(aggregate.StaticMethods));
 
                 // Register parameters and implicit 'this' for struct/class methods
@@ -421,6 +444,17 @@ public static class SemanticLookup
             }
         }
 
+        // Register type alias declaration identifiers so code lenses can resolve them.
+        foreach (var typeAliasSyntax in FindNodes<TypeAliasDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root)))
+        {
+            var aliasId = typeAliasSyntax.Identifier;
+            if (aliasId != null && aliasId.Text != null
+                && compilation.GlobalScope.TypeAliases.TryGetValue(aliasId.Text, out var aliasedType))
+            {
+                declarations[aliasId] = aliasedType;
+            }
+        }
+
         MapLocalVariables(compilation, declarations, localDeclarations);
         return new SemanticModel(compilation, declarations, globals, localDeclarations);
     }
@@ -433,12 +467,15 @@ public static class SemanticLookup
         var byName = new Dictionary<string, Symbol>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            byName[symbol.Name] = symbol;
+            if (symbol?.Name != null)
+            {
+                byName[symbol.Name] = symbol;
+            }
         }
 
         foreach (var identifier in identifiers)
         {
-            if (identifier != null && byName.TryGetValue(identifier.Text, out var symbol))
+            if (identifier != null && identifier.Text != null && byName.TryGetValue(identifier.Text, out var symbol))
             {
                 declarations[identifier] = symbol;
             }
@@ -629,6 +666,7 @@ public static class SemanticLookup
     {
         private readonly Compilation compilation;
         private readonly Dictionary<SyntaxToken, Symbol> declarations;
+        private readonly Dictionary<(string FileName, int SpanStart, int SpanEnd), Symbol> declarationsBySpan;
         private readonly Dictionary<string, Symbol> globals;
         private readonly Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations;
 
@@ -642,6 +680,22 @@ public static class SemanticLookup
             this.declarations = declarations;
             this.globals = globals;
             this.localDeclarations = localDeclarations;
+
+            // Build a (file, span) → Symbol index in parallel with the reference-equality map.
+            // When a caller passes a SyntaxToken from a tree the compilation no longer holds
+            // (e.g. the project has since been reparsed by a diagnostic pull while a cached
+            // DocumentContent still references the prior tree), token identity diverges but
+            // the file path and span are stable across re-parses of identical source — so a
+            // span-based fallback recovers the correct symbol.
+            this.declarationsBySpan = new Dictionary<(string, int, int), Symbol>(declarations.Count);
+            foreach (var pair in declarations)
+            {
+                var key = SpanKey(pair.Key);
+                if (key.HasValue)
+                {
+                    this.declarationsBySpan[key.Value] = pair.Value;
+                }
+            }
         }
 
         public Symbol Resolve(SyntaxToken token)
@@ -651,10 +705,50 @@ public static class SemanticLookup
                 return declared;
             }
 
+            var spanKey = SpanKey(token);
+            if (spanKey.HasValue && this.declarationsBySpan.TryGetValue(spanKey.Value, out var bySpan))
+            {
+                return bySpan;
+            }
+
+            if (token.Text == null)
+            {
+                return null;
+            }
+
+            // Instance/static member access: when the token is the member identifier on the right
+            // side of `receiver.Member` (AccessorExpressionSyntax) or the field identifier of
+            // `receiver.Field = value` (FieldAssignmentExpressionSyntax), resolve the receiver's
+            // type and look the member up on it. This runs *before* the by-name local/global
+            // fallbacks so a member access never accidentally binds to a same-named local or
+            // global (e.g. `person.Name` must never resolve to a top-level `Name`).
+            var asMember = this.ResolveAsMemberAccess(token);
+            if (asMember != null)
+            {
+                return asMember;
+            }
+
+            if (IsRightOfMemberAccess(token))
+            {
+                // Token is clearly a member name; do not fall through to by-name lookups.
+                return null;
+            }
+
             var function = this.FindContainingFunction(token);
             if (function != null && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(token.Text, out var local))
             {
                 return local;
+            }
+
+            // Implicit-this member access: inside a class/struct method body, a bare identifier
+            // like `Name` is bound by the binder as `this.Name` (see Binder + ImplicitProperty/
+            // FieldVariableSymbol). Mirror that here so FindReferences, go-to-definition, rename,
+            // and the CodeLens reference count include the implicit-this use sites — not just
+            // explicit `this.Name` accesses.
+            var implicitThis = this.ResolveImplicitThisMember(token);
+            if (implicitThis != null)
+            {
+                return implicitThis;
             }
 
             return this.globals.TryGetValue(token.Text, out var global) ? global : ResolvePrimitiveOrImportedType(token.Text);
@@ -668,6 +762,319 @@ public static class SemanticLookup
             }
 
             return Array.Empty<VariableSymbol>();
+        }
+
+        private static (string FileName, int SpanStart, int SpanEnd)? SpanKey(SyntaxToken token)
+        {
+            if (token == null || token.SyntaxTree?.Text == null)
+            {
+                return null;
+            }
+
+            return (token.SyntaxTree.Text.FileName ?? string.Empty, token.Span.Start, token.Span.End);
+        }
+
+        private static Symbol LookupMember(StructSymbol structSymbol, string memberName)
+        {
+            for (var current = structSymbol; current != null; current = current.BaseClass)
+            {
+                var property = current.Properties.Concat(current.StaticProperties).FirstOrDefault(p => p.Name == memberName);
+                if (property != null)
+                {
+                    return property;
+                }
+
+                var field = current.Fields.Concat(current.StaticFields).FirstOrDefault(f => f.Name == memberName);
+                if (field != null)
+                {
+                    return field;
+                }
+
+                var evt = current.Events.Concat(current.StaticEvents).FirstOrDefault(e => e.Name == memberName);
+                if (evt != null)
+                {
+                    return evt;
+                }
+
+                var method = current.Methods.Concat(current.StaticMethods).FirstOrDefault(m => m.Name == memberName);
+                if (method != null)
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
+        private Symbol ResolveImplicitThisMember(SyntaxToken token)
+        {
+            // Find the innermost struct method body that contains the token. We deliberately do
+            // NOT pre-filter by StructDeclarationSyntax.Span: the parser sometimes reports a
+            // struct's span as ending at an internal closing brace (e.g. the `}` of a `shared {}`
+            // block) rather than the type's own `}`, so a span-containment check would wrongly
+            // skip methods that live below that point. The method body span is what actually
+            // matters for "is this token inside an instance method of a class".
+            //
+            // Shared-block methods are intentionally excluded — they're static and have no
+            // implicit `this` receiver.
+            StructDeclarationSyntax enclosing = null;
+            var enclosingBodyLength = int.MaxValue;
+            foreach (var decl in FindNodes<StructDeclarationSyntax>(this.compilation.SyntaxTrees.Select(t => t.Root)))
+            {
+                foreach (var method in decl.Methods)
+                {
+                    if (method.Body == null)
+                    {
+                        continue;
+                    }
+
+                    if (method.Body.Span.Start <= token.Span.Start
+                        && token.Span.End <= method.Body.Span.End
+                        && method.Body.Span.Length < enclosingBodyLength)
+                    {
+                        enclosing = decl;
+                        enclosingBodyLength = method.Body.Span.Length;
+                    }
+                }
+            }
+
+            if (enclosing == null)
+            {
+                return null;
+            }
+
+            // Resolve the struct declaration to its symbol (this goes through the same
+            // declarations/declarationsBySpan/globals chain, so it survives tree-reparse desyncs).
+            if (!(this.Resolve(enclosing.Identifier) is StructSymbol structSymbol))
+            {
+                return null;
+            }
+
+            return LookupMember(structSymbol, token.Text);
+        }
+
+        private static bool TokenMatches(SyntaxToken candidate, SyntaxToken token)
+        {
+            if (ReferenceEquals(candidate, token))
+            {
+                return true;
+            }
+
+            return candidate != null
+                && token != null
+                && candidate.Span.Start == token.Span.Start
+                && candidate.Span.End == token.Span.End
+                && string.Equals(candidate.Text, token.Text, StringComparison.Ordinal);
+        }
+
+        private static bool IsRightOfMemberAccess(SyntaxToken token)
+        {
+            // Cheap text-free check used to suppress fallback lookups. A token whose tree
+            // contains an AccessorExpressionSyntax or FieldAssignmentExpressionSyntax at this
+            // span is treated as a member name, and must not be resolved by name as a local
+            // or global.
+            if (token?.SyntaxTree == null)
+            {
+                return false;
+            }
+
+            foreach (var accessor in FindNodes<AccessorExpressionSyntax>(token.SyntaxTree.Root))
+            {
+                if (accessor.RightPart.Span.Start <= token.Span.Start
+                    && token.Span.End <= accessor.RightPart.Span.End
+                    && AccessorRightContainsMemberToken(accessor.RightPart, token))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var assign in FindNodes<FieldAssignmentExpressionSyntax>(token.SyntaxTree.Root))
+            {
+                if (TokenMatches(assign.FieldIdentifier, token))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool AccessorRightContainsMemberToken(ExpressionSyntax rightPart, SyntaxToken token)
+        {
+            switch (rightPart)
+            {
+                case NameExpressionSyntax name:
+                    return TokenMatches(name.IdentifierToken, token);
+                case CallExpressionSyntax call:
+                    return TokenMatches(call.Identifier, token);
+                case AccessorExpressionSyntax nested:
+                    return AccessorRightContainsMemberToken(nested.LeftPart, token)
+                        || AccessorRightContainsMemberToken(nested.RightPart, token);
+                default:
+                    return false;
+            }
+        }
+
+        private Symbol ResolveAsMemberAccess(SyntaxToken token)
+        {
+            if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+            {
+                return null;
+            }
+
+            // Walk the token's own tree first (covers the common case and works even when
+            // the compilation does not contain this tree — e.g. a stale DocumentContent).
+            // Then walk every compilation tree to support cross-file resolution.
+            var trees = new HashSet<SyntaxTree>();
+            if (token.SyntaxTree != null)
+            {
+                trees.Add(token.SyntaxTree);
+            }
+
+            foreach (var t in this.compilation.SyntaxTrees)
+            {
+                trees.Add(t);
+            }
+
+            foreach (var tree in trees)
+            {
+                foreach (var accessor in FindNodes<AccessorExpressionSyntax>(tree.Root)
+                             .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
+                             .OrderBy(a => a.Span.Length))
+                {
+                    if (TryDriveAccessorTarget(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpr, out var memberName))
+                    {
+                        var receiverType = this.ResolveReceiverTypeSymbol(tree, receiverExpr);
+                        var member = LookupTypeMember(receiverType, memberName);
+                        if (member != null)
+                        {
+                            return member;
+                        }
+                    }
+                }
+
+                foreach (var assign in FindNodes<FieldAssignmentExpressionSyntax>(tree.Root))
+                {
+                    if (!TokenMatches(assign.FieldIdentifier, token))
+                    {
+                        continue;
+                    }
+
+                    var receiverType = AsTypeSymbol(this.Resolve(assign.Receiver));
+                    var member = LookupTypeMember(receiverType, assign.FieldIdentifier.Text);
+                    if (member != null)
+                    {
+                        return member;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static bool TryDriveAccessorTarget(
+            SyntaxTree tree,
+            ExpressionSyntax expression,
+            ExpressionSyntax receiver,
+            SyntaxToken token,
+            out ExpressionSyntax receiverExpression,
+            out string memberName)
+        {
+            receiverExpression = null;
+            memberName = null;
+
+            switch (expression)
+            {
+                case NameExpressionSyntax name when TokenMatches(name.IdentifierToken, token):
+                    receiverExpression = receiver;
+                    memberName = name.IdentifierToken.Text;
+                    return true;
+                case CallExpressionSyntax call when TokenMatches(call.Identifier, token):
+                    receiverExpression = receiver;
+                    memberName = call.Identifier.Text;
+                    return true;
+                case AccessorExpressionSyntax nested:
+                    if (TryDriveAccessorTarget(tree, nested.LeftPart, receiver, token, out receiverExpression, out memberName))
+                    {
+                        return true;
+                    }
+
+                    var nestedReceiver = new AccessorExpressionSyntax(tree, receiver, nested.DotToken, nested.LeftPart);
+                    return TryDriveAccessorTarget(tree, nested.RightPart, nestedReceiver, token, out receiverExpression, out memberName);
+                default:
+                    return false;
+            }
+        }
+
+        private TypeSymbol ResolveReceiverTypeSymbol(SyntaxTree tree, ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case NameExpressionSyntax name:
+                    return AsTypeSymbol(this.Resolve(name.IdentifierToken));
+                case CallExpressionSyntax call:
+                    return AsTypeSymbol(this.Resolve(call.Identifier));
+                case AccessorExpressionSyntax nested:
+                    var outerType = this.ResolveReceiverTypeSymbol(tree, nested.LeftPart);
+                    if (outerType == null)
+                    {
+                        return null;
+                    }
+
+                    if (!TryGetMemberName(nested.RightPart, out var intermediateName))
+                    {
+                        return null;
+                    }
+
+                    var member = LookupTypeMember(outerType, intermediateName);
+                    return member switch
+                    {
+                        PropertySymbol property => property.Type as TypeSymbol,
+                        FieldSymbol field => field.Type as TypeSymbol,
+                        FunctionSymbol fn => fn.Type as TypeSymbol,
+                        _ => null,
+                    };
+                default:
+                    return null;
+            }
+        }
+
+        private static bool TryGetMemberName(ExpressionSyntax expression, out string memberName)
+        {
+            memberName = expression switch
+            {
+                NameExpressionSyntax name => name.IdentifierToken.Text,
+                CallExpressionSyntax call => call.Identifier.Text,
+                _ => null,
+            };
+
+            return memberName != null;
+        }
+
+        private static TypeSymbol AsTypeSymbol(Symbol symbol)
+        {
+            return symbol switch
+            {
+                TypeSymbol t => t,
+                VariableSymbol v => v.Type,
+                FunctionSymbol f => f.Type,
+                PropertySymbol p => p.Type,
+                FieldSymbol fld => fld.Type,
+                _ => null,
+            };
+        }
+
+        private static Symbol LookupTypeMember(TypeSymbol receiverType, string memberName)
+        {
+            switch (receiverType)
+            {
+                case StructSymbol structSymbol:
+                    return LookupMember(structSymbol, memberName);
+                case EnumSymbol enumSymbol:
+                    return enumSymbol.Members.FirstOrDefault(m => m.Name == memberName);
+                default:
+                    return null;
+            }
         }
 
         private FunctionDeclarationSyntax FindContainingFunction(SyntaxToken token)
