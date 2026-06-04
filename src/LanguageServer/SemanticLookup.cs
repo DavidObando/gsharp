@@ -56,7 +56,7 @@ public static class SemanticLookup
 
     public static Symbol ResolveSymbol(Compilation compilation, SyntaxToken identifierToken)
     {
-        if (identifierToken == null || identifierToken.Kind != SyntaxKind.IdentifierToken)
+        if (identifierToken == null || identifierToken.IsMissing || identifierToken.Kind != SyntaxKind.IdentifierToken)
         {
             return null;
         }
@@ -330,19 +330,42 @@ public static class SemanticLookup
                     declarations[aggregate.Declaration.Fields[i].Identifier] = aggregate.Fields[i];
                 }
 
+                var allPropertyIdentifiers = aggregate.Declaration.Properties.Select(p => p.Identifier);
+                var allEventIdentifiers = aggregate.Declaration.Events.Select(e => e.Identifier);
+                var allMethodIdentifiers = aggregate.Declaration.Methods.Select(m => m.Identifier);
+
+                if (aggregate.Declaration.SharedBlock != null)
+                {
+                    allPropertyIdentifiers = allPropertyIdentifiers.Concat(aggregate.Declaration.SharedBlock.Properties.Select(p => p.Identifier));
+                    allEventIdentifiers = allEventIdentifiers.Concat(aggregate.Declaration.SharedBlock.Events.Select(e => e.Identifier));
+                    allMethodIdentifiers = allMethodIdentifiers.Concat(aggregate.Declaration.SharedBlock.Methods.Select(m => m.Identifier));
+
+                    if (!aggregate.StaticFields.IsDefaultOrEmpty)
+                    {
+                        for (var si = 0; si < aggregate.Declaration.SharedBlock.Fields.Length && si < aggregate.StaticFields.Length; si++)
+                        {
+                            var fieldId = aggregate.Declaration.SharedBlock.Fields[si].Identifier;
+                            if (fieldId != null)
+                            {
+                                declarations[fieldId] = aggregate.StaticFields[si];
+                            }
+                        }
+                    }
+                }
+
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Properties.Select(p => p.Identifier),
+                    allPropertyIdentifiers,
                     aggregate.Properties.Concat(aggregate.StaticProperties));
 
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Events.Select(e => e.Identifier),
+                    allEventIdentifiers,
                     aggregate.Events.Concat(aggregate.StaticEvents));
 
                 MapMembersByName(
                     declarations,
-                    aggregate.Declaration.Methods.Select(m => m.Identifier),
+                    allMethodIdentifiers,
                     aggregate.Methods.Concat(aggregate.StaticMethods));
 
                 // Register parameters and implicit 'this' for struct/class methods
@@ -421,6 +444,17 @@ public static class SemanticLookup
             }
         }
 
+        // Register type alias declaration identifiers so code lenses can resolve them.
+        foreach (var typeAliasSyntax in FindNodes<TypeAliasDeclarationSyntax>(compilation.SyntaxTrees.Select(t => t.Root)))
+        {
+            var aliasId = typeAliasSyntax.Identifier;
+            if (aliasId != null && aliasId.Text != null
+                && compilation.GlobalScope.TypeAliases.TryGetValue(aliasId.Text, out var aliasedType))
+            {
+                declarations[aliasId] = aliasedType;
+            }
+        }
+
         MapLocalVariables(compilation, declarations, localDeclarations);
         return new SemanticModel(compilation, declarations, globals, localDeclarations);
     }
@@ -433,12 +467,15 @@ public static class SemanticLookup
         var byName = new Dictionary<string, Symbol>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            byName[symbol.Name] = symbol;
+            if (symbol?.Name != null)
+            {
+                byName[symbol.Name] = symbol;
+            }
         }
 
         foreach (var identifier in identifiers)
         {
-            if (identifier != null && byName.TryGetValue(identifier.Text, out var symbol))
+            if (identifier != null && identifier.Text != null && byName.TryGetValue(identifier.Text, out var symbol))
             {
                 declarations[identifier] = symbol;
             }
@@ -629,6 +666,7 @@ public static class SemanticLookup
     {
         private readonly Compilation compilation;
         private readonly Dictionary<SyntaxToken, Symbol> declarations;
+        private readonly Dictionary<(string FileName, int SpanStart, int SpanEnd), Symbol> declarationsBySpan;
         private readonly Dictionary<string, Symbol> globals;
         private readonly Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations;
 
@@ -642,6 +680,22 @@ public static class SemanticLookup
             this.declarations = declarations;
             this.globals = globals;
             this.localDeclarations = localDeclarations;
+
+            // Build a (file, span) → Symbol index in parallel with the reference-equality map.
+            // When a caller passes a SyntaxToken from a tree the compilation no longer holds
+            // (e.g. the project has since been reparsed by a diagnostic pull while a cached
+            // DocumentContent still references the prior tree), token identity diverges but
+            // the file path and span are stable across re-parses of identical source — so a
+            // span-based fallback recovers the correct symbol.
+            this.declarationsBySpan = new Dictionary<(string, int, int), Symbol>(declarations.Count);
+            foreach (var pair in declarations)
+            {
+                var key = SpanKey(pair.Key);
+                if (key.HasValue)
+                {
+                    this.declarationsBySpan[key.Value] = pair.Value;
+                }
+            }
         }
 
         public Symbol Resolve(SyntaxToken token)
@@ -651,10 +705,32 @@ public static class SemanticLookup
                 return declared;
             }
 
+            var spanKey = SpanKey(token);
+            if (spanKey.HasValue && this.declarationsBySpan.TryGetValue(spanKey.Value, out var bySpan))
+            {
+                return bySpan;
+            }
+
+            if (token.Text == null)
+            {
+                return null;
+            }
+
             var function = this.FindContainingFunction(token);
             if (function != null && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(token.Text, out var local))
             {
                 return local;
+            }
+
+            // Implicit-this member access: inside a class/struct method body, a bare identifier
+            // like `Name` is bound by the binder as `this.Name` (see Binder + ImplicitProperty/
+            // FieldVariableSymbol). Mirror that here so FindReferences, go-to-definition, rename,
+            // and the CodeLens reference count include the implicit-this use sites — not just
+            // explicit `this.Name` accesses.
+            var implicitThis = this.ResolveImplicitThisMember(token);
+            if (implicitThis != null)
+            {
+                return implicitThis;
             }
 
             return this.globals.TryGetValue(token.Text, out var global) ? global : ResolvePrimitiveOrImportedType(token.Text);
@@ -668,6 +744,101 @@ public static class SemanticLookup
             }
 
             return Array.Empty<VariableSymbol>();
+        }
+
+        private static (string FileName, int SpanStart, int SpanEnd)? SpanKey(SyntaxToken token)
+        {
+            if (token == null || token.SyntaxTree?.Text == null)
+            {
+                return null;
+            }
+
+            return (token.SyntaxTree.Text.FileName ?? string.Empty, token.Span.Start, token.Span.End);
+        }
+
+        private static Symbol LookupMember(StructSymbol structSymbol, string memberName)
+        {
+            for (var current = structSymbol; current != null; current = current.BaseClass)
+            {
+                var property = current.Properties.Concat(current.StaticProperties).FirstOrDefault(p => p.Name == memberName);
+                if (property != null)
+                {
+                    return property;
+                }
+
+                var field = current.Fields.Concat(current.StaticFields).FirstOrDefault(f => f.Name == memberName);
+                if (field != null)
+                {
+                    return field;
+                }
+
+                var evt = current.Events.Concat(current.StaticEvents).FirstOrDefault(e => e.Name == memberName);
+                if (evt != null)
+                {
+                    return evt;
+                }
+
+                var method = current.Methods.Concat(current.StaticMethods).FirstOrDefault(m => m.Name == memberName);
+                if (method != null)
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
+        private Symbol ResolveImplicitThisMember(SyntaxToken token)
+        {
+            // Walk all struct declarations in any tree; pick the innermost one whose span
+            // contains the token AND which has a method body that also contains the token.
+            // (Tokens inside a struct's *own declarations*, like field/property declarators,
+            // are already mapped via the declarations dictionary and must not be re-resolved
+            // as implicit-this member references.)
+            StructDeclarationSyntax enclosing = null;
+            foreach (var decl in FindNodes<StructDeclarationSyntax>(this.compilation.SyntaxTrees.Select(t => t.Root)))
+            {
+                if (decl.Span.Start > token.Span.Start || token.Span.End > decl.Span.End)
+                {
+                    continue;
+                }
+
+                var insideMethod = false;
+                foreach (var method in decl.Methods)
+                {
+                    if (method.Body != null
+                        && method.Body.Span.Start <= token.Span.Start
+                        && token.Span.End <= method.Body.Span.End)
+                    {
+                        insideMethod = true;
+                        break;
+                    }
+                }
+
+                if (!insideMethod)
+                {
+                    continue;
+                }
+
+                if (enclosing == null || decl.Span.Length < enclosing.Span.Length)
+                {
+                    enclosing = decl;
+                }
+            }
+
+            if (enclosing == null)
+            {
+                return null;
+            }
+
+            // Resolve the struct declaration to its symbol (this goes through the same
+            // declarations/declarationsBySpan/globals chain, so it survives tree-reparse desyncs).
+            if (!(this.Resolve(enclosing.Identifier) is StructSymbol structSymbol))
+            {
+                return null;
+            }
+
+            return LookupMember(structSymbol, token.Text);
         }
 
         private FunctionDeclarationSyntax FindContainingFunction(SyntaxToken token)
