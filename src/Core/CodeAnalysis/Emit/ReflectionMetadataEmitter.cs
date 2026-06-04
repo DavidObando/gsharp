@@ -4107,7 +4107,7 @@ internal sealed class ReflectionMetadataEmitter
 
         if (to.IsEnum)
         {
-            return from == Enum.GetUnderlyingType(to);
+            return from == GetEnumUnderlyingTypeSafe(to);
         }
 
         if (from.IsArray && to.IsArray && from.GetArrayRank() == 1 && to.GetArrayRank() == 1)
@@ -4178,7 +4178,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (t.IsEnum)
         {
-            EncodeClrTypeForCtorSig(enc, Enum.GetUnderlyingType(t));
+            EncodeClrTypeForCtorSig(enc, GetEnumUnderlyingTypeSafe(t));
         }
         else if (t.IsArray && t.GetArrayRank() == 1)
         {
@@ -4201,7 +4201,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         if (paramType.IsEnum)
         {
-            WriteCustomAttributeFixedArg(bb, Enum.GetUnderlyingType(paramType), value);
+            WriteCustomAttributeFixedArg(bb, GetEnumUnderlyingTypeSafe(paramType), value);
             return;
         }
 
@@ -4318,6 +4318,38 @@ internal sealed class ReflectionMetadataEmitter
         // may omit the assembly portion. We always emit the assembly-qualified
         // form so the consumer can unambiguously rebind the type.
         return t.AssemblyQualifiedName ?? t.FullName ?? t.Name;
+    }
+
+    /// <summary>
+    /// Returns the underlying primitive type of an enum in a way that works for
+    /// types loaded through a <see cref="MetadataLoadContext"/>. The BCL helper
+    /// <see cref="Enum.GetUnderlyingType(Type)"/> requires a runtime
+    /// <see cref="Type"/> and throws <see cref="NotSupportedException"/> for
+    /// metadata-loaded types (issue #418 / P1-8), which surfaces as an emit-time
+    /// crash in the custom-attribute blob writer whenever an attribute argument
+    /// is an enum defined in a referenced (non-BCL) package.
+    /// </summary>
+    /// <remarks>
+    /// Per ECMA-335 II.14.3 every enum is laid out as a class containing a
+    /// single instance field named <c>value__</c> whose type is the underlying
+    /// primitive (e.g. <see cref="int"/>). Reading that field's type works
+    /// uniformly for runtime and metadata-loaded types. The result is then
+    /// normalized to the executing runtime's <see cref="Type"/> so that the
+    /// reference-equality dispatch in the blob writers matches.
+    /// </remarks>
+    private static Type GetEnumUnderlyingTypeSafe(Type enumType)
+    {
+        var valueField = enumType.GetField("value__", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var fieldType = valueField?.FieldType;
+        if (fieldType == null)
+        {
+            // Defensive fallback: a malformed enum without value__ would be
+            // invalid metadata, but treating it as int32 keeps the writer
+            // robust rather than crashing during emit.
+            return typeof(int);
+        }
+
+        return NormalizeWellKnownType(fieldType);
     }
 
     private static void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)

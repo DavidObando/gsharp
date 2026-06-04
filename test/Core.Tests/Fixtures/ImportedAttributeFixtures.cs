@@ -29,6 +29,40 @@ public sealed class ImportedDefaultAttribute : Attribute
 }
 
 /// <summary>
+/// A user-defined enum used as the type of a custom-attribute named/positional
+/// argument by <see cref="ImportedEnumArgAttribute"/>. Defined in a referenced
+/// fixture assembly, so when consumed via the G# compiler's reference resolver
+/// the enum type is reified through a <see cref="System.Reflection.MetadataLoadContext"/>.
+/// </summary>
+public enum ImportedAttributeMode
+{
+    /// <summary>The default mode.</summary>
+    None = 0,
+
+    /// <summary>An "info" mode.</summary>
+    Info = 1,
+
+    /// <summary>A "warning" mode.</summary>
+    Warning = 2,
+}
+
+/// <summary>
+/// Regression fixture for issue #418 (P1-8): an attribute whose named-arg
+/// property is enum-typed. When applied to a G# declaration the emitter
+/// writes the named enum argument into the custom-attribute blob, exercising
+/// <c>WriteCustomAttributeFixedArg</c> with an enum <see cref="System.Type"/>
+/// resolved through a <see cref="System.Reflection.MetadataLoadContext"/>.
+/// The ctor is parameterless so the regression is scoped to the named-arg
+/// path called out in the bug report.
+/// </summary>
+[AttributeUsage(AttributeTargets.All, AllowMultiple = false, Inherited = true)]
+public sealed class ImportedEnumArgAttribute : Attribute
+{
+    /// <summary>Gets or sets a mode as a named argument.</summary>
+    public ImportedAttributeMode Mode { get; set; }
+}
+
+/// <summary>
 /// A plain reference-assembly class used to verify that imports of non-System
 /// namespaces resolve inside function and method bodies — not just in top-level
 /// statements. Constructing this type or calling its members from within a
