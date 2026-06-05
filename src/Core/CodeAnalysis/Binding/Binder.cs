@@ -122,6 +122,20 @@ public sealed class Binder
 
         if (function != null)
         {
+            // Pre-compute parameter names once so both instance-member and
+            // static-member seeding can defer to parameters (parameter wins
+            // on name collision with a sibling static member; the existing
+            // instance-vs-parameter precedence — instance pseudo-vars win
+            // today via TryDeclareVariable's silent-skip — is preserved
+            // verbatim for backward compatibility).
+            var paramNames = new HashSet<string>(function.Parameters.Select(p => p.Name));
+
+            // `seenMembers` tracks names already consumed by an instance
+            // field/property so we can refuse to expose a same-named static
+            // member by bare name (instance wins). It is also reused as the
+            // de-dup set within the instance-member inheritance walk below.
+            var seenMembers = new HashSet<string>();
+
             if (function.ThisParameter != null)
             {
                 scope.TryDeclareVariable(function.ThisParameter);
@@ -141,7 +155,6 @@ public sealed class Binder
                 // also accessible via bare name. Derived shadowing wins.
                 if (function.ReceiverType is StructSymbol receiverStruct)
                 {
-                    var seenMembers = new HashSet<string>();
                     for (var t = receiverStruct; t != null; t = t.BaseClass)
                     {
                         if (!t.Fields.IsDefaultOrEmpty)
@@ -169,20 +182,55 @@ public sealed class Binder
                 }
             }
 
-            // Issue #261 / ADR-0053: expose sibling static fields as bare names
-            // inside shared method bodies so `x` resolves without requiring
-            // `TypeName.x`. Skip fields whose name collides with a parameter
-            // so that parameters shadow static fields naturally.
-            if (function.IsStatic && function.StaticOwnerType is StructSymbol ownerStruct)
+            // Issue #261 / ADR-0053: expose sibling static fields and static
+            // properties of the enclosing user type as bare names inside both
+            // shared method bodies AND instance method bodies, so that
+            //
+            //     type Counter class {
+            //         shared { prop CallCount int32 }
+            //         func Bump() { CallCount += 1 }    // bare access OK
+            //     }
+            //
+            // resolves without requiring `TypeName.` prefix. Static members
+            // are exposed for the enclosing type only (no base-class walk) —
+            // this is consistent with the qualified `Type.StaticMember`
+            // paths (BindUserTypeStaticMemberAccess, BindFieldAssignmentExpression)
+            // which also do not walk inheritance for statics today.
+            //
+            // Shadowing precedence (enforced by paramNames/seenMembers):
+            //   parameter > instance member > static member.
+            var ownerStruct = (function.StaticOwnerType as StructSymbol)
+                ?? (function.ReceiverType as StructSymbol);
+            if (ownerStruct != null)
             {
                 if (!ownerStruct.StaticFields.IsDefaultOrEmpty)
                 {
-                    var paramNames = new HashSet<string>(function.Parameters.Select(p => p.Name));
                     foreach (var fld in ownerStruct.StaticFields)
                     {
-                        if (!paramNames.Contains(fld.Name))
+                        if (paramNames.Contains(fld.Name) || seenMembers.Contains(fld.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(fld.Name))
                         {
                             scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerStruct, fld));
+                        }
+                    }
+                }
+
+                if (!ownerStruct.StaticProperties.IsDefaultOrEmpty)
+                {
+                    foreach (var prop in ownerStruct.StaticProperties)
+                    {
+                        if (paramNames.Contains(prop.Name) || seenMembers.Contains(prop.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(prop.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticPropertyVariableSymbol(ownerStruct, prop));
                         }
                     }
                 }
@@ -6024,6 +6072,28 @@ public sealed class Binder
                 implicitStaticField.Field);
         }
 
+        // ADR-0053: bare static property name inside a method body (shared
+        // or instance) of the enclosing type.
+        if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProp)
+        {
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitStaticProp.Property,
+                $"{implicitStaticProp.StructType.Name}.{implicitStaticProp.Property.Name}");
+
+            if (!implicitStaticProp.Property.HasGetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.IdentifierToken.Location, implicitStaticProp.Property.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundPropertyAccessExpression(
+                null,
+                receiver: null,
+                implicitStaticProp.StructType,
+                implicitStaticProp.Property);
+        }
+
         // Bare property name inside an instance method body resolves to
         // `this.<property>` (analogous to implicit field access).
         if (variable is ImplicitPropertyVariableSymbol implicitProp)
@@ -6108,6 +6178,29 @@ public sealed class Binder
 
             var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
             return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
+        }
+
+        // ADR-0053: bare static property assignment inside a method body
+        // (shared or instance) of the enclosing type.
+        if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProp)
+        {
+            if (!implicitStaticProp.Property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            }
+
+            ReportObsoleteUseIfApplicable(
+                syntax.IdentifierToken.Location,
+                implicitStaticProp.Property,
+                $"{implicitStaticProp.StructType.Name}.{implicitStaticProp.Property.Name}");
+
+            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticProp.Property.Type);
+            return new BoundPropertyAssignmentExpression(
+                null,
+                receiver: null,
+                implicitStaticProp.StructType,
+                implicitStaticProp.Property,
+                convertedValue);
         }
 
         // Bare property name assignment inside an instance method body resolves
@@ -6672,15 +6765,30 @@ public sealed class Binder
         }
         else if (accessor.LeftPart is NameExpressionSyntax staticLeftName
             && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
-            && staticTypeAlias is StructSymbol staticStruct
-            && !staticStruct.StaticEvents.IsDefaultOrEmpty)
+            && staticTypeAlias is StructSymbol staticStruct)
         {
             // Issue #263: static event subscription on a user-defined type.
-            var ev = staticStruct.StaticEvents.FirstOrDefault(e => e.Name == eventName);
+            // Try matching an event first; if no match, fall through to
+            // ADR-0053 static field/property compound assignment instead of
+            // reporting an immediate "unable to find member".
+            EventSymbol ev = null;
+            if (!staticStruct.StaticEvents.IsDefaultOrEmpty)
+            {
+                ev = staticStruct.StaticEvents.FirstOrDefault(e => e.Name == eventName);
+            }
+
             if (ev != null)
             {
                 var userHandler = BindExpression(syntax.Value);
                 return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
+            }
+
+            // ADR-0053: `Type.StaticField += rhs` / `Type.StaticProp += rhs`.
+            // The simple-assignment path is handled by BindFieldAssignmentExpression
+            // (lines ~6586–6619); this is the compound counterpart.
+            if (TryBindUserTypeStaticCompoundAssignment(staticStruct, eventNameSyntax, syntax, isAdd, out var compoundResult))
+            {
+                return compoundResult;
             }
 
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
@@ -6822,6 +6930,26 @@ public sealed class Binder
             return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
         }
 
+        // ADR-0053: bare static property compound assignment inside a method
+        // body (shared or instance) of the enclosing type. Compound `+=`/`-=`
+        // requires both a getter (for the read half) and a setter (for the
+        // write half).
+        if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProp)
+        {
+            if (!implicitStaticProp.Property.HasGetter || !implicitStaticProp.Property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundPropertyAssignmentExpression(
+                null,
+                receiver: null,
+                implicitStaticProp.StructType,
+                implicitStaticProp.Property,
+                convertedResult);
+        }
+
         if (variable is ImplicitPropertyVariableSymbol implicitProp)
         {
             if (!implicitProp.Property.HasSetter)
@@ -6843,6 +6971,82 @@ public sealed class Binder
         }
 
         return new BoundAssignmentExpression(null, variable, convertedResult);
+    }
+
+    /// <summary>
+    /// ADR-0053: bind <c>Type.StaticField +=/-= rhs</c> or
+    /// <c>Type.StaticProp +=/-= rhs</c> where <paramref name="staticStruct"/>
+    /// is the user-defined receiver type. Returns <c>true</c> if the named
+    /// member was a static field/property and the compound assignment was
+    /// produced; <c>false</c> if no static field or property by that name
+    /// exists on the type (caller falls through to error reporting).
+    /// Mirrors the static branch of <see cref="BindFieldAssignmentExpression"/>
+    /// (lines ~6586–6619) but for compound `+=` / `-=`.
+    /// </summary>
+    private bool TryBindUserTypeStaticCompoundAssignment(
+        StructSymbol staticStruct,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        bool isAdd,
+        out BoundExpression result)
+    {
+        var memberName = memberNameSyntax.IdentifierToken.Text;
+        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        var boundRhs = BindExpression(syntax.Value);
+
+        if (staticStruct.TryGetStaticField(memberName, out var staticField))
+        {
+            var leftRead = new BoundFieldAccessExpression(null, receiver: null, staticStruct, staticField);
+            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, staticField.Type, boundRhs.Type);
+            if (op == null)
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, staticField.Type, boundRhs.Type);
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            if (staticField.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            }
+
+            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+            var converted = BindConversion(syntax.Value.Location, binary, staticField.Type);
+            result = new BoundFieldAssignmentExpression(null, null, staticStruct, staticField, converted);
+            return true;
+        }
+
+        foreach (var prop in staticStruct.StaticProperties)
+        {
+            if (prop.Name != memberName)
+            {
+                continue;
+            }
+
+            if (!prop.HasGetter || !prop.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            var leftRead = new BoundPropertyAccessExpression(null, receiver: null, staticStruct, prop);
+            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, prop.Type, boundRhs.Type);
+            if (op == null)
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, prop.Type, boundRhs.Type);
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+            var converted = BindConversion(syntax.Value.Location, binary, prop.Type);
+            result = new BoundPropertyAssignmentExpression(null, receiver: null, staticStruct, prop, converted);
+            return true;
+        }
+
+        result = null;
+        return false;
     }
 
     /// <summary>
@@ -8914,6 +9118,28 @@ public sealed class Binder
                         receiver: null,
                         implicitStaticField.StructType,
                         implicitStaticField.Field);
+                }
+                else if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProp)
+                {
+                    // ADR-0053: bare static property name as accessor receiver
+                    // (e.g., `StaticProp.Sub` inside a method body of the
+                    // enclosing type).
+                    ReportObsoleteUseIfApplicable(
+                        leftName.IdentifierToken.Location,
+                        implicitStaticProp.Property,
+                        $"{implicitStaticProp.StructType.Name}.{implicitStaticProp.Property.Name}");
+
+                    if (!implicitStaticProp.Property.HasGetter)
+                    {
+                        Diagnostics.ReportCannotAssign(leftName.IdentifierToken.Location, implicitStaticProp.Property.Name);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    receiver = new BoundPropertyAccessExpression(
+                        null,
+                        receiver: null,
+                        implicitStaticProp.StructType,
+                        implicitStaticProp.Property);
                 }
                 else
                 {
