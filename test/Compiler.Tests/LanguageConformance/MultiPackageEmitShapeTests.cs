@@ -39,6 +39,7 @@ public class MultiPackageEmitShapeTests
             });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
 
             using var pe = new PEReader(File.OpenRead(outPath));
             var reader = pe.GetMetadataReader();

@@ -27,6 +27,12 @@ jobs:
       - name: Restore
         run: dotnet restore GSharp.sln
 
+      - name: Restore .NET local tools
+        # Brings in `dotnet-ilverify`, which Compiler.Tests invokes via
+        # `IlVerifier.Verify` to mechanically validate every assembly emitted
+        # by gsc against ECMA-335. The manifest is at .config/dotnet-tools.json.
+        run: dotnet tool restore
+
       - name: Show Nerdbank.GitVersioning version
         # Surface the version nbgv will stamp on assemblies / NuGet packages so
         # that, when a build from `main` is green, the printed NuGetPackageVersion

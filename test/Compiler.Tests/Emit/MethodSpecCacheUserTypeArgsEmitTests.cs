@@ -136,6 +136,7 @@ public class MethodSpecCacheUserTypeArgsEmitTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+        IlVerifier.Verify(outPath);
 
         return outPath;
     }

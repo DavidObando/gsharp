@@ -140,6 +140,7 @@ public class ForRangeEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {
@@ -297,6 +298,7 @@ public class ForRangeEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath);
 
             using var fs = File.OpenRead(outPath);
             using var pe = new PEReader(fs);

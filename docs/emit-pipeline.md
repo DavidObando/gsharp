@@ -171,3 +171,30 @@ The in-process `Evaluator` remains the canonical reference for language semantic
 | `src/Compiler/Program.cs` | `gsc` command-line driver, response-file expansion, runtimeconfig.json generation. |
 | `src/Sdk/Gsharp.NET.Sdk/build/Gsharp.NET.Core.Sdk.targets` | MSBuild `CoreCompile` override that invokes `gsc.dll` via the SDK's build task. |
 | `src/Sdk/Gsharp.NET.Sdk/BuildTask.cs` | MSBuild task that materializes a response file and shells out to `dotnet gsc.dll`. |
+
+## IL verification gate (Compiler.Tests)
+
+`Compiler.Tests` runs every test-emitted assembly through `dotnet-ilverify`
+immediately after `gsc` writes the PE. This catches IL-correctness regressions
+(callvirt-on-value-type, stack-type mismatches, init-only writes, ref-struct
+escapes, …) at unit-test granularity instead of waiting for a runtime
+`InvalidProgramException` or a JIT failure.
+
+The integration lives in
+[`test/Compiler.Tests/IlVerifier.cs`](../test/Compiler.Tests/IlVerifier.cs).
+Every test compile helper calls
+`IlVerifier.Verify(outPath, ignoredErrorCodes: …)` right after asserting that
+`gsc` exited successfully, so a verification failure is attributed to the
+specific test that emitted the bad IL.
+
+- The tool is declared in [`.config/dotnet-tools.json`](../.config/dotnet-tools.json)
+  and is restored in CI via `dotnet tool restore` (see
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)).
+- `IlVerifier.KnownIssues` enumerates compiler bugs that currently produce
+  non-strict-conforming IL (async lowering, generic value-type dispatch,
+  ref-struct emission). Tests that exercise those paths opt in to the
+  matching ignore list; the goal is to **shrink** these lists as the
+  underlying bugs are fixed.
+- To bypass the gate while iterating locally, set
+  `GSHARP_SKIP_ILVERIFY=1` in the environment. CI must run with the gate
+  enabled — there is no opt-out in `build.yml`.

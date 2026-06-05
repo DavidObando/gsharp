@@ -121,6 +121,7 @@ public class AsyncValueReturnEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.AsyncStateMachine);
             Assert.True(File.Exists(outPath), $"expected emitted assembly at {outPath}");
 
             var psi = new ProcessStartInfo("dotnet")

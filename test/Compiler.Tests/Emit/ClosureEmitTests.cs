@@ -167,6 +167,7 @@ public class ClosureEmitTests
             }
 
             Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
+            IlVerifier.Verify(outPath);
 
             // Drop a minimal runtimeconfig so `dotnet exec` can host the .dll.
             var runtimeConfigPath = Path.ChangeExtension(outPath, "runtimeconfig.json");
