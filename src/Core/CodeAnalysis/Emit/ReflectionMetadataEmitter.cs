@@ -10818,7 +10818,11 @@ internal sealed class ReflectionMetadataEmitter
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                 {
-                    var receiverIsValueType = IsValueTypeSymbol(instCall.Receiver.Type);
+                    var receiverType = instCall.Receiver.Type is ByRefTypeSymbol byRef
+                        ? byRef.PointeeType
+                        : instCall.Receiver.Type;
+                    var receiverIsValueType = IsValueTypeSymbol(receiverType);
+                    var receiverIsManagedPointer = instCall.Receiver.Type is ByRefTypeSymbol;
 
                     // A value-type receiver invoking a method it inherits from a
                     // reference base type (System.Object/ValueType/Enum) — e.g.
@@ -10844,8 +10848,13 @@ internal sealed class ReflectionMetadataEmitter
                         // the inherited reference-type method receives a proper
                         // object reference.
                         this.EmitExpression(instCall.Receiver);
+                        if (receiverIsManagedPointer)
+                        {
+                            this.EmitLoadIndirect(receiverType);
+                        }
+
                         this.il.OpCode(ILOpCode.Box);
-                        this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
+                        this.il.Token(this.outer.GetElementTypeToken(receiverType));
                     }
                     else
                     {
