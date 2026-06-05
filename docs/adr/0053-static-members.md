@@ -77,6 +77,8 @@ Members inside `shared` inherit the same accessibility modifier rules as regular
 - Inside a shared body, `this` is not available. Attempting to reference `this` or instance members produces a diagnostic.
 - Other static members of the same type are accessible by simple name (no `TypeName.` prefix required).
 - Static members are accessed from outside via `TypeName.member` — reusing the existing `ImportedClassSymbol`-style accessor resolution path extended to user-defined types.
+- Bare static-member access (no `TypeName.` prefix) is allowed from **both** shared and instance method bodies of the enclosing type. Lookup is own-type only — inherited static members must be qualified with `Base.X` (symmetric with the qualified-access paths, which also do not walk the inheritance chain for statics today). If an instance member or parameter shadows a same-named static member, the instance member / parameter wins.
+- Compound assignment (`+=` / `-=`) on `TypeName.StaticField` and `TypeName.StaticProp` is supported wherever simple assignment is. For static properties, compound assignment requires both a getter and a setter; otherwise the binder reports `GS0127` (cannot assign) and the expression is rejected.
 
 ### 6. Type-level access from GSharp
 

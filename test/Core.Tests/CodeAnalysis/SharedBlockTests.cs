@@ -771,4 +771,463 @@ type Mixed class {
         var pdRows = md.GetTableRowCount(TableIndex.Property);
         Assert.Equal(2, pdRows);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 7. ADR-0053 §5 expansion: bare static-member access from instance
+    //    methods (previously only allowed from shared methods), bare static-
+    //    property access, and compound `+=` / `-=` on `Type.StaticMember`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BareStaticField_InInstanceMethod_Read()
+    {
+        var source = @"
+type Counter class {
+    shared { count int32 }
+    func get() int32 { return count }
+}
+
+Counter.count = 17
+var c = Counter{}
+var r = c.get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(17, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticField_InInstanceMethod_SimpleAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { count int32 }
+    func set(v int32) { count = v }
+}
+
+var c = Counter{}
+c.set(33)
+var r = Counter.count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(33, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticField_InInstanceMethod_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { count int32 }
+    func bump() int32 {
+        count += 1
+        return count
+    }
+}
+
+Counter.count = 5
+var c = Counter{}
+var r = c.bump()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticProp_InInstanceMethod_Read()
+    {
+        var source = @"
+type Counter class {
+    shared { prop count int32 }
+    func get() int32 { return count }
+}
+
+Counter.count = 12
+var c = Counter{}
+var r = c.get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticProp_InInstanceMethod_SimpleAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { prop count int32 }
+    func set(v int32) { count = v }
+}
+
+var c = Counter{}
+c.set(81)
+var r = Counter.count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(81, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticProp_InInstanceMethod_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { prop count int32 }
+    func bump() int32 {
+        count += 1
+        return count
+    }
+}
+
+Counter.count = 9
+var c = Counter{}
+var r = c.bump()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticProp_InSharedMethod_Read()
+    {
+        var source = @"
+type Counter class {
+    shared {
+        prop count int32
+        func get() int32 { return count }
+    }
+}
+
+Counter.count = 41
+var r = Counter.get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(41, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticProp_InSharedMethod_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared {
+        prop count int32
+        func bump() int32 {
+            count += 1
+            return count
+        }
+    }
+}
+
+Counter.count = 7
+var r = Counter.bump()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(8, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticField_InSharedMethod_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared {
+        count int32
+        func bump() int32 {
+            count += 2
+            return count
+        }
+    }
+}
+
+Counter.count = 3
+var r = Counter.bump()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void TypeQualified_StaticField_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { count int32 }
+}
+
+Counter.count = 4
+Counter.count += 6
+var r = Counter.count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void TypeQualified_StaticProp_CompoundAssign()
+    {
+        var source = @"
+type Counter class {
+    shared { prop count int32 }
+}
+
+Counter.count = 4
+Counter.count += 6
+var r = Counter.count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void TypeQualified_StaticField_CompoundMinus()
+    {
+        var source = @"
+type Counter class {
+    shared { count int32 }
+}
+
+Counter.count = 20
+Counter.count -= 7
+var r = Counter.count
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(13, result.Value);
+    }
+
+    [Fact]
+    public void NameCollision_Parameter_ShadowsStatic_NoFalseSuccess()
+    {
+        // Parameter `count` shadows the same-named static field. The
+        // existing shared-method seeding already enforces this; the new
+        // instance-method seeding must do the same.
+        var source = @"
+type Foo class {
+    shared { count int32 }
+    func echo(count int32) int32 { return count }
+}
+
+Foo.count = 1
+var f = Foo{}
+var r = f.echo(99)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.Value);
+    }
+
+    [Fact]
+    public void StaticField_FromAnotherInstanceMethod_QualifiedRead()
+    {
+        // Qualified read `Type.X` (regression — should keep working
+        // after refactor that splits static-event vs static-field branches).
+        var source = @"
+type Counter class {
+    shared { count int32 }
+    func get() int32 { return Counter.count }
+}
+
+Counter.count = 22
+var c = Counter{}
+var r = c.get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(22, result.Value);
+    }
+
+    [Fact]
+    public void StaticEvent_AndStaticField_OnSameType_BothCompoundAssignable()
+    {
+        // Regression for the restructured static-event branch in
+        // BindEventSubscriptionExpression: a type with BOTH a static event
+        // and a static field must still allow `Type.StaticEvent += handler`
+        // (event), and must now ALSO allow `Type.StaticField += 1` (field
+        // path — previously masked by the static-event branch returning an
+        // unable-to-find error when the event name didn't match).
+        var source = @"package EventAndFieldCompound
+import System
+
+type Bus class {
+    shared {
+        event Tick Action
+        count int32
+    }
+}
+
+func handler() { }
+
+Bus.Tick += handler
+Bus.count = 5
+Bus.count += 3
+Console.WriteLine(Bus.count)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "ADR53-EventAndFieldCompound");
+        Assert.Contains("8", output);
+    }
+
+    [Fact]
+    public void StaticGetterOnlyProp_BareCompound_ReportsCannotAssign()
+    {
+        // `+=` requires both a getter and a setter. A getter-only static
+        // property must fail with `CannotAssign` (GS0127) on the bare
+        // compound path.
+        var source = @"
+type Foo class {
+    shared {
+        _v int32
+        prop value int32 { get { return _v } }
+        func bump() { value += 1 }
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0127");
+    }
+
+    [Fact]
+    public void StaticSetterOnlyProp_BareCompound_ReportsCannotAssign()
+    {
+        // `+=` requires both a getter and a setter. A setter-only static
+        // property must fail with `CannotAssign` (GS0127) on the bare
+        // compound path.
+        var source = @"
+type Foo class {
+    shared {
+        _v int32
+        prop value int32 { set(v) { _v = v } }
+        func bump() { value += 1 }
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0127");
+    }
+
+    [Fact]
+    public void TypeQualified_StaticGetterOnlyProp_CompoundReportsCannotAssign()
+    {
+        var source = @"
+type Foo class {
+    shared {
+        _v int32
+        prop value int32 { get { return _v } }
+    }
+}
+
+Foo.value += 1
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0127");
+    }
+
+    [Fact]
+    public void GenericType_BareStatic_InInstanceMethod_CompoundAssign()
+    {
+        // function.ReceiverType for a method on type Container[T] is the
+        // generic definition, whose StaticFields/StaticProperties are
+        // populated. StructSymbol.Construct does not propagate statics to
+        // constructed instantiations, but body-bind uses the definition, so
+        // bare static access from an instance method on a generic type
+        // must still resolve.
+        var source = @"
+type Container[T] class {
+    shared { count int32 }
+    Value T
+    func bump() int32 {
+        count += 1
+        return count
+    }
+}
+
+var c = Container[int32]{Value: 10}
+var unused = c.bump()
+var r = c.bump()
+r
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void BareStaticField_InInstanceMethod_InsideGoScope_Works()
+    {
+        // Static access in a body launched via `go` (inside a `scope`)
+        // needs no receiver capture, so it should compile and run.
+        var source = @"package BareStaticInGo
+import System
+
+type Bus class {
+    shared { count int32 }
+    func bump() int32 {
+        count += 1
+        return count
+    }
+}
+
+Bus.count = 0
+var b = Bus{}
+scope {
+    go b.bump()
+    go b.bump()
+    go b.bump()
+}
+Console.WriteLine(Bus.count)
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "ADR53-BareStaticInGo");
+        Assert.Contains("3", output);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 8. ADR-0053 §5 expansion: end-to-end repro from user bug report.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Repro_UserBug_BareAndQualifiedStaticPropFromInstanceMethod()
+    {
+        // Faithful reproduction of the original failing program from the
+        // user bug report. Pre-fix, this errored with three GS0125
+        // "Variable doesn't exist" diagnostics inside `ToString()`.
+        var source = @"package ReproUserBug
+import System
+
+type Person class {
+    shared {
+        prop CallCount int32
+    }
+    public prop Name string
+    public prop Age int32
+
+    func ToString() string {
+        CallCount += 1
+        Person.CallCount += 1
+        return ""Name: ${Name}, Age: ${this.Age}""
+    }
+}
+
+Person.CallCount = 23
+var person = Person{}
+person.Name = ""Alice""
+person.Age = 30
+Console.WriteLine(person.ToString())
+Console.WriteLine(person.ToString())
+Console.WriteLine(""CallCount: ${Person.CallCount}"")
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "ADR53-ReproUserBug");
+        // Two ToString() calls × (bare CallCount += 1 + qualified Person.CallCount += 1)
+        // = 4 increments from the initial 23 → final 27.
+        Assert.Contains("CallCount: 27", output);
+    }
 }
