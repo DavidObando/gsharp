@@ -1,9 +1,10 @@
 # ADR-0029: `data struct` synthesized members
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-22
 - **Phase**: Phase 3 (lock before 3.B.2)
 - **Related**: ADR-0003 (OO surface); ADR-0017 (method virtuality); ADR-0026 (copy syntax, Phase 7); execution plan §3.B.2; gaps doc §3.2.1
+- **Implementation**: Issue [#410](https://github.com/DavidObando/gsharp/issues/410); see `EmitDataStructSynthesizedMembers` in `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` and diagnostic GS0232.
 
 ## Context
 

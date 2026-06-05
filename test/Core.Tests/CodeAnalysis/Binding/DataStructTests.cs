@@ -158,6 +158,63 @@ p
         _ = compilation;
     }
 
+    [Fact]
+    public void DataStruct_ExplicitEqualsObject_ReportsGS0232()
+    {
+        // ADR-0029 / Issue #410: Equals/GetHashCode/ToString/op_Equality/
+        // op_Inequality/Deconstruct are synthesized for data structs and
+        // cannot be hand-written, so the structural contract stays
+        // predictable.
+        var source = @"
+type Point data struct {
+    X int32
+    Y int32
+}
+
+func (p Point) Equals(other any) bool {
+    return false
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0232");
+    }
+
+    [Fact]
+    public void DataStruct_ExplicitGetHashCode_ReportsGS0232()
+    {
+        var source = @"
+type Point data struct {
+    X int32
+    Y int32
+}
+
+func (p Point) GetHashCode() int32 {
+    return 0
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0232");
+    }
+
+    [Fact]
+    public void DataStruct_ExplicitDeconstruct_ReportsGS0232()
+    {
+        var source = @"
+type Point data struct {
+    X int32
+    Y int32
+}
+
+func (p Point) Deconstruct() {
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0232");
+    }
+
     private static StructSymbol BuildPoint(out Compilation compilation)
     {
         var source = @"
