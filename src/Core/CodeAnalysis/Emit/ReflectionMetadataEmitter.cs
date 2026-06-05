@@ -997,6 +997,21 @@ internal sealed class ReflectionMetadataEmitter
 
         var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
 
+        // Issue #456: enumeration of `program.Functions` walks a
+        // Dictionary<FunctionSymbol, ...> whose hash buckets depend on
+        // FunctionSymbol identity, which is not stable across Compilation
+        // instances. Two functions with identical signatures (e.g.
+        // `func f(int32) int32` and `func g(int32) int32`) can therefore
+        // be assigned MethodDef rows in flipped order across runs, breaking
+        // byte-deterministic emit. Sort each bucket by source declaration
+        // position (with Name as a stable tiebreaker for synthesized
+        // functions that share or lack a Declaration) so the MethodDef
+        // table is emitted in the same order every run.
+        foreach (var pkgKey in functionsByPackage.Keys.ToList())
+        {
+            functionsByPackage[pkgKey].Sort(FunctionEmitOrderComparer.Instance);
+        }
+
         // Phase 4 emit parity (E1): non-capture function literals are attached
         // to the entry-point package's <Program> container as ordinary static
         // methods. Capture-bearing literals were already redirected into
@@ -5617,6 +5632,18 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
+        // Issue #420 / #455 (P3-10): the emitted IL takes the receiver and the
+        // typed argument by address (`ldarga`) and reads the field directly.
+        // The signature encoded below also passes the typed argument by value
+        // through EncodeTypeSymbol, which assumes a value-type StructSymbol.
+        // If reference-type structs/records are ever introduced the IL and the
+        // signature both need to switch (load by reference, no `ldarga`); make
+        // the value-type precondition explicit so a future change trips loudly
+        // in Debug instead of producing invalid IL.
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitInlineEqualsTyped precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
+
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.metadataOnly)
         {
@@ -5681,6 +5708,16 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
     {
+        // Issue #420 / #455 (P3-10): the emitted IL uses `ldarga` on both
+        // operands to read fields directly, which requires the operands to be
+        // value-type structs. If reference-type structs/records are ever
+        // introduced this helper must switch to `ldarg` / `ldfld` chains and
+        // re-encode the parameter signature; assert the value-type precondition
+        // explicitly so any future change trips loudly in Debug.
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitInlineEqualityOperator precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
+
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.metadataOnly)
         {
@@ -10099,6 +10136,81 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    /// <summary>
+    /// Issue #456: deterministic ordering for FunctionSymbols emitted into
+    /// the MethodDef table. Sort first by the function's source declaration
+    /// start (so user-visible order matches source order), then by name
+    /// (Ordinal) for synthesized helpers that lack a Declaration or share a
+    /// span. This guarantees byte-identical MethodDef layout across
+    /// Compilation instances, which is required for byte-deterministic emit
+    /// (cf. <see cref="DebugInformationOptions.Deterministic"/>).
+    /// </summary>
+    private sealed class FunctionEmitOrderComparer : IComparer<FunctionSymbol>
+    {
+        public static readonly FunctionEmitOrderComparer Instance = new FunctionEmitOrderComparer();
+
+        private FunctionEmitOrderComparer()
+        {
+        }
+
+        public int Compare(FunctionSymbol x, FunctionSymbol y)
+        {
+            if (ReferenceEquals(x, y))
+            {
+                return 0;
+            }
+
+            if (x is null)
+            {
+                return -1;
+            }
+
+            if (y is null)
+            {
+                return 1;
+            }
+
+            int xPos = x.Declaration?.Span.Start ?? int.MaxValue;
+            int yPos = y.Declaration?.Span.Start ?? int.MaxValue;
+            int cmp = xPos.CompareTo(yPos);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = string.CompareOrdinal(x.Name ?? string.Empty, y.Name ?? string.Empty);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            // Final tiebreaker for distinct-but-otherwise-equal symbols (e.g.
+            // synthesized partial-method shadows): fall back to a stable
+            // signature string so equal-named overloads get a deterministic
+            // order even when source positions and names coincide.
+            return string.CompareOrdinal(FormatSignature(x), FormatSignature(y));
+        }
+
+        private static string FormatSignature(FunctionSymbol fn)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(fn.Type?.Name ?? "?");
+            sb.Append('(');
+            for (int i = 0; i < fn.Parameters.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+
+                sb.Append(fn.Parameters[i].Type?.Name ?? "?");
+            }
+
+            sb.Append(')');
+            return sb.ToString();
+        }
+    }
+
     private sealed class ReceiverSpillCollector : BoundTreeWalker
     {
         private readonly ReflectionMetadataEmitter outer;
@@ -13400,6 +13512,19 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
         {
+            // Issue #420 / #455 (P3-4): top-of-method precondition. The
+            // non-static paths below evaluate `fas.Value` between two reads of
+            // `fas.Receiver`. That is only safe when the value expression does
+            // not reassign the receiver variable. The binder does not produce
+            // such shapes today (see ValueExpressionMutatesReceiver helper).
+            // Repeat the check at the top of the method so the invariant is
+            // visible without scrolling past the static-field fast path; the
+            // per-receiver assertion further down remains for the targeted
+            // diagnostic message.
+            Debug.Assert(
+                fas.Receiver == null || !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
+                $"EmitFieldAssignment precondition violated: BoundFieldAssignmentExpression value must not reassign the receiver variable for field '{fas.Field.Name}' — see issue #420 / P3-4.");
+
             if (!this.outer.structFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
@@ -13669,7 +13794,14 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInstanceReceiver(access.Receiver);
             }
 
-            var receiverIsValueType = !isStatic && access.Receiver.Type?.ClrType?.IsValueType == true;
+            // Issue #454: use IsValueTypeSymbol — same predicate that
+            // EmitInstanceReceiver uses — so user-declared structs (ClrType
+            // null until emission completes) are recognised as value-type
+            // receivers and dispatched via `call` instead of `callvirt`.
+            // EmitInstanceReceiver already loaded `ldloca` for them; emitting
+            // `callvirt` against a value-type method with a managed-pointer
+            // receiver produces invalid IL.
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(access.Receiver.Type);
             switch (access.Member)
             {
                 case PropertyInfo property:
@@ -13717,7 +13849,7 @@ internal sealed class ReflectionMetadataEmitter
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
 
-            var receiverIsValueType = !isStatic && assn.Receiver.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(assn.Receiver.Type);
             switch (assn.Member)
             {
                 case PropertyInfo property:
@@ -13746,7 +13878,7 @@ internal sealed class ReflectionMetadataEmitter
             // Stream B′ emit parity: `+=` / `-=` calls the event's add_X /
             // remove_X accessor. Both accessors are void-returning.
             var isStatic = subscription.Receiver == null;
-            var receiverIsValueType = !isStatic && subscription.Receiver.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = !isStatic && IsValueTypeSymbol(subscription.Receiver.Type);
 
             if (!isStatic)
             {
@@ -13890,7 +14022,7 @@ internal sealed class ReflectionMetadataEmitter
             var getter = idx.Indexer.GetGetMethod(nonPublic: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
-            var receiverIsValueType = idx.Target.Type?.ClrType?.IsValueType == true;
+            var receiverIsValueType = IsValueTypeSymbol(idx.Target.Type);
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
         }

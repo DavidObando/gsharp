@@ -31,6 +31,10 @@ GSharp has two execution backends. The interpreter (`Evaluator`) walks the bound
 | Compiler driver | `gsc` (`src/Compiler`) | Parse command-line args (`/out`, `/r`, `/target`, `/targetframework`, response files), produce the PE, and write `<name>.runtimeconfig.json` for executable outputs. |
 | MSBuild SDK | `Gsharp.NET.Sdk` | Wire `CoreCompile` into `Microsoft.NET.Sdk` so `.gsproj` files participate in the standard build pipeline. The SDK's task DLL is `netstandard2.0`; the compiler payload is `net10.0` invoked as `dotnet gsc.dll`. |
 
+## Side-effect spilling
+
+The general `SideEffectSpiller` lowering pass (`src/Core/CodeAnalysis/Lowering/SideEffectSpiller.cs`) runs after interpolated-string lowering and before the async / iterator state-machine rewriters. For each bound-tree context that the emit pipeline historically re-evaluated more than once — currently `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundPropertyAssignmentExpression`, and `BoundClrPropertyAssignmentExpression` — it spills every side-effecting sub-expression (per `SideEffectAnalyzer.HasObservableSideEffect`) into a fresh local inside a `BoundBlockExpression` wrapper, then substitutes a variable read for the original sub-expression. The emit phase therefore sees only `BoundVariableExpression` reads in the duplicating positions, eliminating an entire class of bugs (issue #452 — covers P0-1, P1-1, P1-2, P1-12). Expressions classified as pure (literals, variable reads, conversions of pure operands, pure binary / unary, field / tuple access of pure receivers, `len`/`cap` of pure operands) are left untouched; everything else is conservatively spilled.
+
 ## Async / iterator lowering pipeline
 
 Async methods, async lambdas, sync iterators (`sequence[T]`), and async iterators (`IAsyncEnumerable[T]`) require a state-machine transformation before IL emission. This lowering runs inside `Compilation.LowerForEmit`, after binding and before `EmitAssembly`. The entry point is `AsyncStateMachineRewriter.Rewrite` (for async methods/lambdas) or the sibling `IteratorRewriter` / `AsyncIteratorRewriter` (for sync/async iterators respectively).
