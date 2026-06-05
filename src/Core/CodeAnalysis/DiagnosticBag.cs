@@ -1719,6 +1719,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0060 + ADR-0029: rejects a ref-kind modifier on a primary-constructor parameter.
+    /// Primary-constructor parameters materialize fields, and the CLR cannot encode a
+    /// managed-pointer (<c>T&amp;</c>) as a field type. The user must drop the modifier or
+    /// move the constructor body to a standalone <c>init(...)</c> that does not synthesize
+    /// a backing field.
+    /// </summary>
+    /// <param name="location">The ref-kind modifier location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    public void ReportRefKindOnPrimaryCtorParameter(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0241", $"'ref'/'out'/'in' is not a legal modifier on the primary-constructor parameter '{parameterName}'; primary-ctor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Move the constructor to an 'init(...)' body if a by-reference parameter is required.");
+    }
+
+    /// <summary>
     /// ADR-0060 §8: warns that a call passes a value at an <c>in</c> parameter position
     /// without the matching <c>in</c> modifier. The compiler does NOT silently spill the
     /// value; the user should write <c>in lvalue</c> or remove the <c>in</c> from the signature.

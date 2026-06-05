@@ -218,6 +218,197 @@ Console.WriteLine(cOut)
         Assert.Contains("9", output);
     }
 
+    // ----------------------------------------------------------------------
+    // ADR-0060 deferred-item #1 / #2: emit-time tests for ref-kind parameters
+    // on struct instance methods, class instance methods, class static methods,
+    // class constructors, and named-delegate type Invoke signatures.
+    // ----------------------------------------------------------------------
+
+    [Fact]
+    public void StructInstanceMethod_RefParameter_EmitsByRefSignature_AndRoundTrips()
+    {
+        const string Source = @"package StructRefMethod
+import System
+
+type Counter struct {
+    Value int32
+}
+
+func (c Counter) Bump(ref delta int32) {
+    delta = delta + 1
+}
+
+var d = 10
+var c = Counter{Value: 0}
+c.Bump(&d)
+Console.WriteLine(d)
+";
+        var output = CompileAndRun(Source, "StructRefMethod");
+        Assert.Contains("11", output);
+
+        var asm = CompileToAssembly(Source, "StructRefMethod_Meta");
+        var counter = asm.GetTypes().Single(t => t.Name == "Counter");
+        var bump = counter.GetMethod("Bump", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(bump);
+        var p = bump!.GetParameters()[0];
+        Assert.True(p.ParameterType.IsByRef, "struct method ref parameter must be ByRef");
+        Assert.False(p.IsOut);
+        Assert.False(p.IsIn);
+    }
+
+    [Fact]
+    public void ClassInstanceMethod_OutParameter_EmitsByRef_AndOutFlag()
+    {
+        const string Source = @"package ClassOutMethod
+import System
+
+type Producer class {
+    init() {
+    }
+    func MakeFortyTwo(out result int32) bool {
+        result = 42
+        return true
+    }
+}
+
+var p = Producer()
+var v = 0
+p.MakeFortyTwo(&v)
+Console.WriteLine(v)
+";
+        var output = CompileAndRun(Source, "ClassOutMethod");
+        Assert.Contains("42", output);
+
+        var asm = CompileToAssembly(Source, "ClassOutMethod_Meta");
+        var prod = asm.GetTypes().Single(t => t.Name == "Producer");
+        var make = prod.GetMethod("MakeFortyTwo", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(make);
+        var p2 = make!.GetParameters()[0];
+        Assert.True(p2.ParameterType.IsByRef, "out parameter must be ByRef");
+        Assert.True(p2.IsOut, "out parameter must carry [Out]");
+        Assert.False(p2.IsIn);
+    }
+
+    [Fact]
+    public void ClassStaticMethod_InParameter_EmitsByRef_AndIn_AndIsReadOnlyModreq()
+    {
+        const string Source = @"package ClassInStatic
+import System
+
+type Helper class {
+    shared {
+        func DoubleIt(in source int32) int32 {
+            return source + source
+        }
+    }
+}
+
+var n = 21
+Console.WriteLine(Helper.DoubleIt(in n))
+";
+        var output = CompileAndRun(Source, "ClassInStatic");
+        Assert.Contains("42", output);
+
+        var asm = CompileToAssembly(Source, "ClassInStatic_Meta");
+        var helper = asm.GetTypes().Single(t => t.Name == "Helper");
+        var doubleIt = helper.GetMethod("DoubleIt", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(doubleIt);
+        var p = doubleIt!.GetParameters()[0];
+        Assert.True(p.ParameterType.IsByRef);
+        Assert.True(p.IsIn);
+        Assert.False(p.IsOut);
+        var modreqs = p.GetRequiredCustomModifiers();
+        Assert.Contains(modreqs, t => t.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute");
+    }
+
+    [Fact]
+    public void ClassConstructor_RefParameter_EmitsByRef()
+    {
+        const string Source = @"package ClassCtorRef
+import System
+
+type Box class {
+    Value int32
+
+    init(ref delta int32) {
+        delta = delta + 1
+        Value = delta
+    }
+}
+
+var d = 4
+var b = Box(&d)
+Console.WriteLine(d)
+Console.WriteLine(b.Value)
+";
+        var output = CompileAndRun(Source, "ClassCtorRef");
+        Assert.Contains("5", output);
+
+        var asm = CompileToAssembly(Source, "ClassCtorRef_Meta");
+        var box = asm.GetTypes().Single(t => t.Name == "Box");
+        var ctor = box.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Single();
+        var p = ctor.GetParameters()[0];
+        Assert.True(p.ParameterType.IsByRef, "ctor ref parameter must be ByRef");
+        Assert.False(p.IsOut);
+        Assert.False(p.IsIn);
+    }
+
+    [Fact]
+    public void NamedDelegate_RefParameter_InvokeSignatureIsByRef_AndRoundTrips()
+    {
+        const string Source = @"package DelegateRef
+import System
+
+type IntRefAction = delegate func(ref counter int32, by int32)
+";
+        var asm = CompileToAssembly(Source, "DelegateRef_Meta");
+        var del = asm.GetTypes().Single(t => t.Name == "IntRefAction");
+        var invoke = del.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(invoke);
+        var ps = invoke!.GetParameters();
+        Assert.Equal(2, ps.Length);
+        Assert.True(ps[0].ParameterType.IsByRef, "ref delegate parameter must be ByRef");
+        Assert.False(ps[0].IsOut);
+        Assert.False(ps[0].IsIn);
+        Assert.False(ps[1].ParameterType.IsByRef, "non-ref delegate parameter must be by value");
+    }
+
+    [Fact]
+    public void NamedDelegate_OutParameter_InvokeHasOutFlag()
+    {
+        const string Source = @"package DelegateOut
+import System
+
+type IntOutPredicate = delegate func(out result int32) bool
+";
+        var asm = CompileToAssembly(Source, "DelegateOut_Meta");
+        var del = asm.GetTypes().Single(t => t.Name == "IntOutPredicate");
+        var invoke = del.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance);
+        var p = invoke!.GetParameters()[0];
+        Assert.True(p.ParameterType.IsByRef);
+        Assert.True(p.IsOut);
+        Assert.False(p.IsIn);
+    }
+
+    [Fact]
+    public void NamedDelegate_InParameter_InvokeHasIn_AndIsReadOnlyModreq()
+    {
+        const string Source = @"package DelegateIn
+import System
+
+type IntInObserver = delegate func(in value int32)
+";
+        var asm = CompileToAssembly(Source, "DelegateIn_Meta");
+        var del = asm.GetTypes().Single(t => t.Name == "IntInObserver");
+        var invoke = del.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance);
+        var p = invoke!.GetParameters()[0];
+        Assert.True(p.ParameterType.IsByRef);
+        Assert.True(p.IsIn);
+        Assert.False(p.IsOut);
+        var modreqs = p.GetRequiredCustomModifiers();
+        Assert.Contains(modreqs, t => t.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute");
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();

@@ -997,7 +997,11 @@ public sealed class Binder
                 continue;
             }
 
-            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+            parameters.Add(new ParameterSymbol(
+                parameterName,
+                parameterType,
+                declaringSyntax: parameterSyntax.Identifier,
+                refKind: BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null)));
         }
 
         // Variadic / `scoped` parameters are deliberately not supported in v1
@@ -1193,6 +1197,15 @@ public sealed class Binder
                 {
                     Diagnostics.ReportPointerTypeCannotBeFieldType(paramSyntax.Identifier.Location, byRefParamType.Name);
                     continue;
+                }
+
+                // ADR-0060: a primary-constructor parameter materializes a field of the
+                // same name; a `ref`/`out`/`in` modifier on that slot is meaningless (the
+                // CLR cannot store a managed pointer in a field). Reject early so the
+                // user sees one clear diagnostic instead of a downstream emit failure.
+                if (paramSyntax.HasRefKindModifier)
+                {
+                    Diagnostics.ReportRefKindOnPrimaryCtorParameter(paramSyntax.RefKindModifier.Location, paramName);
                 }
 
                 ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped));
@@ -1490,13 +1503,20 @@ public sealed class Binder
                             Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                         }
 
+                        var parameterRefKind = BindAndValidateParameterRefKind(
+                            parameterSyntax,
+                            parameterName,
+                            parameterType,
+                            isVariadic: false,
+                            asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
+
                         if (!seenParameterNames.Add(parameterName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind));
                         }
                     }
 
@@ -1519,7 +1539,24 @@ public sealed class Binder
                         }
                         else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
                         {
-                            Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                            // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
+                            // a general signature mismatch (the existing diagnostic), so the
+                            // user sees the specific parameter and modifier that disagree.
+                            var refMismatchIdx = FindRefKindMismatchIndex(baseMethod, methodParameters, returnType);
+                            if (refMismatchIdx >= 0)
+                            {
+                                var baseCallable = GetCallableParameters(baseMethod);
+                                Diagnostics.ReportOverrideRefKindMismatch(
+                                    methodSyntax.Identifier.Location,
+                                    methodName,
+                                    methodParameters[refMismatchIdx].Name,
+                                    RefKindToString(baseCallable[refMismatchIdx].RefKind),
+                                    RefKindToString(methodParameters[refMismatchIdx].RefKind));
+                            }
+                            else
+                            {
+                                Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                            }
                         }
                         else
                         {
@@ -2001,13 +2038,20 @@ public sealed class Binder
                             Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                         }
 
+                        var parameterRefKind = BindAndValidateParameterRefKind(
+                            parameterSyntax,
+                            parameterName,
+                            parameterType,
+                            isVariadic: false,
+                            asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
+
                         if (!seenParameterNames.Add(parameterName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                         }
                         else
                         {
-                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
+                            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind));
                         }
                     }
 
@@ -2340,14 +2384,38 @@ public sealed class Binder
             {
                 foreach (var imethod in iface.Methods)
                 {
-                    if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl)
-                        || !SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type))
+                    if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl))
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
                             structSymbol.Name,
                             iface.Name,
                             imethod.Name);
+                    }
+                    else if (!SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type))
+                    {
+                        // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
+                        // an unrelated signature mismatch (the existing diagnostic).
+                        var refMismatchIdx = FindRefKindMismatchIndex(imethod, GetCallableParameters(impl), impl.Type);
+                        if (refMismatchIdx >= 0)
+                        {
+                            var implCallable = GetCallableParameters(impl);
+                            var ifaceCallable = GetCallableParameters(imethod);
+                            Diagnostics.ReportOverrideRefKindMismatch(
+                                syntax.Identifier.Location,
+                                imethod.Name,
+                                ifaceCallable[refMismatchIdx].Name,
+                                RefKindToString(ifaceCallable[refMismatchIdx].RefKind),
+                                RefKindToString(implCallable[refMismatchIdx].RefKind));
+                        }
+                        else
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol.Name,
+                                iface.Name,
+                                imethod.Name);
+                        }
                     }
                 }
 
@@ -2503,13 +2571,20 @@ public sealed class Binder
                     Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                 }
 
+                var parameterRefKind = BindAndValidateParameterRefKind(
+                    parameterSyntax,
+                    parameterName,
+                    parameterType,
+                    isVariadic: false,
+                    asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
+
                 if (!seenParameterNames.Add(parameterName))
                 {
                     Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
                 }
                 else
                 {
-                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
+                    parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind));
                 }
             }
 
@@ -2749,35 +2824,12 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameterRefKind = GetRefKindFromModifier(parameterSyntax.RefKindModifier);
-
-                    // ADR-0060 §2: a `*T` type cannot appear as a parameter type. The CLR's
-                    // managed-pointer-typed parameter slot would normally surface as `T&`
-                    // via the keyword form; suggest the rewrite.
-                    if (parameterType is ByRefTypeSymbol pointerParamType)
-                    {
-                        Diagnostics.ReportPointerTypeCannotBeParameterType(
-                            parameterSyntax.Type.Location,
-                            parameterName,
-                            pointerParamType.PointeeType.Name);
-                    }
-
-                    // ADR-0060 §8: a variadic parameter (`...T`) cannot also carry a ref-kind
-                    // modifier — the CLR cannot represent an array of managed pointers.
-                    if (parameterRefKind != RefKind.None && isVariadic)
-                    {
-                        Diagnostics.ReportRefKindOnVariadicParameter(parameterSyntax.Location, parameterName);
-                        parameterRefKind = RefKind.None;
-                    }
-
-                    // ADR-0060 §10: ban ref-kind parameters on async functions. The state-machine
-                    // rewriter cannot hoist a managed pointer into a field. Sequence/async-sequence
-                    // are detected after the return type is bound (see the post-pass below).
-                    if (parameterRefKind != RefKind.None && syntax.IsAsync)
-                    {
-                        Diagnostics.ReportRefKindOnAsyncOrIterator(parameterSyntax.Location, parameterName, "async");
-                        parameterRefKind = RefKind.None;
-                    }
+                    var parameterRefKind = BindAndValidateParameterRefKind(
+                        parameterSyntax,
+                        parameterName,
+                        parameterType,
+                        isVariadic,
+                        syntax.IsAsync ? "async" : null);
 
                     var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                     parameters.Add(parameter);
@@ -3109,9 +3161,56 @@ public sealed class Binder
             {
                 return false;
             }
+
+            // ADR-0060 §9: two functions that differ only in a parameter's ref-kind
+            // are *different signatures*. Required for CLR-faithful override / interface-
+            // implementation matching.
+            if (baseParams[i].RefKind != derivedParams[i].RefKind)
+            {
+                return false;
+            }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// ADR-0060 §9: when <see cref="SignaturesMatch"/> rejected an override / interface
+    /// implementation, returns the index of the first parameter whose ref-kind disagrees
+    /// (return type and pointee types all matching). Returns -1 when the disagreement is
+    /// something other than a ref-kind mismatch (so the caller can fall back to the generic
+    /// "signature mismatch" diagnostic).
+    /// </summary>
+    private static int FindRefKindMismatchIndex(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
+    {
+        if (baseMethod.Type != derivedReturnType)
+        {
+            return -1;
+        }
+
+        var baseParams = GetCallableParameters(baseMethod);
+        if (baseParams.Length != derivedParams.Length)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < derivedParams.Length; i++)
+        {
+            if (baseParams[i].Type != derivedParams[i].Type)
+            {
+                return -1;
+            }
+        }
+
+        for (var i = 0; i < derivedParams.Length; i++)
+        {
+            if (baseParams[i].RefKind != derivedParams[i].RefKind)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
@@ -7608,6 +7707,103 @@ public sealed class Binder
         };
     }
 
+    /// <summary>
+    /// ADR-0060: validates the ref-kind modifier on a parameter syntax and emits the
+    /// appropriate diagnostics. Returns the (possibly cleared) <see cref="RefKind"/>.
+    /// Shared between the free-function, struct-method, interface-member, class-method,
+    /// constructor, and named-delegate parameter binding sites so the validation rules
+    /// stay consistent.
+    /// </summary>
+    /// <param name="parameterSyntax">The parameter syntax to validate.</param>
+    /// <param name="parameterName">The (already-extracted) parameter name for diagnostics.</param>
+    /// <param name="parameterType">The bound parameter type, for the <c>*T</c> rejection check.</param>
+    /// <param name="isVariadic">Whether the parameter is variadic (rejects ref-kind via GS0241).</param>
+    /// <param name="asyncOrIteratorKind">
+    /// Non-null when the containing function is <c>async</c>/<c>sequence</c>/<c>async sequence</c>;
+    /// fires the GS0226 family if any ref-kind modifier is present. Pass <see langword="null"/>
+    /// when the containing surface (interface declaration, delegate type, constructor) does not
+    /// support async at all.
+    /// </param>
+    /// <returns>The validated <see cref="RefKind"/> (cleared to <see cref="RefKind.None"/> on rejection).</returns>
+    private RefKind BindAndValidateParameterRefKind(
+        ParameterSyntax parameterSyntax,
+        string parameterName,
+        TypeSymbol parameterType,
+        bool isVariadic,
+        string asyncOrIteratorKind)
+    {
+        var parameterRefKind = GetRefKindFromModifier(parameterSyntax.RefKindModifier);
+
+        // ADR-0060 §2: a `*T` type cannot appear as a parameter type. The CLR's
+        // managed-pointer-typed parameter slot would normally surface as `T&`
+        // via the keyword form; suggest the rewrite.
+        if (parameterType is ByRefTypeSymbol pointerParamType)
+        {
+            Diagnostics.ReportPointerTypeCannotBeParameterType(
+                parameterSyntax.Type.Location,
+                parameterName,
+                pointerParamType.PointeeType.Name);
+        }
+
+        // ADR-0060 §8: a variadic parameter (`...T`) cannot also carry a ref-kind
+        // modifier — the CLR cannot represent an array of managed pointers.
+        if (parameterRefKind != RefKind.None && isVariadic)
+        {
+            Diagnostics.ReportRefKindOnVariadicParameter(parameterSyntax.Location, parameterName);
+            parameterRefKind = RefKind.None;
+        }
+
+        // ADR-0060 §10: ban ref-kind parameters on async / iterator (sequence) functions.
+        // The state-machine rewriter cannot hoist a managed pointer into a field.
+        if (parameterRefKind != RefKind.None && asyncOrIteratorKind != null)
+        {
+            Diagnostics.ReportRefKindOnAsyncOrIterator(parameterSyntax.Location, parameterName, asyncOrIteratorKind);
+            parameterRefKind = RefKind.None;
+        }
+
+        return parameterRefKind;
+    }
+
+    /// <summary>
+    /// ADR-0060: at call sites that target a G#-authored function/method/constructor
+    /// with a <c>ref</c>/<c>out</c>/<c>in</c> parameter, the bound argument should
+    /// already be a <see cref="BoundAddressOfExpression"/> whose operand type matches
+    /// the parameter's pointee type (either from a bare <c>&amp;x</c> back-compat
+    /// form, or from a <see cref="RefArgumentExpressionSyntax"/> lowered through
+    /// <see cref="BindRefArgumentExpression"/>). In that case we pass the argument
+    /// through unchanged — the conversion machinery would otherwise try to coerce
+    /// <c>*T</c> into <c>T</c> and fail. The returned value's type may be a
+    /// <see cref="ByRefTypeSymbol"/> wrapping the expected type.
+    /// </summary>
+    /// <param name="location">The diagnostic location for any conversion error.</param>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="expectedType">The (substituted) parameter type.</param>
+    /// <param name="parameter">The target parameter (carrying <see cref="RefKind"/>).</param>
+    /// <returns>The argument, possibly with a normal conversion applied.</returns>
+    private BoundExpression BindCallArgumentWithRefKind(
+        TextLocation location,
+        BoundExpression argument,
+        TypeSymbol expectedType,
+        ParameterSymbol parameter)
+    {
+        if (parameter != null && parameter.RefKind != RefKind.None)
+        {
+            if (argument is BoundAddressOfExpression addr)
+            {
+                var operandType = addr.Operand?.Type;
+                if (operandType == expectedType || operandType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                {
+                    return argument;
+                }
+
+                // Fall through: type mismatch on the address-of operand. Surface
+                // the standard "cannot convert" diagnostic via BindConversion.
+            }
+        }
+
+        return BindConversion(location, argument, expectedType);
+    }
+
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
     private static bool IsLvalue(BoundExpression expression)
     {
@@ -8171,9 +8367,18 @@ public sealed class Binder
 
         var parameters = classType.ExplicitConstructor.Parameters;
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-        foreach (var argument in syntax.Arguments)
+        for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {
-            boundArguments.Add(BindExpression(argument));
+            var argument = syntax.Arguments[ai];
+            ParameterSymbol parameterForArg = ai < parameters.Length ? parameters[ai] : null;
+            if (argument is RefArgumentExpressionSyntax refArg)
+            {
+                boundArguments.Add(BindRefArgumentExpression(refArg, parameterForArg));
+            }
+            else
+            {
+                boundArguments.Add(BindExpression(argument));
+            }
         }
 
         if (syntax.Arguments.Count != parameters.Length)
@@ -8196,6 +8401,19 @@ public sealed class Binder
             {
                 convertedArguments.Add(BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
                 continue;
+            }
+
+            // ADR-0060: when the constructor parameter is ref-kind, the bound
+            // argument is a BoundAddressOfExpression of type *T; bypass the
+            // standard convertibility check so the address is forwarded as-is.
+            if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor)
+            {
+                var pointee = addrCtor.Operand?.Type;
+                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                {
+                    convertedArguments.Add(argument);
+                    continue;
+                }
             }
 
             if (argument.Type != parameter.Type
@@ -9865,7 +10083,14 @@ public sealed class Binder
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var argument in ce.Arguments)
         {
-            boundArguments.Add(BindExpression(argument));
+            if (argument is RefArgumentExpressionSyntax refArg)
+            {
+                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+            }
+            else
+            {
+                boundArguments.Add(BindExpression(argument));
+            }
         }
 
         var arguments = boundArguments.ToImmutable();
@@ -9955,7 +10180,7 @@ public sealed class Binder
                 }
 
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+                convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i]));
             }
 
             if (substitution != null)
@@ -10261,7 +10486,14 @@ public sealed class Binder
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var argument in ce.Arguments)
         {
-            boundArguments.Add(BindExpression(argument));
+            if (argument is RefArgumentExpressionSyntax refArg)
+            {
+                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+            }
+            else
+            {
+                boundArguments.Add(BindExpression(argument));
+            }
         }
 
         var arguments = boundArguments.ToImmutable();
@@ -10635,7 +10867,7 @@ public sealed class Binder
             else
             {
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+                convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, extension.Parameters[i + 1]));
             }
         }
 
@@ -11027,7 +11259,7 @@ public sealed class Binder
                 continue;
             }
 
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
+            convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
         if (substitution != null)
@@ -12394,13 +12626,20 @@ public sealed class Binder
                 Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
             }
 
+            var parameterRefKind = BindAndValidateParameterRefKind(
+                parameterSyntax,
+                parameterName,
+                parameterType,
+                isVariadic: false,
+                asyncOrIteratorKind: null);
+
             if (!seenParameterNames.Add(parameterName))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
             }
             else
             {
-                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped));
+                parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind));
             }
         }
 

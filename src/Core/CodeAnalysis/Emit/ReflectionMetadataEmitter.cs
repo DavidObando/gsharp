@@ -4772,7 +4772,22 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     foreach (var p in delegateSym.Parameters)
                     {
-                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                        // ADR-0060 §12: a named-delegate parameter declared `ref`/`out`/`in`
+                        // emits `T&` on the Invoke signature, plus the IsReadOnlyAttribute
+                        // modreq for `in` (matching the C# convention so consumers see a
+                        // normal `ref`/`out`/`in` parameter). ParameterAttributes.Out / In
+                        // are stamped on the per-parameter row below.
+                        var paramEncoder = ps.AddParameter();
+                        if (p.RefKind == RefKind.In)
+                        {
+                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            if (!isReadOnlyAttrType.IsNil)
+                            {
+                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
+                            }
+                        }
+
+                        this.EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
                     }
                 });
 
@@ -4780,10 +4795,28 @@ internal sealed class ReflectionMetadataEmitter
         for (var i = 0; i < delegateSym.Parameters.Length; i++)
         {
             var p = delegateSym.Parameters[i];
-            this.metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+
+            // ADR-0060 §12: stamp the Parameter row with .Out / .In for ref-kind delegate
+            // parameters, and attach IsReadOnlyAttribute for `in`.
+            var paramAttributes = ParameterAttributes.None;
+            if (p.RefKind == RefKind.Out)
+            {
+                paramAttributes |= ParameterAttributes.Out;
+            }
+            else if (p.RefKind == RefKind.In)
+            {
+                paramAttributes |= ParameterAttributes.In;
+            }
+
+            var paramHandle = this.metadata.AddParameter(
+                attributes: paramAttributes,
                 name: this.metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
                 sequenceNumber: (ushort)(i + 1));
+
+            if (p.RefKind == RefKind.In)
+            {
+                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
         }
 
         var invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
@@ -5716,9 +5749,49 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     foreach (var p in function.Parameters)
                     {
-                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                        // ADR-0060: ref-kind constructor parameters are encoded as
+                        // managed pointers (`T&`). For `in`, also stamp the
+                        // IsReadOnlyAttribute modreq.
+                        var paramEncoder = ps.AddParameter();
+                        if (p.RefKind == RefKind.In)
+                        {
+                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            if (!isReadOnlyAttrType.IsNil)
+                            {
+                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
+                            }
+                        }
+
+                        this.EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
                     }
                 });
+
+        // ADR-0060: emit a Parameter row per source parameter so we can stamp
+        // ParameterAttributes.In/Out and (for `in`) IsReadOnlyAttribute.
+        var firstCtorParamHandle = this.NextParameterHandle();
+        for (var pi = 0; pi < function.Parameters.Length; pi++)
+        {
+            var p = function.Parameters[pi];
+            var paramAttributes = ParameterAttributes.None;
+            if (p.RefKind == RefKind.Out)
+            {
+                paramAttributes |= ParameterAttributes.Out;
+            }
+            else if (p.RefKind == RefKind.In)
+            {
+                paramAttributes |= ParameterAttributes.In;
+            }
+
+            var paramHandle = this.metadata.AddParameter(
+                attributes: paramAttributes,
+                name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: pi + 1);
+
+            if (p.RefKind == RefKind.In)
+            {
+                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+        }
 
         return this.metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
@@ -5727,7 +5800,7 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
+            parameterList: firstCtorParamHandle);
     }
 
     /// <summary>Issue #306: resolves the metadata token of the base constructor targeted by a <see cref="BaseConstructorInitializer"/>.</summary>
