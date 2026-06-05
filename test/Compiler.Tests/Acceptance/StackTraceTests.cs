@@ -259,7 +259,7 @@ public class StackTraceTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-        IlVerifier.Verify(asmPath, ignoredErrorCodes: IlVerifier.KnownIssues.AsyncStateMachine);
+        IlVerifier.Verify(asmPath);
         Assert.True(File.Exists(asmPath), $"missing PE: {asmPath}");
         Assert.True(File.Exists(pdbPath), $"missing PDB: {pdbPath}");
 

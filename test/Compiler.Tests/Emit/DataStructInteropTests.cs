@@ -172,7 +172,7 @@ public class DataStructInteropTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.GenericValueTypeDispatch);
+        IlVerifier.Verify(outPath);
 
         var bytes = File.ReadAllBytes(outPath);
         return Assembly.Load(bytes);

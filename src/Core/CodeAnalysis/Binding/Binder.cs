@@ -7890,6 +7890,14 @@ public sealed class Binder
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
 
+            if (substitution != null
+                && parameter.Type is FunctionTypeSymbol openFunctionParameter
+                && TryGetFunctionLiteral(argument, out var functionLiteralArgument))
+            {
+                boundArguments[i] = CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter);
+                continue;
+            }
+
             // ADR-0055 Tier 4 (#369): an interpolated-string argument bound
             // against an IFormattable/FormattableString parameter is re-lowered
             // to FormattableStringFactory.Create instead of an eager string. Only
@@ -9231,6 +9239,14 @@ public sealed class Binder
                     continue;
                 }
 
+                if (substitution != null
+                    && paramType is FunctionTypeSymbol openFunctionParameter
+                    && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                {
+                    convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    continue;
+                }
+
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
                 convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], expectedType));
             }
@@ -9670,7 +9686,9 @@ public sealed class Binder
                         var instParameters = resolution.Best.GetParameters();
                         var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
                         var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location);
-                        var instArguments = AppendOmittedOptionalArguments(instHandlerArgs, instParameters);
+                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters);
+                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce);
+                        var instArguments = AppendOmittedOptionalArguments(instConvertedArgs, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
@@ -9750,7 +9768,9 @@ public sealed class Binder
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, arguments, receiver, ce.Location);
-                var inheritedArguments = AppendOmittedOptionalArguments(inheritedHandlerArgs, inheritedParameters);
+                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters);
+                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce);
+                var inheritedArguments = AppendOmittedOptionalArguments(inheritedConvertedArgs, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
                 result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
@@ -9857,6 +9877,13 @@ public sealed class Binder
             var paramType = extension.Parameters[i + 1].Type;
             if (substitution != null && TypeSymbol.ContainsTypeParameter(paramType))
             {
+                if (paramType is FunctionTypeSymbol openFunctionParameter
+                    && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                {
+                    convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    continue;
+                }
+
                 // A parameter typed as an open T is encoded as System.Object in
                 // the emitted signature; pass the argument unconverted so the
                 // emitter inserts box / unbox.any around the erased boundary.
@@ -10229,6 +10256,23 @@ public sealed class Binder
             }
 
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
+
+            if (substitution != null
+                && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+            {
+                if (paramType is FunctionTypeSymbol openFunctionParameter)
+                {
+                    convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    continue;
+                }
+
+                if (TryGetDelegateFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
+                    && functionLiteralArgument.FunctionType != targetDelegateFunctionType)
+                {
+                    convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));
+                    continue;
+                }
+            }
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
             // FormattableStringFactory.Create when the parameter is
@@ -10768,6 +10812,13 @@ public sealed class Binder
             return BindClrMethodGroupConversion(diagnosticLocation, clrMethodGroup, type);
         }
 
+        if (expression is BoundFunctionLiteralExpression literal
+            && type is FunctionTypeSymbol targetFunctionType
+            && TypeSymbol.ContainsTypeParameter(targetFunctionType))
+        {
+            return CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+        }
+
         var conversion = Conversion.Classify(expression.Type, type);
 
         if (!conversion.Exists)
@@ -10815,6 +10866,198 @@ public sealed class Binder
         }
 
         return new BoundConversionExpression(null, type, expression);
+    }
+
+    private BoundFunctionLiteralExpression CreateErasedFunctionLiteralAdapter(
+        BoundFunctionLiteralExpression literal,
+        FunctionTypeSymbol targetFunctionType)
+    {
+        var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(literal.Function.Parameters.Length);
+        var replacementMap = new Dictionary<VariableSymbol, BoundExpression>();
+        for (var i = 0; i < literal.Function.Parameters.Length; i++)
+        {
+            var original = literal.Function.Parameters[i];
+            var adapterParameterType = i < targetFunctionType.ParameterTypes.Length
+                ? GetErasedDelegateSlotType(targetFunctionType.ParameterTypes[i])
+                : TypeSymbol.Object;
+            var adapterParameter = new ParameterSymbol(
+                original.Name,
+                adapterParameterType,
+                declaringSyntax: original.DeclaringSyntax,
+                isScoped: original.IsScoped);
+            adapterParameters.Add(adapterParameter);
+            replacementMap[original] = new BoundConversionExpression(
+                null,
+                original.Type,
+                new BoundVariableExpression(null, adapterParameter));
+        }
+
+        var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
+            ? TypeSymbol.Void
+            : GetErasedDelegateSlotType(targetFunctionType.ReturnType);
+        var adapterFunctionType = FunctionTypeSymbol.Get(
+            adapterParameters.Select(p => p.Type).ToImmutableArray(),
+            adapterReturnType);
+        var adapterFunction = new FunctionSymbol(
+            $"<lambda_erased{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>",
+            adapterParameters.ToImmutable(),
+            adapterReturnType,
+            package: literal.Function.Package);
+        adapterFunction.IsAsync = literal.Function.IsAsync;
+
+        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterReturnType)
+            .RewriteStatement(literal.Body);
+
+        return new BoundFunctionLiteralExpression(
+            literal.Syntax,
+            adapterFunction,
+            adapterFunctionType,
+            body,
+            literal.CapturedVariables);
+    }
+
+    private static TypeSymbol GetErasedDelegateSlotType(TypeSymbol type)
+    {
+        return TypeSymbol.ContainsTypeParameter(type) ? TypeSymbol.Object : type;
+    }
+
+    private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < arguments.Length && i < parameters.Length; i++)
+        {
+            var argument = arguments[i];
+            var rebound = argument;
+            if (TryGetFunctionLiteral(argument, out var literal)
+                && TryGetDelegateFunctionType(parameters[i].ParameterType, out var targetFunctionType)
+                && literal.FunctionType != targetFunctionType)
+            {
+                rebound = CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+            }
+
+            if (rebound != argument && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(arguments[j]);
+                }
+            }
+
+            builder?.Add(rebound);
+        }
+
+        if (builder == null)
+        {
+            return arguments;
+        }
+
+        for (var i = builder.Count; i < arguments.Length; i++)
+        {
+            builder.Add(arguments[i]);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private ImmutableArray<BoundExpression> BindClrParameterConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        CallExpressionSyntax call)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < arguments.Length && i < parameters.Length; i++)
+        {
+            var argument = arguments[i];
+            var rebound = argument;
+            var parameterType = parameters[i].ParameterType;
+            if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
+            {
+                var targetType = TypeSymbol.FromClrType(parameterType);
+                if (argument.Type != targetType && Conversion.Classify(argument.Type, targetType).Exists)
+                {
+                    rebound = BindConversion(call.Arguments[i].Location, argument, targetType, allowExplicit: true);
+                }
+            }
+
+            if (rebound != argument && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(arguments[j]);
+                }
+            }
+
+            builder?.Add(rebound);
+        }
+
+        if (builder == null)
+        {
+            return arguments;
+        }
+
+        for (var i = builder.Count; i < arguments.Length; i++)
+        {
+            builder.Add(arguments[i]);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static bool TryGetDelegateFunctionType(Type delegateType, out FunctionTypeSymbol functionType)
+    {
+        functionType = null;
+        if (!ClrTypeUtilities.IsDelegateType(delegateType)
+            && !string.Equals(delegateType?.BaseType?.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
+            && !(delegateType?.FullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true)
+            && !(delegateType?.FullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true))
+        {
+            return false;
+        }
+
+        var invoke = delegateType.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        var parameters = invoke.GetParameters();
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+        foreach (var parameter in parameters)
+        {
+            parameterTypes.Add(parameter.ParameterType.ContainsGenericParameters
+                ? TypeSymbol.Object
+                : TypeSymbol.FromClrType(parameter.ParameterType));
+        }
+
+        var returnType = invoke.ReturnType == typeof(void)
+            ? TypeSymbol.Void
+            : invoke.ReturnType.ContainsGenericParameters
+                ? TypeSymbol.Object
+                : TypeSymbol.FromClrType(invoke.ReturnType);
+        functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
+        return true;
+    }
+
+    private static bool TryGetFunctionLiteral(BoundExpression expression, out BoundFunctionLiteralExpression literal)
+    {
+        if (expression is BoundFunctionLiteralExpression direct)
+        {
+            literal = direct;
+            return true;
+        }
+
+        if (expression is BoundConversionExpression { Expression: BoundFunctionLiteralExpression converted })
+        {
+            literal = converted;
+            return true;
+        }
+
+        literal = null;
+        return false;
     }
 
     // ADR-0056 (#344), low-hanging-fruit item #3: a call argument whose declared
@@ -12145,6 +12388,45 @@ public sealed class Binder
 
         // Numeric / char widening between primitives (e.g. int → long).
         return Convert.ChangeType(value, elementType, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private sealed class ErasedFunctionLiteralAdapterRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<VariableSymbol, BoundExpression> replacementMap;
+        private readonly TypeSymbol adapterReturnType;
+
+        public ErasedFunctionLiteralAdapterRewriter(
+            Dictionary<VariableSymbol, BoundExpression> replacementMap,
+            TypeSymbol adapterReturnType)
+        {
+            this.replacementMap = replacementMap;
+            this.adapterReturnType = adapterReturnType;
+        }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        {
+            return this.replacementMap.TryGetValue(node.Variable, out var replacement)
+                ? replacement
+                : node;
+        }
+
+        protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
+        {
+            var rewritten = (BoundReturnStatement)base.RewriteReturnStatement(node);
+            if (this.adapterReturnType == TypeSymbol.Void || rewritten.Expression == null)
+            {
+                return rewritten;
+            }
+
+            if (rewritten.Expression.Type == this.adapterReturnType)
+            {
+                return rewritten;
+            }
+
+            return new BoundReturnStatement(
+                null,
+                new BoundConversionExpression(null, this.adapterReturnType, rewritten.Expression));
+        }
     }
 
     private sealed class CapturedVariableCollector : BoundTreeRewriter

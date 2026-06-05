@@ -10811,45 +10811,30 @@ internal sealed class ReflectionMetadataEmitter
 
                     this.il.Call(fnHandle);
 
-                    // Phase 4 emit parity (F1, type-erased generics): a return
-                    // typed as an open T is encoded as System.Object. If the
-                    // call's substituted return type is a value type, unbox
-                    // the result so the rest of the IL sees the expected
-                    // primitive on stack.
-                    if (call.Function.Type is TypeParameterSymbol
-                        && call.Type is not TypeParameterSymbol
-                        && IsValueTypeSymbol(call.Type))
-                    {
-                        this.il.OpCode(ILOpCode.Unbox_any);
-                        this.il.Token(this.outer.GetElementTypeToken(call.Type));
-                    }
-                    else if (TypeSymbol.ContainsTypeParameter(call.Function.Type)
-                        && !TypeSymbol.ContainsTypeParameter(call.Type)
-                        && call.Type?.ClrType != null
-                        && !IsValueTypeSymbol(call.Type))
-                    {
-                        // #313: a return typed as an erased generic over a type
-                        // parameter (e.g. `func GetAll[T]() List[T]`) is encoded
-                        // as System.Object. When the substituted return type is
-                        // a concrete reference type (e.g. `List<int32>`), cast
-                        // the boxed-free reference back so the rest of the IL —
-                        // and any subsequent indexing/member access — sees it.
-                        this.il.OpCode(ILOpCode.Castclass);
-                        this.il.Token(this.outer.GetElementTypeToken(call.Type));
-                    }
+                    this.EmitErasedObjectReturnWidening(call.Function.Type, call.Type);
 
                     break;
                 case BoundImportedCallExpression impCall:
                     this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
                     this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(impCall.Function.Method.ReturnType),
+                        impCall.Type);
                     break;
                 case BoundClrStaticCallExpression staticCall:
                     this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
                     this.il.Call(this.outer.GetMethodEntityHandle(staticCall.Method));
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(staticCall.Method.ReturnType),
+                        staticCall.Type);
                     break;
                 case BoundImportedInstanceCallExpression instCall:
                 {
-                    var receiverIsValueType = IsValueTypeSymbol(instCall.Receiver.Type);
+                    var receiverType = instCall.Receiver.Type is ByRefTypeSymbol byRef
+                        ? byRef.PointeeType
+                        : instCall.Receiver.Type;
+                    var receiverIsValueType = IsValueTypeSymbol(receiverType);
+                    var receiverIsManagedPointer = instCall.Receiver.Type is ByRefTypeSymbol;
 
                     // A value-type receiver invoking a method it inherits from a
                     // reference base type (System.Object/ValueType/Enum) — e.g.
@@ -10875,8 +10860,13 @@ internal sealed class ReflectionMetadataEmitter
                         // the inherited reference-type method receives a proper
                         // object reference.
                         this.EmitExpression(instCall.Receiver);
+                        if (receiverIsManagedPointer)
+                        {
+                            this.EmitLoadIndirect(receiverType);
+                        }
+
                         this.il.OpCode(ILOpCode.Box);
-                        this.il.Token(this.outer.GetElementTypeToken(instCall.Receiver.Type));
+                        this.il.Token(this.outer.GetElementTypeToken(receiverType));
                     }
                     else
                     {
@@ -10888,6 +10878,9 @@ internal sealed class ReflectionMetadataEmitter
 
                     this.il.OpCode(useCall ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(instCall.Method.ReturnType),
+                        instCall.Type);
                     break;
                 }
 
@@ -11159,6 +11152,16 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            if (from?.ClrType == typeof(object)
+                && to?.ClrType != typeof(object)
+                && to is not TypeParameterSymbol
+                && !IsValueTypeSymbol(to))
+            {
+                this.il.OpCode(ILOpCode.Castclass);
+                this.il.Token(this.outer.GetElementTypeToken(to));
+                return;
+            }
+
             // Phase D: class → interface upcast is a CLR reference-level
             // no-op. The receiver already implements the interface; loading
             // the reference into an interface-typed slot needs no IL.
@@ -11169,6 +11172,42 @@ internal sealed class ReflectionMetadataEmitter
 
             throw new NotSupportedException(
                 $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+        }
+
+        private void EmitErasedObjectReturnWidening(TypeSymbol runtimeReturnType, TypeSymbol expectedType)
+        {
+            if (!IsObjectStackType(runtimeReturnType)
+                || expectedType == null
+                || expectedType == TypeSymbol.Void
+                || expectedType == TypeSymbol.Error
+                || expectedType is TypeParameterSymbol
+                || TypeSymbol.ContainsTypeParameter(expectedType)
+                || expectedType?.ClrType == typeof(object))
+            {
+                return;
+            }
+
+            if (IsValueTypeSymbol(expectedType))
+            {
+                this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.GetElementTypeToken(expectedType));
+                return;
+            }
+
+            this.il.OpCode(ILOpCode.Castclass);
+            this.il.Token(this.outer.GetElementTypeToken(expectedType));
+        }
+
+        private static bool IsObjectStackType(TypeSymbol type)
+        {
+            if (type == TypeSymbol.Object || type?.ClrType == typeof(object))
+            {
+                return true;
+            }
+
+            return type is TypeParameterSymbol
+                || (type is ImportedTypeSymbol imported && imported.HasTypeParameterArgument)
+                || (type is FunctionTypeSymbol fn && TypeSymbol.ContainsTypeParameter(fn));
         }
 
         // Issue #295: emit a GSharp function value materialized as a CLR
@@ -12842,17 +12881,7 @@ internal sealed class ReflectionMetadataEmitter
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(methodHandle);
 
-            // Issue #312 (emit parity, type-erased generics): a return typed as
-            // an open type parameter is encoded as System.Object. When the
-            // call's substituted return type is a value type, unbox the result
-            // so the rest of the IL sees the expected primitive on the stack.
-            if (call.Method.Type is TypeParameterSymbol
-                && call.Type is not TypeParameterSymbol
-                && IsValueTypeSymbol(call.Type))
-            {
-                this.il.OpCode(ILOpCode.Unbox_any);
-                this.il.Token(this.outer.GetElementTypeToken(call.Type));
-            }
+            this.EmitErasedObjectReturnWidening(call.Method.Type, call.Type);
         }
 
         private void EmitMapLiteral(BoundMapLiteralExpression literal)
@@ -13129,11 +13158,18 @@ internal sealed class ReflectionMetadataEmitter
 
                 if (defField != null
                     && defField.Type is TypeParameterSymbol
-                    && fa.Field.Type is not TypeParameterSymbol
-                    && IsValueTypeSymbol(fa.Field.Type))
+                    && fa.Field.Type is not TypeParameterSymbol)
                 {
-                    this.il.OpCode(ILOpCode.Unbox_any);
-                    this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
+                    if (IsValueTypeSymbol(fa.Field.Type))
+                    {
+                        this.il.OpCode(ILOpCode.Unbox_any);
+                        this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
+                    }
+                    else if (fa.Field.Type?.ClrType != typeof(object))
+                    {
+                        this.il.OpCode(ILOpCode.Castclass);
+                        this.il.Token(this.outer.GetElementTypeToken(fa.Field.Type));
+                    }
                 }
             }
         }
@@ -13421,6 +13457,11 @@ internal sealed class ReflectionMetadataEmitter
             if (IsValueTypeSymbol(tp.TargetType))
             {
                 this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+            }
+            else if (tp.TargetType?.ClrType != typeof(object))
+            {
+                this.il.OpCode(ILOpCode.Castclass);
                 this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
             }
 
@@ -13842,6 +13883,9 @@ internal sealed class ReflectionMetadataEmitter
                     var getterRef = this.outer.GetMethodReference(getter);
                     this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(getterRef);
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(getter.ReturnType),
+                        access.Type);
                     break;
                 case FieldInfo field:
                     var fieldRef = this.outer.GetFieldReference(field);
@@ -13973,6 +14017,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(op.Right);
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.GetMethodReference(op.Method));
+            this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
         }
 
         private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)
@@ -13981,6 +14026,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(op.Operand);
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.GetMethodReference(op.Method));
+            this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
         }
 
         private void EmitClrConversionCall(BoundClrConversionCallExpression conv)
@@ -13990,6 +14036,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(conv.Source);
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(this.outer.GetMethodReference(conv.Method));
+            this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(conv.Method.ReturnType), conv.Type);
         }
 
         private void EmitClrIndex(BoundClrIndexExpression idx)
@@ -14019,6 +14066,7 @@ internal sealed class ReflectionMetadataEmitter
                         .GetGetMethod();
                     this.il.OpCode(ILOpCode.Callvirt);
                     this.il.Token(this.outer.GetMethodReference(iListGetter));
+                    this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
                     return;
                 }
 
@@ -14039,6 +14087,7 @@ internal sealed class ReflectionMetadataEmitter
                         .GetGetMethod();
                     this.il.OpCode(ILOpCode.Callvirt);
                     this.il.Token(this.outer.GetMethodReference(iDictGetter));
+                    this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
                     return;
                 }
             }
@@ -14056,6 +14105,7 @@ internal sealed class ReflectionMetadataEmitter
             var receiverIsValueType = IsValueTypeSymbol(idx.Target.Type);
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.GetMethodReference(getter));
+            this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(getter.ReturnType), idx.Type);
         }
 
         private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)

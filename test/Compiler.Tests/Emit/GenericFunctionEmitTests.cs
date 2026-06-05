@@ -194,7 +194,7 @@ public class GenericFunctionEmitTests
             }
 
             Assert.True(compileExit == 0, $"compile failed ({compileExit}): {compileOut}{compileErr}");
-            IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.GenericValueTypeDispatch);
+            IlVerifier.Verify(outPath);
 
             var runtimeConfigPath = Path.ChangeExtension(outPath, "runtimeconfig.json");
             File.WriteAllText(runtimeConfigPath, """
