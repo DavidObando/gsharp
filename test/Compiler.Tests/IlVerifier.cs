@@ -171,15 +171,26 @@ internal static class IlVerifier
     public static class KnownIssues
     {
         /// <summary>
-        /// Ref-struct receivers and stack-allocated return paths trip
-        /// ilverify's escape-analysis checks. See ADR/issue tracking ref
-        /// struct ergonomics.
+        /// By-value returns of a user-declared <c>ref struct</c> (e.g.
+        /// <c>func add(a Accumulator, n int32) Accumulator { return Accumulator{Total: a.Total + n} }</c>)
+        /// trip ilverify's <c>ReturnPtrToStack</c> check on
+        /// <c>dotnet-ilverify</c> 10.0.8. This is a known ilverify
+        /// limitation, NOT a G# emitter bug: the same minimal C# program
+        /// (a <c>public ref struct</c> with a <c>public static T Add(T, int)</c>
+        /// returning <c>new T { ... }</c>) compiled by <c>csc</c> emits
+        /// identical IL and fails the same check. The verifier rejects any
+        /// <c>IsByRefLike</c> return-type signature even when the returned
+        /// value is in a "permanent home" (the caller's stack frame, the
+        /// only legal escape for a ref struct value).
+        ///
+        /// Track the upstream issue at
+        /// https://github.com/dotnet/runtime/issues/129030 and
+        /// drop this bundle once a newer ilverify release distinguishes
+        /// permanent-home returns from raw byref returns.
         /// </summary>
         public static readonly string[] RefStruct =
         {
             "ReturnPtrToStack",
-            "InitOnly",
-            "StackUnexpected",
         };
     }
 
