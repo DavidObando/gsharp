@@ -276,14 +276,14 @@ Func-typed parameters expressed via the structural `func(T1, T2) R` clause (ADR-
 
 **Foreclosed:**
 
-- `ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.
+- ~~`ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.~~ **Implemented in issue #490** — `func foo(ref x int32) ref int32 { return ref x }` is now parsed, bound, emitted (CLR `T&` return), and consumable from C# via reflection. Diagnostics GS0248–GS0255 cover the full surface, override / interface ref-return matching extends GS0240 with a dedicated GS0255, and the function-local escape check rejects `return ref local`.
 - `ref` local variables outside the existing `*T` form. Not addressed; users who want a managed-pointer local continue to use `var p *int32 = &x` per ADR-0039.
 - `params` / variadic `ref`/`out`/`in` parameters. Rejected by GS0236 at parse/bind time and not on any roadmap (the CLR has no array-of-byref encoding).
 - Conditional ref-passing (`f(ok ? ref x : ref y)`). The ternary form requires both branches to produce the same lvalue *category*, which is a meaningful escape-analysis question; deferred until there is concrete demand.
 
 **Other ADRs constrained:**
 
-- A future ADR introducing `ref` returns must compose with §5's body lowering: the `BoundIndirectAssignmentExpression` shape extends naturally to `BoundRefReturnStatement`.
+- ~~A future ADR introducing `ref` returns must compose with §5's body lowering: the `BoundIndirectAssignmentExpression` shape extends naturally to `BoundRefReturnStatement`.~~ **Implemented in issue #490** — `BoundReturnStatement` gained an `IsRef` flag and wraps the operand in `BoundAddressOfExpression`; the emitter emits `EmitAddressOf` before `ret`, mirroring the `BoundIndirectAssignmentExpression` lowering shape.
 - A future relaxation of GS0237 (auto-spill at `in` argument positions) would convert the warning into a silent compiler-inserted temp; it should preserve the *option* to opt back in to strict mode via a package-level pragma.
 - The `customize` partial-class support (multi-package emit, ADR-0028) must propagate `ParameterSymbol.RefKind` across partial declarations and surface a mismatch diagnostic if two partial declarations disagree on the modifier.
 

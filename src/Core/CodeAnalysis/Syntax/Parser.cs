@@ -629,6 +629,35 @@ public class Parser
         }
     }
 
+    /// <summary>
+    /// Issue #490: returns true when <paramref name="token"/> can plausibly begin an expression
+    /// — used by <see cref="ParseReturnStatement"/> to disambiguate the contextual <c>ref</c>
+    /// modifier from an identifier expression named <c>ref</c>.
+    /// </summary>
+    private static bool CanStartExpression(SyntaxToken token)
+    {
+        switch (token.Kind)
+        {
+            case SyntaxKind.IdentifierToken:
+            case SyntaxKind.NumberToken:
+            case SyntaxKind.StringToken:
+            case SyntaxKind.OpenParenthesisToken:
+            case SyntaxKind.OpenSquareBracketToken:
+            case SyntaxKind.AmpersandToken:
+            case SyntaxKind.StarToken:
+            case SyntaxKind.MinusToken:
+            case SyntaxKind.PlusToken:
+            case SyntaxKind.BangToken:
+            case SyntaxKind.TrueKeyword:
+            case SyntaxKind.FalseKeyword:
+            case SyntaxKind.NilKeyword:
+            case SyntaxKind.FuncKeyword:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private EnumDeclarationSyntax ParseEnumDeclaration(
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
@@ -1440,9 +1469,23 @@ public class Parser
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        // Issue #490 (ADR-0060 follow-up): optional `ref` contextual modifier preceding
+        // the return type clause turns this function into a ref-returning function:
+        //   func max(ref a int32, ref b int32) ref int32 { return ref (a > b ? a : b) }
+        // The keyword is consumed only when followed by a type-starting token, so a
+        // top-level function literally named after the `ref` token is unaffected.
+        SyntaxToken returnRefModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && CanStartTypeClause(Peek(1)))
+        {
+            returnRefModifier = NextToken();
+        }
+
         var type = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        decl.ReturnRefModifier = returnRefModifier;
+        return decl;
     }
 
     // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the
@@ -2750,9 +2793,24 @@ public class Parser
         var currentLine = syntaxTree.Text.GetLineIndex(Current.Span.Start);
         var isEof = Current.Kind == SyntaxKind.EndOfFileToken;
         var sameLine = !isEof && keywordLine == currentLine;
+        SyntaxToken refKeyword = null;
         ExpressionSyntax expression = null;
         if (sameLine)
         {
+            // Issue #490 (ADR-0060 follow-up): optional `ref` contextual modifier directly
+            // following `return` marks this as a ref-return: `return ref <lvalue>`. The
+            // modifier is consumed only when an expression-starting token follows on the
+            // same line, preserving backward compatibility for `return ref` where `ref` is
+            // itself the identifier being returned (the binder rejects `return ref` with
+            // no operand on a ref-returning function).
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && Current.Text == "ref"
+                && CanStartExpression(Peek(1))
+                && syntaxTree.Text.GetLineIndex(Peek(1).Span.Start) == keywordLine)
+            {
+                refKeyword = NextToken();
+            }
+
             expression = ParseExpression();
 
             // Phase 4.6: multi-return support. `return e1, e2, ...` lowers to
@@ -2775,7 +2833,7 @@ public class Parser
             }
         }
 
-        return new ReturnStatementSyntax(syntaxTree, keyword, expression);
+        return new ReturnStatementSyntax(syntaxTree, keyword, refKeyword, expression);
     }
 
     private StatementSyntax ParseYieldStatement()

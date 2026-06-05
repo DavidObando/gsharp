@@ -5072,7 +5072,7 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(
                 method.Parameters.Length,
-                r => EncodeReturnSymbol(r, method.Type),
+                r => EncodeReturnSymbol(r, method.Type, method.ReturnRefKind),
                 ps =>
                 {
                     foreach (var p in method.Parameters)
@@ -7204,7 +7204,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
                     else
                     {
-                        EncodeReturnSymbol(r, function.Type);
+                        EncodeReturnSymbol(r, function.Type, function.ReturnRefKind);
                     }
                 },
                 ps =>
@@ -10527,6 +10527,14 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
+        => EncodeReturnSymbol(encoder, type, RefKind.None);
+
+    /// <summary>
+    /// Issue #490 (ADR-0060 follow-up): a function whose <see cref="FunctionSymbol.ReturnRefKind"/>
+    /// is <see cref="RefKind.Ref"/> returns a managed pointer (<c>T&amp;</c>) — encode it via
+    /// the <c>ReturnTypeEncoder.Type(isByRef: true, ...)</c> overload.
+    /// </summary>
+    private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type, RefKind returnRefKind)
     {
         if (type == TypeSymbol.Void)
         {
@@ -10534,7 +10542,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else
         {
-            this.EncodeTypeSymbol(encoder.Type(), type);
+            this.EncodeTypeSymbol(encoder.Type(isByRef: returnRefKind == RefKind.Ref), type);
         }
     }
 
@@ -11726,7 +11734,18 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundReturnStatement ret:
                     if (ret.Expression is not null)
                     {
-                        this.EmitExpression(ret.Expression);
+                        // Issue #490 (ADR-0060 follow-up): a `return ref <lvalue>` arrives
+                        // as a BoundAddressOfExpression wrapping the lvalue. Emit the address
+                        // (ldloca / ldarga / ldflda / ldelema / dereferenced pointer) so the
+                        // returned `T&` slot holds the managed pointer the signature declares.
+                        if (ret.IsRef && ret.Expression is BoundAddressOfExpression addrOf)
+                        {
+                            this.EmitAddressOf(addrOf);
+                        }
+                        else
+                        {
+                            this.EmitExpression(ret.Expression);
+                        }
                     }
 
                     this.il.OpCode(ILOpCode.Ret);
