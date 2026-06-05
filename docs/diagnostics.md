@@ -308,3 +308,21 @@ Cause/fix examples:
 - **GS0242** (warning) — passing a plain identifier to an `in` parameter without writing `in`: `f(x)` where `f(in x int32)`. Fix: write `f(in x)` to make the pass-by-readonly-ref explicit. The compiler does NOT silently spill the value (a deliberate departure from C#).
 - **GS0243** — declaring a parameter whose type is the raw pointer `*T`: `func f(p *int32)`. Fix: use a ref-kind modifier instead — `func f(ref p int32)` (or `in`/`out`).
 
+## Named-argument diagnostics (GS0244–GS0247)
+
+Issue #343 introduces named arguments at call sites — `Foo(timeout: 30, retries: 3)` — for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, intentionally do not accept named arguments because the call target does not preserve parameter names. The diagnostics below flag malformed or unresolvable named-argument call sites.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0244 | Error | Positional argument cannot follow a named argument. |
+| GS0245 | Error | Named argument '{name}' is specified more than once. |
+| GS0246 | Error | The best overload of '{callee}' does not have a parameter named '{name}'. |
+| GS0247 | Error | Named argument '{name}' specifies a parameter for which a positional argument has already been given. |
+
+Cause/fix examples:
+
+- **GS0244** — `Foo(1, name: "a", 2)`. Fix: move every named argument to the trailing positions, or pass the named one positionally.
+- **GS0245** — `Foo(timeout: 1, timeout: 2)`. Fix: remove the duplicate.
+- **GS0246** — `Foo(qty: 3)` when `Foo` has no parameter named `qty`. Fix: use the correct parameter name. Also fires when calling through a function-typed/delegate variable, or when targeting a variadic parameter list (parameter names are not addressable in those cases).
+- **GS0247** — `Foo(1, x: 2)` when `Foo(x int32, y int32)` is bound — the positional `1` already filled `x`. Fix: drop one or the other.
+

@@ -6110,7 +6110,7 @@ public sealed class Binder
 
     /// <summary>
     /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
-    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool})"/>,
+    /// <see cref="OverloadResolution.Resolve{T}(System.Collections.Generic.IEnumerable{T}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Collections.Generic.IReadOnlyList{System.Type}, System.Func{System.Type, System.Type}, System.Collections.Generic.IReadOnlyList{bool}, System.Collections.Generic.IReadOnlyList{string})"/>,
     /// marking each positional argument whose syntax is an interpolated-string
     /// literal. These arguments may convert to an
     /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
@@ -6144,14 +6144,22 @@ public sealed class Binder
     private ImmutableArray<BoundExpression> RebindFormattableInterpolationArguments(
         ImmutableArray<BoundExpression> arguments,
         SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
-        System.Reflection.ParameterInfo[] parameters)
+        System.Reflection.ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping = default)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
-        var limit = Math.Min(arguments.Length, Math.Min(parameters.Length, argumentSyntax.Count));
+        var limit = Math.Min(arguments.Length, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
         {
-            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax interpolated
-                && OverloadResolution.IsFormattableStringTarget(parameters[i].ParameterType))
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (paramIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            var argSyntax = UnwrapNamedArgumentValue(argumentSyntax[i]);
+            if (argSyntax is InterpolatedStringExpressionSyntax interpolated
+                && OverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
             {
                 builder ??= arguments.ToBuilder();
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);
@@ -7852,12 +7860,14 @@ public sealed class Binder
     /// <param name="arguments">The bound positional arguments (aligned with the leading parameters).</param>
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for static/constructor calls.</param>
     /// <param name="location">The diagnostic location for the call.</param>
+    /// <param name="parameterMapping">Issue #343: per-source-argument → parameter-position map; default for identity.</param>
     /// <returns>The arguments, with handler-targeted interpolations rewritten.</returns>
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression receiver,
-        TextLocation location)
+        TextLocation location,
+        ImmutableArray<int> parameterMapping = default)
     {
         if (parameters == null || arguments.IsDefaultOrEmpty)
         {
@@ -7865,15 +7875,20 @@ public sealed class Binder
         }
 
         ImmutableArray<BoundExpression>.Builder builder = null;
-        var count = System.Math.Min(parameters.Length, arguments.Length);
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < arguments.Length; i++)
         {
             if (arguments[i] is not BoundInterpolatedStringExpression interp || interp.Handler != null)
             {
                 continue;
             }
 
-            var parameterType = parameters[i].ParameterType;
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (paramIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            var parameterType = parameters[paramIndex].ParameterType;
 
             // V1 supports by-value handler parameters only; a by-ref handler
             // parameter (e.g. StringBuilder.Append(ref AppendInterpolatedStringHandler))
@@ -7886,7 +7901,7 @@ public sealed class Binder
 
             var handler = InterpolatedStringHandlerInfo.TryCreate(
                 parameterType,
-                parameters[i],
+                parameters[paramIndex],
                 parameters,
                 arguments,
                 receiver,
@@ -8051,7 +8066,414 @@ public sealed class Binder
         }
     }
 
-    /// <summary>ADR-0039: Validates that ref/out arguments are wrapped in <c>BoundAddressOfExpression</c>.</summary>
+    /// <summary>
+    /// Issue #343: returns the underlying value expression for a call-argument
+    /// node. When the node is a <see cref="NamedArgumentExpressionSyntax"/>
+    /// wrapper (e.g. <c>x: 1</c>), unwraps to the inner value expression so the
+    /// argument is bound and post-processed against its actual payload.
+    /// </summary>
+    /// <param name="argument">The call-argument syntax node.</param>
+    /// <returns>The wrapped value expression when named, otherwise the node itself.</returns>
+    private static ExpressionSyntax UnwrapNamedArgumentValue(ExpressionSyntax argument)
+        => argument is NamedArgumentExpressionSyntax named ? named.Expression : argument;
+
+    /// <summary>
+    /// Issue #343: pre-validates the layout of call arguments — positional
+    /// arguments must precede all named arguments, and no two named arguments
+    /// may share the same name. Reports the corresponding diagnostic
+    /// (<see cref="DiagnosticBag.ReportPositionalArgumentAfterNamedArgument"/>
+    /// or <see cref="DiagnosticBag.ReportDuplicateNamedArgument"/>) on each
+    /// violation, then returns <see langword="false"/> so the surrounding call
+    /// binder can fall back to a <see cref="BoundErrorExpression"/>.
+    /// </summary>
+    /// <param name="arguments">The call's argument syntax list.</param>
+    /// <param name="positionalCount">On return, the number of leading positional arguments.</param>
+    /// <param name="argumentNames">On return, the per-source-argument names (entries are <see langword="null"/> for positional, the name for named). The default array when no named arguments are present.</param>
+    /// <returns><see langword="true"/> when the layout is well-formed.</returns>
+    private bool TryAnalyzeCallArgumentLayout(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        out int positionalCount,
+        out ImmutableArray<string> argumentNames)
+    {
+        positionalCount = 0;
+        argumentNames = default;
+
+        if (arguments.Count == 0)
+        {
+            return true;
+        }
+
+        var ok = true;
+        var seenNamed = false;
+        HashSet<string> seenNames = null;
+        string[] names = null;
+
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (arguments[i] is NamedArgumentExpressionSyntax named)
+            {
+                names ??= new string[arguments.Count];
+                seenNames ??= new HashSet<string>(StringComparer.Ordinal);
+                seenNamed = true;
+                names[i] = named.NameToken.Text;
+                if (!seenNames.Add(named.NameToken.Text))
+                {
+                    Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, named.NameToken.Text);
+                    ok = false;
+                }
+            }
+            else
+            {
+                if (seenNamed)
+                {
+                    Diagnostics.ReportPositionalArgumentAfterNamedArgument(arguments[i].Location);
+                    ok = false;
+                }
+                else
+                {
+                    positionalCount++;
+                }
+            }
+        }
+
+        if (names != null)
+        {
+            argumentNames = ImmutableArray.Create(names);
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// Issue #343: re-orders source-order bound arguments into the resolved
+    /// callee's parameter order, filling any unfilled (skipped) optional slots
+    /// with their compile-time default expressions. Generalises
+    /// <see cref="AppendOmittedOptionalArguments"/> to handle named arguments
+    /// that target non-trailing parameter positions (so an interior optional
+    /// parameter can be omitted).
+    /// </summary>
+    /// <param name="suppliedArguments">Bound arguments in source order.</param>
+    /// <param name="parameterMapping">Per-source-argument → parameter-position map; default for identity.</param>
+    /// <param name="parameters">The resolved method's/constructor's full parameter list.</param>
+    /// <returns>The argument array reordered into parameter positions, padded with defaults.</returns>
+    private static ImmutableArray<BoundExpression> BuildOrderedCallArguments(
+        ImmutableArray<BoundExpression> suppliedArguments,
+        ImmutableArray<int> parameterMapping,
+        System.Reflection.ParameterInfo[] parameters)
+    {
+        if (parameterMapping.IsDefault)
+        {
+            // No named-argument reordering required — preserve the existing
+            // trailing-optional behaviour.
+            return AppendOmittedOptionalArguments(suppliedArguments, parameters);
+        }
+
+        var ordered = new BoundExpression[parameters.Length];
+        for (var i = 0; i < suppliedArguments.Length; i++)
+        {
+            var slot = parameterMapping[i];
+            ordered[slot] = suppliedArguments[i];
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            ordered[i] ??= CreateOptionalDefaultArgument(parameters[i]);
+        }
+
+        return ImmutableArray.Create(ordered);
+    }
+
+    /// <summary>
+    /// Issue #343: reorders source-order user-function arguments into the
+    /// callee's parameter order. User-declared functions, methods, extensions
+    /// and constructors do not support default parameter values, so every
+    /// parameter slot must be filled — the helper validates that, reports
+    /// <see cref="DiagnosticBag.ReportNamedArgumentParameterNotFound"/> /
+    /// <see cref="DiagnosticBag.ReportNamedArgumentAlsoSpecifiedPositionally"/> /
+    /// <see cref="DiagnosticBag.ReportDuplicateNamedArgument"/> on layout
+    /// violations and returns <see langword="false"/> to short-circuit the
+    /// surrounding binder. When no named arguments are present, returns
+    /// identity-mapped <paramref name="permutedSyntax"/> /
+    /// <paramref name="permutedBound"/> so callers can use a single code path.
+    /// </summary>
+    /// <param name="sourceArguments">The call's argument syntax in source order.</param>
+    /// <param name="sourceBound">The bound arguments in source order (already unwrapped from <see cref="NamedArgumentExpressionSyntax"/> at bind time).</param>
+    /// <param name="parameterCount">The number of callable parameter slots (excludes any synthetic receiver slot).</param>
+    /// <param name="parameterNameAt">Function returning the declared name of the i-th callable parameter.</param>
+    /// <param name="calleeName">The callee name used in diagnostics.</param>
+    /// <param name="permutedSyntax">On true, an array of length <paramref name="parameterCount"/> giving the argument syntax slotted at each parameter position.</param>
+    /// <param name="permutedBound">On true, an <see cref="ImmutableArray{T}"/> of length <paramref name="parameterCount"/> giving the bound arguments in parameter order.</param>
+    /// <returns><see langword="true"/> when reordering succeeds.</returns>
+    private bool TryReorderUserCallArguments(
+        SeparatedSyntaxList<ExpressionSyntax> sourceArguments,
+        ImmutableArray<BoundExpression> sourceBound,
+        int parameterCount,
+        System.Func<int, string> parameterNameAt,
+        string calleeName,
+        out ExpressionSyntax[] permutedSyntax,
+        out ImmutableArray<BoundExpression> permutedBound)
+    {
+        permutedSyntax = null;
+        permutedBound = default;
+
+        if (!TryAnalyzeCallArgumentLayout(sourceArguments, out var positionalCount, out var argumentNames))
+        {
+            return false;
+        }
+
+        if (argumentNames.IsDefault)
+        {
+            var identitySyntax = new ExpressionSyntax[sourceArguments.Count];
+            for (var i = 0; i < sourceArguments.Count; i++)
+            {
+                identitySyntax[i] = sourceArguments[i];
+            }
+
+            permutedSyntax = identitySyntax;
+            permutedBound = sourceBound;
+            return true;
+        }
+
+        var slotSyntax = new ExpressionSyntax[parameterCount];
+        var slotBound = new BoundExpression[parameterCount];
+
+        var leadingPositional = positionalCount < parameterCount ? positionalCount : parameterCount;
+        for (var i = 0; i < leadingPositional; i++)
+        {
+            slotSyntax[i] = sourceArguments[i];
+            slotBound[i] = sourceBound[i];
+        }
+
+        var ok = true;
+        for (var i = positionalCount; i < sourceArguments.Count; i++)
+        {
+            var name = argumentNames[i];
+            if (name == null)
+            {
+                continue;
+            }
+
+            var named = (NamedArgumentExpressionSyntax)sourceArguments[i];
+
+            var paramIdx = -1;
+            for (var p = 0; p < parameterCount; p++)
+            {
+                if (string.Equals(parameterNameAt(p), name, StringComparison.Ordinal))
+                {
+                    paramIdx = p;
+                    break;
+                }
+            }
+
+            if (paramIdx < 0)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(named.NameToken.Location, calleeName, name);
+                ok = false;
+                continue;
+            }
+
+            if (slotSyntax[paramIdx] != null)
+            {
+                if (paramIdx < leadingPositional)
+                {
+                    Diagnostics.ReportNamedArgumentAlsoSpecifiedPositionally(named.NameToken.Location, name);
+                }
+                else
+                {
+                    Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, name);
+                }
+
+                ok = false;
+                continue;
+            }
+
+            slotSyntax[paramIdx] = sourceArguments[i];
+            slotBound[paramIdx] = sourceBound[i];
+        }
+
+        if (!ok)
+        {
+            return false;
+        }
+
+        for (var p = 0; p < parameterCount; p++)
+        {
+            if (slotSyntax[p] == null)
+            {
+                // Caller's count check should have prevented this; defensive.
+                return false;
+            }
+        }
+
+        permutedSyntax = slotSyntax;
+        permutedBound = ImmutableArray.Create(slotBound);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #343: returns the first non-null name in <paramref name="argumentNames"/>,
+    /// used as the offending name when reporting
+    /// <see cref="DiagnosticBag.ReportNamedArgumentParameterNotFound"/> at call sites
+    /// where the callee does not expose parameter names (delegate-typed variables,
+    /// variadic functions, etc.). Callers should only invoke this when at least one
+    /// entry is non-null.
+    /// </summary>
+    private static string FirstNamedArgumentName(ImmutableArray<string> argumentNames)
+    {
+        if (argumentNames.IsDefault)
+        {
+            return string.Empty;
+        }
+
+        for (var i = 0; i < argumentNames.Length; i++)
+        {
+            if (argumentNames[i] != null)
+            {
+                return argumentNames[i];
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Issue #343: when overload resolution fails for a CLR call site that
+    /// supplied named arguments, surface the first unknown parameter name as a
+    /// dedicated diagnostic (<see cref="DiagnosticBag.ReportNamedArgumentParameterNotFound"/>)
+    /// rather than the generic "unable to find function". A name is "known"
+    /// when any candidate of the requested name and binding flags exposes a
+    /// parameter with that name.
+    /// </summary>
+    /// <param name="receiverClrType">The CLR type that hosts the candidate methods.</param>
+    /// <param name="methodName">The method name at the call site.</param>
+    /// <param name="bindingFlags">Reflection binding flags used to enumerate candidates.</param>
+    /// <param name="ce">The originating call expression (for diagnostic location).</param>
+    /// <param name="argumentNames">Per-source-argument names parallel to the call's arguments.</param>
+    /// <returns><see langword="true"/> when a dedicated diagnostic was emitted.</returns>
+    private bool TryReportUnknownNamedArgumentForClr(
+        System.Type receiverClrType,
+        string methodName,
+        System.Reflection.BindingFlags bindingFlags,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames)
+    {
+        HashSet<string> knownNames = null;
+        for (var i = 0; i < argumentNames.Length; i++)
+        {
+            var name = argumentNames[i];
+            if (name == null)
+            {
+                continue;
+            }
+
+            knownNames ??= CollectClrParameterNames(receiverClrType, methodName, bindingFlags);
+            if (!knownNames.Contains(name))
+            {
+                var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
+                Diagnostics.ReportNamedArgumentParameterNotFound(location, methodName, name);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> CollectClrParameterNames(System.Type receiverClrType, string methodName, System.Reflection.BindingFlags bindingFlags)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        System.Reflection.MethodInfo[] methods;
+        try
+        {
+            methods = receiverClrType.GetMethods(bindingFlags);
+        }
+        catch
+        {
+            return names;
+        }
+
+        foreach (var method in methods)
+        {
+            if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var parameter in method.GetParameters())
+            {
+                if (parameter.Name != null)
+                {
+                    names.Add(parameter.Name);
+                }
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Issue #343: when overload resolution fails for a CLR <em>constructor</em>
+    /// call site that supplied named arguments, surface the first unknown
+    /// parameter name as a dedicated diagnostic
+    /// (<see cref="DiagnosticBag.ReportNamedArgumentParameterNotFound"/>) instead
+    /// of falling back to the generic "no matching constructor" path.
+    /// </summary>
+    /// <param name="clrType">The CLR type being constructed.</param>
+    /// <param name="ce">The originating call expression (for diagnostic location).</param>
+    /// <param name="argumentNames">Per-source-argument names parallel to the call's arguments.</param>
+    /// <returns><see langword="true"/> when a dedicated diagnostic was emitted.</returns>
+    private bool TryReportUnknownNamedArgumentForClrConstructor(
+        System.Type clrType,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames)
+    {
+        HashSet<string> knownNames = null;
+        for (var i = 0; i < argumentNames.Length; i++)
+        {
+            var name = argumentNames[i];
+            if (name == null)
+            {
+                continue;
+            }
+
+            knownNames ??= CollectClrConstructorParameterNames(clrType);
+            if (!knownNames.Contains(name))
+            {
+                var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
+                Diagnostics.ReportNamedArgumentParameterNotFound(location, clrType.Name, name);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> CollectClrConstructorParameterNames(System.Type clrType)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        System.Reflection.ConstructorInfo[] ctors;
+        try
+        {
+            ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
+        }
+        catch
+        {
+            return names;
+        }
+
+        foreach (var ctor in ctors)
+        {
+            foreach (var parameter in ctor.GetParameters())
+            {
+                if (parameter.Name != null)
+                {
+                    names.Add(parameter.Name);
+                }
+            }
+        }
+
+        return names;
+    }
+
     private ImmutableArray<BoundExpression> ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> refKinds,
@@ -8205,6 +8627,13 @@ public sealed class Binder
             return BindExplicitConstructorCallExpression(syntax, classType);
         }
 
+        // Issue #343: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). Diagnostics are reported by the helper.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
         // Phase 4.3b / ADR-0020: a primary-constructor call on a generic
         // class definition (`Box(5)` or `Box[int](5)`) builds a type-argument
         // substitution before resolving the parameter list against the
@@ -8239,10 +8668,44 @@ public sealed class Binder
             else
             {
                 // Pre-bind arguments and infer type arguments from them.
-                for (var i = 0; i < syntax.Arguments.Count && i < defParams.Length; i++)
+                // Issue #343: when an argument is named, locate its parameter
+                // by name (so type inference still works with named args) and
+                // unwrap the wrapper before binding.
+                for (var i = 0; i < syntax.Arguments.Count; i++)
                 {
-                    var preBound = BindExpression(syntax.Arguments[i]);
-                    InferTypeArguments(defParams[i].Type, preBound.Type, substitution);
+                    var argSyntax = syntax.Arguments[i];
+                    int paramIdx;
+                    if (argSyntax is NamedArgumentExpressionSyntax named)
+                    {
+                        paramIdx = -1;
+                        for (var p = 0; p < defParams.Length; p++)
+                        {
+                            if (string.Equals(defParams[p].Name, named.NameToken.Text, StringComparison.Ordinal))
+                            {
+                                paramIdx = p;
+                                break;
+                            }
+                        }
+
+                        if (paramIdx < 0)
+                        {
+                            continue;
+                        }
+
+                        argSyntax = named.Expression;
+                    }
+                    else
+                    {
+                        paramIdx = i;
+                    }
+
+                    if (paramIdx >= defParams.Length)
+                    {
+                        continue;
+                    }
+
+                    var preBound = BindExpression(argSyntax);
+                    InferTypeArguments(defParams[paramIdx].Type, preBound.Type, substitution);
                 }
 
                 foreach (var tp in tps)
@@ -8286,7 +8749,8 @@ public sealed class Binder
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         foreach (var argument in syntax.Arguments)
         {
-            boundArguments.Add(BindExpression(argument));
+            // Issue #343: bind the value behind any named-argument wrapper.
+            boundArguments.Add(BindExpression(UnwrapNamedArgumentValue(argument)));
         }
 
         if (syntax.Arguments.Count != parameters.Length)
@@ -8316,6 +8780,39 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
+        // Issue #343: reorder bound arguments into parameter order when the
+        // call mixes positional and named arguments. The per-position loop
+        // below then sees the call as fully positional.
+        ExpressionSyntax[] parameterSyntax;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments.ToImmutable(),
+                    parameters.Length,
+                    p => parameters[p].Name,
+                    classType.Name,
+                    out parameterSyntax,
+                    out var permutedBound))
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(permutedBound.Length);
+            for (var i = 0; i < permutedBound.Length; i++)
+            {
+                boundArguments.Add(permutedBound[i]);
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
         var hasErrors = false;
         for (var i = 0; i < parameters.Length; i++)
         {
@@ -8325,7 +8822,7 @@ public sealed class Binder
             // ADR-0055 Tier 4 (#369): an interpolated-string argument targeting an
             // IFormattable/FormattableString constructor parameter lowers to
             // FormattableStringFactory.Create rather than an eager string.
-            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+            if (parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && IsFormattableStringTargetType(parameter.Type))
             {
                 boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type);
@@ -8343,7 +8840,7 @@ public sealed class Binder
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, parameter.Type, argument.Type);
                 }
 
                 hasErrors = true;
@@ -8390,11 +8887,20 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
+        // Issue #343: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). Diagnostics are reported by the helper.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
         var parameters = classType.ExplicitConstructor.Parameters;
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {
-            var argument = syntax.Arguments[ai];
+            // Issue #343: peel any named-argument wrapper before binding so the
+            // value is bound in source order. We will permute below.
+            var argument = UnwrapNamedArgumentValue(syntax.Arguments[ai]);
             ParameterSymbol parameterForArg = ai < parameters.Length ? parameters[ai] : null;
             if (argument is RefArgumentExpressionSyntax refArg)
             {
@@ -8412,6 +8918,38 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
+        // Issue #343: reorder into parameter order when the call mixes
+        // positional and named arguments.
+        ExpressionSyntax[] parameterSyntax;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments.ToImmutable(),
+                    parameters.Length,
+                    p => parameters[p].Name,
+                    classType.Name,
+                    out parameterSyntax,
+                    out var permutedBound))
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(permutedBound.Length);
+            for (var i = 0; i < permutedBound.Length; i++)
+            {
+                boundArguments.Add(permutedBound[i]);
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
         var hasErrors = false;
         var convertedArguments = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
         for (var i = 0; i < parameters.Length; i++)
@@ -8421,7 +8959,7 @@ public sealed class Binder
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
-            if (syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+            if (parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && IsFormattableStringTargetType(parameter.Type))
             {
                 convertedArguments.Add(BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
@@ -8452,7 +8990,7 @@ public sealed class Binder
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, parameter.Type, argument.Type);
                 }
 
                 hasErrors = true;
@@ -8460,7 +8998,7 @@ public sealed class Binder
             }
             else
             {
-                convertedArguments.Add(BindConversion(syntax.Arguments[i].Location, argument, parameter.Type));
+                convertedArguments.Add(BindConversion(parameterSyntax[i].Location, argument, parameter.Type));
             }
         }
 
@@ -8513,6 +9051,14 @@ public sealed class Binder
             return intrinsic;
         }
 
+        // Issue #343: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). Errors are reported by the helper so the
+        // call short-circuits to a bound error here.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
         // ADR-0060: argument binding needs the matching parameter to resolve
@@ -8523,14 +9069,17 @@ public sealed class Binder
         // lvalue ref/in/out form is parameter-independent.
         foreach (var argument in syntax.Arguments)
         {
+            // Issue #343: a named-argument wrapper carries the value expression
+            // we want to bind; unwrap it so the value is bound on its own.
+            var argSyntax = UnwrapNamedArgumentValue(argument);
             BoundExpression boundArgument;
-            if (argument is RefArgumentExpressionSyntax refArg)
+            if (argSyntax is RefArgumentExpressionSyntax refArg)
             {
                 boundArgument = BindRefArgumentExpression(refArg, parameter: null);
             }
             else
             {
-                boundArgument = BindExpression(argument);
+                boundArgument = BindExpression(argSyntax);
             }
 
             boundArguments.Add(boundArgument);
@@ -8547,7 +9096,7 @@ public sealed class Binder
                 && implicitReceiverStruct.TryGetMethodIncludingInherited(syntax.Identifier.Text, out var implicitMethod))
             {
                 var implicitReceiver = new BoundVariableExpression(null, this.function.ThisParameter);
-                return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax);
+                return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
             }
 
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
@@ -8559,6 +9108,14 @@ public sealed class Binder
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
         if (symbol is VariableSymbol variable && variable.Type is FunctionTypeSymbol fnType)
         {
+            // Issue #343: indirect calls through a function-typed variable have
+            // no preserved parameter names; named arguments are not allowed.
+            if (!argumentNames.IsDefault)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
+                return new BoundErrorExpression(null);
+            }
+
             if (syntax.Arguments.Count != fnType.Arity)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, variable.Name, fnType.Arity, syntax.Arguments.Count);
@@ -8579,6 +9136,14 @@ public sealed class Binder
         // branch below — both end up dispatching through Invoke.
         if (symbol is VariableSymbol namedDelegateVar && namedDelegateVar.Type is DelegateTypeSymbol namedDelegateSym)
         {
+            // Issue #343: named-delegate Invoke parameter names live on the
+            // delegate-type symbol; they are not surfaced to the call site.
+            if (!argumentNames.IsDefault)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, namedDelegateVar.Name, FirstNamedArgumentName(argumentNames));
+                return new BoundErrorExpression(null);
+            }
+
             if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
@@ -8604,7 +9169,7 @@ public sealed class Binder
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
             var receiver = new BoundVariableExpression(null, delegateVar);
-            if (TryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall))
+            if (TryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, argumentNames: argumentNames))
             {
                 return invokeCall;
             }
@@ -8632,6 +9197,14 @@ public sealed class Binder
 
         var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
+
+        // Issue #343: variadic functions and named arguments do not compose:
+        // there is no way to "name" the variadic slot at a call site.
+        if (isVariadic && !argumentNames.IsDefault)
+        {
+            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, function.Name, FirstNamedArgumentName(argumentNames));
+            return new BoundErrorExpression(null);
+        }
 
         if (isVariadic)
         {
@@ -8666,6 +9239,41 @@ public sealed class Binder
 
             Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), function.Name, function.Parameters.Length, syntax.Arguments.Count);
             return new BoundErrorExpression(null);
+        }
+
+        // Issue #343: when the call site mixes positional and named arguments,
+        // reorder the bound arguments into the function's parameter order so
+        // the existing per-position passes operate as if every argument were
+        // positional. `parameterSyntax[i]` carries the source-syntax node at
+        // parameter position `i` (preserving locations for diagnostics).
+        ExpressionSyntax[] parameterSyntax;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments.ToImmutable(),
+                    function.Parameters.Length,
+                    p => function.Parameters[p].Name,
+                    function.Name,
+                    out parameterSyntax,
+                    out var permutedBound))
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(permutedBound.Length);
+            for (var i = 0; i < permutedBound.Length; i++)
+            {
+                boundArguments.Add(permutedBound[i]);
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
         }
 
         bool hasErrors = false;
@@ -8743,9 +9351,9 @@ public sealed class Binder
             // ADR-0060 §1 back-compat: a bare `&x` (BoundAddressOfExpression
             // without a RefArgumentExpressionSyntax wrapper) is universally
             // compatible with any ref-kind parameter (existing ADR-0039 behaviour).
-            if (parameter.RefKind != RefKind.None || (i < syntax.Arguments.Count && syntax.Arguments[i] is RefArgumentExpressionSyntax))
+            if (parameter.RefKind != RefKind.None || (i < parameterSyntax.Length && parameterSyntax[i] is RefArgumentExpressionSyntax))
             {
-                var argSyntax = i < syntax.Arguments.Count ? syntax.Arguments[i] : null;
+                var argSyntax = i < parameterSyntax.Length ? parameterSyntax[i] : null;
                 var argRefKind = RefKind.None;
                 if (argSyntax is RefArgumentExpressionSyntax refArgSyntax)
                 {
@@ -8799,8 +9407,8 @@ public sealed class Binder
                     // resolution has chosen the function and the parameter
                     // pointee type is known.
                     if (operandType == TypeSymbol.Error
-                        && i < syntax.Arguments.Count
-                        && syntax.Arguments[i] is RefArgumentExpressionSyntax refArgFixup
+                        && i < parameterSyntax.Length
+                        && parameterSyntax[i] is RefArgumentExpressionSyntax refArgFixup
                         && refArgFixup.IsInlineDeclaration
                         && refArgFixup.DeclaredType == null)
                     {
@@ -8810,7 +9418,7 @@ public sealed class Binder
 
                     if (operandType != expectedType && operandType != TypeSymbol.Error)
                     {
-                        Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, operandType);
+                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, operandType);
                         hasErrors = true;
                     }
                 }
@@ -8832,8 +9440,8 @@ public sealed class Binder
             // applies in the non-generic case (a type parameter is never a
             // formattable target).
             if (substitution == null
-                && i < syntax.Arguments.Count
-                && syntax.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+                && i < parameterSyntax.Length
+                && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedArg
                 && IsFormattableStringTargetType(expectedType))
             {
                 boundArguments[i] = BindInterpolatedStringAsFormattable(interpolatedArg, expectedType);
@@ -8852,7 +9460,7 @@ public sealed class Binder
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, argument.Type);
                 }
 
                 hasErrors = true;
@@ -9525,10 +10133,17 @@ public sealed class Binder
             return false;
         }
 
+        // Issue #343: pre-validate named-argument layout for CLR constructor calls.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            result = new BoundErrorExpression(syntax);
+            return true;
+        }
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
-            boundArguments.Add(BindExpression(syntax.Arguments[i]));
+            boundArguments.Add(BindExpression(UnwrapNamedArgumentValue(syntax.Arguments[i])));
         }
 
         // Phase A (overload resolution): pick a constructor via the shared
@@ -9551,13 +10166,15 @@ public sealed class Binder
         }
 
         ConstructorInfo bestCtor = null;
+        ImmutableArray<int> ctorMapping = default;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count));
+            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best;
+                    ctorMapping = resolution.ParameterMapping;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
                     Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length);
@@ -9569,14 +10186,24 @@ public sealed class Binder
 
         if (bestCtor == null)
         {
+            // Issue #343: a CLR constructor call that mismatched on a name we
+            // can show as "no such parameter" is more actionable than the
+            // generic fallback diagnostic.
+            if (!argumentNames.IsDefault
+                && TryReportUnknownNamedArgumentForClrConstructor(clrType, syntax, argumentNames))
+            {
+                result = new BoundErrorExpression(syntax);
+                return true;
+            }
+
             return false;
         }
 
         var ctorParameters = bestCtor.GetParameters();
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters);
-        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location);
-        var ctorArgs = AppendOmittedOptionalArguments(ctorHandlerArgs, ctorParameters);
+        var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters, ctorMapping);
+        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorMapping);
+        var ctorArgs = BuildOrderedCallArguments(ctorHandlerArgs, ctorMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -10502,22 +11129,25 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
-        if (hasNamedArguments)
+        // Issue #343: validate named-argument layout (positional precedes named,
+        // no duplicate names). Errors are reported by the helper so the call
+        // short-circuits to a bound error here.
+        if (!TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
         {
-            Diagnostics.ReportNamedArgumentOnlyValidForCopy(ce.Location);
             return new BoundErrorExpression(null);
         }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         foreach (var argument in ce.Arguments)
         {
-            if (argument is RefArgumentExpressionSyntax refArg)
+            var inner = UnwrapNamedArgumentValue(argument);
+            if (inner is RefArgumentExpressionSyntax refArg)
             {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
             }
             else
             {
-                boundArguments.Add(BindExpression(argument));
+                boundArguments.Add(BindExpression(inner));
             }
         }
 
@@ -10534,12 +11164,12 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
             {
                 var staticParameters = staticFn.Method.GetParameters();
-                var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters);
-                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location);
-                var staticArguments = AppendOmittedOptionalArguments(staticHandlerArgs, staticParameters);
+                var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters, staticMapping);
+                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticMapping);
+                var staticArguments = BuildOrderedCallArguments(staticHandlerArgs, staticMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
                 return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
@@ -10548,6 +11178,14 @@ public sealed class Binder
             if (staticAmbiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, candidateCount: 2);
+                return new BoundErrorExpression(null);
+            }
+
+            // Issue #343: a named-argument call that resolves to no candidate
+            // is most actionably explained by the first unknown name (if any),
+            // since the missing parameter is the prevailing cause.
+            if (!argumentNames.IsDefault && TryReportUnknownNamedArgumentForClr(classSymbol.ClassType, methodName, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
+            {
                 return new BoundErrorExpression(null);
             }
 
@@ -10572,7 +11210,7 @@ public sealed class Binder
             // the static receiver type is an interface.
             if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
             {
-                return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce);
+                return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce, argumentNames);
             }
 
             // Phase 4.2b / ADR-0020: dispatch through a type parameter's
@@ -10581,21 +11219,21 @@ public sealed class Binder
             if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null
                 && tpRecv.InterfaceConstraint.TryGetMethod(methodName, out var tpIfaceMethod))
             {
-                return BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce);
+                return BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce, argumentNames);
             }
 
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
             if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethodIncludingInherited(methodName, out var userMethod))
             {
-                return BindUserInstanceCall(receiver, userMethod, arguments, ce);
+                return BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames);
             }
 
             // Phase 3.B.6 / ADR-0019: extension function fallback for
             // user-type receivers (struct/class/interface).
             if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var userExtFn))
             {
-                return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce);
+                return BindExtensionFunctionCall(receiver, userExtFn, arguments, ce, argumentNames);
             }
 
             // Issue #296: a GSharp class inheriting an imported CLR base class
@@ -10606,7 +11244,7 @@ public sealed class Binder
             // imported extension methods.
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
                 && inheritedDerived.ImportedBaseType?.ClrType is System.Type inheritedBaseClr
-                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols))
+                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames))
             {
                 return inheritedCall;
             }
@@ -10614,7 +11252,7 @@ public sealed class Binder
             // Issue #294: imported [Extension] method dispatched with instance
             // (receiver) syntax, when the receiver carries a CLR type even
             // though its symbol is a user/interface shape.
-            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs, typeArgSymbols))
+            if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var userPathExt, explicitTypeArgs, typeArgSymbols, argumentNames))
             {
                 return userPathExt;
             }
@@ -10628,7 +11266,7 @@ public sealed class Binder
         // fallback for imported CLR types.)
         if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethodIncludingInherited(methodName, out var userMethodPriority))
         {
-            return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce);
+            return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames);
         }
 
         var clrType = receiver.Type.ClrType;
@@ -10653,17 +11291,18 @@ public sealed class Binder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length));
+                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length), argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
-                        var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters);
-                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location);
-                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters);
-                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce);
-                        var instArguments = AppendOmittedOptionalArguments(instConvertedArgs, instParameters);
+                        var instMapping = resolution.ParameterMapping;
+                        var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters, instMapping);
+                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instMapping);
+                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instMapping);
+                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce, instMapping);
+                        var instArguments = BuildOrderedCallArguments(instConvertedArgs, instMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
@@ -10680,16 +11319,25 @@ public sealed class Binder
         // instance/static lookups fail, try matching by (receiverType, name).
         if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var extFn))
         {
-            return BindExtensionFunctionCall(receiver, extFn, arguments, ce);
+            return BindExtensionFunctionCall(receiver, extFn, arguments, ce, argumentNames);
         }
 
         // Issue #294: BCL/library [Extension] method dispatched with instance
         // (receiver) syntax. After instance members and user extension
         // functions fail, fall back to imported static [Extension] methods
         // whose first parameter is compatible with the receiver type.
-        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs, typeArgSymbols))
+        if (receiver != null && TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var importedExt, explicitTypeArgs, typeArgSymbols, argumentNames))
         {
             return importedExt;
+        }
+
+        // Issue #343: if all CLR-instance lookups missed and the call uses
+        // named arguments, point at the first unknown parameter name (if any)
+        // for a more actionable diagnostic than "unable to find function".
+        if (!argumentNames.IsDefault && receiver?.Type?.ClrType is System.Type recvClr
+            && TryReportUnknownNamedArgumentForClr(recvClr, methodName, BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
+        {
+            return new BoundErrorExpression(null);
         }
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
@@ -10711,7 +11359,8 @@ public sealed class Binder
         CallExpressionSyntax ce,
         out BoundExpression result,
         System.Type[] explicitTypeArgs = null,
-        ImmutableArray<TypeSymbol> typeArgSymbols = default)
+        ImmutableArray<TypeSymbol> typeArgSymbols = default,
+        ImmutableArray<string> argumentNames = default)
     {
         result = null;
 
@@ -10736,16 +11385,17 @@ public sealed class Binder
             argTypes[i] = t;
         }
 
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
-                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, arguments, receiver, ce.Location);
-                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters);
-                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce);
-                var inheritedArguments = AppendOmittedOptionalArguments(inheritedConvertedArgs, inheritedParameters);
+                var inheritedMapping = resolution.ParameterMapping;
+                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, arguments, receiver, ce.Location, inheritedMapping);
+                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedMapping);
+                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedMapping);
+                var inheritedArguments = BuildOrderedCallArguments(inheritedConvertedArgs, inheritedMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
                 result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
@@ -10755,6 +11405,15 @@ public sealed class Binder
                 result = new BoundErrorExpression(null);
                 return true;
             default:
+                // Issue #343: if the failure is plausibly due to an unknown
+                // named-argument target, surface that as the diagnostic.
+                if (!argumentNames.IsDefault
+                    && TryReportUnknownNamedArgumentForClr(importedBaseClr, methodName, BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
+                {
+                    result = new BoundErrorExpression(null);
+                    return true;
+                }
+
                 return false;
         }
     }
@@ -10784,7 +11443,7 @@ public sealed class Binder
         return new BoundIndirectCallExpression(null, receiver, delegateSym.EquivalentFunctionType, convertedArgs.MoveToImmutable());
     }
 
-    private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default)
     {
         // The extension's first parameter is the receiver; user arguments line
         // up against parameters[1..].
@@ -10793,6 +11452,36 @@ public sealed class Binder
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, extension.Name, userParamCount, arguments.Length);
             return new BoundErrorExpression(null);
+        }
+
+        // Issue #343: reorder named arguments into the extension's parameter
+        // order (excluding the synthetic receiver slot). User extensions have
+        // no default parameter values, so every callable parameter must be filled.
+        ExpressionSyntax[] permutedSyntax;
+        ImmutableArray<BoundExpression> permutedArguments;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    ce.Arguments,
+                    arguments,
+                    userParamCount,
+                    p => extension.Parameters[p + 1].Name,
+                    extension.Name,
+                    out permutedSyntax,
+                    out permutedArguments))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+        else
+        {
+            permutedSyntax = new ExpressionSyntax[ce.Arguments.Count];
+            for (var i = 0; i < ce.Arguments.Count; i++)
+            {
+                permutedSyntax[i] = ce.Arguments[i];
+            }
+
+            permutedArguments = arguments;
         }
 
         // Issue #326: a generic extension function
@@ -10835,11 +11524,11 @@ public sealed class Binder
                     InferTypeArguments(extension.Parameters[0].Type, receiver.Type, substitution);
                 }
 
-                for (var i = 0; i < arguments.Length; i++)
+                for (var i = 0; i < permutedArguments.Length; i++)
                 {
-                    if (arguments[i].Type != null)
+                    if (permutedArguments[i].Type != null)
                     {
-                        InferTypeArguments(extension.Parameters[i + 1].Type, arguments[i].Type, substitution);
+                        InferTypeArguments(extension.Parameters[i + 1].Type, permutedArguments[i].Type, substitution);
                     }
                 }
 
@@ -10872,13 +11561,13 @@ public sealed class Binder
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
         var receiverParamType = substitution != null ? SubstituteType(extension.Parameters[0].Type, substitution) : extension.Parameters[0].Type;
         convertedArgs.Add(BindConversion(ce.Location, receiver, receiverParamType));
-        for (var i = 0; i < arguments.Length; i++)
+        for (var i = 0; i < permutedArguments.Length; i++)
         {
             var paramType = extension.Parameters[i + 1].Type;
             if (substitution != null && TypeSymbol.ContainsTypeParameter(paramType))
             {
                 if (paramType is FunctionTypeSymbol openFunctionParameter
-                    && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                    && TryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument))
                 {
                     convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
                     continue;
@@ -10887,12 +11576,12 @@ public sealed class Binder
                 // A parameter typed as an open T is encoded as System.Object in
                 // the emitted signature; pass the argument unconverted so the
                 // emitter inserts box / unbox.any around the erased boundary.
-                convertedArgs.Add(arguments[i]);
+                convertedArgs.Add(permutedArguments[i]);
             }
             else
             {
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, extension.Parameters[i + 1]));
+                convertedArgs.Add(BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
             }
         }
 
@@ -10922,8 +11611,9 @@ public sealed class Binder
     /// <param name="result">The bound call when resolution succeeds (or a bound error on ambiguity).</param>
     /// <param name="explicitTypeArgs">Issue #311: resolved explicit type arguments from a <c>[T1, T2]</c> list, or <c>null</c> for inference.</param>
     /// <param name="typeArgSymbols">Issue #320: explicit type-argument symbols in source order (carrying user-defined types), or default.</param>
+    /// <param name="argumentNames">Issue #343: per-source-argument names parallel to <paramref name="arguments"/> (entries are <see langword="null"/> for positional); default when the call is purely positional.</param>
     /// <returns>True when an imported extension method was matched (success or ambiguity); false to let the caller report GS0159.</returns>
-    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default)
+    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, ImmutableArray<string> argumentNames = default)
     {
         result = null;
 
@@ -10950,6 +11640,21 @@ public sealed class Binder
             argTypes[i + 1] = t;
         }
 
+        // Issue #343: extension methods are dispatched as `Class.Method(receiver, userArgs...)`,
+        // so prepend a null slot to user-supplied argument names so positions
+        // align with the method's parameter list (where index 0 is `this`).
+        IReadOnlyList<string> extensionArgumentNames = null;
+        if (!argumentNames.IsDefault)
+        {
+            var withReceiver = new string[arguments.Length + 1];
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                withReceiver[i + 1] = argumentNames[i];
+            }
+
+            extensionArgumentNames = withReceiver;
+        }
+
         var candidates = CollectImportedExtensionMethods(methodName);
         if (candidates.Count == 0)
         {
@@ -10962,7 +11667,7 @@ public sealed class Binder
         // when the call site supplied explicit type arguments (e.g.
         // services.AddSingleton[IService, Service]()), those are used to close
         // the generic method instead of inference.
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: extensionArgumentNames);
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -10991,10 +11696,11 @@ public sealed class Binder
         allArguments.AddRange(arguments);
         var bound = allArguments.MoveToImmutable();
 
-        // Issue #327: fill in any trailing optional parameters the call omitted
-        // (e.g. the CancellationToken on HttpResponse.WriteAsync(text)).
+        // Issue #327 / #343: re-order arguments into parameter positions when
+        // named arguments were used; otherwise fall through to the existing
+        // trailing-optional fill.
         var parameters = best.GetParameters();
-        bound = AppendOmittedOptionalArguments(bound, parameters);
+        bound = BuildOrderedCallArguments(bound, resolution.ParameterMapping, parameters);
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
@@ -11159,7 +11865,7 @@ public sealed class Binder
         return false;
     }
 
-    private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default)
     {
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
         var callableParameterCount = method.Parameters.Length - parameterOffset;
@@ -11167,6 +11873,36 @@ public sealed class Binder
         {
             Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, callableParameterCount, arguments.Length);
             return new BoundErrorExpression(null);
+        }
+
+        // Issue #343: reorder named arguments into the method's parameter
+        // order. User-defined methods have no default parameter values, so
+        // every parameter slot must be filled.
+        ExpressionSyntax[] permutedSyntax;
+        ImmutableArray<BoundExpression> permutedArguments;
+        if (!argumentNames.IsDefault)
+        {
+            if (!TryReorderUserCallArguments(
+                    ce.Arguments,
+                    arguments,
+                    callableParameterCount,
+                    p => method.Parameters[p + parameterOffset].Name,
+                    method.Name,
+                    out permutedSyntax,
+                    out permutedArguments))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+        else
+        {
+            permutedSyntax = new ExpressionSyntax[ce.Arguments.Count];
+            for (var i = 0; i < ce.Arguments.Count; i++)
+            {
+                permutedSyntax[i] = ce.Arguments[i];
+            }
+
+            permutedArguments = arguments;
         }
 
         // Phase 4.3b / ADR-0020: if the receiver is a constructed generic
@@ -11210,9 +11946,9 @@ public sealed class Binder
             }
             else
             {
-                for (var i = 0; i < arguments.Length; i++)
+                for (var i = 0; i < permutedArguments.Length; i++)
                 {
-                    InferTypeArguments(method.Parameters[i + parameterOffset].Type, arguments[i].Type, substitution);
+                    InferTypeArguments(method.Parameters[i + parameterOffset].Type, permutedArguments[i].Type, substitution);
                 }
 
                 foreach (var tp in method.TypeParameters)
@@ -11241,8 +11977,8 @@ public sealed class Binder
             }
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-        for (var i = 0; i < arguments.Length; i++)
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArguments.Length);
+        for (var i = 0; i < permutedArguments.Length; i++)
         {
             var paramType = method.Parameters[i + parameterOffset].Type;
 
@@ -11251,14 +11987,14 @@ public sealed class Binder
             // is encoded as System.Object under the type-erased model).
             if (paramType is TypeParameterSymbol)
             {
-                convertedArgs.Add(arguments[i]);
+                convertedArgs.Add(permutedArguments[i]);
                 continue;
             }
 
             var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
 
             if (substitution != null
-                && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                && TryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument))
             {
                 if (paramType is FunctionTypeSymbol openFunctionParameter)
                 {
@@ -11277,14 +12013,15 @@ public sealed class Binder
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
             // FormattableStringFactory.Create when the parameter is
             // IFormattable/FormattableString.
-            if (ce.Arguments[i] is InterpolatedStringExpressionSyntax interpolatedArg
+            var argSyntaxForInterp = UnwrapNamedArgumentValue(permutedSyntax[i]);
+            if (argSyntaxForInterp is InterpolatedStringExpressionSyntax interpolatedArg
                 && IsFormattableStringTargetType(expectedType))
             {
                 convertedArgs.Add(BindInterpolatedStringAsFormattable(interpolatedArg, expectedType));
                 continue;
             }
 
-            convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i + parameterOffset]));
+            convertedArgs.Add(BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
         if (substitution != null)
@@ -11923,15 +12660,18 @@ public sealed class Binder
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
         ImmutableArray<BoundExpression> arguments,
-        ParameterInfo[] parameters)
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping = default)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
-        for (var i = 0; i < arguments.Length && i < parameters.Length; i++)
+        for (var i = 0; i < arguments.Length; i++)
         {
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             var argument = arguments[i];
             var rebound = argument;
-            if (TryGetFunctionLiteral(argument, out var literal)
-                && TryGetDelegateFunctionType(parameters[i].ParameterType, out var targetFunctionType)
+            if (paramIndex < parameters.Length
+                && TryGetFunctionLiteral(argument, out var literal)
+                && TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
             {
                 rebound = CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
@@ -11965,20 +12705,25 @@ public sealed class Binder
     private ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
-        CallExpressionSyntax call)
+        CallExpressionSyntax call,
+        ImmutableArray<int> parameterMapping = default)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
-        for (var i = 0; i < arguments.Length && i < parameters.Length; i++)
+        for (var i = 0; i < arguments.Length; i++)
         {
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             var argument = arguments[i];
             var rebound = argument;
-            var parameterType = parameters[i].ParameterType;
-            if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
+            if (paramIndex < parameters.Length)
             {
-                var targetType = TypeSymbol.FromClrType(parameterType);
-                if (argument.Type != targetType && Conversion.Classify(argument.Type, targetType).Exists)
+                var parameterType = parameters[paramIndex].ParameterType;
+                if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
                 {
-                    rebound = BindConversion(call.Arguments[i].Location, argument, targetType, allowExplicit: true);
+                    var targetType = TypeSymbol.FromClrType(parameterType);
+                    if (argument.Type != targetType && Conversion.Classify(argument.Type, targetType).Exists)
+                    {
+                        rebound = BindConversion(call.Arguments[i].Location, argument, targetType, allowExplicit: true);
+                    }
                 }
             }
 

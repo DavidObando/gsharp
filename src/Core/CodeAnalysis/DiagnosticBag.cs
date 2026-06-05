@@ -1773,6 +1773,52 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0226", $"Ref-kind parameter '{parameterName}' cannot appear on a {functionKind} function.");
     }
 
+    /// <summary>
+    /// Issue #343: reports a positional call argument written after a named call
+    /// argument. Named arguments must come last; positional → named ordering is
+    /// fixed by the parser to support unambiguous matching against the parameter
+    /// list.
+    /// </summary>
+    /// <param name="location">The location of the offending positional argument.</param>
+    public void ReportPositionalArgumentAfterNamedArgument(TextLocation location)
+    {
+        Report(location, "GS0244", "Positional argument cannot follow a named argument.");
+    }
+
+    /// <summary>
+    /// Issue #343: reports a duplicate named argument at a call site (e.g.
+    /// <c>F(x: 1, x: 2)</c>). Each named argument's name must be unique.
+    /// </summary>
+    /// <param name="location">The location of the duplicate named argument.</param>
+    /// <param name="name">The duplicated parameter name.</param>
+    public void ReportDuplicateNamedArgument(TextLocation location, string name)
+    {
+        Report(location, "GS0245", $"Named argument '{name}' specified more than once.");
+    }
+
+    /// <summary>
+    /// Issue #343: reports a named call argument whose name does not match any
+    /// parameter of the resolved callee.
+    /// </summary>
+    /// <param name="location">The location of the offending named argument.</param>
+    /// <param name="callee">The callee name (for diagnostic context).</param>
+    /// <param name="name">The argument name that did not match any parameter.</param>
+    public void ReportNamedArgumentParameterNotFound(TextLocation location, string callee, string name)
+    {
+        Report(location, "GS0246", $"Named argument '{name}' does not match any parameter of '{callee}'.");
+    }
+
+    /// <summary>
+    /// Issue #343: reports a named call argument whose target parameter is
+    /// already supplied by a positional argument earlier in the same call.
+    /// </summary>
+    /// <param name="location">The location of the offending named argument.</param>
+    /// <param name="name">The parameter name that was double-bound.</param>
+    public void ReportNamedArgumentAlsoSpecifiedPositionally(TextLocation location, string name)
+    {
+        Report(location, "GS0247", $"Named argument '{name}' specifies a value for parameter '{name}' which was already given a positional value.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
