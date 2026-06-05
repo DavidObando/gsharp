@@ -122,6 +122,7 @@ public class SampleConformanceTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed for {sampleName}:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.GetKnownIssuesForSample(baseName));
             Assert.True(File.Exists(outPath), $"expected emitted assembly at {outPath}");
 
             var psi = new ProcessStartInfo("dotnet")

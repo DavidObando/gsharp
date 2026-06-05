@@ -402,6 +402,7 @@ public class PropertyInteropTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(gsDllPath);
 
             Assert.True(File.Exists(gsDllPath), $"GSharp DLL not found at {gsDllPath}");
 

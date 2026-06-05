@@ -108,6 +108,7 @@ Console.WriteLine(""done"")
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.AsyncStateMachine);
             Assert.True(File.Exists(outPath), "expected emitted assembly");
 
             var psi = new ProcessStartInfo("dotnet")

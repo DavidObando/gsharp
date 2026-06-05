@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "dotnet-ilverify": {
+      "version": "10.0.8",
+      "commands": [
+        "ilverify"
+      ],
+      "rollForward": true
+    }
+  }
+}

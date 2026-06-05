@@ -97,6 +97,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "/out:" + outPath, "/target:exe", "/targetframework:net10.0", sample });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath), "expected output assembly to exist");
+            IlVerifier.Verify(outPath);
             var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");
             Assert.True(File.Exists(runtimeConfig), "expected runtimeconfig.json beside output");
             Assert.Contains("Microsoft.NETCore.App", File.ReadAllText(runtimeConfig));
@@ -122,6 +123,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", sample });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
             Assert.False(File.Exists(Path.ChangeExtension(outPath, ".runtimeconfig.json")));
         }
         finally
@@ -145,6 +147,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "@" + rspPath });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
         }
         finally
         {
@@ -233,6 +236,7 @@ public class ProgramTests
             var exit = GSharp.Compiler.Program.Main(new[] { "@" + rspPath });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath), $"expected output at '{outPath}'");
+            IlVerifier.Verify(outPath);
         }
         finally
         {
@@ -425,6 +429,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", debugFlag, sample });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
             var pdbPath = Path.ChangeExtension(outPath, ".pdb");
             Assert.Equal(expectPdb, File.Exists(pdbPath));
         }
@@ -448,6 +453,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/pdb:" + pdbPath, sample });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
             Assert.True(File.Exists(pdbPath), "explicit /pdb:<path> sidecar should exist");
             // The default {PE}.pdb should NOT have been written when /pdb redirected it.
             Assert.False(File.Exists(Path.ChangeExtension(outPath, ".pdb")));
@@ -473,6 +479,7 @@ public class ProgramTests
             var exit = Program.Main(new[] { "/out:" + outPath, "/target:library", "/pdb:" + pdbPath, "/debug-", sample });
             Assert.Equal(0, exit);
             Assert.True(File.Exists(outPath));
+            IlVerifier.Verify(outPath);
             Assert.False(File.Exists(pdbPath));
         }
         finally

@@ -475,6 +475,7 @@ public class AttributeEmitTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+        IlVerifier.Verify(outPath);
 
         // Read all bytes so the file isn't locked, then load via Assembly.Load.
         var bytes = File.ReadAllBytes(outPath);
