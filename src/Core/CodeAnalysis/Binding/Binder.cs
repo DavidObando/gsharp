@@ -7565,6 +7565,11 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
+        if (classType.IsInline)
+        {
+            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+        }
+
         if (!classType.IsClass)
         {
             var fieldInitializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(parameters.Length);

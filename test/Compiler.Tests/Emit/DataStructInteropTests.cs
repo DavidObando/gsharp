@@ -75,7 +75,7 @@ public class DataStructInteropTests
     public void DataStruct_CoexistsWithInlineStruct_WithoutTypeLoadException()
     {
         // Issue #242 root cause: when a data struct (no methods) preceded an
-        // inline struct (7 synthesized methods) in the TypeDef table, the
+        // inline struct (8 synthesized methods, including its ctor) in the TypeDef table, the
         // methodList pointers violated ECMA-335 monotonicity.
         var source = """
             package MyLib

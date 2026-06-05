@@ -203,9 +203,6 @@ internal static class IlVerifier
 
     private static readonly Dictionary<string, string[]> SampleKnownIssues = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Generic value-type dispatch: see KnownIssues.GenericValueTypeDispatch.
-        ["InlineStruct"] = new[] { "InitOnly" },
-
         // Ref struct emission: see KnownIssues.RefStruct.
         ["UserRefStruct"] = KnownIssues.RefStruct,
     };

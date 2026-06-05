@@ -12,7 +12,7 @@ using System.Collections.Immutable;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Constructs a class instance via its Kotlin-style primary constructor:
+/// Constructs a class or inline-struct instance via its Kotlin-style primary constructor:
 /// <c>ClassName(arg1, arg2)</c> (Phase 3.B.3 sub-step 2). The arguments
 /// correspond 1:1 with <see cref="StructSymbol.PrimaryConstructorParameters"/>
 /// and are assigned to the same-named fields of the new instance.
