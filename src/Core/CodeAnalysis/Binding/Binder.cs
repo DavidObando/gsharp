@@ -375,6 +375,17 @@ public sealed class Binder
             binder.BindTypeAliasDeclaration(typeAlias);
         }
 
+        // ADR-0059 / issue #255: declare named delegate types BEFORE
+        // interfaces/structs/enums so that interface methods, struct fields,
+        // event handler types, etc. can reference a named delegate by name.
+        var delegateDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+                                              .OfType<DelegateDeclarationSyntax>();
+        foreach (var delegateSyntax in delegateDeclarations)
+        {
+            var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
+            binder.BindDelegateDeclaration(delegateSyntax, owningPackage);
+        }
+
         var interfaceDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                                .OfType<InterfaceDeclarationSyntax>();
 
@@ -465,7 +476,9 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, entryPoint, statements.ToImmutable());
+        var delegates = binder.scope.GetDeclaredDelegates();
+
+        var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable());
         result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet<string>.Empty;
         return result;
     }
@@ -771,7 +784,7 @@ public sealed class Binder
             .Where(g => !g.Name.StartsWith("<>"))
             .ToImmutableArray();
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals)
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
         {
             Imports = globalScope.Imports,
         };
@@ -936,6 +949,93 @@ public sealed class Binder
             System.AttributeTargets.Class);
 
         if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0059 / issue #255: binds a <c>type Name = delegate func(...)</c>
+    /// declaration into a <see cref="DelegateTypeSymbol"/> registered with the
+    /// current scope. Unlike a plain type alias, a named delegate produces a
+    /// real CLR TypeDef at emit time.
+    /// </summary>
+    private void BindDelegateDeclaration(DelegateDeclarationSyntax syntax, PackageSymbol package)
+    {
+        var name = syntax.Identifier.Text;
+
+        // Reject shadowing of primitive type names — same rule as struct/enum.
+        if (IsPrimitiveTypeName(name))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return;
+        }
+
+        // ADR-0059 v1 limitation: generic delegate declarations are accepted
+        // syntactically but rejected by the binder (the emitter does not yet
+        // thread GenericParam rows through delegate TypeDefs). Surface a clear
+        // diagnostic so users know it's a deliberate not-yet-supported case.
+        if (syntax.TypeParameterList != null)
+        {
+            Diagnostics.ReportGenericDelegateNotSupported(syntax.Identifier.Location, name);
+            return;
+        }
+
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        var seenParameterNames = new HashSet<string>();
+        for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+        {
+            var parameterSyntax = syntax.Parameters[pIndex];
+            var parameterName = parameterSyntax.Identifier.Text;
+            var parameterType = BindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+            if (!seenParameterNames.Add(parameterName))
+            {
+                Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+                continue;
+            }
+
+            parameters.Add(new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier));
+        }
+
+        // Variadic / `scoped` parameters are deliberately not supported in v1
+        // (the CLR delegate's Invoke signature has no analogue). Flag the
+        // first occurrence with the existing variadic-must-be-last check.
+        for (var i = 0; i < syntax.Parameters.Count; i++)
+        {
+            if (syntax.Parameters[i].IsVariadic)
+            {
+                Diagnostics.ReportVariadicParameterMustBeLast(syntax.Parameters[i].Location, syntax.Parameters[i].Identifier.Text);
+            }
+        }
+
+        var returnType = syntax.ReturnType != null ? BindTypeClause(syntax.ReturnType) : TypeSymbol.Void;
+        if (returnType == null)
+        {
+            returnType = TypeSymbol.Void;
+        }
+
+        // ADR-0047: annotations on a delegate declaration default to the Type
+        // target — identical to a struct/class/interface/enum.
+        var delegateAttributes = BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Type,
+            TypeDeclarationAllowedTargets,
+            "a delegate declaration",
+            System.AttributeTargets.Class);
+
+        var delegateSymbol = new DelegateTypeSymbol(
+            name,
+            package.Name,
+            accessibility,
+            parameters.ToImmutable(),
+            returnType,
+            syntax);
+        delegateSymbol.SetAttributes(delegateAttributes);
+        AttachDocumentation(delegateSymbol, syntax);
+
+        if (!scope.TryDeclareTypeAlias(name, delegateSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
@@ -7982,6 +8082,26 @@ public sealed class Binder
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
         }
 
+        // ADR-0059 / issue #255: direct call syntax `h(args)` on a variable
+        // of a user-declared named delegate type. Mirrors the CLR-delegate
+        // branch below — both end up dispatching through Invoke.
+        if (symbol is VariableSymbol namedDelegateVar && namedDelegateVar.Type is DelegateTypeSymbol namedDelegateSym)
+        {
+            if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
+                return new BoundErrorExpression(null);
+            }
+
+            var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                convertedNamedArgs.Add(BindConversion(syntax.Arguments[i].Location, boundArguments[i], namedDelegateSym.Parameters[i].Type));
+            }
+
+            return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, namedDelegateVar), namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
+        }
+
         // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,
         // int32]`, `RequestDelegate`) is callable with call syntax `f(x)`,
         // mirroring native func-typed variables. Lower the call to an
@@ -9850,6 +9970,17 @@ public sealed class Binder
 
         if (receiver == null || receiver.Type?.ClrType == null)
         {
+            // ADR-0059 / issue #255: a value of a user-declared named delegate
+            // type supports member-style invocation `del.Invoke(args)` (same as
+            // any CLR delegate). Lower to a BoundIndirectCallExpression whose
+            // function shape mirrors the delegate's declared signature; the
+            // emitter recognises a DelegateTypeSymbol target and dispatches
+            // through the delegate's runtime-implemented Invoke MethodDef.
+            if (receiver != null && receiver.Type is DelegateTypeSymbol delRecv && string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
+            {
+                return BindNamedDelegateInvokeCall(receiver, delRecv, arguments, ce);
+            }
+
             // Phase 3.B.4: dispatch to a user-defined interface method when
             // the static receiver type is an interface.
             if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
@@ -10039,6 +10170,31 @@ public sealed class Binder
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// ADR-0059 / issue #255: lowers a <c>delegateValue.Invoke(args)</c>
+    /// call against a value of <see cref="DelegateTypeSymbol"/> into a
+    /// <see cref="BoundIndirectCallExpression"/> whose function shape is the
+    /// delegate's equivalent <see cref="FunctionTypeSymbol"/>. The emitter
+    /// recognises a DelegateTypeSymbol target and routes the call through
+    /// the delegate's runtime-implemented Invoke MethodDef.
+    /// </summary>
+    private BoundExpression BindNamedDelegateInvokeCall(BoundExpression receiver, DelegateTypeSymbol delegateSym, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
+    {
+        if (arguments.Length != delegateSym.Parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, delegateSym.Name, delegateSym.Parameters.Length, arguments.Length);
+            return new BoundErrorExpression(null);
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], delegateSym.Parameters[i].Type));
+        }
+
+        return new BoundIndirectCallExpression(null, receiver, delegateSym.EquivalentFunctionType, convertedArgs.MoveToImmutable());
     }
 
     private BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)

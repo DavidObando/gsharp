@@ -270,3 +270,12 @@ ADR-0029 / Issue #410: every `data struct` synthesizes a fixed contract of value
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0232 | Error | Data struct '{type}' synthesizes member '{member}'; it cannot be declared explicitly. |
+
+## Named delegate type diagnostics (GS0233–GS0234)
+
+ADR-0059 / Issue #255: `type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected, and generic delegate types are reserved for v2.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)'). |
+| GS0234 | Error | Generic delegate declaration '{name}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up). |
