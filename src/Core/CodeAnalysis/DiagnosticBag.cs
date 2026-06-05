@@ -1635,6 +1635,130 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0234", $"Generic delegate declaration '{typeName}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up).");
     }
 
+    /// <summary>
+    /// ADR-0060: reports that an argument's ref-kind modifier (or its absence) does not match
+    /// the parameter's declared ref-kind at a call site. Replaces the lower-level GS9002 for
+    /// keyword-form call sites with a more targeted message naming both observed and expected.
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="argumentIndex">The 1-based argument index.</param>
+    /// <param name="parameterName">The parameter name on the callee.</param>
+    /// <param name="expected">The expected ref-kind ("none", "ref", "out", "in").</param>
+    /// <param name="observed">The observed ref-kind ("none", "ref", "out", "in").</param>
+    public void ReportRefKindMismatch(TextLocation location, int argumentIndex, string parameterName, string expected, string observed)
+    {
+        Report(location, "GS0235", $"Argument {argumentIndex} (parameter '{parameterName}') passes with ref-kind '{observed}' but the parameter is declared '{expected}'.");
+    }
+
+    /// <summary>
+    /// ADR-0060: reports that an inline-declaration / discard form (<c>out var</c>, <c>out let</c>,
+    /// or <c>out _</c>) was used outside an <c>out</c> argument position (e.g. with <c>ref</c>
+    /// or <c>in</c>, or as a named-argument value, or in a non-argument expression position).
+    /// </summary>
+    /// <param name="location">The location of the offending construct.</param>
+    public void ReportOutDeclarationOutsideOutArgument(TextLocation location)
+    {
+        Report(location, "GS0236", "An inline 'out var', 'out let', or 'out _' declaration is only allowed as an argument at an 'out' parameter position.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §5: reports an assignment to an <c>in</c> parameter inside the function body.
+    /// </summary>
+    /// <param name="location">The assignment location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    public void ReportCannotAssignToInParameter(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0237", $"'in' parameter '{parameterName}' is read-only; remove the 'in' modifier on the declaration if mutation is intended.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §5: reports a return-path on which an <c>out</c> parameter has not been
+    /// definitely assigned. The diagnostic locates the offending <c>return</c>.
+    /// </summary>
+    /// <param name="location">The location of the return statement (or the end-of-body for fall-through).</param>
+    /// <param name="parameterName">The out parameter name.</param>
+    public void ReportOutParameterNotAssigned(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0238", $"Out parameter '{parameterName}' must be definitely assigned on every path before the function returns.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §8: user-facing twin of GS9003. Reports that a variable was passed by <c>ref</c>
+    /// before being definitely assigned.
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="variableName">The variable name.</param>
+    public void ReportVariableNotAssignedBeforeRef(TextLocation location, string variableName)
+    {
+        Report(location, "GS0239", $"Variable '{variableName}' is not definitely assigned before being passed by 'ref'.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §8: reports that an override or interface-implementation method's parameter
+    /// ref-kind does not match the base/interface declaration.
+    /// </summary>
+    /// <param name="location">The location of the overriding declaration.</param>
+    /// <param name="memberName">The member name.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="expected">The expected ref-kind ("none", "ref", "out", "in").</param>
+    /// <param name="actual">The actual ref-kind ("none", "ref", "out", "in").</param>
+    public void ReportOverrideRefKindMismatch(TextLocation location, string memberName, string parameterName, string expected, string actual)
+    {
+        Report(location, "GS0240", $"Override of '{memberName}' must match the base parameter ref-kind on '{parameterName}': base is '{expected}', this declaration is '{actual}'.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §8: reports a variadic parameter (`...T`) declared with a ref-kind modifier.
+    /// The combination is forbidden — the CLR cannot express an array of by-ref values.
+    /// </summary>
+    /// <param name="location">The parameter location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    public void ReportRefKindOnVariadicParameter(TextLocation location, string parameterName)
+    {
+        Report(location, "GS0241", $"'ref'/'out'/'in' is not a legal modifier on a variadic parameter '{parameterName}'.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §8: warns that a call passes a value at an <c>in</c> parameter position
+    /// without the matching <c>in</c> modifier. The compiler does NOT silently spill the
+    /// value; the user should write <c>in lvalue</c> or remove the <c>in</c> from the signature.
+    /// </summary>
+    /// <param name="location">The argument location.</param>
+    /// <param name="argumentIndex">The 1-based argument index.</param>
+    /// <param name="parameterName">The parameter name on the callee.</param>
+    public void ReportInArgumentMissingInModifier(TextLocation location, int argumentIndex, string parameterName)
+    {
+        Report(location, "GS0242", $"Argument {argumentIndex} (parameter '{parameterName}') is an 'in' parameter but the call does not use the 'in' modifier; pass 'in <lvalue>' or change the parameter to by-value.", DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0060 §2: rejects a managed-pointer type (`*T`) used as a parameter type. The CLR
+    /// cannot encode a `*T` parameter without going through `ELEMENT_TYPE_BYREF` plus the
+    /// matching attributes; use the keyword form (`ref name T` / `out name T` / `in name T`)
+    /// to declare an explicit by-reference parameter.
+    /// </summary>
+    /// <param name="location">The parameter or type-clause location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="pointeeName">The pointee type name (e.g. "int32").</param>
+    public void ReportPointerTypeCannotBeParameterType(TextLocation location, string parameterName, string pointeeName)
+    {
+        Report(location, "GS0243", $"Managed-pointer type '*{pointeeName}' is not a legal parameter type; use 'ref {parameterName} {pointeeName}', 'out {parameterName} {pointeeName}', or 'in {parameterName} {pointeeName}' instead.");
+    }
+
+    /// <summary>
+    /// ADR-0060 §10: reports a ref-kind parameter on an <c>async</c>, <c>sequence</c>, or
+    /// <c>async sequence</c> function. The state-machine rewriter cannot hoist a managed
+    /// pointer into a field, so the parameter is rejected. (Same GS0226 family as the
+    /// existing async/iterator restrictions.)
+    /// </summary>
+    /// <param name="location">The parameter location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="functionKind">"async", "sequence", or "async sequence".</param>
+    public void ReportRefKindOnAsyncOrIterator(TextLocation location, string parameterName, string functionKind)
+    {
+        Report(location, "GS0226", $"Ref-kind parameter '{parameterName}' cannot appear on a {functionKind} function.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

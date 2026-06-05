@@ -75,6 +75,16 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this parameter carries the <c>scoped</c> modifier (ADR-0058).</summary>
     public bool IsScoped => ScopedModifier != null;
 
+    /// <summary>
+    /// Gets or sets the ADR-0060 optional <c>ref</c>, <c>out</c>, or <c>in</c> contextual modifier preceding the parameter
+    /// identifier. The modifier carries the CLR ref-kind contract for this parameter; it composes with
+    /// <see cref="ScopedModifier"/> (which precedes it). Assigned by the parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken RefKindModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this parameter carries a <c>ref</c>/<c>out</c>/<c>in</c> modifier (ADR-0060).</summary>
+    public bool HasRefKindModifier => RefKindModifier != null;
+
     /// <summary>Attaches the given annotation list to this parameter and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
     /// <returns>This same <see cref="ParameterSyntax"/>, with <see cref="Annotations"/> updated.</returns>

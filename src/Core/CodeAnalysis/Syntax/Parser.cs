@@ -1705,6 +1705,19 @@ public class Parser
             scopedModifier = NextToken();
         }
 
+        // ADR-0060: optional `ref`/`out`/`in` contextual modifier immediately precedes the
+        // parameter identifier (after the optional `scoped`). Disambiguation rule: the
+        // modifier is only consumed when the next token is an identifier (the parameter
+        // name). If `ref` / `out` / `in` IS the parameter name (no following identifier),
+        // treat it as the identifier itself.
+        SyntaxToken refKindModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "ref" || Current.Text == "out" || Current.Text == "in")
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            refKindModifier = NextToken();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         SyntaxToken ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
@@ -1715,6 +1728,7 @@ public class Parser
         var type = ParseTypeClause();
         var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
         parameter.ScopedModifier = scopedModifier;
+        parameter.RefKindModifier = refKindModifier;
         return parameter;
     }
 
@@ -3206,6 +3220,19 @@ public class Parser
 
         var expression = ParseBinaryExpression();
 
+        // ADR-0060 §13: indirect assignment `*p = expr`. Detected when the
+        // parsed primary is a unary `*` dereference followed by `=`. The
+        // binder produces a `BoundIndirectAssignmentExpression` which the
+        // emitter lowers to `<load-address> <value> stind.*`.
+        if (expression is UnaryExpressionSyntax unaryDeref
+            && unaryDeref.OperatorToken.Kind == SyntaxKind.StarToken
+            && Current.Kind == SyntaxKind.EqualsToken)
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new IndirectAssignmentExpressionSyntax(syntaxTree, unaryDeref, equalsToken, value);
+        }
+
         // Stream B′: `receiver.Event += handler` / `receiver.Event -= handler`
         // is captured as an EventSubscriptionExpressionSyntax once the LHS has
         // been parsed as a member-access chain. The binder later validates that
@@ -3853,8 +3880,27 @@ public class Parser
             {
                 var name = MatchToken(SyntaxKind.IdentifierToken);
                 var equals = MatchToken(SyntaxKind.EqualsToken);
-                var value = ParseExpression();
+
+                // ADR-0060: a named argument may carry a ref-kind modifier in
+                // its value position (e.g. `name = ref x`). V1 rejects this
+                // shape at bind time per ADR §4 / §8 (composition with named
+                // arguments is a follow-up); the parser still accepts it so
+                // the diagnostic carries a precise location.
+                ExpressionSyntax value;
+                if (TryParseRefArgument(out var refValue))
+                {
+                    value = refValue;
+                }
+                else
+                {
+                    value = ParseExpression();
+                }
+
                 expression = new NamedArgumentExpressionSyntax(syntaxTree, name, equals, value);
+            }
+            else if (TryParseRefArgument(out var refArg))
+            {
+                expression = refArg;
             }
             else
             {
@@ -3875,6 +3921,123 @@ public class Parser
         }
 
         return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    // ADR-0060: at the start of each argument position, recognise the
+    // contextual ref-kind modifiers `ref`/`out`/`in` and wrap the payload
+    // in a `RefArgumentExpressionSyntax`. Disambiguation rules per ADR §1:
+    //   ref/in <ident> | (              -> ref-kind argument
+    //   out var <ident>                 -> out inline-var
+    //   out let <ident>                 -> out inline-let
+    //   out _                           -> out discard
+    //   out <ident>                     -> out lvalue
+    // Otherwise the identifier `ref`/`out`/`in` is left as a plain expression
+    // (e.g. a user-defined parameter actually named `out`).
+    private bool TryParseRefArgument(out RefArgumentExpressionSyntax result)
+    {
+        result = null;
+        if (Current.Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var text = Current.Text;
+        if (text != "ref" && text != "out" && text != "in")
+        {
+            return false;
+        }
+
+        var nextKind = Peek(1).Kind;
+        var nextText = Peek(1).Text;
+
+        if (text == "out")
+        {
+            // `out var <ident>`, `out let <ident>`, `out _`, `out <ident>`,
+            // or `out (`. Reject the `out` if the next token isn't a legal
+            // payload start (so a parameter actually named `out` still binds).
+            bool payloadIsDecl = nextKind == SyntaxKind.IdentifierToken
+                && (nextText == "var" || nextText == "let")
+                && Peek(2).Kind == SyntaxKind.IdentifierToken;
+            bool payloadIsDiscard = nextKind == SyntaxKind.IdentifierToken && nextText == "_";
+            bool payloadIsLvalueStart = nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken;
+
+            // A bare identifier follower could be the parameter name (use `out`).
+            // It is treated as `out lvalue` only when the lookahead is unambiguous.
+            // We follow the ADR's rule: if the modifier is followed by an
+            // identifier (not the named-argument `=` form), recognise it as
+            // a ref-kind argument. A trailing `=` (named argument) is already
+            // handled above; anything else with an ident lookahead is `out`.
+            if (!(payloadIsDecl || payloadIsDiscard || payloadIsLvalueStart))
+            {
+                return false;
+            }
+
+            var outToken = NextToken();
+            if (payloadIsDecl)
+            {
+                var keyword = NextToken();
+                var ident = MatchToken(SyntaxKind.IdentifierToken);
+                TypeClauseSyntax declType = null;
+                if (CurrentTokenStartsTypeClause())
+                {
+                    declType = ParseTypeClause();
+                }
+
+                result = new RefArgumentExpressionSyntax(syntaxTree, outToken, keyword, ident, discardToken: null, declType);
+                return true;
+            }
+
+            if (payloadIsDiscard)
+            {
+                var underscore = NextToken();
+                TypeClauseSyntax declType = null;
+                if (CurrentTokenStartsTypeClause())
+                {
+                    declType = ParseTypeClause();
+                }
+
+                result = new RefArgumentExpressionSyntax(syntaxTree, outToken, declarationKeyword: null, declarationIdentifier: null, discardToken: underscore, declType);
+                return true;
+            }
+
+            var lvalue = ParseExpression();
+            result = new RefArgumentExpressionSyntax(syntaxTree, outToken, lvalue);
+            return true;
+        }
+
+        // `ref` / `in` — only legal followers are an identifier (lvalue) or
+        // a parenthesised lvalue. Named-argument `=` form is handled above.
+        if (!(nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken))
+        {
+            return false;
+        }
+
+        var modifier = NextToken();
+        var inner = ParseExpression();
+        result = new RefArgumentExpressionSyntax(syntaxTree, modifier, inner);
+        return true;
+    }
+
+    // ADR-0060 helper for the optional `out var name T` / `out let name T` /
+    // `out name T` type-clause: returns true when the current token is an
+    // identifier that could start a G# type clause (excluding `,` / `)`).
+    private bool CurrentTokenStartsTypeClause()
+    {
+        switch (Current.Kind)
+        {
+            case SyntaxKind.FuncKeyword:
+            case SyntaxKind.OpenParenthesisToken:
+            case SyntaxKind.MapKeyword:
+            case SyntaxKind.ChanKeyword:
+            case SyntaxKind.SequenceKeyword:
+            case SyntaxKind.AsyncKeyword:
+            case SyntaxKind.StarToken:
+            case SyntaxKind.OpenSquareBracketToken:
+            case SyntaxKind.IdentifierToken:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private ExpressionSyntax ParseNameExpression()

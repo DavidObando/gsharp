@@ -265,6 +265,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.DereferenceExpression:
                 WriteDereferenceExpression((BoundDereferenceExpression)node, writer);
                 break;
+            case BoundNodeKind.IndirectAssignmentExpression:
+                WriteIndirectAssignmentExpression((BoundIndirectAssignmentExpression)node, writer);
+                break;
             case BoundNodeKind.StateMachineAwaitOnCompleted:
                 WriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node, writer);
                 break;
@@ -1484,6 +1487,16 @@ public static class BoundNodePrinter
     {
         writer.WritePunctuation(SyntaxKind.StarToken);
         node.Operand.WriteTo(writer);
+    }
+
+    private static void WriteIndirectAssignmentExpression(BoundIndirectAssignmentExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.StarToken);
+        node.Pointer.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Value.WriteTo(writer);
     }
 
     private static void WriteStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node, IndentedTextWriter writer)

@@ -249,6 +249,19 @@ public enum SyntaxKind
     // it inside `type Name = ...` (mirroring the data/record/inline/ref
     // contextual-modifier pattern in ParseTypeAliasDeclaration).
     DelegateDeclaration,
+
+    // ADR-0060: argument-position ref-kind modifier wrapper. Carries
+    // the literal `ref`/`out`/`in` token and, for `out`, an optional
+    // inline-declaration payload (`out var name [T]`, `out let name [T]`,
+    // or `out _`). Plain `ref name` / `in name` / `out name` wrap a
+    // single inner expression.
+    RefArgumentExpression,
+
+    // ADR-0060 §13: indirect assignment `*p = expr`. The LHS is a
+    // pointer dereference; the emitter lowers to `<load-address> <value>
+    // stind.*`. Necessary for §5's body-side lowering of `ref`/`out`
+    // parameter writes and for direct `*T`-local stores.
+    IndirectAssignmentExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented
