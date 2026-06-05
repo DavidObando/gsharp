@@ -273,6 +273,14 @@ public class Compilation
         // untouched and renders the interpolation node directly.
         program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
 
+        // Issue #452: spill side-effecting sub-expressions that sit in
+        // emit-pipeline contexts which historically re-emitted them more
+        // than once (compound index / property assignments, etc.). Run
+        // after interpolated-string lowering and before the async /
+        // iterator state machine rewriters so the spilled temps
+        // participate in hoist-set computation.
+        program = Lowering.SideEffectSpiller.Lower(program);
+
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
@@ -368,6 +376,14 @@ public class Compilation
         // the async/iterator rewriters and IL emission. The interpreter path is
         // untouched and renders the interpolation node directly.
         program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
+
+        // Issue #452: spill side-effecting sub-expressions that sit in
+        // emit-pipeline contexts which historically re-emitted them more
+        // than once (compound index / property assignments, etc.). Run
+        // after interpolated-string lowering and before the async /
+        // iterator state machine rewriters so the spilled temps
+        // participate in hoist-set computation.
+        program = Lowering.SideEffectSpiller.Lower(program);
 
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
