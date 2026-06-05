@@ -6515,7 +6515,17 @@ public sealed class Binder
 
         if (variable.IsReadOnly)
         {
-            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            // ADR-0060: an `in` parameter is read-only because of its ref-kind,
+            // not because of the standard `let` quality. Report GS0237 with
+            // ADR-specific wording instead of the generic "cannot assign to const".
+            if (variable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
+            {
+                Diagnostics.ReportCannotAssignToInParameter(syntax.EqualsToken.Location, name);
+            }
+            else
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+            }
         }
 
         var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
@@ -7497,7 +7507,18 @@ public sealed class Binder
         // GS9005: cannot take address of a constant binding.
         if (operand is BoundVariableExpression bve && bve.Variable.IsReadOnly)
         {
-            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, bve.Variable.Name);
+            // ADR-0060: address-of an `in` parameter would let callers write
+            // through the pointer, defeating the read-only contract. Report
+            // GS0237 instead of the generic "cannot take address of constant".
+            if (bve.Variable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
+            {
+                Diagnostics.ReportCannotAssignToInParameter(syntax.OperatorToken.Location, inParam.Name);
+            }
+            else
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, bve.Variable.Name);
+            }
+
             return new BoundErrorExpression(null);
         }
 
