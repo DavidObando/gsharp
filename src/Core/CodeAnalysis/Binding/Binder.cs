@@ -6003,6 +6003,13 @@ public sealed class Binder
                 // to BindRefArgumentExpression directly before reaching this.
                 Diagnostics.ReportOutDeclarationOutsideOutArgument(syntax.Location);
                 return new BoundErrorExpression(null);
+            case SyntaxKind.ConditionalRefArgumentExpression:
+                // ADR-0061: a conditional ref-argument expression is only
+                // valid as the payload of a ref-kind modifier or as the
+                // operand of `&`. Those sites dispatch to the dedicated
+                // binders below; anywhere else is a hard error.
+                Diagnostics.ReportConditionalRefArgumentOutsideRefContext(syntax.Location);
+                return new BoundErrorExpression(null);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
             default:
@@ -7510,6 +7517,21 @@ public sealed class Binder
     /// <summary>ADR-0039: Binds <c>&amp;expr</c> — takes managed pointer to an lvalue.</summary>
     private BoundExpression BindAddressOfExpression(UnaryExpressionSyntax syntax)
     {
+        // ADR-0061: `&(cond ? a : b)` and `&cond ? a : b` (parser tail
+        // form). Dispatch to the conditional ref-argument binder, which
+        // produces a BoundConditionalAddressExpression of type `T&`.
+        // The operand may be wrapped in parens by the parser; unwrap.
+        var rawOperand = syntax.Operand;
+        while (rawOperand is ParenthesizedExpressionSyntax pen)
+        {
+            rawOperand = pen.Expression;
+        }
+
+        if (rawOperand is ConditionalRefArgumentExpressionSyntax condOperand)
+        {
+            return BindConditionalRefArgument(condOperand, outerModifier: null);
+        }
+
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {
@@ -7682,6 +7704,21 @@ public sealed class Binder
         }
 
         // Plain lvalue form: bind the operand and check it's an lvalue.
+        // ADR-0061: the operand may be a conditional ref-argument expression
+        // (`cond ? a : b`); dispatch to the dedicated binder which produces
+        // a BoundConditionalAddressExpression (also typed `T&`). The
+        // operand may be wrapped in parens (`ref (cond ? a : b)`); unwrap.
+        var rawExpr = syntax.Expression;
+        while (rawExpr is ParenthesizedExpressionSyntax pen)
+        {
+            rawExpr = pen.Expression;
+        }
+
+        if (rawExpr is ConditionalRefArgumentExpressionSyntax condSyntax)
+        {
+            return BindConditionalRefArgument(condSyntax, syntax.RefKindModifier);
+        }
+
         var operand = BindExpression(syntax.Expression);
         if (operand is BoundErrorExpression)
         {
@@ -7706,6 +7743,138 @@ public sealed class Binder
         }
 
         return new BoundAddressOfExpression(null, operand);
+    }
+
+    /// <summary>
+    /// ADR-0061: binds a conditional ref-argument expression (<c>cond ? a : b</c>)
+    /// at a ref-kind modifier payload or `&amp;` operand. Validates condition type,
+    /// both-branches-are-lvalues, branch type identity, ref/readonly compatibility,
+    /// and inner-modifier matching. Produces a <see cref="BoundConditionalAddressExpression"/>
+    /// on success.
+    /// </summary>
+    /// <param name="syntax">The conditional ref-argument syntax.</param>
+    /// <param name="outerModifier">The outer ref-kind modifier token (<see langword="null"/> for the bare <c>&amp;</c> operand form).</param>
+    /// <returns>The bound conditional address expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
+    private BoundExpression BindConditionalRefArgument(
+        ConditionalRefArgumentExpressionSyntax syntax,
+        SyntaxToken outerModifier)
+    {
+        // Condition must be bool.
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+
+        // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
+        // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
+        // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
+        // mismatch since `&` already denotes mutable byref.
+        string outerText = outerModifier?.Text ?? "&";
+        if (syntax.WhenTrueRefKindModifier != null
+            && !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText))
+        {
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
+                syntax.WhenTrueRefKindModifier.Location,
+                outerText,
+                syntax.WhenTrueRefKindModifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        if (syntax.WhenFalseRefKindModifier != null
+            && !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText))
+        {
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
+                syntax.WhenFalseRefKindModifier.Location,
+                outerText,
+                syntax.WhenFalseRefKindModifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        // Each branch must itself be a plain lvalue expression — not a nested
+        // conditional, not a ref-argument, not an inline-declaration. We
+        // explicitly reject the inline-declaration form here (GS0250) before
+        // attempting to bind.
+        if (syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration)
+        {
+            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        if (syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration)
+        {
+            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        var whenTrue = BindExpression(syntax.WhenTrue);
+        var whenFalse = BindExpression(syntax.WhenFalse);
+
+        if (whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!IsLvalue(whenTrue))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        if (!IsLvalue(whenFalse))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        // Branch types must match exactly — no implicit widening or nullable
+        // adjustment, since the resulting byref selects between slots whose
+        // physical type must agree.
+        if (!ReferenceEquals(whenTrue.Type, whenFalse.Type)
+            && !string.Equals(whenTrue.Type?.Name, whenFalse.Type?.Name, System.StringComparison.Ordinal))
+        {
+            Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
+                syntax.Location,
+                whenTrue.Type?.Name ?? "?",
+                whenFalse.Type?.Name ?? "?");
+            return new BoundErrorExpression(null);
+        }
+
+        // Readonly check: for `ref` (and bare `&`), neither branch may be a
+        // read-only local. For `in` either branch may be read-only. For `out`
+        // both must be writable. (Definite-assignment is enforced elsewhere
+        // by RefKindDefiniteAssignmentAnalyzer.)
+        bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
+        if (requiresWritable)
+        {
+            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+    }
+
+    /// <summary>
+    /// ADR-0061: validates that an inner ref-kind modifier on a conditional
+    /// ref-argument branch is compatible with the outer modifier. The bare
+    /// <c>&amp;</c> operand form accepts only inner <c>ref</c> (no <c>in</c>/<c>out</c>).
+    /// </summary>
+    /// <param name="inner">The inner modifier text.</param>
+    /// <param name="outer">The outer modifier text (or "&amp;" for the bare address-of form).</param>
+    /// <returns><see langword="true"/> when compatible.</returns>
+    private static bool InnerModifierMatchesOuter(string inner, string outer)
+    {
+        if (outer == "&")
+        {
+            return inner == "ref";
+        }
+
+        return string.Equals(inner, outer, System.StringComparison.Ordinal);
     }
 
     /// <summary>ADR-0060: human-readable label for a <see cref="RefKind"/>.</summary>
@@ -7831,6 +8000,17 @@ public sealed class Binder
 
                 // Fall through: type mismatch on the address-of operand. Surface
                 // the standard "cannot convert" diagnostic via BindConversion.
+            }
+            else if (argument is BoundConditionalAddressExpression condAddr)
+            {
+                // ADR-0061: conditional address-of also accepted at ref-kind
+                // parameter positions. The shared pointee type was validated
+                // by BindConditionalRefArgument.
+                var pointeeType = condAddr.PointeeType;
+                if (pointeeType == expectedType || pointeeType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                {
+                    return argument;
+                }
             }
         }
 
@@ -8496,7 +8676,11 @@ public sealed class Binder
 
             if (rk == RefKind.Ref || rk == RefKind.Out)
             {
-                if (arguments[i] is not BoundAddressOfExpression)
+                // ADR-0061: BoundConditionalAddressExpression is also a valid
+                // byref-producing argument (selects one of two addresses at
+                // runtime).
+                if (arguments[i] is not BoundAddressOfExpression
+                    && arguments[i] is not BoundConditionalAddressExpression)
                 {
                     Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
                 }
@@ -8969,9 +9153,20 @@ public sealed class Binder
             // ADR-0060: when the constructor parameter is ref-kind, the bound
             // argument is a BoundAddressOfExpression of type *T; bypass the
             // standard convertibility check so the address is forwarded as-is.
+            // ADR-0061: BoundConditionalAddressExpression is the analogous
+            // shape for conditional ref-arguments.
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor)
             {
                 var pointee = addrCtor.Operand?.Type;
+                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                {
+                    convertedArguments.Add(argument);
+                    continue;
+                }
+            }
+            else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrCtor)
+            {
+                var pointee = condAddrCtor.PointeeType;
                 if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
                 {
                     convertedArguments.Add(argument);
@@ -9363,9 +9558,10 @@ public sealed class Binder
                 // Back-compat: bare `&x` (UnaryExpression with AmpersandToken,
                 // bound to BoundAddressOfExpression) is universally compatible
                 // with any ref-kind parameter. Treat it as if the user wrote the
-                // matching keyword.
+                // matching keyword. ADR-0061: same back-compat applies to the
+                // bare `&(cond ? a : b)` conditional address-of form.
                 bool isBareAddressOf = argRefKind == RefKind.None
-                    && argument is BoundAddressOfExpression
+                    && (argument is BoundAddressOfExpression || argument is BoundConditionalAddressExpression)
                     && parameter.RefKind != RefKind.None;
                 if (isBareAddressOf)
                 {
@@ -9396,7 +9592,8 @@ public sealed class Binder
                 }
 
                 // Modifiers match. The bound argument is BoundAddressOfExpression
-                // whose operand type must match the parameter's pointee type.
+                // (or, ADR-0061, BoundConditionalAddressExpression) whose
+                // operand/pointee type must match the parameter's pointee type.
                 if (argument is BoundAddressOfExpression addr)
                 {
                     var operandType = addr.Operand.Type;
@@ -9419,6 +9616,15 @@ public sealed class Binder
                     if (operandType != expectedType && operandType != TypeSymbol.Error)
                     {
                         Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, operandType);
+                        hasErrors = true;
+                    }
+                }
+                else if (argument is BoundConditionalAddressExpression condAddrArg)
+                {
+                    var pointeeType = condAddrArg.PointeeType;
+                    if (pointeeType != expectedType && pointeeType != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, pointeeType);
                         hasErrors = true;
                     }
                 }

@@ -424,6 +424,8 @@ public abstract class BoundTreeRewriter
                 return RewriteChannelCloseExpression((BoundChannelCloseExpression)node);
             case BoundNodeKind.AddressOfExpression:
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
+            case BoundNodeKind.ConditionalAddressExpression:
+                return RewriteConditionalAddressExpression((BoundConditionalAddressExpression)node);
             case BoundNodeKind.DereferenceExpression:
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             case BoundNodeKind.IndirectAssignmentExpression:
@@ -894,6 +896,24 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundAddressOfExpression(null, operand);
+    }
+
+    /// <summary>
+    /// ADR-0061: Rewrites a conditional address-of expression.
+    /// </summary>
+    /// <param name="node">The conditional address-of expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteConditionalAddressExpression(BoundConditionalAddressExpression node)
+    {
+        var condition = RewriteExpression(node.Condition);
+        var whenTrue = RewriteExpression(node.WhenTrueOperand);
+        var whenFalse = RewriteExpression(node.WhenFalseOperand);
+        if (condition == node.Condition && whenTrue == node.WhenTrueOperand && whenFalse == node.WhenFalseOperand)
+        {
+            return node;
+        }
+
+        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, node.PointeeType);
     }
 
     /// <summary>

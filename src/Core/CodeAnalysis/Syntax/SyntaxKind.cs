@@ -257,6 +257,13 @@ public enum SyntaxKind
     // single inner expression.
     RefArgumentExpression,
 
+    // ADR-0061: a call-site-only conditional lvalue payload of the form
+    // `<cond> ? <lvalue> : <lvalue>` recognised inside the payload of a
+    // ref-kind modifier (`ref`/`out`/`in`) and as the operand of `&`.
+    // The two branches may optionally carry a matching inner ref-kind
+    // modifier (e.g. `ref c ? ref a : ref b`).
+    ConditionalRefArgumentExpression,
+
     // ADR-0060 §13: indirect assignment `*p = expr`. The LHS is a
     // pointer dereference; the emitter lowers to `<load-address> <value>
     // stind.*`. Necessary for §5's body-side lowering of `ref`/`out`

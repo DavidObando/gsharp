@@ -86,6 +86,11 @@ public enum BoundNodeKind
     DefaultExpression,
     ClrStaticCallExpression,
 
+    // ADR-0061: a call-site-only conditional lvalue address-of of the form
+    // `<cond> ? <lvalue> : <lvalue>`. Lowered to a CIL branch around two
+    // address-of forms feeding a single byref onto the evaluation stack.
+    ConditionalAddressExpression,
+
     // ADR-0060 §13: indirect assignment `*p = expr` — stores a value
     // through a managed pointer. Lowered to `<load-address> <value>
     // stind.*` by the emitter. Used both for direct `*T`-local stores

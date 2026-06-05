@@ -94,6 +94,17 @@ internal static class SideEffectAnalyzer
             // (they're just managed-pointer arithmetic).
             case BoundNodeKind.AddressOfExpression:
                 return HasObservableSideEffect(((BoundAddressOfExpression)expression).Operand);
+            case BoundNodeKind.ConditionalAddressExpression:
+            {
+                // ADR-0061: conditional address-of is pure when all three
+                // sub-expressions are pure — the lowering is a CIL branch
+                // around two address-of forms, with no user-visible writes.
+                var ca = (BoundConditionalAddressExpression)expression;
+                return HasObservableSideEffect(ca.Condition)
+                    || HasObservableSideEffect(ca.WhenTrueOperand)
+                    || HasObservableSideEffect(ca.WhenFalseOperand);
+            }
+
             case BoundNodeKind.DereferenceExpression:
                 return HasObservableSideEffect(((BoundDereferenceExpression)expression).Operand);
 

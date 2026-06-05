@@ -1819,6 +1819,51 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0247", $"Named argument '{name}' specifies a value for parameter '{name}' which was already given a positional value.");
     }
 
+    /// <summary>
+    /// ADR-0061: reports a conditional ref-argument expression that surfaces outside of
+    /// a ref-kind modifier payload (<c>ref</c>/<c>out</c>/<c>in</c>) or an <c>&amp;</c> operand.
+    /// </summary>
+    /// <param name="location">The text location of the conditional expression.</param>
+    public void ReportConditionalRefArgumentOutsideRefContext(TextLocation location)
+    {
+        Report(location, "GS0248", "Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'.");
+    }
+
+    /// <summary>
+    /// ADR-0061: reports that the two branches of a conditional ref-argument produce
+    /// values of different (non-identical) types.
+    /// </summary>
+    /// <param name="location">The text location of the conditional expression.</param>
+    /// <param name="trueType">The type of the true-branch lvalue.</param>
+    /// <param name="falseType">The type of the false-branch lvalue.</param>
+    public void ReportConditionalRefArgumentBranchTypeMismatch(TextLocation location, string trueType, string falseType)
+    {
+        Report(location, "GS0249", $"Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'.");
+    }
+
+    /// <summary>
+    /// ADR-0061: reports an inline-declaration (<c>out var</c>/<c>out let</c>/<c>out _</c>)
+    /// appearing inside a branch of a conditional ref-argument. A new local declared on
+    /// only one branch is semantically incoherent.
+    /// </summary>
+    /// <param name="location">The text location of the offending inline declaration.</param>
+    public void ReportInlineDeclarationInConditionalRefBranch(TextLocation location)
+    {
+        Report(location, "GS0250", "An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead.");
+    }
+
+    /// <summary>
+    /// ADR-0061: reports an inner ref-kind modifier on a conditional ref-argument branch
+    /// that does not match the outer modifier.
+    /// </summary>
+    /// <param name="location">The text location of the offending inner modifier.</param>
+    /// <param name="outerModifier">The outer modifier text (<c>ref</c>/<c>out</c>/<c>in</c>).</param>
+    /// <param name="innerModifier">The inner modifier text observed.</param>
+    public void ReportConditionalRefArgumentInnerModifierMismatch(TextLocation location, string outerModifier, string innerModifier)
+    {
+        Report(location, "GS0251", $"Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -12011,6 +12011,10 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundAddressOfExpression addressOf:
                     this.EmitAddressOf(addressOf);
                     break;
+                case BoundConditionalAddressExpression conditionalAddress:
+                    // ADR-0061: conditional address-of (`cond ? &a : &b`).
+                    this.EmitConditionalAddress(conditionalAddress);
+                    break;
                 case BoundDereferenceExpression deref:
                     this.EmitDereference(deref);
                     break;
@@ -16037,10 +16041,15 @@ internal sealed class ReflectionMetadataEmitter
 
                 if (rk == RefKind.Ref || rk == RefKind.Out || rk == RefKind.In)
                 {
-                    // Argument must be BoundAddressOfExpression; emit the address.
+                    // Argument must be BoundAddressOfExpression or (ADR-0061)
+                    // BoundConditionalAddressExpression; emit the address.
                     if (arg is BoundAddressOfExpression addrOf)
                     {
                         this.EmitAddressOf(addrOf);
+                    }
+                    else if (arg is BoundConditionalAddressExpression condAddr)
+                    {
+                        this.EmitConditionalAddress(condAddr);
                     }
                     else
                     {
@@ -16087,6 +16096,40 @@ internal sealed class ReflectionMetadataEmitter
                 default:
                     throw new InvalidOperationException($"Cannot take address of expression kind '{node.Operand.GetType().Name}'.");
             }
+        }
+
+        /// <summary>
+        /// ADR-0061: Emits a conditional address-of (`cond ? &amp;a : &amp;b`) as
+        /// a CIL branch that selects one of two address-of forms onto the
+        /// evaluation stack. The result is a managed pointer (<c>T&amp;</c>)
+        /// with the same verifier type as either branch.
+        /// </summary>
+        /// <param name="node">The conditional address-of bound node.</param>
+        private void EmitConditionalAddress(BoundConditionalAddressExpression node)
+        {
+            var falseLabel = this.il.DefineLabel();
+            var doneLabel = this.il.DefineLabel();
+
+            // <cond>
+            this.EmitExpression(node.Condition);
+
+            // brfalse falseLabel
+            this.il.Branch(ILOpCode.Brfalse, falseLabel);
+
+            // <addr of WhenTrue>
+            this.EmitAddressOf(new BoundAddressOfExpression(null, node.WhenTrueOperand));
+
+            // br doneLabel
+            this.il.Branch(ILOpCode.Br, doneLabel);
+
+            // falseLabel:
+            this.il.MarkLabel(falseLabel);
+
+            // <addr of WhenFalse>
+            this.EmitAddressOf(new BoundAddressOfExpression(null, node.WhenFalseOperand));
+
+            // doneLabel:
+            this.il.MarkLabel(doneLabel);
         }
 
         /// <summary>ADR-0039: Emits a dereference (load indirect) from a managed pointer.</summary>
