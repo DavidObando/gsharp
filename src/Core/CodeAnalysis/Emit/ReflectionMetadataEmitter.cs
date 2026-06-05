@@ -783,7 +783,7 @@ internal sealed class ReflectionMetadataEmitter
             structFirstMethodRows[s] = methodRow;
             if (s.IsInline)
             {
-                methodRow += 7;
+                methodRow += 8;
             }
 
             foreach (var m in s.Methods)
@@ -5561,6 +5561,7 @@ internal sealed class ReflectionMetadataEmitter
         var field = structSym.Fields[0];
         var fieldHandle = this.structFieldDefs[field];
         var typeDef = this.structTypeDefs[structSym];
+        this.classPrimaryCtorHandles[structSym] = this.EmitInlineStructConstructor(structSym, field, fieldHandle);
         this.EmitInlineEqualsObject(structSym, field, fieldHandle, typeDef);
         this.EmitInlineEqualsTyped(structSym, field, fieldHandle);
         this.EmitInlineGetHashCode(structSym, field, fieldHandle);
@@ -5568,6 +5569,36 @@ internal sealed class ReflectionMetadataEmitter
         this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: false);
         this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: true);
         this.EmitInlineDeconstruct(structSym, field, fieldHandle);
+    }
+
+    private MethodDefinitionHandle EmitInlineStructConstructor(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
+    {
+        int bodyOffset = -1;
+        if (!this.metadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(fieldHandle);
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                1,
+                r => r.Void(),
+                ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), field.Type));
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
     }
 
     private void EmitBoxIfNeeded(InstructionEncoder il, TypeSymbol type)
@@ -12749,7 +12780,7 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out var ctorHandle))
             {
                 throw new InvalidOperationException(
-                    $"Class '{call.StructType.Name}' has no emitted primary ctor.");
+                    $"Type '{call.StructType.Name}' has no emitted primary ctor.");
             }
 
             // Phase 4 emit parity (F2, type-erased generic user types): the

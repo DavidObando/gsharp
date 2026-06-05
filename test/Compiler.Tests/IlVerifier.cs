@@ -246,7 +246,6 @@ internal static class IlVerifier
         ["ExpressionEval"] = KnownIssues.GenericValueTypeDispatch,
         ["PatternSwitch"] = KnownIssues.GenericValueTypeDispatch,
         ["SwitchExpression"] = KnownIssues.GenericValueTypeDispatch,
-        ["InlineStruct"] = new[] { "InitOnly" },
 
         // Ref struct emission: see KnownIssues.RefStruct.
         ["UserRefStruct"] = KnownIssues.RefStruct,
