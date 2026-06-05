@@ -518,6 +518,10 @@ public sealed class Binder
                     binder.Diagnostics.ReportAllPathsMustReturn(function.Declaration.Identifier.Location);
                 }
 
+                // ADR-0060 items #4/#5: out-parameter definite-assignment and
+                // 'ref'-arg unassigned-before-read checks.
+                RefKindDefiniteAssignmentAnalyzer.Analyze(loweredBody, function, binder.Diagnostics);
+
                 functionBodies.Add(function, loweredBody);
 
                 diagnostics.AddRange(binder.Diagnostics);
