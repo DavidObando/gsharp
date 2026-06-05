@@ -541,9 +541,92 @@ public class Parser
         }
 
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+
+        // ADR-0059 / issue #255: `type Name [TParams] = delegate func(...) R`
+        // declares a named CLR delegate type. The `delegate` contextual keyword
+        // (an IdentifierToken whose text is "delegate") differentiates this
+        // case from the erased type-alias form below. We require `func` to
+        // immediately follow `delegate`; anything else trips GS0233.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "delegate")
+        {
+            return ParseDelegateDeclaration(accessibilityModifier, typeKeyword, identifier, typeParameterList, equalsToken);
+        }
+
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var aliasedType = new TypeClauseSyntax(syntaxTree, aliasedIdentifier);
         return new TypeAliasDeclarationSyntax(syntaxTree, accessibilityModifier, typeKeyword, identifier, equalsToken, aliasedType);
+    }
+
+    private MemberSyntax ParseDelegateDeclaration(
+        SyntaxToken accessibilityModifier,
+        SyntaxToken typeKeyword,
+        SyntaxToken identifier,
+        TypeParameterListSyntax typeParameterList,
+        SyntaxToken equalsToken)
+    {
+        // `delegate` is a contextual keyword that stays as an IdentifierToken
+        // — mirrors the existing data/record/inline/ref contextual-modifier
+        // handling in ParseTypeAliasDeclaration. We DO NOT promote it to a
+        // dedicated SyntaxKind because that would force adding it to
+        // SyntaxFacts.GetKeywordKind, breaking any future use of `delegate`
+        // as a plain identifier.
+        var delegateKeyword = NextToken();
+
+        if (Current.Kind != SyntaxKind.FuncKeyword)
+        {
+            Diagnostics.ReportDelegateDeclarationRequiresFunc(Current.Location);
+        }
+
+        var funcKeyword = MatchToken(SyntaxKind.FuncKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        // Return type clause is optional; absence means `void` per the existing
+        // `func` declaration convention.
+        TypeClauseSyntax returnType = null;
+        if (CanStartTypeClause(Current))
+        {
+            returnType = ParseTypeClause();
+        }
+
+        return new DelegateDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            typeKeyword,
+            identifier,
+            typeParameterList,
+            equalsToken,
+            delegateKeyword,
+            funcKeyword,
+            openParen,
+            parameters,
+            closeParen,
+            returnType);
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="token"/> can start a TypeClauseSyntax.
+    /// Used by the delegate declaration parser to decide whether the optional
+    /// return type clause is present.
+    /// </summary>
+    private static bool CanStartTypeClause(SyntaxToken token)
+    {
+        switch (token.Kind)
+        {
+            case SyntaxKind.IdentifierToken:
+            case SyntaxKind.FuncKeyword:
+            case SyntaxKind.OpenParenthesisToken:
+            case SyntaxKind.OpenSquareBracketToken:
+            case SyntaxKind.MapKeyword:
+            case SyntaxKind.ChanKeyword:
+            case SyntaxKind.SequenceKeyword:
+            case SyntaxKind.AsyncKeyword:
+            case SyntaxKind.StarToken:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private EnumDeclarationSyntax ParseEnumDeclaration(
@@ -1479,6 +1562,7 @@ public class Parser
                 || follow.Kind == SyntaxKind.InterfaceKeyword
                 || follow.Kind == SyntaxKind.SealedKeyword
                 || follow.Kind == SyntaxKind.OpenKeyword
+                || follow.Kind == SyntaxKind.EqualsToken // ADR-0059: `type X[T any] = delegate func(...)` (rejected by binder as GS0234).
                 || (follow.Kind == SyntaxKind.IdentifierToken && (follow.Text == "data" || follow.Text == "record")))
             {
                 return true;

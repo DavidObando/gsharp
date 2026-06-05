@@ -184,6 +184,23 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // ADR-0059 / issue #255: same rule for user-declared named delegate
+        // types. They have no ClrType during binding, so the func→delegate
+        // path above does not fire — classify the conversion structurally
+        // against the delegate's parameter/return signature instead.
+        if (from is FunctionTypeSymbol fnSource2 && to is DelegateTypeSymbol toDelegate
+            && IsFunctionStructurallyAssignable(fnSource2, toDelegate))
+        {
+            return Conversion.Implicit;
+        }
+
+        // ADR-0059: a named delegate VALUE (variable typed as a
+        // DelegateTypeSymbol) is structurally a delegate; widening to
+        // System.Delegate / System.MulticastDelegate follows the existing
+        // rule and is handled below. Conversions BETWEEN two distinct
+        // DelegateTypeSymbol instances are explicitly *not* implicit, per
+        // CLR rules — the user must round-trip through a func value.
+
         // Issue #323: any delegate-typed value widens implicitly to
         // System.Delegate (and System.MulticastDelegate), since every CLR
         // delegate derives from those base types. This covers both a GSharp
@@ -199,6 +216,11 @@ public sealed class Conversion
             }
 
             if (from?.ClrType != null && ClrTypeUtilities.IsDelegateType(from.ClrType))
+            {
+                return Conversion.Implicit;
+            }
+
+            if (from is DelegateTypeSymbol)
             {
                 return Conversion.Implicit;
             }
@@ -395,6 +417,56 @@ public sealed class Conversion
         var fullName = type.FullName;
         return string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
             || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ADR-0059 / issue #255: structural compatibility check between a
+    /// G# function-typed value and a user-declared named delegate
+    /// (<see cref="DelegateTypeSymbol"/>). Used in lieu of the CLR-Type-based
+    /// <see cref="IsFunctionToDelegateConvertible"/> because the delegate has
+    /// no <c>ClrType</c> during binding — its TypeDef is materialized at emit.
+    /// </summary>
+    private static bool IsFunctionStructurallyAssignable(FunctionTypeSymbol fn, DelegateTypeSymbol target)
+    {
+        var parameters = target.Parameters;
+        if (parameters.Length != fn.ParameterTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var fromType = fn.ParameterTypes[i];
+            var toType = parameters[i].Type;
+            if (fromType == null || toType == null)
+            {
+                return false;
+            }
+
+            // Parameter types are contravariant in C#; G# v1 mirrors the
+            // existing CLR-typed func→delegate rule, which is name-based
+            // assignability — i.e., identity or an implicit conversion.
+            var conv = Classify(fromType, toType);
+            if (!conv.Exists || !conv.IsImplicit)
+            {
+                return false;
+            }
+        }
+
+        var fnReturn = fn.ReturnType ?? TypeSymbol.Void;
+        var targetReturn = target.ReturnType ?? TypeSymbol.Void;
+        if (fnReturn == TypeSymbol.Void)
+        {
+            return targetReturn == TypeSymbol.Void;
+        }
+
+        if (targetReturn == TypeSymbol.Void)
+        {
+            return false;
+        }
+
+        var retConv = Classify(fnReturn, targetReturn);
+        return retConv.Exists && retConv.IsImplicit;
     }
 
     // Issue #421 P2-5: enum⇄numeric and enum⇄enum conversions. Both

@@ -51,6 +51,7 @@ ContinueStatement
 DefaultKeyword
 DeferKeyword
 DeferStatement
+DelegateDeclaration
 DiscardPattern
 DocumentationCommentToken
 DotToken

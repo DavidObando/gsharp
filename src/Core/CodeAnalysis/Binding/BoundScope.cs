@@ -369,6 +369,15 @@ public sealed class BoundScope
             ? ImmutableArray<EnumSymbol>.Empty
             : typeAliases.Values.OfType<EnumSymbol>().ToImmutableArray();
 
+    /// <summary>
+    /// Gets the set of declared user-defined named delegate types in this scope chain (ADR-0059 / issue #255).
+    /// </summary>
+    /// <returns>The named delegate types in declaration order.</returns>
+    public ImmutableArray<DelegateTypeSymbol> GetDeclaredDelegates()
+        => typeAliases == null
+            ? ImmutableArray<DelegateTypeSymbol>.Empty
+            : typeAliases.Values.OfType<DelegateTypeSymbol>().ToImmutableArray();
+
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol
     {

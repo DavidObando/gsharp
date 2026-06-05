@@ -242,6 +242,13 @@ public enum SyntaxKind
 
     // Issue #306: standalone user-defined constructor declarations (`init(...)`)
     ConstructorDeclaration,
+
+    // ADR-0059 / issue #255: named delegate type declarations
+    // (`type Name = delegate func(...)`). `delegate` is a contextual
+    // keyword — kept as IdentifierToken at lex time; the parser recognises
+    // it inside `type Name = ...` (mirroring the data/record/inline/ref
+    // contextual-modifier pattern in ParseTypeAliasDeclaration).
+    DelegateDeclaration,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

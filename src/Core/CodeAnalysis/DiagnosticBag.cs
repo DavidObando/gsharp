@@ -1610,6 +1610,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0232", message);
     }
 
+    /// <summary>
+    /// ADR-0059 / issue #255: reports that a delegate declaration
+    /// (<c>type Name = delegate …</c>) was not followed by a <c>func(...)</c>
+    /// signature. Named delegates must take the shape
+    /// <c>type Name = delegate func(params) ret</c>.
+    /// </summary>
+    /// <param name="location">The text location of the offending token.</param>
+    public void ReportDelegateDeclarationRequiresFunc(TextLocation location)
+    {
+        Report(location, "GS0233", "Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)').");
+    }
+
+    /// <summary>
+    /// ADR-0059 / issue #255: reports a generic delegate declaration (e.g.
+    /// <c>type Predicate[T any] = delegate func(value T) bool</c>) — generic
+    /// delegate emit is not yet supported in v1 and is tracked as ADR-0059
+    /// follow-up work.
+    /// </summary>
+    /// <param name="location">The text location of the delegate identifier.</param>
+    /// <param name="typeName">The delegate type name.</param>
+    public void ReportGenericDelegateNotSupported(TextLocation location, string typeName)
+    {
+        Report(location, "GS0234", $"Generic delegate declaration '{typeName}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up).");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

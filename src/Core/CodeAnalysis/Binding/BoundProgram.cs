@@ -107,6 +107,36 @@ public sealed class BoundProgram
         ImmutableArray<InterfaceSymbol> interfaces,
         ImmutableArray<EnumSymbol> enums,
         ImmutableArray<GlobalVariableSymbol> globals)
+        : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, structs, interfaces, enums, globals, ImmutableArray<DelegateTypeSymbol>.Empty)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundProgram"/> class with declared named delegate types (ADR-0059 / issue #255).
+    /// </summary>
+    /// <param name="entryPointPackage">The entry-point package; its name is exposed via <see cref="PackageName"/> for back-compat.</param>
+    /// <param name="packages">All distinct packages in this program, in declaration order.</param>
+    /// <param name="diagnostics">The diagnostics.</param>
+    /// <param name="functions">The functions. Each <see cref="FunctionSymbol"/> key carries its owning package via <see cref="FunctionSymbol.Package"/>.</param>
+    /// <param name="entryPoint">The entry-point function, or null if the compilation is a library.</param>
+    /// <param name="statement">The statements.</param>
+    /// <param name="structs">User-defined struct types declared in this program, grouped by declaring package.</param>
+    /// <param name="interfaces">User-defined interface types declared in this program (Phase 3.B.4).</param>
+    /// <param name="enums">User-defined enum types declared in this program (#193).</param>
+    /// <param name="globals">User-declared top-level <c>var</c>/<c>let</c>/<c>const</c> declarations (#191).</param>
+    /// <param name="delegates">User-declared named delegate types in this program (ADR-0059).</param>
+    public BoundProgram(
+        PackageSymbol entryPointPackage,
+        ImmutableArray<PackageSymbol> packages,
+        ImmutableArray<Diagnostic> diagnostics,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
+        FunctionSymbol entryPoint,
+        BoundBlockStatement statement,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces,
+        ImmutableArray<EnumSymbol> enums,
+        ImmutableArray<GlobalVariableSymbol> globals,
+        ImmutableArray<DelegateTypeSymbol> delegates)
     {
         EntryPointPackage = entryPointPackage;
         Packages = packages;
@@ -118,6 +148,7 @@ public sealed class BoundProgram
         Interfaces = interfaces;
         Enums = enums;
         Globals = globals;
+        Delegates = delegates.IsDefault ? ImmutableArray<DelegateTypeSymbol>.Empty : delegates;
     }
 
     /// <summary>
@@ -211,6 +242,14 @@ public sealed class BoundProgram
     /// observable from other assemblies.
     /// </summary>
     public ImmutableArray<GlobalVariableSymbol> Globals { get; }
+
+    /// <summary>
+    /// Gets the user-declared named delegate types in this program (ADR-0059 / issue #255).
+    /// Each delegate is emitted as a sealed CLR <c>TypeDef</c> deriving from
+    /// <c>System.MulticastDelegate</c> with a runtime-implemented
+    /// <c>.ctor</c> and <c>Invoke</c>.
+    /// </summary>
+    public ImmutableArray<DelegateTypeSymbol> Delegates { get; }
 
     /// <summary>
     /// Gets the explicit (user-written) import symbols declared across all

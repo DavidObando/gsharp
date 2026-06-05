@@ -101,6 +101,42 @@ public sealed class BoundGlobalScope
         ImmutableArray<EnumSymbol> enums,
         FunctionSymbol entryPoint,
         ImmutableArray<BoundStatement> statements)
+        : this(previous, package, packages, diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, ImmutableArray<DelegateTypeSymbol>.Empty, entryPoint, statements)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundGlobalScope"/> class with declared named delegate types (ADR-0059 / issue #255).
+    /// </summary>
+    /// <param name="previous">Previous compilation global scope.</param>
+    /// <param name="package">The entry-point package for the current compilation.</param>
+    /// <param name="packages">All distinct packages declared in the current compilation, in declaration order.</param>
+    /// <param name="diagnostics">Diagnostics for the current compilation.</param>
+    /// <param name="imports">Imports in the current compilation.</param>
+    /// <param name="functions">Functions in the current compilation.</param>
+    /// <param name="variables">Variables in the current compilation.</param>
+    /// <param name="typeAliases">Type aliases declared in the current compilation.</param>
+    /// <param name="structs">User-defined struct types declared in the current compilation.</param>
+    /// <param name="interfaces">User-defined interface types declared in the current compilation (Phase 3.B.4).</param>
+    /// <param name="enums">User-defined enum types declared in the current compilation (#193).</param>
+    /// <param name="delegates">User-declared named delegate types in the current compilation (ADR-0059).</param>
+    /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
+    /// <param name="statements">Statements in the current compilation.</param>
+    public BoundGlobalScope(
+        BoundGlobalScope previous,
+        PackageSymbol package,
+        ImmutableArray<PackageSymbol> packages,
+        ImmutableArray<Diagnostic> diagnostics,
+        ImmutableArray<ImportSymbol> imports,
+        ImmutableArray<FunctionSymbol> functions,
+        ImmutableArray<VariableSymbol> variables,
+        ImmutableDictionary<string, TypeSymbol> typeAliases,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces,
+        ImmutableArray<EnumSymbol> enums,
+        ImmutableArray<DelegateTypeSymbol> delegates,
+        FunctionSymbol entryPoint,
+        ImmutableArray<BoundStatement> statements)
     {
         Previous = previous;
         Package = package;
@@ -113,6 +149,7 @@ public sealed class BoundGlobalScope
         Structs = structs;
         Interfaces = interfaces;
         Enums = enums;
+        Delegates = delegates.IsDefault ? ImmutableArray<DelegateTypeSymbol>.Empty : delegates;
         EntryPoint = entryPoint;
         Statements = statements;
     }
@@ -208,6 +245,11 @@ public sealed class BoundGlobalScope
     /// Gets the user-defined enum types declared in the current compilation (#193).
     /// </summary>
     public ImmutableArray<EnumSymbol> Enums { get; }
+
+    /// <summary>
+    /// Gets the user-declared named delegate types in the current compilation (ADR-0059 / issue #255).
+    /// </summary>
+    public ImmutableArray<DelegateTypeSymbol> Delegates { get; }
 
     /// <summary>
     /// Gets the synthesized or explicit entry-point function for this compilation,

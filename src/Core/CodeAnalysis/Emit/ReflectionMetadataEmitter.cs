@@ -98,6 +98,15 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<EnumSymbol, TypeDefinitionHandle> enumTypeDefs = new Dictionary<EnumSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<EnumMemberSymbol, FieldDefinitionHandle> enumMemberFieldDefs = new Dictionary<EnumMemberSymbol, FieldDefinitionHandle>();
 
+    // ADR-0059 / issue #255: user-defined named delegate TypeDefs. Each
+    // DelegateTypeSymbol is emitted as a sealed reference type deriving from
+    // System.MulticastDelegate with a runtime-implemented `.ctor(object, IntPtr)`
+    // plus a runtime-implemented `Invoke` whose signature mirrors the
+    // delegate's declared parameters and return type.
+    private readonly Dictionary<DelegateTypeSymbol, TypeDefinitionHandle> delegateTypeDefs = new Dictionary<DelegateTypeSymbol, TypeDefinitionHandle>();
+    private readonly Dictionary<DelegateTypeSymbol, MethodDefinitionHandle> delegateInvokeHandles = new Dictionary<DelegateTypeSymbol, MethodDefinitionHandle>();
+    private readonly Dictionary<DelegateTypeSymbol, MethodDefinitionHandle> delegateCtorHandles = new Dictionary<DelegateTypeSymbol, MethodDefinitionHandle>();
+
     // Issue #191: each user-declared top-level var/let/const becomes a static
     // FieldDef on the entry-point package's <Program> TypeDef. Mapping symbol
     // → field handle so EmitLoadVariable/EmitStoreVariable can route through
@@ -206,6 +215,8 @@ internal sealed class ReflectionMetadataEmitter
     private Type coreSystemType;
     private Type coreRuntimeTypeHandleType;
     private Type coreEnumType;
+    private Type coreMulticastDelegateType;
+    private Type coreIntPtrType;
     private TypeReferenceHandle objectTypeRef;
     private TypeReferenceHandle valueTypeRef;
     private MemberReferenceHandle objectCtorRef;
@@ -392,6 +403,10 @@ internal sealed class ReflectionMetadataEmitter
         this.coreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
         this.coreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
         this.coreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
+        // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
+        // type for user-declared named delegate emission.
+        this.coreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
+        this.coreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(System.IntPtr));
         this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
         this.valueTypeRef = this.GetTypeReference(this.coreValueType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
@@ -690,6 +705,20 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // ADR-0059 / issue #255: plan method rows for each named delegate
+        // (one ctor + one Invoke per delegate) AFTER interface methods and
+        // BEFORE non-SM class ctors. The delegate TypeDef rows themselves are
+        // emitted immediately after interfaces so methodList pointers stay
+        // monotone non-decreasing across the table.
+        var delegates = this.program.Delegates;
+        var delegateCtorRows = new Dictionary<DelegateTypeSymbol, int>();
+        var delegateInvokeRows = new Dictionary<DelegateTypeSymbol, int>();
+        foreach (var d in delegates)
+        {
+            delegateCtorRows[d] = methodRow++;
+            delegateInvokeRows[d] = methodRow++;
+        }
+
         // Plan method rows for non-SM class ctors + instance methods.
         var classCtorRows = new Dictionary<StructSymbol, int>();
         var classPrimaryCtorRows = new Dictionary<StructSymbol, int>();
@@ -907,6 +936,16 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var i in interfaces)
         {
             this.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
+        }
+
+        // ADR-0059 / issue #255: emit named delegate TypeDefs immediately
+        // after interfaces and before non-SM classes/structs. Each delegate's
+        // TypeDef methodList points at the ctor row reserved above; the
+        // runtime-implemented ctor and Invoke MethodDefs are added inside
+        // EmitDelegateTypeDef.
+        foreach (var d in delegates)
+        {
+            this.EmitDelegateTypeDef(d, delegateCtorRows[d]);
         }
 
         // 2b. Emit non-SM class TypeDefs (so methodLists stay non-decreasing),
@@ -4605,6 +4644,133 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.EmitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
+    }
+
+    /// <summary>
+    /// ADR-0059 / issue #255: emits a user-declared named delegate as a sealed
+    /// reference type deriving from <c>System.MulticastDelegate</c> with two
+    /// runtime-implemented methods:
+    /// <list type="bullet">
+    ///   <item><c>.ctor(object, native int)</c> — the standard delegate
+    ///     constructor recognised by the CLR for delegate creation
+    ///     (<c>newobj</c>) and binding.</item>
+    ///   <item><c>Invoke(params...) ret</c> — the delegate's call signature
+    ///     used by both managed callers and the CLR's delegate dispatch.</item>
+    /// </list>
+    /// Both methods carry <c>MethodImplAttributes.Runtime | Managed</c> and
+    /// have no IL body — the runtime supplies the implementation. We
+    /// intentionally do NOT emit <c>BeginInvoke</c>/<c>EndInvoke</c>, matching
+    /// Roslyn's portable-assembly convention.
+    /// </summary>
+    /// <param name="delegateSym">The named delegate symbol.</param>
+    /// <param name="firstMethodRow">The pre-reserved method row of the
+    /// delegate's <c>.ctor</c> (the second reserved row is its
+    /// <c>Invoke</c>).</param>
+    private void EmitDelegateTypeDef(DelegateTypeSymbol delegateSym, int firstMethodRow)
+    {
+        var multicastTypeRef = this.GetTypeReference(this.coreMulticastDelegateType);
+
+        // Delegates own no fields; their fieldList points at the next
+        // FieldDef row, which is the first field of whatever TypeDef follows
+        // in row order. We mirror the EmitEnumTypeDef pattern of capturing
+        // the *next* row from the current FieldDef table count.
+        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.metadata.GetRowCount(TableIndex.Field) + 1);
+
+        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
+            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
+            | MapTypeAccessibility(delegateSym.Accessibility);
+
+        var delegateTypeDef = this.metadata.AddTypeDefinition(
+            attributes: typeAttrs,
+            @namespace: this.metadata.GetOrAddString(delegateSym.PackageName ?? string.Empty),
+            name: this.metadata.GetOrAddString(delegateSym.Name),
+            baseType: multicastTypeRef,
+            fieldList: firstFieldHandle,
+            methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
+        this.delegateTypeDefs[delegateSym] = delegateTypeDef;
+
+        // ---- .ctor(object, native int) ----
+        var ctorSigBlob = new BlobBuilder();
+        new BlobEncoder(ctorSigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), ps =>
+            {
+                ps.AddParameter().Type().Object();
+                ps.AddParameter().Type().IntPtr();
+            });
+
+        var ctorFirstParamHandle = this.NextParameterHandle();
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("object"),
+            sequenceNumber: 1);
+        this.metadata.AddParameter(
+            attributes: ParameterAttributes.None,
+            name: this.metadata.GetOrAddString("method"),
+            sequenceNumber: 2);
+
+        var ctorAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
+            | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName;
+
+        var ctorHandle = this.metadata.AddMethodDefinition(
+            attributes: ctorAttrs,
+            implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(".ctor"),
+            signature: this.metadata.GetOrAddBlob(ctorSigBlob),
+            bodyOffset: -1,
+            parameterList: ctorFirstParamHandle);
+        this.delegateCtorHandles[delegateSym] = ctorHandle;
+
+        // Sanity check: the actual .ctor row must match the row reserved by
+        // the scheduler so the TypeDef's methodList pointer is valid.
+        if (MetadataTokens.GetRowNumber(ctorHandle) != firstMethodRow)
+        {
+            throw new InvalidOperationException(
+                $"Delegate '{delegateSym.Name}' .ctor MethodDef row {MetadataTokens.GetRowNumber(ctorHandle)} did not match the reserved row {firstMethodRow}. This indicates another emitter inserted method rows between scheduling and delegate emission.");
+        }
+
+        // ---- Invoke(params...) ret ----
+        var invokeSigBlob = new BlobBuilder();
+        new BlobEncoder(invokeSigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                delegateSym.Parameters.Length,
+                r => this.EncodeReturnSymbol(r, delegateSym.ReturnType ?? TypeSymbol.Void),
+                ps =>
+                {
+                    foreach (var p in delegateSym.Parameters)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                    }
+                });
+
+        var invokeFirstParamHandle = this.NextParameterHandle();
+        for (var i = 0; i < delegateSym.Parameters.Length; i++)
+        {
+            var p = delegateSym.Parameters[i];
+            this.metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
+                sequenceNumber: (ushort)(i + 1));
+        }
+
+        var invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
+            | MethodAttributes.Virtual | MethodAttributes.NewSlot;
+
+        var invokeParamList = delegateSym.Parameters.Length > 0
+            ? invokeFirstParamHandle
+            : this.NextParameterHandle();
+
+        var invokeHandle = this.metadata.AddMethodDefinition(
+            attributes: invokeAttrs,
+            implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("Invoke"),
+            signature: this.metadata.GetOrAddBlob(invokeSigBlob),
+            bodyOffset: -1,
+            parameterList: invokeParamList);
+        this.delegateInvokeHandles[delegateSym] = invokeHandle;
+
+        // ADR-0047 §3: user annotations targeting the delegate type land on
+        // the TypeDef row (same as struct/interface/enum).
+        this.EmitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type);
     }
 
     /// <summary>
@@ -10143,6 +10309,18 @@ internal sealed class ReflectionMetadataEmitter
 
             encoder.Type(ifaceDef, isValueType: false);
         }
+        else if (type is DelegateTypeSymbol delegateSym)
+        {
+            // ADR-0059 / issue #255: a user-declared named delegate type
+            // encodes as a reference type referring to its own TypeDef
+            // (a sealed class deriving from System.MulticastDelegate).
+            if (!this.delegateTypeDefs.TryGetValue(delegateSym, out var delegateDef))
+            {
+                throw new InvalidOperationException($"Delegate '{delegateSym.Name}' has no emitted TypeDef.");
+            }
+
+            encoder.Type(delegateDef, isValueType: false);
+        }
         else if (type is ChannelTypeSymbol chType)
         {
             // Phase E: chan T -> System.Threading.Channels.Channel<T>.
@@ -11758,6 +11936,20 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitConversion(BoundConversionExpression conv)
         {
+            // ADR-0059 / issue #255: GSharp function value → user-declared
+            // named delegate type. The named delegate has no ClrType (its
+            // TypeDef only exists in the assembly being emitted), so the
+            // CLR-delegate path below cannot fire; emit the same
+            // `ldnull/ldftn/newobj` (or closure `dup/ldftn/newobj`) sequence
+            // but referencing the delegate's emitted ctor MethodDef handle
+            // instead of a CLR ConstructorInfo.
+            if (conv.Expression.Type is FunctionTypeSymbol namedSourceFn
+                && conv.Type is DelegateTypeSymbol namedTargetDelegate)
+            {
+                this.EmitFunctionToNamedDelegateConversion(conv.Expression, namedSourceFn, namedTargetDelegate);
+                return;
+            }
+
             // Issue #295: GSharp function value → CLR delegate. This is the
             // general materialization that previously only happened in
             // argument position; routing it through EmitConversion makes
@@ -11963,6 +12155,149 @@ internal sealed class ReflectionMetadataEmitter
             this.il.Token(this.outer.GetMethodReference(sourceInvoke));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(targetCtor));
+        }
+
+        /// <summary>
+        /// ADR-0059 / issue #255: emits a GSharp function value → user-declared
+        /// named delegate type conversion. The delegate has no CLR Type during
+        /// emit; we reference its emitted <c>.ctor</c> MethodDef directly
+        /// instead of looking up a <see cref="ConstructorInfo"/> on a runtime
+        /// <see cref="Type"/>.
+        /// </summary>
+        private void EmitFunctionToNamedDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, DelegateTypeSymbol targetDelegate)
+        {
+            if (!this.outer.delegateCtorHandles.TryGetValue(targetDelegate, out var ctorHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Named delegate '{targetDelegate.Name}' has no emitted .ctor MethodDef.");
+            }
+
+            if (source is BoundFunctionLiteralExpression literal)
+            {
+                this.EmitFunctionLiteralToNamedDelegate(literal, ctorHandle);
+                return;
+            }
+
+            if (source is BoundMethodGroupExpression methodGroup)
+            {
+                this.EmitMethodGroupToNamedDelegate(methodGroup, ctorHandle);
+                return;
+            }
+
+            // Delegate-to-delegate adaptation (CLR delegate value → named
+            // delegate): wrap the source delegate's Invoke in a new named
+            // delegate instance using `dup; ldvirtftn; newobj`.
+            if (sourceFn?.ClrType != null && ClrTypeUtilities.IsDelegateType(sourceFn.ClrType))
+            {
+                var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
+                var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
+                    ?? throw new InvalidOperationException(
+                        $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
+
+                this.EmitExpression(source);
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.OpCode(ILOpCode.Ldvirtftn);
+                this.il.Token(this.outer.GetMethodReference(sourceInvoke));
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(ctorHandle);
+                return;
+            }
+
+            throw new NotSupportedException(
+                $"Cannot convert function value of type '{sourceFn?.Name}' to named delegate '{targetDelegate.Name}'.");
+        }
+
+        /// <summary>
+        /// ADR-0059 / issue #255: emits a <see cref="BoundFunctionLiteralExpression"/>
+        /// bound to a user-declared named delegate type whose <c>.ctor</c>
+        /// MethodDef handle is supplied directly. Mirrors
+        /// <see cref="EmitFunctionLiteral(BoundFunctionLiteralExpression, Type)"/>
+        /// but uses a metadata handle instead of a runtime <see cref="Type"/>.
+        /// </summary>
+        private void EmitFunctionLiteralToNamedDelegate(BoundFunctionLiteralExpression literal, MethodDefinitionHandle delegateCtorHandle)
+        {
+            if (this.outer.closureInfos.TryGetValue(literal, out var closure))
+            {
+                if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var closureCtor))
+                {
+                    throw new InvalidOperationException(
+                        $"Closure class '{closure.ClassSym.Name}' has no emitted constructor.");
+                }
+
+                if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var closureInvoke))
+                {
+                    throw new InvalidOperationException(
+                        $"Closure invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
+                }
+
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(closureCtor);
+
+                foreach (var captured in literal.CapturedVariables)
+                {
+                    if (!closure.CaptureFields.TryGetValue(captured, out var field))
+                    {
+                        throw new InvalidOperationException(
+                            $"Closure for '{literal.Function.Name}' has no field for captured '{captured.Name}'.");
+                    }
+
+                    if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Closure field '{field.Name}' has no emitted FieldDef.");
+                    }
+
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.EmitCapturedVariableLoad(captured);
+                    this.il.OpCode(ILOpCode.Stfld);
+                    this.il.Token(fieldHandle);
+                }
+
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(closureInvoke);
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(delegateCtorHandle);
+                return;
+            }
+
+            if (literal.CapturedVariables.Length > 0)
+            {
+                throw new NotSupportedException(
+                    $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
+            }
+
+            if (!this.outer.functionHandles.TryGetValue(literal.Function, out var methodHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
+            }
+
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ldftn);
+            this.il.Token(methodHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(delegateCtorHandle);
+        }
+
+        /// <summary>
+        /// ADR-0059 / issue #255: emits a static method group bound to a
+        /// user-declared named delegate type using its emitted <c>.ctor</c>
+        /// MethodDef handle. Mirrors
+        /// <see cref="EmitMethodGroup(BoundMethodGroupExpression, Type)"/>.
+        /// </summary>
+        private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, MethodDefinitionHandle delegateCtorHandle)
+        {
+            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var staticHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
+            }
+
+            this.il.OpCode(ILOpCode.Ldnull);
+            this.il.OpCode(ILOpCode.Ldftn);
+            this.il.Token(staticHandle);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(delegateCtorHandle);
         }
 
         // ADR-0044 numeric conversions. Maps the from/to CLR pair to the
@@ -15163,6 +15498,29 @@ internal sealed class ReflectionMetadataEmitter
         // `callvirt`.
         private void EmitIndirectCall(BoundIndirectCallExpression call)
         {
+            // ADR-0059 / issue #255: a call through a value typed as a
+            // user-declared named delegate dispatches through that delegate's
+            // emitted Invoke MethodDef directly (no DynamicInvoke marshalling
+            // needed — the signature is concrete, not type-erased).
+            if (call.Target.Type is DelegateTypeSymbol namedDelegate)
+            {
+                if (!this.outer.delegateInvokeHandles.TryGetValue(namedDelegate, out var namedInvokeHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Delegate '{namedDelegate.Name}' has no emitted Invoke MethodDef.");
+                }
+
+                this.EmitExpression(call.Target);
+                foreach (var arg in call.Arguments)
+                {
+                    this.EmitExpression(arg);
+                }
+
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(namedInvokeHandle);
+                return;
+            }
+
             // Phase 4 emit parity (F1, type-erased generics): a delegate whose
             // parameter or return types reference open type parameters (e.g.
             // `func(T) U`) is encoded as `System.Func<object, object>`, but the
