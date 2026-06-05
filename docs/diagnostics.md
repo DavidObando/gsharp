@@ -279,3 +279,32 @@ ADR-0059 / Issue #255: `type Name = delegate func(...)` declares a real CLR `Mul
 |------|----------|---------|
 | GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)'). |
 | GS0234 | Error | Generic delegate declaration '{name}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up). |
+
+## Ref-kind parameter diagnostics (GS0235–GS0243)
+
+ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at both call sites and method-definition sites. The ADR (§8) originally enumerated diagnostics GS0230–GS0238, but those codes were already in use by ADR-0029 / ADR-0030 / ADR-0056 / ADR-0059; the ADR-0060 diagnostics ship at the next free range, GS0235–GS0243, with a 1:1 mapping (GS0230→GS0235, GS0231→GS0236, …, GS0238→GS0243). The async/iterator ban (§10) reuses the existing GS0226 family.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0235 | Error | Argument {index} (parameter '{name}') passes with ref-kind '{actual}' but the parameter is declared '{expected}'. |
+| GS0236 | Error | An 'out var/let/_' inline declaration is only valid on an 'out' argument. |
+| GS0237 | Error | Cannot assign to 'in' parameter '{name}' — it is read-only. |
+| GS0238 | Error | The 'out' parameter '{name}' must be assigned on every path before the function returns. |
+| GS0239 | Error | The variable '{name}' must be definitely assigned before it can be passed by 'ref'. |
+| GS0240 | Error | Override of '{name}' must match the base ref-kind on parameter '{parameter}' ('{baseKind}' vs '{overrideKind}'). |
+| GS0241 | Error | A variadic parameter cannot carry a ref-kind modifier ('ref'/'out'/'in'). |
+| GS0242 | Warning | Argument {index} (parameter '{name}') is passed by 'in' implicitly; add 'in' at the call site to make the read-only pass explicit. |
+| GS0243 | Error | A pointer type '*T' is not a valid parameter type; use the appropriate ref-kind modifier instead (e.g. 'ref T', 'out T', 'in T'). |
+
+Cause/fix examples:
+
+- **GS0235** — fire when the call-site modifier doesn't match the declaration: `f(x)` where `f(ref x int32)` requires `f(&x)` or `f(ref x)`. Fix: add the matching modifier; if the parameter is by-value, drop any unwanted `ref`/`out`/`in`.
+- **GS0236** — `out var n` outside an `out` argument: e.g. `func g(int32) {}` then `g(out var n)`. Fix: only use the inline declaration when the parameter is declared `out`.
+- **GS0237** — assignment to an `in` parameter inside the body: `func h(in p int32) { p = 0 }`. Fix: copy to a local for any mutation, or change the parameter to `ref`.
+- **GS0238** — a missing write before return on an `out` parameter: `func k(out r int32) bool { if cond { r = 1; return true } return false }` — the `false` branch fails to assign `r`. Fix: assign on every path.
+- **GS0239** — passing an uninitialized variable by `ref`: `var x int32; f(ref x)` with no prior assignment. Fix: assign before the call (e.g. `var x = 0`).
+- **GS0240** — override changes the ref-kind of an inherited parameter: `func override f(in p int32) { … }` when the base declares `f(ref p int32)`. Fix: match the base declaration.
+- **GS0241** — variadic combined with ref-kind: `func g(ref values ...int32) {}`. Fix: remove the modifier or remove the variadic decoration.
+- **GS0242** (warning) — passing a plain identifier to an `in` parameter without writing `in`: `f(x)` where `f(in x int32)`. Fix: write `f(in x)` to make the pass-by-readonly-ref explicit. The compiler does NOT silently spill the value (a deliberate departure from C#).
+- **GS0243** — declaring a parameter whose type is the raw pointer `*T`: `func f(p *int32)`. Fix: use a ref-kind modifier instead — `func f(ref p int32)` (or `in`/`out`).
+
