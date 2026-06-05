@@ -57,7 +57,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public override bool IsScoped { get; set; }
 
     /// <summary>
-    /// Gets the ADR-0060 by-reference passing mode of this parameter (<c>None</c>, <c>Ref</c>, <c>Out</c>, or <c>In</c>).
+    /// Gets or sets the ADR-0060 by-reference passing mode of this parameter (<c>None</c>, <c>Ref</c>, <c>Out</c>, or <c>In</c>).
     /// </summary>
-    public RefKind RefKind { get; }
+    public override RefKind RefKind { get; set; }
 }

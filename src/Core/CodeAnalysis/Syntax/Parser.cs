@@ -2355,6 +2355,19 @@ public class Parser
             scopedModifier = NextToken();
         }
 
+        // Issue #491 (ADR-0060 follow-up): optional `ref` contextual modifier on
+        // `let`/`var` declarations introduces a ref-aliasing local
+        // (`let ref m = lvalue` / `var ref m = lvalue`). Disambiguate: `ref` is
+        // only a modifier when followed by another identifier (the variable
+        // name). If `ref` IS the variable name (no following identifier), treat
+        // it as the identifier itself. Rejected on `const` after binding.
+        SyntaxToken refKindModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            refKindModifier = NextToken();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var typeClause = ParseOptionalTypeClause();
 
@@ -2363,7 +2376,10 @@ public class Parser
         // takes that type's default value. `let`/`const` remain immutable, so
         // an initializer stays mandatory for them; and without a type clause
         // there is nothing to infer from, so an initializer is still required.
+        // Issue #491: a ref-aliasing local always requires an initializer (it
+        // must alias an lvalue) — fall through to MatchToken below if absent.
         if (expected == SyntaxKind.VarKeyword
+            && refKindModifier == null
             && typeClause != null
             && Current.Kind != SyntaxKind.EqualsToken)
         {
@@ -2383,6 +2399,7 @@ public class Parser
         var initializer = ParseExpression();
         var result = new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
         result.ScopedModifier = scopedModifier;
+        result.RefKindModifier = refKindModifier;
         return result;
     }
 
