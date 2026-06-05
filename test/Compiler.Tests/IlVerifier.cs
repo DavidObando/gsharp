@@ -171,33 +171,6 @@ internal static class IlVerifier
     public static class KnownIssues
     {
         /// <summary>
-        /// Async lowering emits a state machine whose <c>MoveNext</c> method
-        /// uses <c>callvirt</c> on value-type awaiters (instead of the
-        /// <c>constrained.</c> + <c>callvirt</c> sequence the spec requires)
-        /// and produces stack-type mismatches around the awaiter dispatch.
-        /// Tracked separately as a follow-up to the IL gate work.
-        /// </summary>
-        public static readonly string[] AsyncStateMachine =
-        {
-            "CallVirtOnValueType",
-            "StackUnexpected",
-        };
-
-        /// <summary>
-        /// Generic dispatch on value-typed receivers emits a bare
-        /// <c>callvirt</c> instead of <c>constrained.</c> + <c>callvirt</c>,
-        /// and generic-delegate construction sometimes loses the variance
-        /// adjustment, producing stack-type mismatches between
-        /// <c>Action&lt;T&gt;</c> instantiations. Surfaces in generic
-        /// data-structs and generic delegate invokes.
-        /// </summary>
-        public static readonly string[] GenericValueTypeDispatch =
-        {
-            "CallVirtOnValueType",
-            "StackUnexpected",
-        };
-
-        /// <summary>
         /// By-value returns of a user-declared <c>ref struct</c> (e.g.
         /// <c>func add(a Accumulator, n int32) Accumulator { return Accumulator{Total: a.Total + n} }</c>)
         /// trip ilverify's <c>ReturnPtrToStack</c> check on
@@ -211,7 +184,7 @@ internal static class IlVerifier
         /// only legal escape for a ref struct value).
         ///
         /// Track the upstream issue at
-        /// https://github.com/dotnet/runtime/issues (ilverify component) and
+        /// https://github.com/dotnet/runtime/issues/129030 and
         /// drop this bundle once a newer ilverify release distinguishes
         /// permanent-home returns from raw byref returns.
         /// </summary>
@@ -241,24 +214,6 @@ internal static class IlVerifier
 
     private static readonly Dictionary<string, string[]> SampleKnownIssues = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Async lowering: see KnownIssues.AsyncStateMachine.
-        ["AsyncAwaitInLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncAwaitInNestedLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncGoScopeJoin"] = KnownIssues.AsyncStateMachine,
-        ["AsyncMultiAwaitInLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncTask"] = KnownIssues.AsyncStateMachine,
-        ["AsyncValueReturns"] = KnownIssues.AsyncStateMachine,
-
-        // Generic value-type dispatch: see KnownIssues.GenericValueTypeDispatch.
-        ["GenericMethodDelegates"] = KnownIssues.GenericValueTypeDispatch,
-        ["GenericMethods"] = KnownIssues.GenericValueTypeDispatch,
-        ["NullableFlow"] = KnownIssues.GenericValueTypeDispatch,
-        ["ImportedBaseClass"] = KnownIssues.GenericValueTypeDispatch,
-        ["ExpressionEval"] = KnownIssues.GenericValueTypeDispatch,
-        ["PatternSwitch"] = KnownIssues.GenericValueTypeDispatch,
-        ["SwitchExpression"] = KnownIssues.GenericValueTypeDispatch,
-        ["InlineStruct"] = new[] { "InitOnly" },
-
         // Ref struct emission: see KnownIssues.RefStruct.
         ["UserRefStruct"] = KnownIssues.RefStruct,
     };
