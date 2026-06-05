@@ -85,6 +85,7 @@ public sealed class Binder
     private int nullConditionalCaptureCounter;
     private int syntheticLocalCounter;
     private int deferArgumentCounter;
+    private int outDiscardCounter;
     private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
     private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
     private BoundScope scope;
@@ -2748,7 +2749,37 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped);
+                    var parameterRefKind = GetRefKindFromModifier(parameterSyntax.RefKindModifier);
+
+                    // ADR-0060 §2: a `*T` type cannot appear as a parameter type. The CLR's
+                    // managed-pointer-typed parameter slot would normally surface as `T&`
+                    // via the keyword form; suggest the rewrite.
+                    if (parameterType is ByRefTypeSymbol pointerParamType)
+                    {
+                        Diagnostics.ReportPointerTypeCannotBeParameterType(
+                            parameterSyntax.Type.Location,
+                            parameterName,
+                            pointerParamType.PointeeType.Name);
+                    }
+
+                    // ADR-0060 §8: a variadic parameter (`...T`) cannot also carry a ref-kind
+                    // modifier — the CLR cannot represent an array of managed pointers.
+                    if (parameterRefKind != RefKind.None && isVariadic)
+                    {
+                        Diagnostics.ReportRefKindOnVariadicParameter(parameterSyntax.Location, parameterName);
+                        parameterRefKind = RefKind.None;
+                    }
+
+                    // ADR-0060 §10: ban ref-kind parameters on async functions. The state-machine
+                    // rewriter cannot hoist a managed pointer into a field. Sequence/async-sequence
+                    // are detected after the return type is bound (see the post-pass below).
+                    if (parameterRefKind != RefKind.None && syntax.IsAsync)
+                    {
+                        Diagnostics.ReportRefKindOnAsyncOrIterator(parameterSyntax.Location, parameterName, "async");
+                        parameterRefKind = RefKind.None;
+                    }
+
+                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                     parameters.Add(parameter);
                     parameterSymbolBySyntax[pIndex] = parameter;
                 }
@@ -2765,6 +2796,23 @@ public sealed class Binder
 
             // ADR-0041: bind the return type with async-aware alias resolution.
             var type = BindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
+
+            // ADR-0060 §10: post-bind check — if this is a sequence/async-sequence
+            // function, ref-kind parameters are forbidden. (The async-only check
+            // is handled earlier in the parameter loop.)
+            var isSequenceReturn = type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol;
+            if (isSequenceReturn)
+            {
+                for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+                {
+                    var pSym = parameterSymbolBySyntax[pIndex];
+                    if (pSym != null && pSym.RefKind != RefKind.None)
+                    {
+                        var label = syntax.IsAsync ? "async sequence" : "sequence";
+                        Diagnostics.ReportRefKindOnAsyncOrIterator(syntax.Parameters[pIndex].Location, pSym.Name, label);
+                    }
+                }
+            }
 
             var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
 
@@ -5845,6 +5893,15 @@ public sealed class Binder
             case SyntaxKind.NamedArgumentExpression:
                 Diagnostics.ReportNamedArgumentOnlyValidForCopy(syntax.Location);
                 return new BoundErrorExpression(null);
+            case SyntaxKind.RefArgumentExpression:
+                // ADR-0060: a ref-kind argument expression is only valid at an
+                // argument position; if it surfaces in any other expression
+                // context it is rejected here. The call-site binder dispatches
+                // to BindRefArgumentExpression directly before reaching this.
+                Diagnostics.ReportOutDeclarationOutsideOutArgument(syntax.Location);
+                return new BoundErrorExpression(null);
+            case SyntaxKind.IndirectAssignmentExpression:
+                return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -7374,6 +7431,178 @@ public sealed class Binder
         return new BoundDereferenceExpression(null, operand);
     }
 
+    /// <summary>
+    /// ADR-0060 §13: binds an indirect assignment <c>*p = expr</c>. The left-hand
+    /// side must be a unary dereference of a pointer expression; the result is a
+    /// <see cref="BoundIndirectAssignmentExpression"/> whose value type is the
+    /// pointee type.
+    /// </summary>
+    /// <param name="syntax">The indirect-assignment syntax.</param>
+    /// <returns>The bound expression, or an error expression on failure.</returns>
+    private BoundExpression BindIndirectAssignmentExpression(IndirectAssignmentExpressionSyntax syntax)
+    {
+        var pointer = BindExpression(syntax.Target.Operand);
+        if (pointer is BoundErrorExpression)
+        {
+            return pointer;
+        }
+
+        if (pointer.Type is not ByRefTypeSymbol byRef)
+        {
+            Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var value = BindExpression(syntax.Value);
+        if (value is BoundErrorExpression)
+        {
+            return value;
+        }
+
+        if (value.Type != byRef.PointeeType && value.Type != TypeSymbol.Error)
+        {
+            var converted = Conversion.Classify(value.Type, byRef.PointeeType);
+            if (!converted.IsImplicit)
+            {
+                Diagnostics.ReportCannotConvert(syntax.Value.Location, value.Type, byRef.PointeeType);
+                return new BoundErrorExpression(null);
+            }
+
+            value = new BoundConversionExpression(null, byRef.PointeeType, value);
+        }
+
+        return new BoundIndirectAssignmentExpression(syntax, pointer, value);
+    }
+
+    /// <summary>
+    /// ADR-0060: binds a <c>ref</c>/<c>out</c>/<c>in</c> argument-position expression.
+    /// For the lvalue form (e.g. <c>ref x</c>, <c>out result</c>, <c>in rect</c>) the
+    /// inner expression is bound to a <see cref="BoundAddressOfExpression"/>. For the
+    /// inline-declaration / discard form (<c>out var name</c>, <c>out let name</c>,
+    /// <c>out _</c>), a synthesized <see cref="LocalVariableSymbol"/> is registered in
+    /// the current scope (with the declared type, or — if omitted — the parameter's
+    /// pointee type) and the address-of expression wraps it.
+    /// </summary>
+    /// <param name="syntax">The ref-kind argument syntax.</param>
+    /// <param name="parameter">The callee parameter this argument binds to (may be <see langword="null"/> when unresolved).</param>
+    /// <returns>The bound address-of expression, or an error expression on failure.</returns>
+    private BoundExpression BindRefArgumentExpression(RefArgumentExpressionSyntax syntax, ParameterSymbol parameter)
+    {
+        if (syntax.IsInlineDeclaration)
+        {
+            // ADR-0060 §1: `out var n [T]` / `out let n [T]` / `out _ [T]`.
+            // Only legal when the modifier is `out` AND the parameter (if known) is `out`.
+            if (!string.Equals(syntax.RefKindModifier.Text, "out", System.StringComparison.Ordinal))
+            {
+                Diagnostics.ReportOutDeclarationOutsideOutArgument(syntax.Location);
+                return new BoundErrorExpression(null);
+            }
+
+            TypeSymbol declaredType = null;
+            if (syntax.DeclaredType != null)
+            {
+                declaredType = BindTypeClause(syntax.DeclaredType);
+            }
+
+            if (declaredType == null && parameter != null)
+            {
+                declaredType = parameter.Type;
+            }
+
+            if (declaredType == null)
+            {
+                declaredType = TypeSymbol.Error;
+            }
+
+            // Synthesize the local. `out _` gets a fresh anonymous name; `out var`/`out let`
+            // honour the user-given identifier.
+            bool isReadOnly = syntax.DeclarationKeyword != null
+                && string.Equals(syntax.DeclarationKeyword.Text, "let", System.StringComparison.Ordinal);
+            string localName;
+            if (syntax.DiscardToken != null)
+            {
+                localName = $"<>out_discard_{outDiscardCounter++}";
+            }
+            else
+            {
+                localName = syntax.DeclarationIdentifier.Text;
+            }
+
+            var local = new LocalVariableSymbol(localName, isReadOnly, declaredType, declaringSyntax: syntax);
+            if (syntax.DiscardToken == null && !scope.TryDeclareVariable(local))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.DeclarationIdentifier.Location, localName);
+                return new BoundErrorExpression(null);
+            }
+            else if (syntax.DiscardToken != null)
+            {
+                // Discards never collide; always declare under the synthesized name.
+                scope.TryDeclareVariable(local);
+            }
+
+            var nameExpression = new BoundVariableExpression(null, local);
+            return new BoundAddressOfExpression(null, nameExpression);
+        }
+
+        // Plain lvalue form: bind the operand and check it's an lvalue.
+        var operand = BindExpression(syntax.Expression);
+        if (operand is BoundErrorExpression)
+        {
+            return operand;
+        }
+
+        if (!IsLvalue(operand))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.RefKindModifier.Location, syntax.Expression.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        // For `out` we allow writes to a read-only target only if it's an
+        // out-parameter or a writable local. The existing GS9005 check fires
+        // for true constants; preserve that for `ref` (read-only operand is
+        // fine for `in`).
+        if (operand is BoundVariableExpression vex && vex.Variable.IsReadOnly
+            && string.Equals(syntax.RefKindModifier.Text, "ref", System.StringComparison.Ordinal))
+        {
+            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.RefKindModifier.Location, vex.Variable.Name);
+            return new BoundErrorExpression(null);
+        }
+
+        return new BoundAddressOfExpression(null, operand);
+    }
+
+    /// <summary>ADR-0060: human-readable label for a <see cref="RefKind"/>.</summary>
+    /// <param name="kind">The ref-kind value.</param>
+    /// <returns>"none", "ref", "out", or "in".</returns>
+    private static string RefKindToString(RefKind kind) => kind switch
+    {
+        RefKind.Ref => "ref",
+        RefKind.Out => "out",
+        RefKind.In => "in",
+        _ => "none",
+    };
+
+    /// <summary>
+    /// ADR-0060: maps a ref-kind modifier syntax token to a <see cref="RefKind"/> value.
+    /// </summary>
+    /// <param name="modifier">The <c>ref</c>/<c>out</c>/<c>in</c> contextual-keyword token (<see langword="null"/> for none).</param>
+    /// <returns>The corresponding <see cref="RefKind"/> value.</returns>
+    private static RefKind GetRefKindFromModifier(SyntaxToken modifier)
+    {
+        if (modifier == null)
+        {
+            return RefKind.None;
+        }
+
+        return modifier.Text switch
+        {
+            "ref" => RefKind.Ref,
+            "out" => RefKind.Out,
+            "in" => RefKind.In,
+            _ => RefKind.None,
+        };
+    }
+
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
     private static bool IsLvalue(BoundExpression expression)
     {
@@ -8038,9 +8267,24 @@ public sealed class Binder
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
+        // ADR-0060: argument binding needs the matching parameter to resolve
+        // inline `out var`/`out let`/`out _` payloads. For free-function calls
+        // we don't have the FunctionSymbol resolved until below, so we first
+        // bind everything with parameter=null (the inline-out form falls back
+        // to its declared type) and patch up the type later. The plain
+        // lvalue ref/in/out form is parameter-independent.
         foreach (var argument in syntax.Arguments)
         {
-            var boundArgument = BindExpression(argument);
+            BoundExpression boundArgument;
+            if (argument is RefArgumentExpressionSyntax refArg)
+            {
+                boundArgument = BindRefArgumentExpression(refArg, parameter: null);
+            }
+            else
+            {
+                boundArgument = BindExpression(argument);
+            }
+
             boundArguments.Add(boundArgument);
         }
 
@@ -8244,6 +8488,58 @@ public sealed class Binder
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
             var expectedType = substitution != null ? SubstituteType(parameter.Type, substitution) : parameter.Type;
+
+            // ADR-0060: ref-kind argument matching. The argument's syntax must
+            // carry the same `ref`/`out`/`in` modifier as the parameter; for `in`
+            // the modifier is required (warning GS0242 is reported when omitted).
+            // The lvalue form binds to BoundAddressOfExpression(operand) with
+            // the operand's type matching parameter.Type (the pointee).
+            if (parameter.RefKind != RefKind.None || (i < syntax.Arguments.Count && syntax.Arguments[i] is RefArgumentExpressionSyntax))
+            {
+                var argSyntax = i < syntax.Arguments.Count ? syntax.Arguments[i] : null;
+                var argRefKind = RefKind.None;
+                if (argSyntax is RefArgumentExpressionSyntax refArgSyntax)
+                {
+                    argRefKind = GetRefKindFromModifier(refArgSyntax.RefKindModifier);
+                }
+
+                if (argRefKind != parameter.RefKind)
+                {
+                    if (parameter.RefKind == RefKind.In && argRefKind == RefKind.None)
+                    {
+                        // GS0242: warn on `in` without explicit modifier; the call site is
+                        // still rejected as a type error (the value isn't an address) unless
+                        // we rebind under the `in` modifier — but ADR §1 says we do NOT
+                        // silently spill. So this remains a hard error.
+                        Diagnostics.ReportInArgumentMissingInModifier(argSyntax?.Location ?? syntax.Location, i + 1, parameter.Name);
+                        hasErrors = true;
+                        continue;
+                    }
+
+                    Diagnostics.ReportRefKindMismatch(
+                        argSyntax?.Location ?? syntax.Location,
+                        i + 1,
+                        parameter.Name,
+                        RefKindToString(parameter.RefKind),
+                        RefKindToString(argRefKind));
+                    hasErrors = true;
+                    continue;
+                }
+
+                // Modifiers match. The bound argument is BoundAddressOfExpression
+                // whose operand type must match the parameter's pointee type.
+                if (argument is BoundAddressOfExpression addr)
+                {
+                    var operandType = addr.Operand.Type;
+                    if (operandType != expectedType && operandType != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, operandType);
+                        hasErrors = true;
+                    }
+                }
+
+                continue;
+            }
 
             if (substitution != null
                 && parameter.Type is FunctionTypeSymbol openFunctionParameter

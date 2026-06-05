@@ -299,6 +299,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.DereferenceExpression:
                 VisitDereferenceExpression((BoundDereferenceExpression)node);
                 break;
+            case BoundNodeKind.IndirectAssignmentExpression:
+                VisitIndirectAssignmentExpression((BoundIndirectAssignmentExpression)node);
+                break;
             case BoundNodeKind.SpillSequenceExpression:
                 VisitSpillSequenceExpression((BoundSpillSequenceExpression)node);
                 break;
@@ -793,6 +796,12 @@ public abstract class BoundTreeWalker
     protected virtual void VisitDereferenceExpression(BoundDereferenceExpression node)
     {
         VisitExpression(node.Operand);
+    }
+
+    protected virtual void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
+    {
+        VisitExpression(node.Pointer);
+        VisitExpression(node.Value);
     }
 
     protected virtual void VisitSpillSequenceExpression(BoundSpillSequenceExpression node)

@@ -3849,6 +3849,40 @@ internal sealed class ReflectionMetadataEmitter
             value: this.metadata.GetOrAddBlob(valueBlob));
     }
 
+    /// <summary>
+    /// ADR-0060 §6: emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on
+    /// an emitted Parameter row so consumers (e.g. the C# compiler) treat the
+    /// corresponding <c>in</c> parameter as a readonly managed pointer.
+    /// </summary>
+    /// <param name="paramHandle">The Parameter row to annotate.</param>
+    private void EmitIsReadOnlyAttributeOnParameter(ParameterHandle paramHandle)
+    {
+        var ctorRef = this.GetIsReadOnlyAttributeCtorRef();
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.metadata.AddCustomAttribute(
+            parent: paramHandle,
+            constructor: ctorRef,
+            value: this.metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// ADR-0060 §6: returns the TypeRef handle for
+    /// <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c>, used as the
+    /// <c>modreq</c> on each emitted <c>in</c> parameter signature.
+    /// </summary>
+    /// <returns>The TypeRef entity handle, or <see langword="default"/> if the type can't be resolved.</returns>
+    private EntityHandle GetIsReadOnlyAttributeTypeRef()
+    {
+        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
+        return this.GetTypeReference(attrType);
+    }
+
     private MemberReferenceHandle GetIsReadOnlyAttributeCtorRef()
     {
         if (this.isReadOnlyAttributeCtorRef.HasValue)
@@ -7109,7 +7143,23 @@ internal sealed class ReflectionMetadataEmitter
                             continue;
                         }
 
-                        EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
+                        // ADR-0060: encode ref-kind parameters as `T&` (managed pointer).
+                        // The pointee type is encoded via the inner Type() encoder. For `in`,
+                        // emit a modreq(System.Runtime.CompilerServices.IsReadOnlyAttribute) on
+                        // the parameter signature so consumers (e.g. C#) treat the call site as
+                        // readonly. ParameterAttributes (Out / In) are stamped on the per-parameter
+                        // metadata row below.
+                        var paramEncoder = ps.AddParameter();
+                        if (p.RefKind == RefKind.In)
+                        {
+                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            if (!isReadOnlyAttrType.IsNil)
+                            {
+                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
+                            }
+                        }
+
+                        EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
                     }
                 });
 
@@ -7201,10 +7251,30 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // ADR-0060 §6: stamp the per-parameter row with ParameterAttributes.Out for
+            // `out`, .In for `in`. `ref` carries neither (the CLR distinguishes ref from
+            // out only via the .out flag); the `in` parameter also gets an
+            // IsReadOnlyAttribute custom attribute below.
+            var paramAttributes = ParameterAttributes.None;
+            if (p.RefKind == RefKind.Out)
+            {
+                paramAttributes |= ParameterAttributes.Out;
+            }
+            else if (p.RefKind == RefKind.In)
+            {
+                paramAttributes |= ParameterAttributes.In;
+            }
+
             var paramHandle = this.metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+                attributes: paramAttributes,
                 name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: sequenceNumber++);
+
+            if (p.RefKind == RefKind.In)
+            {
+                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+
             paramHandles.Add((p, paramHandle));
         }
 
@@ -10201,6 +10271,21 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
+        // ADR-0060 §13 / migration: a managed-pointer type (ByRefTypeSymbol → T&) cannot
+        // be encoded into a SignatureTypeEncoder slot because ELEMENT_TYPE_BYREF is a
+        // parent-encoder concern. Callers in parameter / return / local positions must
+        // request the byref form via the parent encoder (e.g. `ParameterTypeEncoder.Type(isByRef:true)`)
+        // and then call EncodeTypeSymbol with the pointee type. The bug being fixed here
+        // is that the previous code silently encoded `T&` as `T`, producing wrong CLR
+        // signatures for `&T`-typed locals/fields/returns. Detect and fail loudly.
+        if (type is ByRefTypeSymbol byRef)
+        {
+            throw new InvalidOperationException(
+                $"Cannot encode '*{byRef.PointeeType.Name}' as a non-byref signature slot; "
+                + "use the parent encoder's Type(isByRef: true) overload (parameter/return/local) "
+                + "and pass the pointee type to EncodeTypeSymbol.");
+        }
+
         // Phase 3 exit: `T?` for reference types is metadata-only (same CLR
         // signature as `T`). For value types it lowers to `Nullable<T>`.
         if (type is NullableTypeSymbol nullable)
@@ -10396,6 +10481,17 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EncodeClrType(SignatureTypeEncoder encoder, Type type)
     {
+        // ADR-0060 §13 / migration: same as EncodeTypeSymbol — a CLR `T&` (Type.IsByRef)
+        // cannot be encoded into a SignatureTypeEncoder slot. Callers must arrange the
+        // byref form via the parent encoder. Detect and fail loudly so the previously
+        // silent miscoding shows up as an emit-time error.
+        if (type != null && type.IsByRef)
+        {
+            throw new InvalidOperationException(
+                $"Cannot encode CLR byref type '{type.FullName}' as a non-byref signature slot; "
+                + "use the parent encoder's Type(isByRef: true) overload and pass the element type to EncodeClrType.");
+        }
+
         // Compare by FullName so types from a MetadataLoadContext (carrying the target
         // framework's identity) still encode to the same well-known primitive opcodes.
         var fullName = type?.FullName;
@@ -11317,6 +11413,27 @@ internal sealed class ReflectionMetadataEmitter
             this.sink.Add(node);
             base.VisitClrPropertyAssignmentExpression(node);
         }
+
+        // ADR-0060: assignments to ref-kind parameters lower to `ldarg; value;
+        // stind`. To preserve the assignment-as-expression result semantics
+        // without a re-read, the emitter spills the value to a temp local.
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (node.Variable is ParameterSymbol ps && ps.RefKind != RefKind.None)
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitAssignmentExpression(node);
+        }
+
+        // ADR-0060: an explicit `*p = v` indirect-assignment expression spills
+        // its value to a temp for the same reason.
+        protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
+        {
+            this.sink.Add(node);
+            base.VisitIndirectAssignmentExpression(node);
+        }
     }
 
     private sealed class SelectSlots
@@ -11640,9 +11757,45 @@ internal sealed class ReflectionMetadataEmitter
                     this.EmitLoadVariable(v.Variable);
                     break;
                 case BoundAssignmentExpression a:
-                    this.EmitExpression(a.Expression);
-                    this.il.OpCode(ILOpCode.Dup);
-                    this.EmitStoreVariable(a.Variable);
+                    if (a.Variable is ParameterSymbol assignParam && assignParam.RefKind != RefKind.None)
+                    {
+                        // ADR-0060: assign-through-ref-kind-parameter lowers to
+                        // `ldarg ptr; value; dup; stloc tmp; stind.*; ldloc tmp`
+                        // so the expression result is the assigned value without
+                        // a re-read through ldind. The temp slot is pre-allocated
+                        // by AssignmentValueSpillCollector and stored in
+                        // receiverSpillSlots keyed by the assignment node.
+                        var assignArgIndex = this.parameters[assignParam];
+                        var assignTmp = this.receiverSpillSlots[a];
+                        this.il.LoadArgument(assignArgIndex);
+                        this.EmitExpression(a.Expression);
+                        this.il.OpCode(ILOpCode.Dup);
+                        this.il.StoreLocal(assignTmp);
+                        this.EmitStoreIndirect(assignParam.Type);
+                        this.il.LoadLocal(assignTmp);
+                    }
+                    else
+                    {
+                        this.EmitExpression(a.Expression);
+                        this.il.OpCode(ILOpCode.Dup);
+                        this.EmitStoreVariable(a.Variable);
+                    }
+
+                    break;
+                case BoundIndirectAssignmentExpression ia:
+                    {
+                        // ADR-0060 §5/§13: `*p = v` lowers to
+                        // `<pointer>; <value>; dup; stloc tmp; stind.*; ldloc tmp`
+                        // so the expression yields the assigned value once.
+                        var iaTmp = this.receiverSpillSlots[ia];
+                        this.EmitExpression(ia.Pointer);
+                        this.EmitExpression(ia.Value);
+                        this.il.OpCode(ILOpCode.Dup);
+                        this.il.StoreLocal(iaTmp);
+                        this.EmitStoreIndirect(ia.Type);
+                        this.il.LoadLocal(iaTmp);
+                    }
+
                     break;
                 case BoundUnaryExpression u:
                     this.EmitUnary(u);
@@ -13231,6 +13384,13 @@ internal sealed class ReflectionMetadataEmitter
             if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
             {
                 this.il.LoadArgument(argIndex);
+                if (ps.RefKind != RefKind.None)
+                {
+                    // ADR-0060: the parameter slot holds a managed pointer T&; an
+                    // ordinary read of `p` in the body must dereference it.
+                    this.EmitLoadIndirect(ps.Type);
+                }
+
                 return;
             }
 
@@ -15741,6 +15901,13 @@ internal sealed class ReflectionMetadataEmitter
                     && ReferenceEquals(ps, this.structThisParameter))
                 {
                     this.il.LoadArgument(0);
+                }
+                else if (ps.RefKind != RefKind.None)
+                {
+                    // ADR-0060: a ref/out/in parameter slot already holds the
+                    // managed pointer T&; loading the arg value gives the
+                    // address directly. Ldarga would yield T&* which is wrong.
+                    this.il.LoadArgument(argIndex);
                 }
                 else
                 {

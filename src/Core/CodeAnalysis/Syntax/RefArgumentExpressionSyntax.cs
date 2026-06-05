@@ -80,8 +80,8 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     /// <summary>Gets the optional type clause for the inline-declared local (<c>out var name T</c>).</summary>
     public TypeClauseSyntax DeclaredType { get; }
 
-    /// <summary>Gets a value indicating whether this argument is an inline-declaration form (<c>out var/let name</c>).</summary>
-    public bool IsInlineDeclaration => DeclarationKeyword != null;
+    /// <summary>Gets a value indicating whether this argument is an inline-declaration form (<c>out var/let name</c> or <c>out _</c>).</summary>
+    public bool IsInlineDeclaration => DeclarationKeyword != null || DiscardToken != null;
 
     /// <summary>Gets a value indicating whether this argument is the discard form (<c>out _</c>).</summary>
     public bool IsDiscard => DiscardToken != null;
