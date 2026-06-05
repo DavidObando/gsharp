@@ -68,10 +68,10 @@ public static class AsyncIteratorRewriter
 
             // Collect yields (for state assignment) and awaits.
             var yieldCollector = new YieldStateCollector();
-            yieldCollector.RewriteStatement(refHoisted);
+            yieldCollector.Visit(refHoisted);
 
             var awaitCollector = new AwaitStateCollector();
-            awaitCollector.RewriteStatement(refHoisted);
+            awaitCollector.Visit(refHoisted);
 
             // Collect hoisted locals (all locals — they may live across yield or await).
             var hoistedLocals = CollectHoistedLocals(refHoisted);
@@ -110,7 +110,7 @@ public static class AsyncIteratorRewriter
     private static bool ContainsYield(BoundStatement statement)
     {
         var walker = new YieldWalker();
-        walker.RewriteStatement(statement);
+        walker.Visit(statement);
         return walker.Found;
     }
 
@@ -135,14 +135,14 @@ public static class AsyncIteratorRewriter
     private static ImmutableArray<VariableSymbol> CollectHoistedLocals(BoundStatement body)
     {
         var collector = new LocalCollector();
-        collector.RewriteStatement(body);
+        collector.Visit(body);
         return collector.Locals.ToImmutableArray();
     }
 
     private static ImmutableArray<(Type PoolKey, TypeSymbol FieldType)> CollectAwaiterTypes(BoundStatement body)
     {
         var collector = new AwaiterTypeCollector();
-        collector.RewriteStatement(body);
+        collector.Visit(body);
 
         var result = ImmutableArray.CreateBuilder<(Type, TypeSymbol)>();
         var seen = new HashSet<Type>();
@@ -170,14 +170,13 @@ public static class AsyncIteratorRewriter
         return result.ToImmutable();
     }
 
-    private sealed class YieldWalker : BoundTreeRewriter
+    private sealed class YieldWalker : BoundTreeWalker
     {
         public bool Found { get; private set; }
 
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             Found = true;
-            return node;
         }
     }
 
@@ -185,7 +184,7 @@ public static class AsyncIteratorRewriter
     /// Assigns monotonically decreasing yield states starting from
     /// <see cref="StateMachineStates.FirstResumableAsyncIteratorState"/> (-4, -5, ...).
     /// </summary>
-    public sealed class YieldStateCollector : BoundTreeRewriter
+    public sealed class YieldStateCollector : BoundTreeWalker
     {
         private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
         private readonly ImmutableDictionary<BoundYieldStatement, int>.Builder states =
@@ -193,17 +192,16 @@ public static class AsyncIteratorRewriter
 
         public ImmutableDictionary<BoundYieldStatement, int> States => states.ToImmutable();
 
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             states.Add(node, allocator.AllocateYieldState());
-            return node;
         }
     }
 
     /// <summary>
     /// Assigns monotonically increasing await states starting from 0.
     /// </summary>
-    public sealed class AwaitStateCollector : BoundTreeRewriter
+    public sealed class AwaitStateCollector : BoundTreeWalker
     {
         private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
         private readonly ImmutableDictionary<BoundAwaitExpression, int>.Builder states =
@@ -211,18 +209,18 @@ public static class AsyncIteratorRewriter
 
         public ImmutableDictionary<BoundAwaitExpression, int> States => states.ToImmutable();
 
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             states.Add(node, allocator.AllocateAwaitState());
-            return base.RewriteAwaitExpression(node);
+            base.VisitAwaitExpression(node);
         }
     }
 
-    private sealed class LocalCollector : BoundTreeRewriter
+    private sealed class LocalCollector : BoundTreeWalker
     {
         public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
 
-        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
             // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
             // DefaultInterpolatedStringHandler emitted for interpolated strings
@@ -230,7 +228,8 @@ public static class AsyncIteratorRewriter
             // field, so it must stay a MoveNext local rather than be hoisted.
             if (node.Variable.Type?.ClrType?.IsByRefLike == true)
             {
-                return base.RewriteVariableDeclaration(node);
+                base.VisitVariableDeclaration(node);
+                return;
             }
 
             if (!Locals.Contains(node.Variable))
@@ -238,15 +237,15 @@ public static class AsyncIteratorRewriter
                 Locals.Add(node.Variable);
             }
 
-            return base.RewriteVariableDeclaration(node);
+            base.VisitVariableDeclaration(node);
         }
     }
 
-    private sealed class AwaiterTypeCollector : BoundTreeRewriter
+    private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
         public List<Type> AwaiterTypes { get; } = new List<Type>();
 
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             var awaitableClrType = node.Expression?.Type?.ClrType;
             if (awaitableClrType != null)
@@ -258,7 +257,7 @@ public static class AsyncIteratorRewriter
                 }
             }
 
-            return base.RewriteAwaitExpression(node);
+            base.VisitAwaitExpression(node);
         }
     }
 }

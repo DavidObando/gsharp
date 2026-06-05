@@ -215,16 +215,16 @@ public static class AsyncStateMachineTypeBuilder
             : null;
     }
 
-    private sealed class AwaiterTypeCollector : BoundTreeRewriter
+    private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
         public List<Type> AwaiterTypes { get; } = new List<Type>();
 
         public void Walk(BoundStatement body)
         {
-            RewriteStatement(body);
+            Visit(body);
         }
 
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             var awaitableClrType = node.Expression?.Type?.ClrType;
             if (awaitableClrType != null)
@@ -236,7 +236,7 @@ public static class AsyncStateMachineTypeBuilder
                 }
             }
 
-            return base.RewriteAwaitExpression(node);
+            base.VisitAwaitExpression(node);
         }
     }
 }

@@ -847,7 +847,7 @@ public sealed class Lowerer : BoundTreeRewriter
     private static bool BodyContainsYieldOrAwait(BoundStatement body)
     {
         var walker = new YieldOrAwaitDetector();
-        walker.RewriteStatement(body);
+        walker.Visit(body);
         return walker.Found;
     }
 
@@ -1073,20 +1073,18 @@ public sealed class Lowerer : BoundTreeRewriter
         return new BoundBlockStatement(null, stmts.ToImmutable());
     }
 
-    private sealed class YieldOrAwaitDetector : BoundTreeRewriter
+    private sealed class YieldOrAwaitDetector : BoundTreeWalker
     {
         public bool Found { get; private set; }
 
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             this.Found = true;
-            return node;
         }
 
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             this.Found = true;
-            return node;
         }
     }
 }

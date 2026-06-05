@@ -44,11 +44,11 @@ internal static class IteratorTryDispatchPlanner
         IReadOnlyDictionary<BoundYieldStatement, int> yieldStates)
     {
         var walker = new Walker(yieldStates);
-        walker.RewriteStatement(body);
+        walker.Visit(body);
         return walker.Build();
     }
 
-    private sealed class Walker : BoundTreeRewriter
+    private sealed class Walker : BoundTreeWalker
     {
         private readonly IReadOnlyDictionary<BoundYieldStatement, int> yieldStates;
         private readonly Stack<BoundTryStatement> tryStack = new Stack<BoundTryStatement>();
@@ -80,22 +80,20 @@ internal static class IteratorTryDispatchPlanner
                 finallyTrysInnermostFirst.ToImmutableArray());
         }
 
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             if (yieldStates.TryGetValue(node, out var state))
             {
                 RecordYield(state);
             }
-
-            return node;
         }
 
-        protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+        protected override void VisitTryStatement(BoundTryStatement node)
         {
             tryStack.Push(node);
             try
             {
-                RewriteStatement(node.TryBlock);
+                VisitStatement(node.TryBlock);
 
                 // Catches and finallies should not themselves contain yields
                 // for the purpose of state routing (binder rejects yield in
@@ -105,12 +103,12 @@ internal static class IteratorTryDispatchPlanner
                 // is incorrect but cannot occur in well-formed programs).
                 foreach (var c in node.CatchClauses)
                 {
-                    RewriteStatement(c.Body);
+                    VisitStatement(c.Body);
                 }
 
                 if (node.FinallyBlock != null)
                 {
-                    RewriteStatement(node.FinallyBlock);
+                    VisitStatement(node.FinallyBlock);
                 }
             }
             finally
@@ -126,8 +124,6 @@ internal static class IteratorTryDispatchPlanner
             {
                 finallyTrysInnermostFirst.Add(node);
             }
-
-            return node;
         }
 
         private void RecordYield(int state)
