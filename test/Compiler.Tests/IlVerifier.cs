@@ -171,19 +171,6 @@ internal static class IlVerifier
     public static class KnownIssues
     {
         /// <summary>
-        /// Async lowering emits a state machine whose <c>MoveNext</c> method
-        /// uses <c>callvirt</c> on value-type awaiters (instead of the
-        /// <c>constrained.</c> + <c>callvirt</c> sequence the spec requires)
-        /// and produces stack-type mismatches around the awaiter dispatch.
-        /// Tracked separately as a follow-up to the IL gate work.
-        /// </summary>
-        public static readonly string[] AsyncStateMachine =
-        {
-            "CallVirtOnValueType",
-            "StackUnexpected",
-        };
-
-        /// <summary>
         /// Ref-struct receivers and stack-allocated return paths trip
         /// ilverify's escape-analysis checks. See ADR/issue tracking ref
         /// struct ergonomics.
@@ -216,14 +203,7 @@ internal static class IlVerifier
 
     private static readonly Dictionary<string, string[]> SampleKnownIssues = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Async lowering: see KnownIssues.AsyncStateMachine.
-        ["AsyncAwaitInLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncAwaitInNestedLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncGoScopeJoin"] = KnownIssues.AsyncStateMachine,
-        ["AsyncMultiAwaitInLoop"] = KnownIssues.AsyncStateMachine,
-        ["AsyncTask"] = KnownIssues.AsyncStateMachine,
-        ["AsyncValueReturns"] = KnownIssues.AsyncStateMachine,
-
+        // Generic value-type dispatch: see KnownIssues.GenericValueTypeDispatch.
         ["InlineStruct"] = new[] { "InitOnly" },
 
         // Ref struct emission: see KnownIssues.RefStruct.

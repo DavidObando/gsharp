@@ -118,12 +118,10 @@ public static class MoveNextBodyRewriter
             // T retVal = default; (only for Task<T>)
             if (retValLocal != null)
             {
-                var defaultVal = retValLocal.Type == TypeSymbol.Int32
-                    ? (BoundExpression)new BoundLiteralExpression(null, 0)
-                    : retValLocal.Type == TypeSymbol.Bool
-                        ? new BoundLiteralExpression(null, false)
-                        : new BoundLiteralExpression(null, null);
-                statements.Add(new BoundVariableDeclaration(null, retValLocal, defaultVal));
+                statements.Add(new BoundVariableDeclaration(
+                    null,
+                    retValLocal,
+                    new BoundDefaultExpression(null, retValLocal.Type)));
             }
 
             // Pre-pass: locate each await within the user's try-statement nesting
