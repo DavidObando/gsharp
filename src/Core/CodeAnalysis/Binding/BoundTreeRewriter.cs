@@ -426,6 +426,8 @@ public abstract class BoundTreeRewriter
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
             case BoundNodeKind.DereferenceExpression:
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
+            case BoundNodeKind.IndirectAssignmentExpression:
+                return RewriteIndirectAssignmentExpression((BoundIndirectAssignmentExpression)node);
             case BoundNodeKind.StateMachineAwaitOnCompleted:
                 return RewriteStateMachineAwaitOnCompleted((BoundStateMachineAwaitOnCompleted)node);
             case BoundNodeKind.StateMachineBuilderMoveNext:
@@ -908,6 +910,23 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundDereferenceExpression(null, operand);
+    }
+
+    /// <summary>
+    /// Rewrites an indirect assignment expression (ADR-0060 §13: <c>*p = expr</c>).
+    /// </summary>
+    /// <param name="node">The indirect assignment expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
+    {
+        var pointer = RewriteExpression(node.Pointer);
+        var value = RewriteExpression(node.Value);
+        if (pointer == node.Pointer && value == node.Value)
+        {
+            return node;
+        }
+
+        return new BoundIndirectAssignmentExpression(node.Syntax, pointer, value);
     }
 
     /// <summary>

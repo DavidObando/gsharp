@@ -86,6 +86,13 @@ public enum BoundNodeKind
     DefaultExpression,
     ClrStaticCallExpression,
 
+    // ADR-0060 §13: indirect assignment `*p = expr` — stores a value
+    // through a managed pointer. Lowered to `<load-address> <value>
+    // stind.*` by the emitter. Used both for direct `*T`-local stores
+    // and as the body-side lowering target for `ref`/`out` parameter
+    // writes (§5).
+    IndirectAssignmentExpression,
+
     // Issue #143: typeof operator
     TypeOfExpression,
 

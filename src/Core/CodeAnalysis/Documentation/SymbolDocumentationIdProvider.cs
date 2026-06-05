@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Documentation;
@@ -153,6 +154,15 @@ internal static class SymbolDocumentationIdProvider
             }
 
             AppendTypeReference(builder, function.Parameters[i].Type, ownerType, function);
+
+            // ADR-0060 item #8: Roslyn DocID convention appends '@' for any
+            // by-ref parameter ('ref', 'out', and 'in' all encode identically
+            // in the DocID; the 'in' / 'out' distinction is recorded only via
+            // ParameterAttributes on the metadata row).
+            if (function.Parameters[i].RefKind != RefKind.None)
+            {
+                builder.Append('@');
+            }
         }
 
         builder.Append(')');

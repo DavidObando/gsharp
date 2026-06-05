@@ -100,6 +100,7 @@ ImportDeclaration
 ImportKeyword
 IndexAssignmentExpression
 IndexExpression
+IndirectAssignmentExpression
 InterfaceDeclaration
 InterfaceKeyword
 InternalKeyword
@@ -155,6 +156,7 @@ QuestionColonToken
 QuestionDotToken
 QuestionToken
 RangeKeyword
+RefArgumentExpression
 RelationalPattern
 ReturnKeyword
 ReturnStatement
@@ -260,6 +262,7 @@ ImportedCallExpression
 ImportedInstanceCallExpression
 IndexAssignmentExpression
 IndexExpression
+IndirectAssignmentExpression
 IndirectCallExpression
 InterpolatedStringExpression
 LabelStatement

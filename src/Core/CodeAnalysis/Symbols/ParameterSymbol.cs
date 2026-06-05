@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -28,11 +29,18 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// When <see langword="true"/>, the parameter's safe-to-escape scope is restricted to the
     /// current function body and returning its value is rejected.
     /// </param>
-    public ParameterSymbol(string name, TypeSymbol type, bool isVariadic = false, SyntaxNode declaringSyntax = null, bool isScoped = false)
-        : base(name, isReadOnly: true, type, declaringSyntax)
+    /// <param name="refKind">
+    /// ADR-0060: the by-reference passing mode of this parameter (<c>none</c>, <c>ref</c>, <c>out</c>, or <c>in</c>).
+    /// Defaults to <see cref="Binding.RefKind.None"/>. When non-<c>None</c>, the parameter's signature-effective
+    /// type is the managed pointer <c>T&amp;</c>; inside the body the symbol's <see cref="Type"/> remains the
+    /// pointee type <c>T</c> and reads/writes are implicitly indirected.
+    /// </param>
+    public ParameterSymbol(string name, TypeSymbol type, bool isVariadic = false, SyntaxNode declaringSyntax = null, bool isScoped = false, RefKind refKind = RefKind.None)
+        : base(name, isReadOnly: refKind == RefKind.None || refKind == RefKind.In, type, declaringSyntax)
     {
         IsVariadic = isVariadic;
         IsScoped = isScoped;
+        RefKind = refKind;
     }
 
     /// <inheritdoc/>
@@ -47,4 +55,9 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// current function body and it may not be directly returned from a ref-struct-returning function.
     /// </summary>
     public override bool IsScoped { get; set; }
+
+    /// <summary>
+    /// Gets the ADR-0060 by-reference passing mode of this parameter (<c>None</c>, <c>Ref</c>, <c>Out</c>, or <c>In</c>).
+    /// </summary>
+    public RefKind RefKind { get; }
 }
