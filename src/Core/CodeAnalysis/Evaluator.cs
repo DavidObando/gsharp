@@ -1950,11 +1950,34 @@ public sealed class Evaluator
         else
         {
             var locals = new Dictionary<VariableSymbol, object>();
+
+            // ADR-0060 item #7: identify ref-kind parameters so we can
+            // write the post-body value back into the caller's lvalue.
+            List<(ParameterSymbol Parameter, BoundExpression Operand)> userRefSlots = null;
+
             for (int i = 0; i < node.Arguments.Length; i++)
             {
                 var parameter = node.Function.Parameters[i];
-                var value = EvaluateExpression(node.Arguments[i]);
-                locals.Add(parameter, value);
+                var arg = node.Arguments[i];
+
+                if (parameter.RefKind != RefKind.None && arg is BoundAddressOfExpression addrOf)
+                {
+                    // Seed the parameter slot with the caller's current value
+                    // (for `out` this is a placeholder the callee is expected
+                    // to overwrite). Capture the operand for write-back unless
+                    // the kind is `in` (read-only).
+                    locals[parameter] = EvaluateExpression(addrOf.Operand);
+                    if (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
+                    {
+                        userRefSlots ??= new List<(ParameterSymbol, BoundExpression)>();
+                        userRefSlots.Add((parameter, addrOf.Operand));
+                    }
+                }
+                else
+                {
+                    var value = EvaluateExpression(arg);
+                    locals.Add(parameter, value);
+                }
             }
 
             this.locals.Push(locals);
@@ -1969,6 +1992,31 @@ public sealed class Evaluator
             }
 
             var result = EvaluateStatement(statement);
+
+            // ADR-0060 item #7: write the final parameter slot value back to
+            // the caller's lvalue for every 'ref'/'out' parameter.
+            if (userRefSlots != null)
+            {
+                foreach (var (parameter, operand) in userRefSlots)
+                {
+                    var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
+                    switch (operand)
+                    {
+                        case BoundVariableExpression bve:
+                            Assign(bve.Variable, finalValue);
+                            break;
+                        case BoundFieldAccessExpression fa:
+                            WriteBackField(fa, finalValue);
+                            break;
+                        case BoundPropertyAccessExpression pa:
+                            WriteBackProperty(pa, finalValue);
+                            break;
+                        case BoundIndexExpression idx:
+                            WriteBackIndex(idx, finalValue);
+                            break;
+                    }
+                }
+            }
 
             this.locals.Pop();
 
