@@ -35,7 +35,7 @@ public static class AsyncBoundTreeQueries
         }
 
         var probe = new AwaitDetector();
-        probe.RewriteStatement(statement);
+        probe.Visit(statement);
         return probe.Found;
     }
 
@@ -57,16 +57,13 @@ public static class AsyncBoundTreeQueries
         return probe.Found;
     }
 
-    private sealed class AwaitDetector : BoundTreeRewriter
+    private sealed class AwaitDetector : BoundTreeWalker
     {
         public bool Found { get; private set; }
 
-        public BoundExpression Visit(BoundExpression expr) => RewriteExpression(expr);
-
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             Found = true;
-            return node;
         }
     }
 }

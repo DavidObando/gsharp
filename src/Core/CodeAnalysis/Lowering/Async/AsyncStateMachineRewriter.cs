@@ -166,7 +166,7 @@ public static class AsyncStateMachineRewriter
             || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
-    private sealed class AwaitStateCollector : BoundTreeRewriter
+    private sealed class AwaitStateCollector : BoundTreeWalker
     {
         private readonly ResumableStateAllocator allocator = new ResumableStateAllocator();
         private readonly ImmutableDictionary<BoundAwaitExpression, int>.Builder states =
@@ -175,14 +175,14 @@ public static class AsyncStateMachineRewriter
         public static ImmutableDictionary<BoundAwaitExpression, int> Allocate(BoundStatement body)
         {
             var collector = new AwaitStateCollector();
-            collector.RewriteStatement(body);
+            collector.Visit(body);
             return collector.states.ToImmutable();
         }
 
-        protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
             states.Add(node, allocator.AllocateAwaitState());
-            return base.RewriteAwaitExpression(node);
+            base.VisitAwaitExpression(node);
         }
     }
 }

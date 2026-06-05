@@ -82,7 +82,7 @@ public static class IteratorRewriter
     private static bool ContainsYield(BoundStatement statement)
     {
         var walker = new YieldWalker();
-        walker.RewriteStatement(statement);
+        walker.Visit(statement);
         return walker.Found;
     }
 
@@ -124,7 +124,7 @@ public static class IteratorRewriter
     {
         // Collect yields and assign states.
         var yieldCollector = new YieldStateCollector();
-        yieldCollector.RewriteStatement(body);
+        yieldCollector.Visit(body);
         var yieldStates = yieldCollector.States;
 
         // Collect hoisted locals (locals that are live across yield points).
@@ -138,42 +138,40 @@ public static class IteratorRewriter
         // Simple approach: hoist all locals declared in the body.
         // A more precise analysis would only hoist those live across yields.
         var collector = new LocalCollector();
-        collector.RewriteStatement(body);
+        collector.Visit(body);
         return collector.Locals.ToImmutableArray();
     }
 
-    private sealed class YieldWalker : BoundTreeRewriter
+    private sealed class YieldWalker : BoundTreeWalker
     {
         public bool Found { get; private set; }
 
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             Found = true;
-            return node;
         }
     }
 
-    private sealed class YieldStateCollector : BoundTreeRewriter
+    private sealed class YieldStateCollector : BoundTreeWalker
     {
+        private readonly ImmutableDictionary<BoundYieldStatement, int>.Builder states =
+            ImmutableDictionary.CreateBuilder<BoundYieldStatement, int>();
+
         private int nextState = 1; // State 0 = initial, -1 = finished, -2 = before first enumeration.
 
         public ImmutableDictionary<BoundYieldStatement, int> States => states.ToImmutable();
 
-        private readonly ImmutableDictionary<BoundYieldStatement, int>.Builder states =
-            ImmutableDictionary.CreateBuilder<BoundYieldStatement, int>();
-
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
+        protected override void VisitYieldStatement(BoundYieldStatement node)
         {
             states.Add(node, nextState++);
-            return node;
         }
     }
 
-    private sealed class LocalCollector : BoundTreeRewriter
+    private sealed class LocalCollector : BoundTreeWalker
     {
         public List<VariableSymbol> Locals { get; } = new List<VariableSymbol>();
 
-        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
             // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
             // DefaultInterpolatedStringHandler emitted for interpolated strings
@@ -181,7 +179,8 @@ public static class IteratorRewriter
             // field, so it must stay a MoveNext local rather than be hoisted.
             if (node.Variable.Type?.ClrType?.IsByRefLike == true)
             {
-                return base.RewriteVariableDeclaration(node);
+                base.VisitVariableDeclaration(node);
+                return;
             }
 
             if (!Locals.Contains(node.Variable))
@@ -189,7 +188,7 @@ public static class IteratorRewriter
                 Locals.Add(node.Variable);
             }
 
-            return base.RewriteVariableDeclaration(node);
+            base.VisitVariableDeclaration(node);
         }
     }
 }

@@ -7255,7 +7255,7 @@ internal sealed class ReflectionMetadataEmitter
     private static void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
     {
         var collector = new BlockExpressionLocalCollector();
-        collector.RewriteStatement(body);
+        collector.Visit(body);
         foreach (var variable in collector.Variables)
         {
             if (!locals.ContainsKey(variable))
@@ -7289,7 +7289,7 @@ internal sealed class ReflectionMetadataEmitter
         var collector = new LambdaCollector(sink);
         foreach (var kvp in this.program.Functions)
         {
-            collector.RewriteStatement(kvp.Value);
+            collector.Visit(kvp.Value);
         }
 
         return sink;
@@ -7301,7 +7301,7 @@ internal sealed class ReflectionMetadataEmitter
         var collector = new GoStatementCollector(sink);
         foreach (var kvp in this.program.Functions)
         {
-            collector.RewriteStatement(kvp.Value);
+            collector.Visit(kvp.Value);
         }
 
         return sink;
@@ -8424,21 +8424,21 @@ internal sealed class ReflectionMetadataEmitter
     private static IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)
     {
         var sink = new List<BoundIndexExpression>();
-        new MapIndexReadCollector(sink).RewriteStatement((BoundStatement)root);
+        new MapIndexReadCollector(sink).Visit((BoundStatement)root);
         return sink;
     }
 
     private static IEnumerable<BoundExpression> CollectIndexAssignmentValueSpills(BoundNode root)
     {
         var sink = new List<BoundExpression>();
-        new IndexAssignmentValueSpillCollector(sink).RewriteStatement((BoundStatement)root);
+        new IndexAssignmentValueSpillCollector(sink).Visit((BoundStatement)root);
         return sink;
     }
 
     private static IEnumerable<BoundDefaultExpression> CollectDefaultExpressions(BoundNode root)
     {
         var sink = new List<BoundDefaultExpression>();
-        new DefaultExpressionCollector(sink).RewriteStatement((BoundStatement)root);
+        new DefaultExpressionCollector(sink).Visit((BoundStatement)root);
         return sink;
     }
 
@@ -8448,7 +8448,7 @@ internal sealed class ReflectionMetadataEmitter
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         var sink = new List<BoundExpression>();
-        new ReceiverSpillCollector(this, function, locals, sink).RewriteStatement((BoundStatement)root);
+        new ReceiverSpillCollector(this, function, locals, sink).Visit((BoundStatement)root);
         return sink;
     }
 
@@ -8460,7 +8460,7 @@ internal sealed class ReflectionMetadataEmitter
     private static IEnumerable<BoundExpression> CollectAssignmentValueSpills(BoundNode root)
     {
         var sink = new List<BoundExpression>();
-        new AssignmentValueSpillCollector(sink).RewriteStatement((BoundStatement)root);
+        new AssignmentValueSpillCollector(sink).Visit((BoundStatement)root);
         return sink;
     }
 
@@ -9965,11 +9965,11 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private sealed class BlockExpressionLocalCollector : BoundTreeRewriter
+    private sealed class BlockExpressionLocalCollector : BoundTreeWalker
     {
         public List<VariableSymbol> Variables { get; } = new List<VariableSymbol>();
 
-        protected override BoundExpression RewriteBlockExpression(BoundBlockExpression node)
+        protected override void VisitBlockExpression(BoundBlockExpression node)
         {
             foreach (var statement in node.Statements)
             {
@@ -9979,17 +9979,16 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
-            return base.RewriteBlockExpression(node);
+            base.VisitBlockExpression(node);
         }
     }
 
     // Walks an arbitrary bound sub-tree and records every BoundLabelStatement
-    // label it discovers. Implemented as a BoundTreeRewriter subclass so it
+    // label it discovers. Implemented as a BoundTreeWalker subclass so it
     // automatically descends through every statement and expression kind
     // (including BoundBlockExpression, BoundSpillSequenceExpression, etc.)
-    // without having to enumerate them by hand. The rewriter is used purely
-    // as a visitor — its returned nodes are discarded.
-    private sealed class ExpressionBlockLabelCollector : BoundTreeRewriter
+    // without having to enumerate them by hand.
+    private sealed class ExpressionBlockLabelCollector : BoundTreeWalker
     {
         private readonly HashSet<BoundLabel> sink;
 
@@ -9998,19 +9997,19 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        public void Visit(BoundExpression expression)
+        public override void VisitStatement(BoundStatement node)
         {
-            this.RewriteExpression(expression);
-        }
+            if (node is BoundLabelStatement label)
+            {
+                this.sink.Add(label.Label);
+                return;
+            }
 
-        protected override BoundStatement RewriteLabelStatement(BoundLabelStatement node)
-        {
-            this.sink.Add(node.Label);
-            return node;
+            base.VisitStatement(node);
         }
     }
 
-    private sealed class LambdaCollector : BoundTreeRewriter
+    private sealed class LambdaCollector : BoundTreeWalker
     {
         private readonly List<BoundFunctionLiteralExpression> sink;
 
@@ -10019,15 +10018,20 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        public override void VisitExpression(BoundExpression node)
         {
-            this.sink.Add(node);
-            this.RewriteStatement(node.Body);
-            return node;
+            if (node is BoundFunctionLiteralExpression lambda)
+            {
+                this.sink.Add(lambda);
+                this.VisitStatement(lambda.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
         }
     }
 
-    private sealed class GoStatementCollector : BoundTreeRewriter
+    private sealed class GoStatementCollector : BoundTreeWalker
     {
         private readonly List<BoundGoStatement> sink;
 
@@ -10036,20 +10040,28 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundStatement RewriteGoStatement(BoundGoStatement node)
+        public override void VisitExpression(BoundExpression node)
         {
-            this.sink.Add(node);
-            return base.RewriteGoStatement(node);
+            // Override the base dispatch so we descend into the body of any
+            // BoundFunctionLiteralExpression we encounter — go statements
+            // need to discover nested go statements inside lambda bodies too.
+            if (node is BoundFunctionLiteralExpression lambda)
+            {
+                this.VisitStatement(lambda.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
         }
 
-        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        protected override void VisitGoStatement(BoundGoStatement node)
         {
-            this.RewriteStatement(node.Body);
-            return node;
+            this.sink.Add(node);
+            base.VisitGoStatement(node);
         }
     }
 
-    private sealed class GoCapturedVariableCollector : BoundTreeRewriter
+    private sealed class GoCapturedVariableCollector : BoundTreeWalker
     {
         private readonly HashSet<VariableSymbol> seen;
         private readonly HashSet<VariableSymbol> declared;
@@ -10067,28 +10079,30 @@ internal sealed class ReflectionMetadataEmitter
 
         public void Collect(BoundExpression expression)
         {
-            this.RewriteExpression(expression);
+            this.VisitExpression(expression);
         }
 
-        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundVariableExpression ve)
+            {
+                this.CaptureIfFree(ve.Variable);
+                return;
+            }
+
+            base.VisitExpression(node);
+        }
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
         {
             this.CaptureIfFree(node.Variable);
-            return node;
+            base.VisitAssignmentExpression(node);
         }
 
-        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
-            this.CaptureIfFree(node.Variable);
-            return base.RewriteAssignmentExpression(node);
-        }
-
-        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
-        {
-            var initializer = this.RewriteExpression(node.Initializer);
+            this.VisitExpression(node.Initializer);
             this.declared.Add(node.Variable);
-            return initializer == node.Initializer
-                ? node
-                : new BoundVariableDeclaration(null, node.Variable, initializer, node.ConstantValue);
         }
 
         private void CaptureIfFree(VariableSymbol variable)
@@ -10101,7 +10115,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private sealed class DefaultExpressionCollector : BoundTreeRewriter
+    private sealed class DefaultExpressionCollector : BoundTreeWalker
     {
         private readonly List<BoundDefaultExpression> sink;
 
@@ -10110,10 +10124,15 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewriteDefaultExpression(BoundDefaultExpression node)
+        public override void VisitExpression(BoundExpression node)
         {
-            this.sink.Add(node);
-            return node;
+            if (node is BoundDefaultExpression de)
+            {
+                this.sink.Add(de);
+                return;
+            }
+
+            base.VisitExpression(node);
         }
     }
 
@@ -10192,7 +10211,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private sealed class ReceiverSpillCollector : BoundTreeRewriter
+    private sealed class ReceiverSpillCollector : BoundTreeWalker
     {
         private readonly ReflectionMetadataEmitter outer;
         private readonly FunctionSymbol function;
@@ -10211,101 +10230,101 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
         {
             this.AddIfNeeded(node.Receiver);
-            return base.RewriteImportedInstanceCallExpression(node);
+            base.VisitImportedInstanceCallExpression(node);
         }
 
-        protected override BoundExpression RewriteUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+        protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
         {
             this.AddIfNeeded(node.Receiver);
-            return base.RewriteUserInstanceCallExpression(node);
+            base.VisitUserInstanceCallExpression(node);
         }
 
-        protected override BoundExpression RewriteClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
+        protected override void VisitClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewriteClrPropertyAccessExpression(node);
+            base.VisitClrPropertyAccessExpression(node);
         }
 
-        protected override BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+        protected override void VisitClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewriteClrPropertyAssignmentExpression(node);
+            base.VisitClrPropertyAssignmentExpression(node);
         }
 
         // Issue #418 (P1-5): G# computed/auto properties also need the spill
         // infrastructure when the receiver is a non-addressable struct rvalue
         // (e.g. `makePoint(5, 6).Sum`, `getOuter().Inner.Length`).
-        protected override BoundExpression RewritePropertyAccessExpression(BoundPropertyAccessExpression node)
+        protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewritePropertyAccessExpression(node);
+            base.VisitPropertyAccessExpression(node);
         }
 
-        protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        protected override void VisitPropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewritePropertyAssignmentExpression(node);
+            base.VisitPropertyAssignmentExpression(node);
         }
 
-        protected override BoundExpression RewriteClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
+        protected override void VisitClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewriteClrEventSubscriptionExpression(node);
+            base.VisitClrEventSubscriptionExpression(node);
         }
 
-        protected override BoundExpression RewriteEventSubscriptionExpression(BoundEventSubscriptionExpression node)
+        protected override void VisitEventSubscriptionExpression(BoundEventSubscriptionExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewriteEventSubscriptionExpression(node);
+            base.VisitEventSubscriptionExpression(node);
         }
 
-        protected override BoundExpression RewriteClrIndexExpression(BoundClrIndexExpression node)
+        protected override void VisitClrIndexExpression(BoundClrIndexExpression node)
         {
             this.AddIfNeeded(node.Target);
-            return base.RewriteClrIndexExpression(node);
+            base.VisitClrIndexExpression(node);
         }
 
-        protected override BoundExpression RewriteTupleElementAccessExpression(BoundTupleElementAccessExpression node)
+        protected override void VisitTupleElementAccessExpression(BoundTupleElementAccessExpression node)
         {
             this.AddIfNeeded(node.Receiver);
-            return base.RewriteTupleElementAccessExpression(node);
+            base.VisitTupleElementAccessExpression(node);
         }
 
-        protected override BoundExpression RewriteClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+        protected override void VisitClrMethodGroupExpression(BoundClrMethodGroupExpression node)
         {
             if (node.Receiver != null)
             {
                 this.AddIfNeeded(node.Receiver);
             }
 
-            return base.RewriteClrMethodGroupExpression(node);
+            base.VisitClrMethodGroupExpression(node);
         }
 
         private void AddIfNeeded(BoundExpression receiver)
@@ -10317,7 +10336,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private sealed class MapIndexReadCollector : BoundTreeRewriter
+    private sealed class MapIndexReadCollector : BoundTreeWalker
     {
         private readonly List<BoundIndexExpression> sink;
 
@@ -10326,14 +10345,14 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewriteIndexExpression(BoundIndexExpression node)
+        protected override void VisitIndexExpression(BoundIndexExpression node)
         {
             if (node.Target.Type is MapTypeSymbol)
             {
                 this.sink.Add(node);
             }
 
-            return base.RewriteIndexExpression(node);
+            base.VisitIndexExpression(node);
         }
     }
 
@@ -10341,7 +10360,7 @@ internal sealed class ReflectionMetadataEmitter
     // emitter can pre-allocate a scratch slot of the value's type. The emit sites
     // use a dup + stloc tmp + store + ldloc tmp pattern to avoid re-evaluating
     // the index/argument expressions when producing the assignment's result.
-    private sealed class IndexAssignmentValueSpillCollector : BoundTreeRewriter
+    private sealed class IndexAssignmentValueSpillCollector : BoundTreeWalker
     {
         private readonly List<BoundExpression> sink;
 
@@ -10350,16 +10369,16 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        protected override void VisitIndexAssignmentExpression(BoundIndexAssignmentExpression node)
         {
             this.sink.Add(node);
-            return base.RewriteIndexAssignmentExpression(node);
+            base.VisitIndexAssignmentExpression(node);
         }
 
-        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        protected override void VisitClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
         {
             this.sink.Add(node);
-            return base.RewriteClrIndexAssignmentExpression(node);
+            base.VisitClrIndexAssignmentExpression(node);
         }
     }
 
@@ -10367,7 +10386,7 @@ internal sealed class ReflectionMetadataEmitter
     // BoundClrPropertyAssignment expression so the slot allocator can give
     // each one a value-temp local for the dup/stloc spill described in
     // CollectAssignmentValueSpills.
-    private sealed class AssignmentValueSpillCollector : BoundTreeRewriter
+    private sealed class AssignmentValueSpillCollector : BoundTreeWalker
     {
         private readonly List<BoundExpression> sink;
 
@@ -10376,16 +10395,16 @@ internal sealed class ReflectionMetadataEmitter
             this.sink = sink;
         }
 
-        protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        protected override void VisitPropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
         {
             this.sink.Add(node);
-            return base.RewritePropertyAssignmentExpression(node);
+            base.VisitPropertyAssignmentExpression(node);
         }
 
-        protected override BoundExpression RewriteClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
+        protected override void VisitClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
         {
             this.sink.Add(node);
-            return base.RewriteClrPropertyAssignmentExpression(node);
+            base.VisitClrPropertyAssignmentExpression(node);
         }
     }
 
@@ -12347,7 +12366,9 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.defaultExpressionSlots.TryGetValue(node, out var slot))
             {
                 throw new InvalidOperationException(
-                    $"BoundDefaultExpression of value type '{type.Name}' has no preallocated temp slot.");
+                    $"No slot populated for {node.Kind} of value type '{type.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check DefaultExpressionCollector and its ancestor walker.");
             }
 
             this.il.LoadLocalAddress(slot);
@@ -12593,7 +12614,7 @@ internal sealed class ReflectionMetadataEmitter
                     // walker as a safety net for any statement kind that might
                     // carry an expression-position block.
                     var stmtWalker = new ExpressionBlockLabelCollector(sink);
-                    stmtWalker.RewriteStatement(statement);
+                    stmtWalker.Visit(statement);
                     return;
             }
         }
@@ -12681,8 +12702,9 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.appendSlots.TryGetValue(app, out var slots))
             {
                 throw new InvalidOperationException(
-                    $"Append expression for slice type '{app.SliceType?.Name}' has no preallocated slot. "
-                    + "A walker pre-pass failed to descend into the parent bound-node kind.");
+                    $"No slot populated for {app.Kind} on slice type '{app.SliceType?.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check AppendCollector and its ancestor walker.");
             }
 
             var element = app.SliceType.ElementType;
@@ -12970,7 +12992,9 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.structLiteralSlots.TryGetValue(literal, out var slot))
             {
                 throw new InvalidOperationException(
-                    $"Struct literal of type '{literal.StructType.Name}' has no preallocated slot.");
+                    $"No slot populated for {literal.Kind} of type '{literal.StructType.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check StructLiteralCollector and its ancestor walker.");
             }
 
             // ldloca slot; initobj typedef — zero-initializes the value type.
@@ -13696,7 +13720,9 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.receiverSpillSlots.TryGetValue(assn, out var valueSlot))
             {
                 throw new InvalidOperationException(
-                    $"No value-spill slot was allocated for property assignment to '{assn.Property.Name}'.");
+                    $"No slot populated for {assn.Kind} on property '{assn.Property.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check AssignmentValueSpillCollector and its ancestor walker.");
             }
 
             // Issue #263: static property assignment — no receiver.
@@ -13809,7 +13835,9 @@ internal sealed class ReflectionMetadataEmitter
             if (!this.receiverSpillSlots.TryGetValue(assn, out var valueSlot))
             {
                 throw new InvalidOperationException(
-                    $"No value-spill slot was allocated for CLR property assignment to '{assn.Member.Name}'.");
+                    $"No slot populated for {assn.Kind} on CLR property '{assn.Member.Name}' — "
+                    + "walker pre-pass missed this child? "
+                    + "Check AssignmentValueSpillCollector and its ancestor walker.");
             }
 
             if (!isStatic)
@@ -14487,7 +14515,9 @@ internal sealed class ReflectionMetadataEmitter
                 if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
                 {
                     throw new InvalidOperationException(
-                        $"No receiver spill slot was allocated for rvalue receiver of type '{receiver.Type}'.");
+                        $"No slot populated for {receiver.Kind} receiver of type '{receiver.Type}' — "
+                        + "walker pre-pass missed this child? "
+                        + "Check ReceiverSpillCollector and its ancestor walker.");
                 }
 
                 this.il.StoreLocal(slot);
