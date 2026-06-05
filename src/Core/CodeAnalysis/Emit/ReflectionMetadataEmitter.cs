@@ -5617,6 +5617,18 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
+        // Issue #420 / #455 (P3-10): the emitted IL takes the receiver and the
+        // typed argument by address (`ldarga`) and reads the field directly.
+        // The signature encoded below also passes the typed argument by value
+        // through EncodeTypeSymbol, which assumes a value-type StructSymbol.
+        // If reference-type structs/records are ever introduced the IL and the
+        // signature both need to switch (load by reference, no `ldarga`); make
+        // the value-type precondition explicit so a future change trips loudly
+        // in Debug instead of producing invalid IL.
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitInlineEqualsTyped precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
+
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.metadataOnly)
         {
@@ -5681,6 +5693,16 @@ internal sealed class ReflectionMetadataEmitter
 
     private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
     {
+        // Issue #420 / #455 (P3-10): the emitted IL uses `ldarga` on both
+        // operands to read fields directly, which requires the operands to be
+        // value-type structs. If reference-type structs/records are ever
+        // introduced this helper must switch to `ldarg` / `ldfld` chains and
+        // re-encode the parameter signature; assert the value-type precondition
+        // explicitly so any future change trips loudly in Debug.
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitInlineEqualityOperator precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
+
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.metadataOnly)
         {
@@ -13376,6 +13398,19 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
         {
+            // Issue #420 / #455 (P3-4): top-of-method precondition. The
+            // non-static paths below evaluate `fas.Value` between two reads of
+            // `fas.Receiver`. That is only safe when the value expression does
+            // not reassign the receiver variable. The binder does not produce
+            // such shapes today (see ValueExpressionMutatesReceiver helper).
+            // Repeat the check at the top of the method so the invariant is
+            // visible without scrolling past the static-field fast path; the
+            // per-receiver assertion further down remains for the targeted
+            // diagnostic message.
+            Debug.Assert(
+                fas.Receiver == null || !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
+                $"EmitFieldAssignment precondition violated: BoundFieldAssignmentExpression value must not reassign the receiver variable for field '{fas.Field.Name}' — see issue #420 / P3-4.");
+
             if (!this.outer.structFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
