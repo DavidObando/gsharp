@@ -7509,9 +7509,14 @@ public sealed class Binder
                 declaredType = parameter.Type;
             }
 
+            // ADR-0060: in the first pass (called from BindCallExpression before
+            // overload resolution), the parameter is unknown and no explicit
+            // type was given. Return a placeholder bound node *without*
+            // declaring a local — the call-site arg-loop re-binds us once the
+            // parameter has been resolved so the local has the right type.
             if (declaredType == null)
             {
-                declaredType = TypeSymbol.Error;
+                return new BoundAddressOfExpression(null, new BoundErrorExpression(null));
             }
 
             // Synthesize the local. `out _` gets a fresh anonymous name; `out var`/`out let`
@@ -8492,8 +8497,9 @@ public sealed class Binder
             // ADR-0060: ref-kind argument matching. The argument's syntax must
             // carry the same `ref`/`out`/`in` modifier as the parameter; for `in`
             // the modifier is required (warning GS0242 is reported when omitted).
-            // The lvalue form binds to BoundAddressOfExpression(operand) with
-            // the operand's type matching parameter.Type (the pointee).
+            // ADR-0060 §1 back-compat: a bare `&x` (BoundAddressOfExpression
+            // without a RefArgumentExpressionSyntax wrapper) is universally
+            // compatible with any ref-kind parameter (existing ADR-0039 behaviour).
             if (parameter.RefKind != RefKind.None || (i < syntax.Arguments.Count && syntax.Arguments[i] is RefArgumentExpressionSyntax))
             {
                 var argSyntax = i < syntax.Arguments.Count ? syntax.Arguments[i] : null;
@@ -8501,6 +8507,18 @@ public sealed class Binder
                 if (argSyntax is RefArgumentExpressionSyntax refArgSyntax)
                 {
                     argRefKind = GetRefKindFromModifier(refArgSyntax.RefKindModifier);
+                }
+
+                // Back-compat: bare `&x` (UnaryExpression with AmpersandToken,
+                // bound to BoundAddressOfExpression) is universally compatible
+                // with any ref-kind parameter. Treat it as if the user wrote the
+                // matching keyword.
+                bool isBareAddressOf = argRefKind == RefKind.None
+                    && argument is BoundAddressOfExpression
+                    && parameter.RefKind != RefKind.None;
+                if (isBareAddressOf)
+                {
+                    argRefKind = parameter.RefKind;
                 }
 
                 if (argRefKind != parameter.RefKind)
@@ -8531,6 +8549,22 @@ public sealed class Binder
                 if (argument is BoundAddressOfExpression addr)
                 {
                     var operandType = addr.Operand.Type;
+
+                    // ADR-0060: an inline-decl `out var n` / `out let n` / `out _`
+                    // was bound with TypeSymbol.Error in the first pass because
+                    // the parameter was unknown. Re-bind now that overload
+                    // resolution has chosen the function and the parameter
+                    // pointee type is known.
+                    if (operandType == TypeSymbol.Error
+                        && i < syntax.Arguments.Count
+                        && syntax.Arguments[i] is RefArgumentExpressionSyntax refArgFixup
+                        && refArgFixup.IsInlineDeclaration
+                        && refArgFixup.DeclaredType == null)
+                    {
+                        boundArguments[i] = BindRefArgumentExpression(refArgFixup, parameter);
+                        continue;
+                    }
+
                     if (operandType != expectedType && operandType != TypeSymbol.Error)
                     {
                         Diagnostics.ReportWrongArgumentType(syntax.Arguments[i].Location, parameter.Name, expectedType, operandType);

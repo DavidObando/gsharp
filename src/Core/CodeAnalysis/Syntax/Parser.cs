@@ -3955,8 +3955,7 @@ public class Parser
             // `out var <ident>`, `out let <ident>`, `out _`, `out <ident>`,
             // or `out (`. Reject the `out` if the next token isn't a legal
             // payload start (so a parameter actually named `out` still binds).
-            bool payloadIsDecl = nextKind == SyntaxKind.IdentifierToken
-                && (nextText == "var" || nextText == "let")
+            bool payloadIsDecl = (nextKind == SyntaxKind.VarKeyword || nextKind == SyntaxKind.LetKeyword)
                 && Peek(2).Kind == SyntaxKind.IdentifierToken;
             bool payloadIsDiscard = nextKind == SyntaxKind.IdentifierToken && nextText == "_";
             bool payloadIsLvalueStart = nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken;

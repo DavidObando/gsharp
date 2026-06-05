@@ -7721,6 +7721,24 @@ internal sealed class ReflectionMetadataEmitter
             base.VisitVariableDeclaration(node);
         }
 
+        // ADR-0060: an inline `out var name`, `out let name`, or `out _` argument
+        // synthesises a local in the binder without a corresponding
+        // BoundVariableDeclaration statement. Pick the local up here when we see
+        // its address taken so the emitter has a slot to ldloca from.
+        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (node.Operand is BoundVariableExpression bve
+                && bve.Variable is LocalVariableSymbol lvs
+                && lvs is not ParameterSymbol
+                && !this.locals.ContainsKey(lvs))
+            {
+                this.locals[lvs] = this.localTypes.Count;
+                this.localTypes.Add(lvs.Type);
+            }
+
+            base.VisitAddressOfExpression(node);
+        }
+
         protected override void VisitGoStatement(BoundGoStatement node)
         {
             if (this.currentScope != null)
