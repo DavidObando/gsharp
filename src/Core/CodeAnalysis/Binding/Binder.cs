@@ -1859,6 +1859,20 @@ public sealed class Binder
                     continue;
                 }
 
+                // Issue #410 / ADR-0029: forbid user-written synthesized members
+                // on data structs even when declared as shared/static methods.
+                if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    continue;
+                }
+
+                if (structSymbol.IsInline && IsInlineSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportInlineStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    continue;
+                }
+
                 // Issue #312 / ADR-0020: support generic static methods too.
                 var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
                 var enclosingTypeParameters = currentTypeParameters;
@@ -2736,6 +2750,12 @@ public sealed class Binder
                     return;
                 }
 
+                if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName))
+                {
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);
+                    return;
+                }
+
                 if (methodReceiverStruct.TryGetField(methodName, out _) || methodReceiverStruct.TryGetMethod(methodName, out _))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName);
@@ -2796,6 +2816,17 @@ public sealed class Binder
             methodName == "op_Equality" ||
             methodName == "op_Inequality" ||
             methodName == "Deconstruct";
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: data structs synthesize the same six member
+    /// names as inline structs (<c>Equals</c>, <c>GetHashCode</c>,
+    /// <c>ToString</c>, <c>op_Equality</c>, <c>op_Inequality</c>,
+    /// <c>Deconstruct</c>). User code may not hand-write any of them.
+    /// </summary>
+    private static bool IsDataStructSynthesizedMemberName(string methodName)
+    {
+        return IsInlineSynthesizedMemberName(methodName);
     }
 
     private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax receiverSyntax, TypeSymbol receiverType, PackageSymbol package)

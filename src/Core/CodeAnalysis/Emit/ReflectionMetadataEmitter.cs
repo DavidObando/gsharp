@@ -215,6 +215,23 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle objectInstanceToStringRef;
     private MemberReferenceHandle objectInstanceGetHashCodeRef;
     private MemberReferenceHandle nullRefExceptionCtorRef;
+
+    // Issue #410 / ADR-0029: cached member refs for data-struct synthesized members.
+    private MemberReferenceHandle stringConcatArrayRef;
+    private MemberReferenceHandle convertToStringRef;
+    private MemberReferenceHandle cultureInvariantGetterRef;
+    private MemberReferenceHandle hashCodeAddOpenRef;
+    private MemberReferenceHandle hashCodeToHashCodeRef;
+    private readonly MemberReferenceHandle?[] hashCodeCombineOpenRefs = new MemberReferenceHandle?[8];
+    private TypeReferenceHandle hashCodeTypeRef;
+    private StandaloneSignatureHandle hashCodeLocalSig;
+
+    // Per-data-struct op_Equality MethodDef handle (issue #410). Populated when
+    // the operator is synthesized so future call sites could route through it
+    // directly. Not currently used by the BoundBinaryExpression lowering
+    // (which still boxes and dispatches via Object.Equals) but kept for
+    // forward-compatibility with future perf work.
+    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataStructOpEqualityHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private EntityHandle? systemAttributeTypeRef;
     private MemberReferenceHandle? systemAttributeCtorRef;
 
@@ -775,7 +792,7 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         foreach (var s in nonSmStructs)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
             {
                 continue;
             }
@@ -784,6 +801,13 @@ internal sealed class ReflectionMetadataEmitter
             if (s.IsInline)
             {
                 methodRow += 8;
+            }
+            else if (s.IsData)
+            {
+                // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
+                // rows: Equals(object), Equals(Name), GetHashCode, ToString,
+                // op_Equality, op_Inequality, Deconstruct.
+                methodRow += 7;
             }
 
             foreach (var m in s.Methods)
@@ -1284,6 +1308,13 @@ internal sealed class ReflectionMetadataEmitter
             if (s.IsInline)
             {
                 this.EmitInlineStructSynthesizedMembers(s);
+            }
+            else if (s.IsData)
+            {
+                // Issue #410 / ADR-0029: emit synthesized members BEFORE
+                // user-declared methods so the MethodDef rows match the
+                // planning order (the first 7 rows reserved by the planner).
+                this.EmitDataStructSynthesizedMembers(s);
             }
 
             if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
@@ -5803,6 +5834,422 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #410 / ADR-0029: emits the seven synthesized members for a
+    /// <c>data struct</c> type. The MethodDef rows are added in a fixed
+    /// order so they align 1:1 with the rows reserved by the method-row
+    /// planner: <c>Equals(Name)</c>, <c>Equals(object)</c>,
+    /// <c>GetHashCode</c>, <c>ToString</c>, <c>op_Equality</c>,
+    /// <c>op_Inequality</c>, <c>Deconstruct</c>.
+    /// <c>Equals(Name)</c> is emitted first so its MethodDef handle is
+    /// available when <c>Equals(object)</c> is emitted.
+    /// </summary>
+    /// <param name="structSym">The data-struct symbol to emit members for.</param>
+    private void EmitDataStructSynthesizedMembers(StructSymbol structSym)
+    {
+        // ADR-0029: data structs must have at least one field. This is
+        // enforced by the binder; assert here so the emit IL stays simple.
+        Debug.Assert(
+            !structSym.Fields.IsDefaultOrEmpty,
+            "Data structs must have at least one field; the binder should have rejected an empty data struct.");
+
+        var typeDef = this.structTypeDefs[structSym];
+        var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
+        this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
+        this.EmitDataStructGetHashCode(structSym);
+        this.EmitDataStructToString(structSym);
+        this.dataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
+        this.EmitDataStructEqualityOperator(structSym, isInequality: true);
+        this.EmitDataStructDeconstruct(structSym);
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public sealed override bool Equals(object other)</c> that performs
+    /// <c>other is Name p &amp;&amp; this.Equals(p)</c>. Sealed because struct
+    /// methods cannot be overridden in user code anyway, but the metadata
+    /// flag communicates intent.
+    /// </summary>
+    private void EmitDataStructEqualsObject(StructSymbol structSym, TypeDefinitionHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
+    {
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitDataStructEqualsObject precondition violated: data struct must be a value type.");
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        if (!this.metadataOnly)
+        {
+            var retFalse = il.DefineLabel();
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Isinst);
+            il.Token(typeDef);
+            il.Branch(ILOpCode.Brfalse, retFalse);
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Unbox_any);
+            il.Token(typeDef);
+            il.OpCode(ILOpCode.Call);
+            il.Token(equalsTypedHandle);
+            il.OpCode(ILOpCode.Ret);
+            il.MarkLabel(retFalse);
+            il.LoadConstantI4(0);
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("Equals"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: this.FinishInlineBody(il),
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public bool Equals(Name other)</c> that compares fields in source
+    /// declaration order via <c>Object.Equals(object, object)</c>, short
+    /// circuiting on first inequality. Value-type fields are boxed; type
+    /// parameters and reference-type fields are passed as objects directly.
+    /// </summary>
+    /// <returns>The MethodDef handle of the emitted method, so callers can
+    /// reference it from other synthesized members.</returns>
+    private MethodDefinitionHandle EmitDataStructEqualsTyped(StructSymbol structSym)
+    {
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitDataStructEqualsTyped precondition violated: data struct must be a value type.");
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        if (!this.metadataOnly)
+        {
+            var retFalse = il.DefineLabel();
+            foreach (var field in structSym.Fields)
+            {
+                var fieldHandle = this.structFieldDefs[field];
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+                this.EmitBoxIfNeeded(il, field.Type);
+                il.LoadArgumentAddress(1);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+                this.EmitBoxIfNeeded(il, field.Type);
+                il.Call(this.GetObjectStaticEqualsReference());
+                il.Branch(ILOpCode.Brfalse, retFalse);
+            }
+
+            il.LoadConstantI4(1);
+            il.OpCode(ILOpCode.Ret);
+            il.MarkLabel(retFalse);
+            il.LoadConstantI4(0);
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("Equals"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: this.FinishInlineBody(il),
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public sealed override int GetHashCode()</c>. For up to 8 fields the
+    /// implementation calls <c>HashCode.Combine&lt;object,...,object&gt;</c>
+    /// after boxing each field; for &gt;8 fields it folds via a stack-allocated
+    /// <c>HashCode</c> local using <c>HashCode.Add&lt;object&gt;</c> per field
+    /// and finishes with <c>ToHashCode()</c>.
+    /// </summary>
+    private void EmitDataStructGetHashCode(StructSymbol structSym)
+    {
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitDataStructGetHashCode precondition violated: data struct must be a value type.");
+
+        var fields = structSym.Fields;
+        bool useFold = fields.Length > 8;
+
+        var il = new InstructionEncoder(new BlobBuilder());
+        StandaloneSignatureHandle localsSignature = default;
+        int bodyOffset = -1;
+
+        if (!this.metadataOnly)
+        {
+            if (!useFold)
+            {
+                foreach (var field in fields)
+                {
+                    var fieldHandle = this.structFieldDefs[field];
+                    il.LoadArgument(0);
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.EmitBoxIfNeeded(il, field.Type);
+                }
+
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.GetHashCodeCombineObjectSpec(fields.Length));
+                il.OpCode(ILOpCode.Ret);
+            }
+            else
+            {
+                // ldloca.s 0; initobj HashCode
+                il.LoadLocalAddress(0);
+                il.OpCode(ILOpCode.Initobj);
+                il.Token(this.GetHashCodeTypeReference());
+
+                var addSpec = this.GetHashCodeAddObjectSpec();
+                foreach (var field in fields)
+                {
+                    var fieldHandle = this.structFieldDefs[field];
+                    il.LoadLocalAddress(0);
+                    il.LoadArgument(0);
+                    il.OpCode(ILOpCode.Ldfld);
+                    il.Token(fieldHandle);
+                    this.EmitBoxIfNeeded(il, field.Type);
+                    il.OpCode(ILOpCode.Call);
+                    il.Token(addSpec);
+                }
+
+                il.LoadLocalAddress(0);
+                il.Call(this.GetHashCodeToHashCodeReference());
+                il.OpCode(ILOpCode.Ret);
+
+                localsSignature = this.GetHashCodeLocalSignature();
+            }
+
+            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Type().Int32(), _ => { });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("GetHashCode"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public sealed override string ToString()</c> rendering
+    /// <c>Name(F1=v1, F2=v2, …)</c>. Field values are converted via
+    /// <c>Convert.ToString(object, IFormatProvider)</c> with
+    /// <see cref="System.Globalization.CultureInfo.InvariantCulture"/> so
+    /// null reference fields render as the empty string and value-type
+    /// formatting is locale-independent. Pieces are assembled with
+    /// <c>String.Concat(string[])</c>.
+    /// </summary>
+    private void EmitDataStructToString(StructSymbol structSym)
+    {
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitDataStructToString precondition violated: data struct must be a value type.");
+
+        var fields = structSym.Fields;
+        int pieceCount = (2 * fields.Length) + 1;
+
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            var stringTypeRef = this.GetTypeReference(this.coreStringType);
+
+            il.LoadConstantI4(pieceCount);
+            il.OpCode(ILOpCode.Newarr);
+            il.Token(stringTypeRef);
+
+            // Piece 0: "Name(F1="
+            il.OpCode(ILOpCode.Dup);
+            il.LoadConstantI4(0);
+            il.LoadString(this.metadata.GetOrAddUserString(structSym.Name + "(" + fields[0].Name + "="));
+            il.OpCode(ILOpCode.Stelem_ref);
+
+            for (int i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                var fieldHandle = this.structFieldDefs[field];
+
+                // Piece 2*i + 1: Convert.ToString(this.Fi, InvariantCulture)
+                il.OpCode(ILOpCode.Dup);
+                il.LoadConstantI4((2 * i) + 1);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+                this.EmitBoxIfNeeded(il, field.Type);
+                il.Call(this.GetCultureInvariantGetterReference());
+                il.Call(this.GetConvertToStringReference());
+                il.OpCode(ILOpCode.Stelem_ref);
+
+                // Piece 2*i + 2: separator (", F{i+1}=" if more fields, else ")")
+                il.OpCode(ILOpCode.Dup);
+                il.LoadConstantI4((2 * i) + 2);
+                string separator = i + 1 < fields.Length
+                    ? ", " + fields[i + 1].Name + "="
+                    : ")";
+                il.LoadString(this.metadata.GetOrAddUserString(separator));
+                il.OpCode(ILOpCode.Stelem_ref);
+            }
+
+            il.Call(this.GetStringConcatArrayReference());
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Type().String(), _ => { });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("ToString"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: this.FinishInlineBody(il),
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public static bool op_Equality(Name left, Name right)</c> (or
+    /// <c>op_Inequality</c> when <paramref name="isInequality"/> is true).
+    /// Both delegate to <see cref="EmitDataStructEqualsTyped"/> via
+    /// <c>Object.Equals(object, object)</c> on every field — equivalent to
+    /// calling <c>left.Equals(right)</c>, but avoids needing the
+    /// MethodDef handle for <c>Equals(Name)</c> ahead of time.
+    /// </summary>
+    /// <returns>The MethodDef handle of the emitted operator.</returns>
+    private MethodDefinitionHandle EmitDataStructEqualityOperator(StructSymbol structSym, bool isInequality)
+    {
+        Debug.Assert(
+            !structSym.IsClass,
+            "EmitDataStructEqualityOperator precondition violated: data struct must be a value type.");
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        if (!this.metadataOnly)
+        {
+            var retFalse = il.DefineLabel();
+            foreach (var field in structSym.Fields)
+            {
+                var fieldHandle = this.structFieldDefs[field];
+                il.LoadArgumentAddress(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+                this.EmitBoxIfNeeded(il, field.Type);
+                il.LoadArgumentAddress(1);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+                this.EmitBoxIfNeeded(il, field.Type);
+                il.Call(this.GetObjectStaticEqualsReference());
+                il.Branch(ILOpCode.Brfalse, retFalse);
+            }
+
+            il.LoadConstantI4(isInequality ? 0 : 1);
+            il.OpCode(ILOpCode.Ret);
+            il.MarkLabel(retFalse);
+            il.LoadConstantI4(isInequality ? 1 : 0);
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().Boolean(),
+                ps =>
+                {
+                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
+                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
+                });
+
+        return this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: this.FinishInlineBody(il),
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: emits
+    /// <c>public void Deconstruct(out T1 F1, out T2 F2, …)</c> assigning each
+    /// field to the corresponding out parameter. Field names match the
+    /// declaration order so C# users get meaningful tooling hints when
+    /// destructuring positionally.
+    /// </summary>
+    private void EmitDataStructDeconstruct(StructSymbol structSym)
+    {
+        var fields = structSym.Fields;
+        var il = new InstructionEncoder(new BlobBuilder());
+        if (!this.metadataOnly)
+        {
+            for (int i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                var fieldHandle = this.structFieldDefs[field];
+                il.LoadArgument(i + 1);
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Ldfld);
+                il.Token(fieldHandle);
+
+                // ADR-0029 Phase 4-erased generics: TypeParameterSymbol
+                // fields are encoded as System.Object (see EncodeTypeSymbol),
+                // so the indirect store must use stind.ref. Concrete value
+                // types use stobj with the value-type token; concrete
+                // reference types use stind.ref.
+                if (field.Type is TypeParameterSymbol)
+                {
+                    il.OpCode(ILOpCode.Stind_ref);
+                }
+                else if (IsValueTypeSymbol(field.Type))
+                {
+                    il.OpCode(ILOpCode.Stobj);
+                    il.Token(this.GetElementTypeToken(field.Type));
+                }
+                else
+                {
+                    il.OpCode(ILOpCode.Stind_ref);
+                }
+            }
+
+            il.OpCode(ILOpCode.Ret);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                fields.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var field in fields)
+                    {
+                        this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type);
+                    }
+                });
+
+        this.metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.metadata.GetOrAddString("Deconstruct"),
+            signature: this.metadata.GetOrAddBlob(sig),
+            bodyOffset: this.FinishInlineBody(il),
+            parameterList: this.NextParameterHandle());
+    }
+
+    /// <summary>
     /// Emits the <c>MoveNext</c> method for an async state machine using the
     /// rewritten bound-tree body produced by <see cref="MoveNextBodyRewriter"/>.
     /// </summary>
@@ -9329,6 +9776,261 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString("Equals"),
             signature: this.metadata.GetOrAddBlob(sigBlob));
         return this.objectStaticEqualsRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: returns a TypeRef for <c>System.HashCode</c>,
+    /// used by data-struct <c>GetHashCode</c> synthesis. Cached because
+    /// <see cref="GetTypeReference(Type)"/> already caches by Type, but the
+    /// data-struct helpers need a strongly-typed handle.
+    /// </summary>
+    private TypeReferenceHandle GetHashCodeTypeReference()
+    {
+        if (!this.hashCodeTypeRef.IsNil)
+        {
+            return this.hashCodeTypeRef;
+        }
+
+        this.hashCodeTypeRef = this.GetTypeReference(typeof(System.HashCode));
+        return this.hashCodeTypeRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves an open MemberRef for the
+    /// <c>System.HashCode.Combine&lt;T1, ..., Tn&gt;</c> overload with the
+    /// given arity (1 ≤ <paramref name="arity"/> ≤ 8). Each open parameter
+    /// is encoded as a generic method parameter (<c>!!i</c>) and instantiated
+    /// to <see cref="object"/> via a MethodSpec at the call site.
+    /// </summary>
+    private MemberReferenceHandle GetHashCodeCombineOpenReference(int arity)
+    {
+        if (arity < 1 || arity > 8)
+        {
+            throw new ArgumentOutOfRangeException(nameof(arity), arity, "HashCode.Combine supports arities 1 through 8.");
+        }
+
+        var cached = this.hashCodeCombineOpenRefs[arity - 1];
+        if (cached.HasValue)
+        {
+            return cached.Value;
+        }
+
+        var hashCodeRef = this.GetHashCodeTypeReference();
+
+        // Signature: static int Combine<T1,...,Tn>(T1, ..., Tn) with `arity`
+        // generic method parameters. In open form each Ti is !!i.
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false, genericParameterCount: arity)
+            .Parameters(
+                arity,
+                r => r.Type().Int32(),
+                ps =>
+                {
+                    for (int i = 0; i < arity; i++)
+                    {
+                        ps.AddParameter().Type().GenericMethodTypeParameter(i);
+                    }
+                });
+
+        var openRef = this.metadata.AddMemberReference(
+            hashCodeRef,
+            this.metadata.GetOrAddString("Combine"),
+            this.metadata.GetOrAddBlob(sig));
+        this.hashCodeCombineOpenRefs[arity - 1] = openRef;
+        return openRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: produces a MethodSpec instantiating
+    /// <c>HashCode.Combine&lt;T1,...,Tn&gt;</c> with <see cref="object"/> for
+    /// each generic parameter. The data-struct emitter always boxes field
+    /// values, so a single object-typed instantiation suffices regardless of
+    /// the field types, dramatically reducing the number of unique MethodSpec
+    /// rows the metadata builder has to track.
+    /// </summary>
+    private EntityHandle GetHashCodeCombineObjectSpec(int arity)
+    {
+        var openRef = this.GetHashCodeCombineOpenReference(arity);
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(arity);
+        for (int i = 0; i < arity; i++)
+        {
+            argsEncoder.AddArgument().Object();
+        }
+
+        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves the open MemberRef for the instance
+    /// method <c>System.HashCode.Add&lt;T&gt;(T)</c>, used by the &gt;8-field
+    /// fold path for <c>GetHashCode</c>.
+    /// </summary>
+    private MemberReferenceHandle GetHashCodeAddOpenReference()
+    {
+        if (!this.hashCodeAddOpenRef.IsNil)
+        {
+            return this.hashCodeAddOpenRef;
+        }
+
+        var hashCodeRef = this.GetHashCodeTypeReference();
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true, genericParameterCount: 1)
+            .Parameters(
+                1,
+                r => r.Void(),
+                ps => ps.AddParameter().Type().GenericMethodTypeParameter(0));
+
+        this.hashCodeAddOpenRef = this.metadata.AddMemberReference(
+            hashCodeRef,
+            this.metadata.GetOrAddString("Add"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.hashCodeAddOpenRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: produces a MethodSpec for
+    /// <c>HashCode.Add&lt;object&gt;(object)</c>.
+    /// </summary>
+    private EntityHandle GetHashCodeAddObjectSpec()
+    {
+        var openRef = this.GetHashCodeAddOpenReference();
+        var sigBlob = new BlobBuilder();
+        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
+        argsEncoder.AddArgument().Object();
+        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves the MemberRef for instance method
+    /// <c>System.HashCode.ToHashCode()</c>.
+    /// </summary>
+    private MemberReferenceHandle GetHashCodeToHashCodeReference()
+    {
+        if (!this.hashCodeToHashCodeRef.IsNil)
+        {
+            return this.hashCodeToHashCodeRef;
+        }
+
+        var hashCodeRef = this.GetHashCodeTypeReference();
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Type().Int32(), _ => { });
+
+        this.hashCodeToHashCodeRef = this.metadata.AddMemberReference(
+            hashCodeRef,
+            this.metadata.GetOrAddString("ToHashCode"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.hashCodeToHashCodeRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: returns a standalone signature with one
+    /// <c>System.HashCode</c> local, used by the &gt;8-field
+    /// <c>GetHashCode</c> fold path.
+    /// </summary>
+    private StandaloneSignatureHandle GetHashCodeLocalSignature()
+    {
+        if (!this.hashCodeLocalSig.IsNil)
+        {
+            return this.hashCodeLocalSig;
+        }
+
+        var hashCodeRef = this.GetHashCodeTypeReference();
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).LocalVariableSignature(1);
+        encoder.AddVariable().Type().Type(hashCodeRef, isValueType: true);
+        this.hashCodeLocalSig = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(sigBlob));
+        return this.hashCodeLocalSig;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
+    /// <c>System.Convert.ToString(object, IFormatProvider)</c> overload used
+    /// by data-struct <c>ToString</c> synthesis. Handles null reference-type
+    /// fields gracefully (returns the empty string) per the ADR.
+    /// </summary>
+    private MemberReferenceHandle GetConvertToStringReference()
+    {
+        if (!this.convertToStringRef.IsNil)
+        {
+            return this.convertToStringRef;
+        }
+
+        var convertRef = this.GetTypeReference(typeof(System.Convert));
+        var ifpRef = this.GetTypeReference(typeof(System.IFormatProvider));
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                2,
+                r => r.Type().String(),
+                ps =>
+                {
+                    ps.AddParameter().Type().Object();
+                    ps.AddParameter().Type().Type(ifpRef, isValueType: false);
+                });
+
+        this.convertToStringRef = this.metadata.AddMemberReference(
+            convertRef,
+            this.metadata.GetOrAddString("ToString"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.convertToStringRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
+    /// property getter <c>System.Globalization.CultureInfo::get_InvariantCulture</c>,
+    /// used to thread an invariant <see cref="System.IFormatProvider"/> into
+    /// <c>Convert.ToString</c> during data-struct <c>ToString</c> synthesis.
+    /// </summary>
+    private MemberReferenceHandle GetCultureInvariantGetterReference()
+    {
+        if (!this.cultureInvariantGetterRef.IsNil)
+        {
+            return this.cultureInvariantGetterRef;
+        }
+
+        var cultureInfoRef = this.GetTypeReference(typeof(System.Globalization.CultureInfo));
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, r => r.Type().Type(cultureInfoRef, isValueType: false), _ => { });
+
+        this.cultureInvariantGetterRef = this.metadata.AddMemberReference(
+            cultureInfoRef,
+            this.metadata.GetOrAddString("get_InvariantCulture"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.cultureInvariantGetterRef;
+    }
+
+    /// <summary>
+    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
+    /// <c>System.String.Concat(string[])</c> overload used to assemble the
+    /// data-struct <c>ToString</c> output from a per-field array of pieces.
+    /// </summary>
+    private MemberReferenceHandle GetStringConcatArrayReference()
+    {
+        if (!this.stringConcatArrayRef.IsNil)
+        {
+            return this.stringConcatArrayRef;
+        }
+
+        var stringTypeRef = this.GetTypeReference(this.coreStringType);
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                1,
+                r => r.Type().String(),
+                ps => ps.AddParameter().Type().SZArray().String());
+
+        this.stringConcatArrayRef = this.metadata.AddMemberReference(
+            stringTypeRef,
+            this.metadata.GetOrAddString("Concat"),
+            this.metadata.GetOrAddBlob(sig));
+        return this.stringConcatArrayRef;
     }
 
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)

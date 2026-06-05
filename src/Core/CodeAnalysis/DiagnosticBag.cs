@@ -1594,6 +1594,22 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0231", $"Unknown documentation tag '{tagName}'. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso.", DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// Issue #410 / ADR-0029: reports that a synthesized data-struct member
+    /// (<c>Equals</c>, <c>GetHashCode</c>, <c>ToString</c>, <c>op_Equality</c>,
+    /// <c>op_Inequality</c>, or <c>Deconstruct</c>) was hand-written. The ADR
+    /// forbids user-written versions so the contract of <c>data struct</c> is
+    /// learnable and predictable.
+    /// </summary>
+    /// <param name="location">The text location of the member name.</param>
+    /// <param name="typeName">The data struct type name.</param>
+    /// <param name="memberName">The synthesized member name.</param>
+    public void ReportDataStructSynthesizedMemberConflict(TextLocation location, string typeName, string memberName)
+    {
+        var message = $"Data struct '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
+        Report(location, "GS0232", message);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

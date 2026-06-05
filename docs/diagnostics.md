@@ -262,3 +262,11 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 | GS0229 | Warning | Documentation @param '{name}' does not match any parameter of '{symbol}'. |
 | GS0230 | Warning | Unsupported documentation Markdown: {detail}. |
 | GS0231 | Warning | Unknown documentation tag '{tag}'. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso. |
+
+## Data struct diagnostics (GS0232)
+
+ADR-0029 / Issue #410: every `data struct` synthesizes a fixed contract of value-semantics members — `Equals(object)`, `Equals(Name)`, `GetHashCode()`, `ToString()`, `op_Equality(Name, Name)`, `op_Inequality(Name, Name)`, and `Deconstruct(out T1, out T2, …)`. Hand-written versions are rejected so the contract stays predictable and so consumers (G# and external .NET) can rely on the synthesized IL.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0232 | Error | Data struct '{type}' synthesizes member '{member}'; it cannot be declared explicitly. |
