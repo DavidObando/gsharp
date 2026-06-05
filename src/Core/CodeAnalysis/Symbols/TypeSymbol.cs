@@ -252,6 +252,16 @@ public class TypeSymbol : Symbol
                 return ContainsTypeParameter(a.ElementType);
             case MapTypeSymbol m:
                 return ContainsTypeParameter(m.KeyType) || ContainsTypeParameter(m.ValueType);
+            case FunctionTypeSymbol fn:
+                foreach (var param in fn.ParameterTypes)
+                {
+                    if (ContainsTypeParameter(param))
+                    {
+                        return true;
+                    }
+                }
+
+                return ContainsTypeParameter(fn.ReturnType);
             case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in it.TypeArguments)
                 {

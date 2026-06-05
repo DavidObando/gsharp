@@ -171,20 +171,6 @@ internal static class IlVerifier
     public static class KnownIssues
     {
         /// <summary>
-        /// Generic dispatch on value-typed receivers emits a bare
-        /// <c>callvirt</c> instead of <c>constrained.</c> + <c>callvirt</c>,
-        /// and generic-delegate construction sometimes loses the variance
-        /// adjustment, producing stack-type mismatches between
-        /// <c>Action&lt;T&gt;</c> instantiations. Surfaces in generic
-        /// data-structs and generic delegate invokes.
-        /// </summary>
-        public static readonly string[] GenericValueTypeDispatch =
-        {
-            "CallVirtOnValueType",
-            "StackUnexpected",
-        };
-
-        /// <summary>
         /// Ref-struct receivers and stack-allocated return paths trip
         /// ilverify's escape-analysis checks. See ADR/issue tracking ref
         /// struct ergonomics.
@@ -218,13 +204,6 @@ internal static class IlVerifier
     private static readonly Dictionary<string, string[]> SampleKnownIssues = new(StringComparer.OrdinalIgnoreCase)
     {
         // Generic value-type dispatch: see KnownIssues.GenericValueTypeDispatch.
-        ["GenericMethodDelegates"] = KnownIssues.GenericValueTypeDispatch,
-        ["GenericMethods"] = KnownIssues.GenericValueTypeDispatch,
-        ["NullableFlow"] = KnownIssues.GenericValueTypeDispatch,
-        ["ImportedBaseClass"] = KnownIssues.GenericValueTypeDispatch,
-        ["ExpressionEval"] = KnownIssues.GenericValueTypeDispatch,
-        ["PatternSwitch"] = KnownIssues.GenericValueTypeDispatch,
-        ["SwitchExpression"] = KnownIssues.GenericValueTypeDispatch,
         ["InlineStruct"] = new[] { "InitOnly" },
 
         // Ref struct emission: see KnownIssues.RefStruct.
