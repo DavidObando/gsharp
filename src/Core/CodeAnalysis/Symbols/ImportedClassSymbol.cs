@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
@@ -78,6 +79,11 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="callExpression">The call expression.</param>
     /// <param name="arguments">The bound arguments.</param>
     /// <param name="function">The resulting function, if one is found.</param>
+    /// <param name="parameterMapping">
+    /// Issue #343: on success, the per-source-argument → parameter-position map
+    /// when the call site used named arguments; default when source order already
+    /// matches parameter order (the common path).
+    /// </param>
     /// <param name="isAmbiguous">Set to true when two or more candidates tied under "better function member" rules.</param>
     /// <param name="explicitTypeArgs">
     /// Issue #311: resolved CLR type arguments from an explicit <c>[T1, T2]</c>
@@ -94,10 +100,16 @@ public sealed class ImportedClassSymbol : Symbol
     /// context so a generic method (e.g. <c>JsonSerializer.Serialize&lt;T&gt;</c>)
     /// can be closed via <c>MakeGenericMethod</c>. <c>null</c> disables projection.
     /// </param>
+    /// <param name="argumentNames">
+    /// Issue #343: per-source-argument names parallel to <paramref name="arguments"/>;
+    /// <see langword="null"/> entries denote positional arguments. The default
+    /// array indicates an all-positional call site (the common path).
+    /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
     {
         function = null;
+        parameterMapping = default;
         isAmbiguous = false;
         var methods = ClrTypeUtilities.SafeGetMethods(ClassType, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
         var nameMatches = methods.Where(m => m.Name == text).ToList();
@@ -118,7 +130,7 @@ public sealed class ImportedClassSymbol : Symbol
             argTypes[i] = t;
         }
 
-        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length));
+        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames);
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -136,6 +148,7 @@ public sealed class ImportedClassSymbol : Symbol
                 }
 
                 function = new ImportedFunctionSymbol(text, this, result.Best, callExpression, returnOverride);
+                parameterMapping = result.ParameterMapping;
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 isAmbiguous = true;
@@ -144,6 +157,23 @@ public sealed class ImportedClassSymbol : Symbol
                 return false;
         }
     }
+
+    /// <summary>
+    /// Backwards-compatible overload retaining the original signature
+    /// (without parameter-mapping output). Calls the named-argument-aware
+    /// overload with a default mapping.
+    /// </summary>
+    /// <param name="text">The name of the function.</param>
+    /// <param name="callExpression">The call expression.</param>
+    /// <param name="arguments">The bound arguments.</param>
+    /// <param name="function">The resulting function, if one is found.</param>
+    /// <param name="isAmbiguous">Set to true when two or more candidates tied under "better function member" rules.</param>
+    /// <param name="explicitTypeArgs">Resolved CLR type arguments from an explicit type-argument list.</param>
+    /// <param name="typeArgSymbols">Explicit type-argument symbols in source order, or default.</param>
+    /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
+    /// <returns>Whether we found a matching function or not.</returns>
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null)
+        => TryLookupFunction(text, callExpression, arguments, out function, out _, out isAmbiguous, explicitTypeArgs, typeArgSymbols, projectTypeArgument);
 
     /// <summary>
     /// Backwards-compatible overload that drops the ambiguity flag.

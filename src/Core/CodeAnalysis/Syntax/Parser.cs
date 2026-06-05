@@ -3876,10 +3876,17 @@ public class Parser
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
             ExpressionSyntax expression;
-            if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken)
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && (Peek(1).Kind == SyntaxKind.EqualsToken || Peek(1).Kind == SyntaxKind.ColonToken))
             {
                 var name = MatchToken(SyntaxKind.IdentifierToken);
-                var equals = MatchToken(SyntaxKind.EqualsToken);
+
+                // Issue #343: a call-site named argument uses `name: value`.
+                // The pre-existing `name = value` form remains accepted for
+                // back-compat (used by `.copy(...)` sugar and attribute args).
+                var separator = Current.Kind == SyntaxKind.ColonToken
+                    ? MatchToken(SyntaxKind.ColonToken)
+                    : MatchToken(SyntaxKind.EqualsToken);
 
                 // ADR-0060: a named argument may carry a ref-kind modifier in
                 // its value position (e.g. `name = ref x`). V1 rejects this
@@ -3896,7 +3903,7 @@ public class Parser
                     value = ParseExpression();
                 }
 
-                expression = new NamedArgumentExpressionSyntax(syntaxTree, name, equals, value);
+                expression = new NamedArgumentExpressionSyntax(syntaxTree, name, separator, value);
             }
             else if (TryParseRefArgument(out var refArg))
             {

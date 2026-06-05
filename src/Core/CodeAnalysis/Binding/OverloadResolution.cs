@@ -287,11 +287,24 @@ internal static class OverloadResolution
     /// (the default) disables the relaxation, preserving prior behaviour for all
     /// other call sites.
     /// </param>
+    /// <param name="argumentNames">
+    /// Issue #343: optional per-argument names supplied at the call site. Entries
+    /// are <see langword="null"/> for positional arguments and the parameter name
+    /// for named arguments (e.g. <c>F(1, x: 2)</c> → <c>[null, "x"]</c>). Named
+    /// arguments must follow all positional arguments in source order; the binder
+    /// pre-validates this layout. When non-<see langword="null"/>, each candidate's
+    /// applicability check additionally requires that every named argument maps to
+    /// a distinct parameter on that candidate, no positional slot is overwritten
+    /// by a named slot, and every unfilled non-trailing slot is optional. The
+    /// returned <see cref="Result{T}.ParameterMapping"/> records, for each source
+    /// argument index, the resolved parameter position so the binder can reorder
+    /// the bound arguments into parameter order before emit.
+    /// </param>
     /// <returns>The resolution result.</returns>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
         where T : MethodBase
     {
-        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
+        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
         foreach (var rawCandidate in candidates)
         {
             // Issue #321: an overload's signature may reference types that cannot
@@ -306,7 +319,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -321,10 +334,11 @@ internal static class OverloadResolution
 
         if (applicable.Count == 1)
         {
-            return Result<T>.Single(applicable[0].Method);
+            var only = applicable[0];
+            return Result<T>.Single(only.Method, BuildMappingArray(only.Mapping, argumentNames));
         }
 
-        return RankApplicable(applicable, argTypes);
+        return RankApplicable(applicable, argTypes, argumentNames);
     }
 
     /// <summary>
@@ -509,11 +523,11 @@ internal static class OverloadResolution
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied
     /// argument types, appending it to <paramref name="applicable"/> when it
-    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool})"/>
+    /// applies. Factored out of <see cref="Resolve{T}(IEnumerable{T}, IReadOnlyList{Type}, IReadOnlyList{Type}, Func{Type, Type}, IReadOnlyList{bool}, IReadOnlyList{string})"/>
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
         where T : MethodBase
     {
         {
@@ -554,7 +568,25 @@ internal static class OverloadResolution
             }
             else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
             {
-                if (!TryInferTypeArguments(mi, argTypes, out var typeArgs))
+                // Issue #343: when named arguments are present, the per-source
+                // argTypes are not necessarily in parameter order. Build an
+                // ordered argTypes for inference by mapping each source index to
+                // its target parameter position (positional first, then named by
+                // name). Inference is purely on parameter-type vs argument-type
+                // unification, so the mapping must already be known before
+                // inference; we use this open candidate's parameters to compute it.
+                IReadOnlyList<Type> inferenceArgTypes = argTypes;
+                if (argumentNames != null && HasAnyNamedArgument(argumentNames))
+                {
+                    if (!TryBuildOrderedArgTypesForInference(mi, argTypes, argumentNames, out var orderedArgTypes))
+                    {
+                        return;
+                    }
+
+                    inferenceArgTypes = orderedArgTypes;
+                }
+
+                if (!TryInferTypeArguments(mi, inferenceArgTypes, out var typeArgs))
                 {
                     return;
                 }
@@ -588,14 +620,27 @@ internal static class OverloadResolution
 
             var parameters = candidate.GetParameters();
 
-            // Issue #321: a candidate applies when it has at least as many
-            // parameters as arguments and every parameter beyond the supplied
-            // arguments is optional (has a compile-time default). Only the
-            // supplied arguments participate in applicability and ranking; the
-            // omitted trailing optionals are materialized to their defaults by
-            // the binder before emit.
-            if (argTypes.Count > parameters.Length || !TrailingParametersOptional(parameters, argTypes.Count))
+            // Issue #343: build a per-source-index → parameter-position mapping
+            // when named arguments are present. Reject the candidate if any
+            // named argument refers to a parameter that does not exist, is
+            // already filled by a positional argument, or is named twice. Any
+            // parameter slot that ends up unfilled must be optional.
+            int[] mapping = null;
+            if (argumentNames != null && HasAnyNamedArgument(argumentNames))
             {
+                if (!TryBuildNamedArgumentMapping(parameters, argTypes.Count, argumentNames, out mapping))
+                {
+                    return;
+                }
+            }
+            else if (argTypes.Count > parameters.Length || !TrailingParametersOptional(parameters, argTypes.Count))
+            {
+                // Issue #321: a candidate applies when it has at least as many
+                // parameters as arguments and every parameter beyond the supplied
+                // arguments is optional (has a compile-time default). Only the
+                // supplied arguments participate in applicability and ranking; the
+                // omitted trailing optionals are materialized to their defaults by
+                // the binder before emit.
                 return;
             }
 
@@ -604,7 +649,8 @@ internal static class OverloadResolution
             var ok = true;
             for (var i = 0; i < argTypes.Count; i++)
             {
-                paramTypes[i] = parameters[i].ParameterType;
+                var paramIndex = mapping != null ? mapping[i] : i;
+                paramTypes[i] = parameters[paramIndex].ParameterType;
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i]);
                 if (conv == ImplicitConversionKind.None)
                 {
@@ -634,9 +680,192 @@ internal static class OverloadResolution
 
             if (ok)
             {
-                applicable.Add((candidate, conversions, paramTypes));
+                applicable.Add((candidate, conversions, paramTypes, mapping));
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #343: returns <see langword="true"/> when any entry in
+    /// <paramref name="argumentNames"/> is non-null (i.e. the call site has at
+    /// least one named argument).
+    /// </summary>
+    private static bool HasAnyNamedArgument(IReadOnlyList<string> argumentNames)
+    {
+        if (argumentNames == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < argumentNames.Count; i++)
+        {
+            if (argumentNames[i] != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #343: matches positional and named arguments to a candidate's
+    /// parameters, producing a per-source-index → parameter-position mapping.
+    /// Returns <see langword="false"/> when the candidate is not applicable
+    /// (unknown name, duplicate slot, or required slot left unfilled).
+    /// </summary>
+    private static bool TryBuildNamedArgumentMapping(ParameterInfo[] parameters, int argCount, IReadOnlyList<string> argumentNames, out int[] mapping)
+    {
+        mapping = null;
+        if (argCount > parameters.Length)
+        {
+            return false;
+        }
+
+        var result = new int[argCount];
+        var filled = new bool[parameters.Length];
+
+        // Positional arguments occupy parameter slots [0..positionalCount).
+        var positionalCount = 0;
+        for (var i = 0; i < argCount; i++)
+        {
+            if (argumentNames[i] != null)
+            {
+                break;
+            }
+
+            result[i] = i;
+            filled[i] = true;
+            positionalCount++;
+        }
+
+        // Each named argument fills the slot whose parameter name matches.
+        // Reject duplicates or slots already filled by positional args.
+        for (var i = positionalCount; i < argCount; i++)
+        {
+            var name = argumentNames[i];
+            if (name == null)
+            {
+                // Should not happen: pre-validation forbids positional after named.
+                return false;
+            }
+
+            var paramIndex = FindParameterIndex(parameters, name);
+            if (paramIndex < 0 || filled[paramIndex])
+            {
+                return false;
+            }
+
+            result[i] = paramIndex;
+            filled[paramIndex] = true;
+        }
+
+        // Every unfilled parameter must be optional.
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (!filled[i] && !parameters[i].IsOptional)
+            {
+                return false;
+            }
+        }
+
+        mapping = result;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #343: returns the index of the parameter whose name matches
+    /// <paramref name="name"/> (ordinal comparison), or -1 when no parameter
+    /// has that name.
+    /// </summary>
+    private static int FindParameterIndex(ParameterInfo[] parameters, string name)
+    {
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (string.Equals(parameters[i].Name, name, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Issue #343: builds the parameter-order arg-type vector required by
+    /// <see cref="TryInferTypeArguments"/> when named arguments are present.
+    /// Returns <see langword="false"/> when names cannot be matched to
+    /// <paramref name="openMethod"/>'s parameters.
+    /// </summary>
+    private static bool TryBuildOrderedArgTypesForInference(MethodInfo openMethod, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames, out Type[] orderedArgTypes)
+    {
+        orderedArgTypes = null;
+        var parameters = openMethod.GetParameters();
+        if (!TryBuildNamedArgumentMapping(parameters, argTypes.Count, argumentNames, out var mapping))
+        {
+            return false;
+        }
+
+        // The inference helper only consumes the leading parameters whose count
+        // equals argTypes.Count, in parameter order. Reorder argTypes so each
+        // source argument's type lands at its target parameter position. Any
+        // omitted optional slots in the middle break the leading-prefix
+        // invariant; in that case fall back to the per-parameter-position
+        // mapping and trim trailing nulls — TryInferTypeArguments expects
+        // exactly argTypes.Count leading types.
+        var perParam = new Type[parameters.Length];
+        var filled = new bool[parameters.Length];
+        for (var i = 0; i < argTypes.Count; i++)
+        {
+            perParam[mapping[i]] = argTypes[i];
+            filled[mapping[i]] = true;
+        }
+
+        // Inference only needs types for parameters that have an argument; the
+        // helper accepts argTypes shorter than parameters.Length (with the
+        // trailing parameters required to be optional). We compress filled
+        // parameter positions into a leading prefix while preserving order.
+        // When non-contiguous slots are filled (e.g. positional[0] + named at
+        // slot 3 with slots 1,2 omitted), inference would have to skip the gaps
+        // — but TryInferTypeArguments aligns position-by-position. To handle
+        // gaps cleanly, build a contiguous leading-prefix view that uses each
+        // filled parameter's type so per-position unification still aligns
+        // correctly with the open candidate's parameter list, then close any
+        // open type parameters that appeared only in gap positions.
+        var leadingCount = 0;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (filled[i])
+            {
+                leadingCount = i + 1;
+            }
+        }
+
+        // Pad gap positions with the parameter's declared type so unification
+        // is a no-op there (parameter unified against itself adds no new bound).
+        var ordered = new Type[leadingCount];
+        for (var i = 0; i < leadingCount; i++)
+        {
+            ordered[i] = filled[i] ? perParam[i] : parameters[i].ParameterType;
+        }
+
+        orderedArgTypes = ordered;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #343: packages a per-source-index → parameter-position mapping
+    /// into an <see cref="ImmutableArray{Int32}"/> for the resolution result.
+    /// Returns the default array when no named arguments were supplied.
+    /// </summary>
+    private static ImmutableArray<int> BuildMappingArray(int[] mapping, IReadOnlyList<string> argumentNames)
+    {
+        if (mapping == null || !HasAnyNamedArgument(argumentNames))
+        {
+            return default;
+        }
+
+        return ImmutableArray.Create(mapping);
     }
 
     /// <summary>
@@ -666,13 +895,13 @@ internal static class OverloadResolution
     /// candidate set, returning the unique best, an ambiguity, or "none".
     /// Always called with at least two applicable candidates.
     /// </summary>
-    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)> applicable, IReadOnlyList<Type> argTypes)
+    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)> applicable, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames)
         where T : MethodBase
     {
         // Better-function-member pass: a candidate wins iff for all arguments
         // its conversion is no worse than every other applicable candidate's,
         // and for at least one argument it is strictly better.
-        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes)>();
+        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
         foreach (var c in applicable)
         {
             var isWinner = true;
@@ -698,7 +927,7 @@ internal static class OverloadResolution
 
         if (winners.Count == 1)
         {
-            return Result<T>.Single(winners[0].Method);
+            return Result<T>.Single(winners[0].Method, BuildMappingArray(winners[0].Mapping, argumentNames));
         }
 
         // When the better-function-member pass produced no strict winner (e.g.
@@ -716,7 +945,7 @@ internal static class OverloadResolution
                 .ToList();
             if (mostSpecific.Count == 1)
             {
-                return Result<T>.Single(mostSpecific[0].Method);
+                return Result<T>.Single(mostSpecific[0].Method, BuildMappingArray(mostSpecific[0].Mapping, argumentNames));
             }
         }
 
@@ -732,7 +961,7 @@ internal static class OverloadResolution
                 .ToList();
             if (fewestParams.Count == 1)
             {
-                return Result<T>.Single(fewestParams[0].Method);
+                return Result<T>.Single(fewestParams[0].Method, BuildMappingArray(fewestParams[0].Mapping, argumentNames));
             }
         }
 
@@ -982,11 +1211,12 @@ internal static class OverloadResolution
     public readonly struct Result<T>
         where T : MethodBase
     {
-        private Result(ResolutionOutcome outcome, T best, ImmutableArray<T> ambiguous)
+        private Result(ResolutionOutcome outcome, T best, ImmutableArray<T> ambiguous, ImmutableArray<int> parameterMapping)
         {
             Outcome = outcome;
             Best = best;
             Ambiguous = ambiguous;
+            ParameterMapping = parameterMapping;
         }
 
         /// <summary>Gets the resolution outcome.</summary>
@@ -998,10 +1228,21 @@ internal static class OverloadResolution
         /// <summary>Gets the candidates participating in an ambiguity, in source-encounter order.</summary>
         public ImmutableArray<T> Ambiguous { get; }
 
-        internal static Result<T> NoneApplicable() => new(ResolutionOutcome.NoneApplicable, default, ImmutableArray<T>.Empty);
+        /// <summary>
+        /// Gets the per-source-argument → parameter-position mapping (issue
+        /// #343) when the call site supplied named arguments.
+        /// <see cref="ImmutableArray{Int32}.IsDefault"/> is <see langword="true"/>
+        /// when no reordering took place (positional-only call), in which case
+        /// the identity mapping is implied.
+        /// </summary>
+        public ImmutableArray<int> ParameterMapping { get; }
 
-        internal static Result<T> Single(T best) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty);
+        internal static Result<T> NoneApplicable() => new(ResolutionOutcome.NoneApplicable, default, ImmutableArray<T>.Empty, default);
 
-        internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied);
+        internal static Result<T> Single(T best) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, default);
+
+        internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping);
+
+        internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied, default);
     }
 }
