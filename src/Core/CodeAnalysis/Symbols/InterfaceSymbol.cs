@@ -131,6 +131,30 @@ public sealed class InterfaceSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// ADR-0063: returns every interface method whose name equals <paramref name="name"/> (the overload set).
+    /// </summary>
+    /// <param name="name">The method name.</param>
+    /// <returns>The overload set; empty if none.</returns>
+    public ImmutableArray<FunctionSymbol> GetMethods(string name)
+    {
+        if (Methods.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in Methods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
     /// Constructs a closed instance of a generic interface definition with the supplied type arguments
     /// (Phase 4.3c / ADR-0020). Method signatures are substituted; identity is cached so two calls with
     /// the same definition + arguments return the same <see cref="InterfaceSymbol"/> reference.
@@ -183,7 +207,15 @@ public sealed class InterfaceSymbol : TypeSymbol
             var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
             foreach (var p in m.Parameters)
             {
-                substParams.Add(new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped));
+                var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+
+                // ADR-0063: propagate explicit default values across generic substitution.
+                if (p.HasExplicitDefaultValue)
+                {
+                    newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
+                }
+
+                substParams.Add(newParam);
             }
 
             var substReturn = SubstituteType(m.Type, subst);

@@ -85,6 +85,23 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this parameter carries a <c>ref</c>/<c>out</c>/<c>in</c> modifier (ADR-0060).</summary>
     public bool HasRefKindModifier => RefKindModifier != null;
 
+    /// <summary>
+    /// Gets or sets the ADR-0063 <c>=</c> token preceding the default-value expression.
+    /// When non-null the parameter declares a default value, making it optional at call sites.
+    /// </summary>
+    public SyntaxToken EqualsToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ADR-0063 default-value expression for an optional parameter.
+    /// Restricted by the binder to a compile-time constant representable in CLR
+    /// parameter metadata (numeric/bool/char/string/enum constant, or <c>nil</c>
+    /// for a nullable/reference type).
+    /// </summary>
+    public ExpressionSyntax DefaultValue { get; set; }
+
+    /// <summary>Gets a value indicating whether this parameter declares a default value (ADR-0063).</summary>
+    public bool HasDefaultValue => EqualsToken != null && DefaultValue != null;
+
     /// <summary>Attaches the given annotation list to this parameter and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
     /// <returns>This same <see cref="ParameterSyntax"/>, with <see cref="Annotations"/> updated.</returns>

@@ -634,24 +634,26 @@ type Bad class(X int32) {
     }
 
     [Fact]
-    public void ExplicitConstructor_MultipleInit_Diagnoses()
+    public void ExplicitConstructor_MultipleInit_Selects_Overload()
     {
-        // Issue #306: GS0216 — only a single explicit `init` constructor is
-        // supported today.
+        // ADR-0063 §9: multiple `init(...)` overloads are now supported. The
+        // call site selects the best match by argument arity/type.
         var source = @"
-type Bad class {
+type Bag class {
     X int32
     init(a int32) {
         X = a
     }
     init(a int32, b int32) {
-        X = a
+        X = a + b
     }
 }
-0
+var b = Bag(2, 3)
+b.X
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("multiple 'init' constructors"));
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
     }
 
     private static EvaluationResult Evaluate(string source)

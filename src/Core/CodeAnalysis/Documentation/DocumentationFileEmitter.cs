@@ -114,7 +114,7 @@ internal static class DocumentationFileEmitter
                 AddIfDocumented(members, method);
             }
 
-            if (type.ExplicitConstructor is { } constructor)
+            foreach (var constructor in type.ExplicitConstructors)
             {
                 AddIfDocumented(members, constructor.Function);
             }

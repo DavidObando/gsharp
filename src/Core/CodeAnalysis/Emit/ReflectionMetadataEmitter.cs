@@ -85,6 +85,11 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
+    // ADR-0063 §9: when a class declares multiple init(...) overloads, each
+    // ConstructorSymbol gets its own MethodDef. The first overload doubles as
+    // the entry in classCtorHandles for legacy lookups.
+    private readonly Dictionary<ConstructorSymbol, MethodDefinitionHandle> explicitCtorHandles = new Dictionary<ConstructorSymbol, MethodDefinitionHandle>();
+
     // Issue #262: .cctor (type initializer) handles for types with static field initializers.
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> cctorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
@@ -1261,12 +1266,24 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (c.ExplicitConstructor != null)
             {
-                // Issue #306: a class with an explicit `init(...)` constructor
-                // emits exactly one `.ctor` (the user constructor). It serves as
-                // both the base-chain target and the `newobj` target.
-                var explicitHandle = this.EmitClassConstructorWithBody(c);
-                this.classCtorHandles[c] = explicitHandle;
-                this.classPrimaryCtorHandles[c] = explicitHandle;
+                // Issue #306 / ADR-0063 §9: a class with explicit `init(...)`
+                // constructors emits one `.ctor` per declared overload. The first
+                // overload also serves as the legacy classCtor/primaryCtor handle.
+                MethodDefinitionHandle firstHandle = default;
+                var firstAssigned = false;
+                foreach (var explicitCtor in c.ExplicitConstructors)
+                {
+                    var ctorHandle = this.EmitClassConstructorWithBody(c, explicitCtor);
+                    this.explicitCtorHandles[explicitCtor] = ctorHandle;
+                    if (!firstAssigned)
+                    {
+                        firstHandle = ctorHandle;
+                        firstAssigned = true;
+                    }
+                }
+
+                this.classCtorHandles[c] = firstHandle;
+                this.classPrimaryCtorHandles[c] = firstHandle;
             }
             else if (c.BaseConstructorInitializer != null)
             {
@@ -5592,9 +5609,10 @@ internal sealed class ReflectionMetadataEmitter
     /// fields (as bare names).
     /// </summary>
     /// <param name="classSym">The class whose explicit constructor is being emitted.</param>
-    private MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym)
+    /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the class is used.</param>
+    private MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol ctor = null)
     {
-        var ctor = classSym.ExplicitConstructor;
+        ctor ??= classSym.ExplicitConstructor;
         var function = ctor.Function;
         var body = this.program.Functions[function];
         var init = ctor.BaseInitializer;
@@ -7338,6 +7356,13 @@ internal sealed class ReflectionMetadataEmitter
                 paramAttributes |= ParameterAttributes.In;
             }
 
+            // ADR-0063 §10: optional parameters with a compile-time constant
+            // default get the Optional+HasDefault flags plus a Constant row.
+            if (p.HasExplicitDefaultValue)
+            {
+                paramAttributes |= ParameterAttributes.Optional | ParameterAttributes.HasDefault;
+            }
+
             var paramHandle = this.metadata.AddParameter(
                 attributes: paramAttributes,
                 name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
@@ -7346,6 +7371,12 @@ internal sealed class ReflectionMetadataEmitter
             if (p.RefKind == RefKind.In)
             {
                 this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+
+            // ADR-0063 §10: emit the Constant row carrying the default value.
+            if (p.HasExplicitDefaultValue)
+            {
+                this.metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
             }
 
             paramHandles.Add((p, paramHandle));
@@ -14202,7 +14233,15 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitConstructorCall(BoundConstructorCallExpression call)
         {
-            if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out var ctorHandle))
+            MethodDefinitionHandle ctorHandle;
+            if (call.SelectedConstructor != null
+                && this.outer.explicitCtorHandles.TryGetValue(call.SelectedConstructor, out var selectedHandle))
+            {
+                // ADR-0063 §9: bind-time overload resolution picked this exact
+                // ctor; emit a newobj against its specific MethodDef.
+                ctorHandle = selectedHandle;
+            }
+            else if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out ctorHandle))
             {
                 throw new InvalidOperationException(
                     $"Type '{call.StructType.Name}' has no emitted primary ctor.");

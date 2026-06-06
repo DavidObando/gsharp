@@ -60,4 +60,32 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// Gets or sets the ADR-0060 by-reference passing mode of this parameter (<c>None</c>, <c>Ref</c>, <c>Out</c>, or <c>In</c>).
     /// </summary>
     public override RefKind RefKind { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this parameter declares an explicit default value (ADR-0063).
+    /// When <see langword="true"/>, callers may omit a corresponding argument and the binder
+    /// substitutes <see cref="ExplicitDefaultValue"/> at the call site.
+    /// </summary>
+    public bool HasExplicitDefaultValue { get; private set; }
+
+    /// <summary>
+    /// Gets the constant default value declared on this parameter (ADR-0063).
+    /// Only meaningful when <see cref="HasExplicitDefaultValue"/> is <see langword="true"/>.
+    /// Value kinds: numeric primitive, <see cref="bool"/>, <see cref="char"/>,
+    /// <see cref="string"/>, enum constant (carried as its underlying integral value),
+    /// or <see langword="null"/> for a nullable/reference parameter.
+    /// </summary>
+    public object ExplicitDefaultValue { get; private set; }
+
+    /// <summary>
+    /// Records the constant default value for this parameter (ADR-0063). Called exactly
+    /// once by the binder when the parameter syntax includes a <c>= constant</c> clause
+    /// and the constant has passed all ADR-0063 §3 restrictions.
+    /// </summary>
+    /// <param name="value">The encoded constant default. May be <see langword="null"/> to represent the source-level <c>nil</c> default.</param>
+    public void SetExplicitDefaultValue(object value)
+    {
+        HasExplicitDefaultValue = true;
+        ExplicitDefaultValue = value;
+    }
 }

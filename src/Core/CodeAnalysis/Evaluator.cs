@@ -1083,7 +1083,10 @@ public sealed class Evaluator
         // its bound body with `this`, the constructor parameters, and the class
         // fields in scope. The base initializer (when GSharp) is forwarded first,
         // mirroring `ldarg.0; <base args>; call base..ctor` in the emitter.
-        if (node.StructType.ExplicitConstructor is ConstructorSymbol explicitCtor)
+        // ADR-0063 §9: when call-site overload resolution selected a specific
+        // ctor overload, use it; otherwise fall back to the legacy single-ctor.
+        var explicitCtor = node.SelectedConstructor ?? node.StructType.ExplicitConstructor;
+        if (explicitCtor != null)
         {
             var ctorFunction = explicitCtor.Function;
             var frame = new Dictionary<VariableSymbol, object>

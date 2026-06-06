@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -11,13 +12,13 @@ using GSharp.Core.CodeAnalysis.Syntax;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #324: a bare reference to a named function used in a value context
-/// (C#/F# "method group"). Its type is the <see cref="FunctionTypeSymbol"/>
-/// describing the function's signature, so the existing function-value →
-/// delegate conversion machinery materializes it as a delegate (native
-/// <c>func(...)</c> slots via identity, <c>Func[...]</c>/<c>Action[...]</c>
-/// slots via the function → delegate conversion). The emitter loads the
-/// function's address with <c>ldftn</c> and constructs the delegate directly.
+/// Issue #324 / ADR-0063 §9: a bare reference to a named function used in a
+/// value context (C#/F# "method group"). When the name resolves to a single
+/// candidate, <see cref="Function"/> is bound eagerly and <see cref="FunctionType"/>
+/// is its signature. When the name resolves to multiple overloads,
+/// <see cref="Candidates"/> contains every overload and final overload
+/// selection is deferred to <c>BindConversion</c>, where the target delegate
+/// signature drives the pick.
 /// </summary>
 public sealed class BoundMethodGroupExpression : BoundExpression
 {
@@ -26,13 +27,28 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     {
         Function = function;
         FunctionType = type;
+        Candidates = ImmutableArray.Create(function);
+    }
+
+    public BoundMethodGroupExpression(SyntaxNode syntax, ImmutableArray<FunctionSymbol> candidates)
+        : base(syntax)
+    {
+        Function = candidates.IsDefaultOrEmpty ? null : candidates[0];
+        FunctionType = null;
+        Candidates = candidates;
     }
 
     public FunctionSymbol Function { get; }
 
     public FunctionTypeSymbol FunctionType { get; }
 
-    public override TypeSymbol Type => FunctionType;
+    /// <summary>
+    /// Gets every candidate overload sharing the source name. Equals
+    /// <c>[Function]</c> when there is a single candidate.
+    /// </summary>
+    public ImmutableArray<FunctionSymbol> Candidates { get; }
+
+    public override TypeSymbol Type => FunctionType ?? (TypeSymbol)TypeSymbol.Error;
 
     public override BoundNodeKind Kind => BoundNodeKind.MethodGroupExpression;
 }
