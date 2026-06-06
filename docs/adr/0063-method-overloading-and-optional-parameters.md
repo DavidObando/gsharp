@@ -275,6 +275,16 @@ Neutral:
 4. Update override/interface validation to search overload families by exact signature.
 5. Emit CLR optional-parameter metadata and expand tests for overload lookup, ambiguity, sparse optional omission, named arguments, constructor overloads, interface matching, and metadata round-tripping.
 
+### Status (post-implementation)
+
+The initial implementation landed in PR #498. Items 1–5 above are all implemented in `Binder.cs`, `BoundScope.cs`, `StructSymbol.cs`, `InterfaceSymbol.cs`, and `ReflectionMetadataEmitter.cs`. The following follow-up gaps that were briefly deferred have since been closed:
+
+- Instance-method call sites (`BindUserInstanceCall`) now perform overload selection by argument signature instead of "first by name."
+- Method-group → delegate conversion preserves the full overload set and final selection happens in `BindConversion` against the target delegate signature.
+- Multiple explicit `init(...)` constructors per class are now supported end-to-end (binding, overload resolution, emission, evaluation).
+- Override-by-signature matching now correctly handles base classes that declare same-name overloads.
+- Optional parameters are now accepted on free functions, instance methods, static methods, interface methods, explicit constructors, primary constructors, delegate declarations, and function literals (lambdas). Property accessors and indexers have no user-declared parameter list that admits defaults.
+
 ## References
 
 - `src/Core/CodeAnalysis/Binding/OverloadResolution.cs`

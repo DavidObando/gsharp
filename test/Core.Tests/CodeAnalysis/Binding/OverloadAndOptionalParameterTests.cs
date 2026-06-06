@@ -147,6 +147,103 @@ type IOps interface {
         Assert.Empty(result.Diagnostics);
     }
 
+    [Fact]
+    public void InstanceMethod_OverloadResolution_PicksByArity()
+    {
+        // ADR-0063 §9: instance-method overload resolution at call sites now
+        // chooses by arity/type rather than first-by-name.
+        var source = @"
+type Calc class(seed int32) {
+    func add(x int32) int32 { return x + seed }
+    func add(x int32, y int32) int32 { return x + y + seed }
+}
+let c = Calc(1)
+c.add(10)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.Value);
+    }
+
+    [Fact]
+    public void InstanceMethod_OverloadResolution_PicksTwoArg()
+    {
+        var source = @"
+type Calc class(seed int32) {
+    func add(x int32) int32 { return x + seed }
+    func add(x int32, y int32) int32 { return x + y + seed }
+}
+let c = Calc(0)
+c.add(7, 8)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(15, result.Value);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_OptionalParameter_OmitsTrailing()
+    {
+        // ADR-0063 §5: primary constructors honor optional parameters.
+        var source = @"
+type P class(X int32, Y int32 = 5) {}
+let p = P(1)
+p.Y
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void MultipleInitConstructors_SelectsByArgCount()
+    {
+        // ADR-0063 §9: multiple init(...) overloads, overload-resolved at call site.
+        var source = @"
+type Box class {
+    X int32
+    init(a int32) { X = a }
+    init(a int32, b int32) { X = a * b }
+}
+let b = Box(3, 4)
+b.X
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void MultipleInitConstructors_DuplicateSignature_Diagnoses()
+    {
+        var source = @"
+type Box class {
+    X int32
+    init(a int32) { X = a }
+    init(a int32) { X = a + 1 }
+}
+";
+        var result = Evaluate(source);
+        AssertHasDiagnosticId(result.Diagnostics, "GS0264");
+    }
+
+    [Fact]
+    public void MethodGroup_OverloadResolution_PicksByDelegateSignature()
+    {
+        // ADR-0063 §9: a method-group reference whose name has multiple
+        // overloads resolves against the target delegate signature.
+        var source = @"
+func op(x int32) int32 { return x + 1 }
+func op(x int32, y int32) int32 { return x + y }
+
+let f func(int32) int32 = op
+f(10)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.Value);
+    }
+
     private static void AssertHasDiagnosticId(ImmutableArray<Diagnostic> diagnostics, string id)
     {
         Assert.Contains(diagnostics, d => d.Id == id);

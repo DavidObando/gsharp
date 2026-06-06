@@ -1005,11 +1005,17 @@ public sealed class Binder
                 continue;
             }
 
-            parameters.Add(new ParameterSymbol(
+            var delegateParam = new ParameterSymbol(
                 parameterName,
                 parameterType,
                 declaringSyntax: parameterSyntax.Identifier,
-                refKind: BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null)));
+                refKind: BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null));
+
+            // ADR-0063 §5: delegate declarations can declare default-valued
+            // parameters; the value is recorded on the parameter symbol for
+            // call-site default substitution.
+            BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam);
+            parameters.Add(delegateParam);
         }
 
         // Variadic / `scoped` parameters are deliberately not supported in v1
@@ -1216,7 +1222,9 @@ public sealed class Binder
                     Diagnostics.ReportRefKindOnPrimaryCtorParameter(paramSyntax.RefKindModifier.Location, paramName);
                 }
 
-                ctorBuilder.Add(new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped));
+                var primaryCtorParam = new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
+                BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
+                ctorBuilder.Add(primaryCtorParam);
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
 
@@ -7329,7 +7337,13 @@ public sealed class Binder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            parameterSymbols.Add(new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped));
+            var lambdaParam = new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+
+            // ADR-0063 §5: function-literal (lambda) parameters can declare a
+            // default value; lambdas can be invoked through their delegate type
+            // which honors the default at the call site.
+            BindAndAttachParameterDefaultValue(p, lambdaParam);
+            parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
 
@@ -10174,6 +10188,63 @@ public sealed class Binder
         {
             // Issue #343: bind the value behind any named-argument wrapper.
             boundArguments.Add(BindExpression(UnwrapNamedArgumentValue(argument)));
+        }
+
+        // ADR-0063 §5: primary constructors now honor optional parameters. When
+        // the caller omits a value for a parameter that declared one, use the
+        // overload-style permutation helper that fills defaults.
+        var primaryHasOptional = false;
+        for (var pi = 0; pi < parameters.Length; pi++)
+        {
+            if (parameters[pi].HasExplicitDefaultValue)
+            {
+                primaryHasOptional = true;
+                break;
+            }
+        }
+
+        if (primaryHasOptional)
+        {
+            if (!TryReorderUserCallArgumentsWithDefaults(
+                    syntax.Arguments,
+                    boundArguments.ToImmutable(),
+                    parameters,
+                    classType.Name,
+                    syntax.Location,
+                    out var primaryParameterSyntax,
+                    out var primaryPermutedBound))
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(primaryPermutedBound.Length);
+            for (var i = 0; i < primaryPermutedBound.Length; i++)
+            {
+                boundArguments.Add(primaryPermutedBound[i]);
+            }
+
+            var hasErrorsP = false;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argument = boundArguments[i];
+                var parameter = parameters[i];
+                var converted = BindConversion(primaryParameterSyntax[i]?.Location ?? syntax.Location, argument, parameter.Type, allowExplicit: false);
+                if (ReferenceEquals(converted.Type, TypeSymbol.Error))
+                {
+                    hasErrorsP = true;
+                }
+                else
+                {
+                    boundArguments[i] = converted;
+                }
+            }
+
+            if (hasErrorsP)
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
         }
 
         if (syntax.Arguments.Count != parameters.Length)
@@ -14283,6 +14354,13 @@ public sealed class Binder
             return BindClrMethodGroupConversion(diagnosticLocation, clrMethodGroup, type);
         }
 
+        // ADR-0063 §9: a user-function method group with multiple candidates
+        // resolves here against the target delegate/function-type signature.
+        if (expression is BoundMethodGroupExpression { FunctionType: null } userMethodGroup)
+        {
+            return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type);
+        }
+
         if (expression is BoundFunctionLiteralExpression literal
             && type is FunctionTypeSymbol targetFunctionType
             && TypeSymbol.ContainsTypeParameter(targetFunctionType))
@@ -14618,11 +14696,47 @@ public sealed class Binder
     {
         methodGroup = null;
 
+        // ADR-0063 §9: a name may resolve to multiple user-function overloads.
+        // Gather every candidate so BindConversion can pick the one matching the
+        // target delegate signature. Fall back to TryLookupSymbol for cases
+        // where the name maps to a function not surfaced via the function
+        // overload tables (legacy lookup behavior).
+        var overloads = scope.TryLookupFunctions(name);
+        if (!overloads.IsDefaultOrEmpty)
+        {
+            var usable = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            foreach (var candidate in overloads)
+            {
+                if (!IsMethodGroupCandidateUsable(candidate))
+                {
+                    continue;
+                }
+
+                usable.Add(candidate);
+            }
+
+            if (usable.Count == 1)
+            {
+                return TryBindSingleMethodGroup(usable[0], out methodGroup);
+            }
+
+            if (usable.Count > 1)
+            {
+                methodGroup = new BoundMethodGroupExpression(null, usable.ToImmutable());
+                return true;
+            }
+        }
+
         if (scope.TryLookupSymbol(name) is not FunctionSymbol function)
         {
             return false;
         }
 
+        return TryBindSingleMethodGroup(function, out methodGroup);
+    }
+
+    private static bool IsMethodGroupCandidateUsable(FunctionSymbol function)
+    {
         if (function.IsInstanceMethod
             || function.IsGeneric
             || function.IsExtension
@@ -14633,14 +14747,29 @@ public sealed class Binder
             return false;
         }
 
-        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
         foreach (var parameter in function.Parameters)
         {
             if (parameter.IsVariadic)
             {
                 return false;
             }
+        }
 
+        return true;
+    }
+
+    private static bool TryBindSingleMethodGroup(FunctionSymbol function, out BoundExpression methodGroup)
+    {
+        methodGroup = null;
+
+        if (!IsMethodGroupCandidateUsable(function))
+        {
+            return false;
+        }
+
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
+        foreach (var parameter in function.Parameters)
+        {
             parameterTypes.Add(parameter.Type);
         }
 
@@ -14778,6 +14907,119 @@ public sealed class Binder
         }
 
         return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
+    }
+
+    // ADR-0063 §9: resolve a multi-overload user-function method group against
+    // a target delegate or native function type. The pick is the unique
+    // candidate whose parameter types and return type exactly match the
+    // target's invoke signature. When zero or multiple candidates match, a
+    // GS0218 ("cannot convert method group") diagnostic is reported.
+    private BoundExpression BindUserMethodGroupConversion(TextLocation diagnosticLocation, BoundMethodGroupExpression group, TypeSymbol targetType)
+    {
+        var groupName = group.Function?.Name ?? "<method group>";
+
+        ImmutableArray<TypeSymbol> targetParameterTypes;
+        TypeSymbol targetReturnType;
+        if (targetType is FunctionTypeSymbol nativeFn)
+        {
+            targetParameterTypes = nativeFn.ParameterTypes;
+            targetReturnType = nativeFn.ReturnType;
+        }
+        else if (targetType is DelegateTypeSymbol userDelegate)
+        {
+            var pb = ImmutableArray.CreateBuilder<TypeSymbol>(userDelegate.Parameters.Length);
+            foreach (var p in userDelegate.Parameters)
+            {
+                pb.Add(p.Type);
+            }
+
+            targetParameterTypes = pb.MoveToImmutable();
+            targetReturnType = userDelegate.ReturnType;
+        }
+        else
+        {
+            if (targetType != null && targetType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        FunctionSymbol pick = null;
+        foreach (var candidate in group.Candidates)
+        {
+            if (candidate.Parameters.Length != targetParameterTypes.Length)
+            {
+                continue;
+            }
+
+            var paramsMatch = true;
+            for (var i = 0; i < candidate.Parameters.Length; i++)
+            {
+                if (!ReferenceEquals(candidate.Parameters[i].Type, targetParameterTypes[i]))
+                {
+                    paramsMatch = false;
+                    break;
+                }
+            }
+
+            if (!paramsMatch)
+            {
+                continue;
+            }
+
+            var candidateReturn = candidate.Type ?? TypeSymbol.Void;
+            if (!ReferenceEquals(candidateReturn, targetReturnType))
+            {
+                continue;
+            }
+
+            if (pick != null)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+                return new BoundErrorExpression(null);
+            }
+
+            pick = candidate;
+        }
+
+        if (pick == null)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length);
+        foreach (var p in pick.Parameters)
+        {
+            pickParams.Add(p.Type);
+        }
+
+        var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);
+        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, pick, pickFnType);
+
+        // If the target is the native function type matching the pick exactly,
+        // identity-convert; otherwise let the regular conversion machinery turn
+        // the function-typed value into the user delegate.
+        if (ReferenceEquals(targetType, pickFnType))
+        {
+            return resolvedGroup;
+        }
+
+        var conversion = Conversion.Classify(pickFnType, targetType);
+        if (!conversion.Exists)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        if (conversion.IsIdentity)
+        {
+            return resolvedGroup;
+        }
+
+        return new BoundConversionExpression(null, targetType, resolvedGroup);
     }
 
     // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an
