@@ -337,15 +337,14 @@ internal static class OverloadResolution
         // form, attempt C#-style `params T[]` expansion. The expanded form is
         // only ever considered as a fallback so that a normal-form candidate
         // always beats an expanded-form one (C# §7.5.3.2 better-function-member
-        // rule). Expanded form is only considered for positional calls — mixing
-        // named arguments with params expansion is out of scope.
-        if (applicable.Count == 0 && !HasAnyNamedArgument(argumentNames))
+        // rule).
+        if (applicable.Count == 0)
         {
             foreach (var rawCandidate in candidateList)
             {
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, applicable);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -848,24 +847,77 @@ internal static class OverloadResolution
     /// <summary>
     /// Issue #506: evaluates a candidate in <em>expanded</em> form — the trailing
     /// <c>params T[]</c> parameter accepts zero or more positional arguments, each
-    /// assignable to the element type <c>T</c>. Only non-generic and already-closed
-    /// generic methods are considered; open generic <c>params</c> methods are out
-    /// of scope (inference would need to consume the variadic tail). Mirrors the
+    /// assignable to the element type <c>T</c>. Closes open generic candidates
+    /// (e.g. <c>Bar&lt;T&gt;(params T[] items)</c>) by inferring <c>T</c> from
+    /// the trailing arguments via the same unification used by
+    /// <see cref="TryInferTypeArguments"/>. Honours named arguments that bind to
+    /// a leading fixed parameter (the params parameter itself is never nameable
+    /// from caller-side under G#'s positional-before-named layout); the leftover
+    /// positional surplus is packed into the synthesised array. Mirrors the
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null)
         where T : MethodBase
     {
-        // Open generic params methods would require co-inferring T from the
-        // variadic tail. Skip; the closed/non-generic cases (Path.Combine,
-        // String.Format, Console.WriteLine, Task.WhenAll) cover the issue.
-        if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+        T candidate = rawCandidate;
+
+        // Issue #506 follow-up: close open generic candidates before applicability
+        // classification. Explicit type arguments win; otherwise infer from the
+        // supplied positional/named args (trailing positionals beyond the params
+        // index unify against T).
+        if (explicitTypeArgs != null)
         {
-            return;
+            if (rawCandidate is MethodInfo gmi
+                && gmi.IsGenericMethodDefinition
+                && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
+            {
+                MethodInfo closed;
+                try
+                {
+                    closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
+                }
+                catch (ArgumentException)
+                {
+                    return;
+                }
+
+                candidate = (T)(MethodBase)closed;
+            }
+            else
+            {
+                return;
+            }
+        }
+        else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+        {
+            if (!TryInferTypeArgumentsForExpandedParams(mi, argTypes, argumentNames, out var typeArgs))
+            {
+                return;
+            }
+
+            if (projectTypeArgument != null)
+            {
+                for (var t = 0; t < typeArgs.Length; t++)
+                {
+                    typeArgs[t] = projectTypeArgument(typeArgs[t]) ?? typeArgs[t];
+                }
+            }
+
+            MethodInfo closed;
+            try
+            {
+                closed = mi.MakeGenericMethod(typeArgs);
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            candidate = (T)(MethodBase)closed;
         }
 
-        var parameters = rawCandidate.GetParameters();
+        var parameters = candidate.GetParameters();
         if (parameters.Length == 0)
         {
             return;
@@ -877,24 +929,102 @@ internal static class OverloadResolution
             return;
         }
 
-        // Need at least the fixed leading parameters covered by supplied
-        // positional arguments. Zero trailing args is valid (empty array).
-        if (argTypes.Count < paramsIndex)
-        {
-            return;
-        }
-
         var elementType = parameters[paramsIndex].ParameterType.GetElementType();
         if (elementType == null)
         {
             return;
         }
 
+        // G#'s positional-before-named rule guarantees the layout
+        //   [positional_0 … positional_{P-1}, named_0 … named_{N-1}].
+        // The leading positionals fill slots 0..min(P, paramsIndex)-1; the
+        // surplus past the params slot (positionals at indices
+        // [paramsIndex..P-1]) is packed into the synthesised array; the named
+        // arguments fill the remaining fixed slots by parameter name. A named
+        // argument that targets the params parameter or a slot already filled
+        // positionally rejects the candidate.
+        var positionalCount = argTypes.Count;
+        var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
+        if (hasNamed)
+        {
+            positionalCount = 0;
+            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
+            {
+                positionalCount++;
+            }
+
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                if (argumentNames[i] == null)
+                {
+                    return;
+                }
+            }
+        }
+
+        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
+        var tailCount = positionalCount > paramsIndex ? positionalCount - paramsIndex : 0;
+
+        var mapping = new int[argTypes.Count];
+        var filled = new bool[parameters.Length];
+        for (var i = 0; i < fixedFilledByPositional; i++)
+        {
+            mapping[i] = i;
+            filled[i] = true;
+        }
+
+        for (var i = fixedFilledByPositional; i < positionalCount; i++)
+        {
+            mapping[i] = paramsIndex;
+        }
+
+        if (tailCount > 0)
+        {
+            filled[paramsIndex] = true;
+        }
+
+        if (hasNamed)
+        {
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                var name = argumentNames[i];
+                var paramIdx = FindParameterIndex(parameters, name);
+                if (paramIdx < 0 || paramIdx == paramsIndex || filled[paramIdx])
+                {
+                    return;
+                }
+
+                mapping[i] = paramIdx;
+                filled[paramIdx] = true;
+            }
+        }
+
+        // Every non-params fixed slot left empty must be optional. The params
+        // slot is virtually optional in expanded form (zero trailing args
+        // allocates an empty array).
+        for (var i = 0; i < paramsIndex; i++)
+        {
+            if (!filled[i] && !parameters[i].IsOptional)
+            {
+                return;
+            }
+        }
+
         var conversions = new ImplicitConversionKind[argTypes.Count];
         var paramTypes = new Type[argTypes.Count];
         for (var i = 0; i < argTypes.Count; i++)
         {
-            var target = i < paramsIndex ? parameters[i].ParameterType : elementType;
+            var slot = mapping[i];
+            Type target;
+            if (slot == paramsIndex && i >= fixedFilledByPositional)
+            {
+                target = elementType;
+            }
+            else
+            {
+                target = parameters[slot].ParameterType;
+            }
+
             paramTypes[i] = target;
             var conv = ClassifyImplicit(target, argTypes[i]);
             if (conv == ImplicitConversionKind.None)
@@ -905,7 +1035,120 @@ internal static class OverloadResolution
             conversions[i] = conv;
         }
 
-        applicable.Add((rawCandidate, conversions, paramTypes, null, true));
+        // When all arguments are purely positional, drop the mapping so the
+        // existing ExpandParamsArguments fast path remains the canonical
+        // post-resolution lowering (matches the prior signature).
+        var storedMapping = hasNamed ? mapping : null;
+        applicable.Add((candidate, conversions, paramTypes, storedMapping, true));
+    }
+
+    /// <summary>
+    /// Issue #506 follow-up: infers method type arguments for an open generic
+    /// candidate in <c>params T[]</c> expanded form. Each fixed leading
+    /// parameter unifies against its positional/named argument; trailing
+    /// positionals beyond the params index unify against the params element
+    /// type. Returns <see langword="false"/> when any type parameter cannot
+    /// be bound.
+    /// </summary>
+    private static bool TryInferTypeArgumentsForExpandedParams(MethodInfo openMethod, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames, out Type[] typeArgs)
+    {
+        typeArgs = null;
+        var parameters = openMethod.GetParameters();
+        if (parameters.Length == 0)
+        {
+            return false;
+        }
+
+        var paramsIndex = parameters.Length - 1;
+        if (!IsParamsArrayParameter(parameters[paramsIndex]))
+        {
+            return false;
+        }
+
+        var elementType = parameters[paramsIndex].ParameterType.GetElementType();
+        if (elementType == null)
+        {
+            return false;
+        }
+
+        var positionalCount = argTypes.Count;
+        var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
+        if (hasNamed)
+        {
+            positionalCount = 0;
+            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
+            {
+                positionalCount++;
+            }
+        }
+
+        var typeParams = openMethod.GetGenericArguments();
+        var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
+
+        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
+
+        for (var i = 0; i < fixedFilledByPositional; i++)
+        {
+            if (argTypes[i] == null)
+            {
+                continue;
+            }
+
+            if (!UnifyForInference(parameters[i].ParameterType, argTypes[i], bounds))
+            {
+                return false;
+            }
+        }
+
+        for (var i = fixedFilledByPositional; i < positionalCount; i++)
+        {
+            if (argTypes[i] == null)
+            {
+                continue;
+            }
+
+            if (!UnifyForInference(elementType, argTypes[i], bounds))
+            {
+                return false;
+            }
+        }
+
+        if (hasNamed)
+        {
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                var name = argumentNames[i];
+                var paramIdx = FindParameterIndex(parameters, name);
+                if (paramIdx < 0 || paramIdx == paramsIndex)
+                {
+                    return false;
+                }
+
+                if (argTypes[i] == null)
+                {
+                    continue;
+                }
+
+                if (!UnifyForInference(parameters[paramIdx].ParameterType, argTypes[i], bounds))
+                {
+                    return false;
+                }
+            }
+        }
+
+        var result = new Type[typeParams.Length];
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            if (!bounds.TryGetValue(typeParams[i].Name, out var bound))
+            {
+                return false;
+            }
+
+            result[i] = bound;
+        }
+
+        typeArgs = result;
+        return true;
     }
 
     /// <summary>

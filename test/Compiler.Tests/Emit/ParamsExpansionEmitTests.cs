@@ -153,6 +153,104 @@ public class ParamsExpansionEmitTests
         Assert.Equal("done\n", output);
     }
 
+    [Fact]
+    public void StringFormat_FixedArityBoxesInt32IntoObjectSlot()
+    {
+        // Issue #506 follow-up: fixed-arity `String.Format(string, object)`
+        // selected for `("{0}", 42)` must emit a `box int32` so the call to
+        // a method expecting `object` produces valid IL. Without the boxing
+        // wiring the generated IL fails ilverify.
+        var source = """
+            package P
+            import System
+
+            let one = String.Format("{0}", 42)
+            let two = String.Format("{0} {1}", 1, "x")
+            Console.WriteLine(one)
+            Console.WriteLine(two)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("42\n1 x\n", output);
+    }
+
+    [Fact]
+    public void StringFormat_NamedFormatAndProviderExpandsWithEmptyTail()
+    {
+        // Issue #506 follow-up: named arguments + expanded params. With both
+        // `provider` and `format` supplied by name and no positional args,
+        // no fixed-arity overload matches; overload resolution must fall back
+        // to `String.Format(IFormatProvider, string, params object[])` in
+        // expanded form, allocating an empty object[]. The call format string
+        // intentionally has no holes so the empty array is sufficient.
+        var source = """
+            package P
+            import System
+            import System.Globalization
+
+            let s = String.Format(provider: CultureInfo.InvariantCulture, format: "no holes")
+            Console.WriteLine(s)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("no holes\n", output);
+    }
+
+    [Fact]
+    public void ImmutableArrayCreate_OpenGenericParamsInfersElementType()
+    {
+        // Issue #506 follow-up: open-generic params. ImmutableArray.Create<T>(
+        // params T[] items) is a generic params definition; expanded-form
+        // overload resolution must infer T from the trailing argument types
+        // before closing the candidate. With three int32 arguments the binder
+        // should select ImmutableArray.Create<int>(params int[]).
+        var source = """
+            package P
+            import System
+            import System.Collections.Immutable
+
+            let arr = ImmutableArray.Create(10, 20, 30)
+            Console.WriteLine(arr.Length)
+            Console.WriteLine(arr[0])
+            Console.WriteLine(arr[1])
+            Console.WriteLine(arr[2])
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\n10\n20\n30\n", output);
+    }
+
+    [Fact]
+    public void BaseConstructorInitializer_ParamsArrayExpansion()
+    {
+        // Issue #506 follow-up: `init() : base(...)` must use the same
+        // two-pass overload resolution / params expansion as other CLR call
+        // sites. AggregateException(params Exception[]) is the canonical BCL
+        // ctor of this shape; the derived class supplies three exceptions
+        // positionally so the params tail must be packed.
+        var source = """
+            package P
+            import System
+
+            type MyAgg class : AggregateException {
+                init(a Exception, b Exception, c Exception) : base(a, b, c) {
+                }
+            }
+
+            let e1 = Exception("first")
+            let e2 = Exception("second")
+            let e3 = Exception("third")
+            let agg = MyAgg(e1, e2, e3)
+            Console.WriteLine(agg.InnerExceptions.Count)
+            for inner in agg.InnerExceptions {
+                Console.WriteLine(inner.Message)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("3\nfirst\nsecond\nthird\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_params_emit_").FullName;

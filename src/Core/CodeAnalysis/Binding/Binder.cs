@@ -9236,12 +9236,14 @@ public sealed class Binder
     /// <param name="parameters">The resolved method's parameter list.</param>
     /// <param name="callSyntax">The originating call expression; used to surface conversion diagnostics for individual variadic elements when present.</param>
     /// <param name="receiverArgCount">The number of leading argument slots reserved for a synthesised receiver (0 for plain calls, 1 for imported extension calls).</param>
+    /// <param name="parameterMapping">Issue #506 follow-up: when non-default, the source-order mapping from each input argument to its parameter slot, as produced by overload resolution for calls combining named arguments with expanded <c>params</c> form. Causes the expander to emit arguments already in parameter order with optional slots filled by their defaults.</param>
     /// <returns>An argument list of length <paramref name="parameters"/>.Length whose final element is the packed array.</returns>
     private ImmutableArray<BoundExpression> ExpandParamsArguments(
         ImmutableArray<BoundExpression> arguments,
         System.Reflection.ParameterInfo[] parameters,
         CallExpressionSyntax callSyntax,
-        int receiverArgCount = 0)
+        int receiverArgCount = 0,
+        ImmutableArray<int> parameterMapping = default)
     {
         var paramsIndex = parameters.Length - 1;
         var paramArrayType = parameters[paramsIndex].ParameterType;
@@ -9250,6 +9252,44 @@ public sealed class Binder
             ? TypeSymbol.Object
             : TypeSymbol.FromClrType(elementClrType);
         var sliceType = SliceTypeSymbol.Get(elementTypeSymbol);
+
+        // Issue #506 follow-up: when a parameter mapping is supplied (named
+        // arguments combined with `params` expansion) the input arguments are
+        // in source order and may bind to any non-params parameter; the source
+        // positions that map to the params slot must be packed. The result is
+        // built in parameter order so the downstream binding pipeline can drop
+        // its own reorder step.
+        if (!parameterMapping.IsDefault)
+        {
+            var ordered = new BoundExpression[parameters.Length];
+            var paramsElementBuilder = ImmutableArray.CreateBuilder<BoundExpression>();
+            var paramsSourceIndices = new List<int>();
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                var slot = parameterMapping[i];
+                if (slot == paramsIndex)
+                {
+                    paramsSourceIndices.Add(i);
+                }
+                else
+                {
+                    ordered[slot] = arguments[i];
+                }
+            }
+
+            foreach (var sourceIndex in paramsSourceIndices)
+            {
+                paramsElementBuilder.Add(ConvertParamsElement(arguments[sourceIndex], elementTypeSymbol, callSyntax, sourceIndex, receiverArgCount));
+            }
+
+            ordered[paramsIndex] = new BoundArrayCreationExpression(callSyntax, sliceType, paramsElementBuilder.ToImmutable());
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                ordered[i] ??= CreateOptionalDefaultArgument(parameters[i]);
+            }
+
+            return ImmutableArray.Create(ordered);
+        }
 
         var fixedCount = paramsIndex;
         var tailCount = arguments.Length - fixedCount;
@@ -9265,34 +9305,7 @@ public sealed class Binder
         for (var i = 0; i < tailCount; i++)
         {
             var sourceIndex = fixedCount + i;
-            var arg = arguments[sourceIndex];
-            var converted = arg;
-            if (arg.Type != null && arg.Type != TypeSymbol.Error && arg.Type != elementTypeSymbol)
-            {
-                if (Conversion.Classify(arg.Type, elementTypeSymbol).Exists)
-                {
-                    var conversionSyntaxIndex = sourceIndex - receiverArgCount;
-                    TextLocation location;
-                    if (callSyntax != null
-                        && conversionSyntaxIndex >= 0
-                        && conversionSyntaxIndex < callSyntax.Arguments.Count)
-                    {
-                        location = callSyntax.Arguments[conversionSyntaxIndex].Location;
-                    }
-                    else
-                    {
-                        location = callSyntax?.Location ?? default;
-                    }
-
-                    converted = BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
-                }
-                else if (TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var udc))
-                {
-                    converted = udc;
-                }
-            }
-
-            packed.Add(converted);
+            packed.Add(ConvertParamsElement(arguments[sourceIndex], elementTypeSymbol, callSyntax, sourceIndex, receiverArgCount));
         }
 
         var arrayExpr = new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable());
@@ -9305,6 +9318,44 @@ public sealed class Binder
 
         result.Add(arrayExpr);
         return result.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #506: converts a single positional argument intended for a
+    /// <c>params T[]</c> element slot to the element type, threading the
+    /// originating source location for diagnostic reporting.
+    /// </summary>
+    private BoundExpression ConvertParamsElement(BoundExpression arg, TypeSymbol elementTypeSymbol, CallExpressionSyntax callSyntax, int sourceIndex, int receiverArgCount)
+    {
+        if (arg.Type == null || arg.Type == TypeSymbol.Error || arg.Type == elementTypeSymbol)
+        {
+            return arg;
+        }
+
+        if (Conversion.Classify(arg.Type, elementTypeSymbol).Exists)
+        {
+            var conversionSyntaxIndex = sourceIndex - receiverArgCount;
+            TextLocation location;
+            if (callSyntax != null
+                && conversionSyntaxIndex >= 0
+                && conversionSyntaxIndex < callSyntax.Arguments.Count)
+            {
+                location = callSyntax.Arguments[conversionSyntaxIndex].Location;
+            }
+            else
+            {
+                location = callSyntax?.Location ?? default;
+            }
+
+            return BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
+        }
+
+        if (TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var udc))
+        {
+            return udc;
+        }
+
+        return arg;
     }
 
     /// <summary>
@@ -12251,11 +12302,23 @@ public sealed class Binder
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
         var ctorRawArgs = boundArguments.MoveToImmutable();
         var ctorExpandedArgs = ctorIsExpanded
-            ? ExpandParamsArguments(ctorRawArgs, ctorParameters, syntax)
+            ? ExpandParamsArguments(ctorRawArgs, ctorParameters, syntax, parameterMapping: ctorMapping)
             : ctorRawArgs;
-        var ctorRebound = RebindFormattableInterpolationArguments(ctorExpandedArgs, syntax.Arguments, ctorParameters, ctorMapping);
-        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorMapping);
-        var ctorArgs = BuildOrderedCallArguments(ctorHandlerArgs, ctorMapping, ctorParameters);
+
+        // Issue #506 follow-up: when expanded form fires (with or without
+        // named arguments), the expander emits the arguments already in
+        // parameter order with optional slots filled — downstream reorderers
+        // therefore consume an identity mapping.
+        var ctorDownstreamMapping = ctorIsExpanded ? default : ctorMapping;
+        var ctorRebound = RebindFormattableInterpolationArguments(ctorExpandedArgs, syntax.Arguments, ctorParameters, ctorDownstreamMapping);
+        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorDownstreamMapping);
+
+        // Issue #506 follow-up: fixed-arity CLR ctor overloads expecting an
+        // `object` parameter from a value-type argument require a boxing
+        // conversion in IL; route through BindClrParameterConversions so the
+        // emitter sees a BoundConversionExpression and emits `box <T>`.
+        var ctorConvertedArgs = BindClrParameterConversions(ctorHandlerArgs, ctorParameters, syntax, ctorDownstreamMapping);
+        var ctorArgs = BuildOrderedCallArguments(ctorConvertedArgs, ctorDownstreamMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
             ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
@@ -13281,11 +13344,17 @@ public sealed class Binder
             {
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticExpandedArgs = staticIsExpanded
-                    ? ExpandParamsArguments(arguments, staticParameters, ce)
+                    ? ExpandParamsArguments(arguments, staticParameters, ce, parameterMapping: staticMapping)
                     : arguments;
-                var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticMapping);
-                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticMapping);
-                var staticArguments = BuildOrderedCallArguments(staticHandlerArgs, staticMapping, staticParameters);
+                var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
+                var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticDownstreamMapping);
+                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping);
+
+                // Issue #506 follow-up: ensure value-type → object boxing fires
+                // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
+                // selecting the fixed `(string, object)` overload).
+                var staticConvertedArgs = BindClrParameterConversions(staticHandlerArgs, staticParameters, ce, staticDownstreamMapping);
+                var staticArguments = BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
                 return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
@@ -13457,13 +13526,14 @@ public sealed class Binder
                         var instParameters = resolution.Best.GetParameters();
                         var instMapping = resolution.ParameterMapping;
                         var instExpandedArgs = resolution.IsExpanded
-                            ? ExpandParamsArguments(arguments, instParameters, ce)
+                            ? ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
                             : arguments;
-                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instMapping);
-                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instMapping);
-                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instMapping);
-                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce, instMapping);
-                        var instArguments = BuildOrderedCallArguments(instConvertedArgs, instMapping, instParameters);
+                        var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
+                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
+                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping);
+                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
+                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
+                        var instArguments = BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
@@ -13554,12 +13624,13 @@ public sealed class Binder
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
                 var inheritedExpandedArgs = resolution.IsExpanded
-                    ? ExpandParamsArguments(arguments, inheritedParameters, ce)
+                    ? ExpandParamsArguments(arguments, inheritedParameters, ce, parameterMapping: inheritedMapping)
                     : arguments;
-                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedMapping);
-                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedMapping);
-                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedMapping);
-                var inheritedArguments = BuildOrderedCallArguments(inheritedConvertedArgs, inheritedMapping, inheritedParameters);
+                var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
+                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping);
+                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping);
+                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping);
+                var inheritedArguments = BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
                 result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
@@ -13865,17 +13936,40 @@ public sealed class Binder
         // params string[] tail)` called with positional tail args), pack the
         // trailing positional arguments into a synthesised slice/array first.
         // The receiver occupies parameter slot 0; the params slot is always
-        // the last parameter, so it never collides with the receiver.
+        // the last parameter, so it never collides with the receiver. Named
+        // arguments against an expanded-form extension are funnelled through
+        // an offset mapping so the receiver position lines up with bound[0].
         var parameters = best.GetParameters();
         if (resolution.IsExpanded)
         {
-            bound = ExpandParamsArguments(bound, parameters, ce, receiverArgCount: 1);
+            ImmutableArray<int> expandedMapping = default;
+            if (!resolution.ParameterMapping.IsDefault)
+            {
+                var offset = ImmutableArray.CreateBuilder<int>(bound.Length);
+                offset.Add(0);
+                for (var i = 0; i < resolution.ParameterMapping.Length; i++)
+                {
+                    offset.Add(resolution.ParameterMapping[i]);
+                }
+
+                expandedMapping = offset.MoveToImmutable();
+            }
+
+            bound = ExpandParamsArguments(bound, parameters, ce, receiverArgCount: 1, parameterMapping: expandedMapping);
         }
+
+        var downstreamMapping = resolution.IsExpanded ? default : resolution.ParameterMapping;
+
+        // Issue #506 follow-up: route through BindClrParameterConversions so
+        // value-type → object boxing fires for fixed-arity imported extension
+        // calls too. The receiver occupies arg slot 0 (and is already typed
+        // correctly via the extension dispatch).
+        bound = BindClrParameterConversions(bound, parameters, ce, downstreamMapping, receiverArgCount: 1);
 
         // Issue #327 / #343: re-order arguments into parameter positions when
         // named arguments were used; otherwise fall through to the existing
         // trailing-optional fill.
-        bound = BuildOrderedCallArguments(bound, resolution.ParameterMapping, parameters);
+        bound = BuildOrderedCallArguments(bound, downstreamMapping, parameters);
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
@@ -15246,7 +15340,8 @@ public sealed class Binder
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
         CallExpressionSyntax call,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping = default,
+        int receiverArgCount = 0)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -15260,9 +15355,21 @@ public sealed class Binder
                 if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
                 {
                     var targetType = TypeSymbol.FromClrType(parameterType);
-                    if (argument.Type != targetType && Conversion.Classify(argument.Type, targetType).Exists)
+                    if (argument.Type != targetType
+                        && Conversion.Classify(argument.Type, targetType).Exists
+                        && NeedsBindClrParameterConversion(argument.Type, parameterType))
                     {
-                        rebound = BindConversion(call.Arguments[i].Location, argument, targetType, allowExplicit: true);
+                        // Issue #506: the source-argument list may not align with
+                        // the bound-argument list when a synthesised receiver
+                        // occupies leading slots (imported extension calls) or
+                        // when params expansion has replaced N positional source
+                        // args with one synthesised array. Fall back to the
+                        // overall call location when the source slot is absent.
+                        var sourceIndex = i - receiverArgCount;
+                        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                            ? call.Arguments[sourceIndex].Location
+                            : call?.Location ?? default;
+                        rebound = BindConversion(location, argument, targetType, allowExplicit: true);
                     }
                 }
             }
@@ -15290,6 +15397,39 @@ public sealed class Binder
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #506 follow-up: returns <see langword="true"/> when the bound
+    /// argument's static type needs an actual IL-visible conversion to land in
+    /// the CLR parameter's slot (boxing, numeric coercion, func→delegate
+    /// materialisation, etc.). Skips no-op rewraps where the source and
+    /// destination share the same CLR type — for example
+    /// <c>string?</c> → <c>string</c>, where the difference is purely the
+    /// nullability wrapper and emit is identical. Those no-op rewraps would
+    /// otherwise wrap a <see cref="BoundVariableExpression"/> argument in a
+    /// <see cref="BoundConversionExpression"/>, defeating nullable-flow
+    /// narrowing patterns (e.g. <c>!String.IsNullOrEmpty(s)</c> can no longer
+    /// strip <c>s</c>'s nullability).
+    /// </summary>
+    /// <param name="from">The bound argument's static type.</param>
+    /// <param name="targetParameterType">The CLR parameter type.</param>
+    /// <returns>Whether a rebinding conversion is required.</returns>
+    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType)
+    {
+        if (from == null || targetParameterType == null)
+        {
+            return false;
+        }
+
+        // FunctionTypeSymbol carries no ClrType but always needs delegate
+        // materialisation when handed to a CLR delegate parameter.
+        if (from.ClrType == null)
+        {
+            return true;
+        }
+
+        return from.ClrType != targetParameterType;
     }
 
     private static bool TryGetDelegateFunctionType(Type delegateType, out FunctionTypeSymbol functionType)
@@ -15954,6 +16094,7 @@ public sealed class Binder
         }
 
         ConstructorInfo bestCtor = null;
+        var isExpanded = false;
         if (argsAllTyped)
         {
             var resolution = OverloadResolution.Resolve(ctors, argTypes);
@@ -15961,6 +16102,7 @@ public sealed class Binder
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best as ConstructorInfo;
+                    isExpanded = resolution.IsExpanded;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
                     Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
@@ -15980,9 +16122,64 @@ public sealed class Binder
         // For a by-ref parameter the bound argument must already be an address-of
         // expression (`&x`); the emitter forwards the address rather than a value.
         var ctorParams = bestCtor.GetParameters();
-        var refKindsBuilder = ImmutableArray.CreateBuilder<RefKind>(boundArguments.Count);
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
-        for (var i = 0; i < boundArguments.Count; i++)
+
+        // Issue #506 follow-up: when overload resolution selected the expanded
+        // form of a `params T[]` base ctor (e.g. `init() : base(1, 2, 3, 4)`
+        // flowing into a C# `Base(int x, params int[] tail)`), pack the trailing
+        // positional arguments into a synthesised slice/array first. The fixed
+        // leading parameters and the synthesised array slot then go through the
+        // same per-parameter ref/conversion loop as the normal-form path.
+        ImmutableArray<BoundExpression> orderedArgs;
+        if (isExpanded)
+        {
+            var paramsIndex = ctorParams.Length - 1;
+            var paramArrayType = ctorParams[paramsIndex].ParameterType;
+            var elementClrType = paramArrayType.GetElementType();
+            var elementTypeSymbol = elementClrType == null
+                ? TypeSymbol.Object
+                : TypeSymbol.FromClrType(elementClrType);
+            var sliceType = SliceTypeSymbol.Get(elementTypeSymbol);
+
+            var tailCount = boundArguments.Count - paramsIndex;
+            var packed = ImmutableArray.CreateBuilder<BoundExpression>(tailCount);
+            for (var j = 0; j < tailCount; j++)
+            {
+                var srcIndex = paramsIndex + j;
+                var element = boundArguments[srcIndex];
+                if (element.Type != null && element.Type != TypeSymbol.Error && element.Type != elementTypeSymbol)
+                {
+                    if (Conversion.Classify(element.Type, elementTypeSymbol).Exists)
+                    {
+                        element = BindConversion(argLocation(srcIndex), element, elementTypeSymbol, allowExplicit: true);
+                    }
+                    else if (TryApplyUserDefinedImplicitArgumentConversion(element, elementTypeSymbol, out var udc))
+                    {
+                        element = udc;
+                    }
+                }
+
+                packed.Add(element);
+            }
+
+            var arrayExpr = new BoundArrayCreationExpression(syntax: null, sliceType, packed.MoveToImmutable());
+
+            var expandedBuilder = ImmutableArray.CreateBuilder<BoundExpression>(ctorParams.Length);
+            for (var i = 0; i < paramsIndex; i++)
+            {
+                expandedBuilder.Add(boundArguments[i]);
+            }
+
+            expandedBuilder.Add(arrayExpr);
+            orderedArgs = expandedBuilder.MoveToImmutable();
+        }
+        else
+        {
+            orderedArgs = boundArguments.ToImmutable();
+        }
+
+        var refKindsBuilder = ImmutableArray.CreateBuilder<RefKind>(ctorParams.Length);
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(ctorParams.Length);
+        for (var i = 0; i < ctorParams.Length; i++)
         {
             var clrParamType = ctorParams[i].ParameterType;
             if (clrParamType.IsByRef)
@@ -15994,13 +16191,29 @@ public sealed class Binder
 
                 // A by-ref argument is forwarded as-is (it is already a managed
                 // pointer, e.g. the result of `&x`); no value conversion applies.
-                convertedArgs.Add(boundArguments[i]);
+                convertedArgs.Add(orderedArgs[i]);
                 continue;
             }
 
             refKindsBuilder.Add(RefKind.None);
             var targetType = TypeSymbol.FromClrType(clrParamType);
-            convertedArgs.Add(BindConversion(argLocation(i), boundArguments[i], targetType));
+            var argLoc = isExpanded && i == ctorParams.Length - 1
+                ? location
+                : argLocation(i);
+            var orderedArg = orderedArgs[i];
+
+            // Issue #506 follow-up: when the synthesised params array already
+            // carries the exact CLR type of the parameter (SliceTypeSymbol(T)
+            // → T[]), skip the rebinding so the emitter sees the original
+            // array-creation expression without an extra conversion wrapper.
+            if (orderedArg.Type?.ClrType != null && orderedArg.Type.ClrType == clrParamType)
+            {
+                convertedArgs.Add(orderedArg);
+            }
+            else
+            {
+                convertedArgs.Add(BindConversion(argLoc, orderedArg, targetType));
+            }
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), bestCtor, refKindsBuilder.ToImmutable());
