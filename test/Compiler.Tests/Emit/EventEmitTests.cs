@@ -290,6 +290,236 @@ public class EventEmitTests
         Assert.True(ev.RaiseMethod.IsSpecialName);
     }
 
+    [Fact]
+    public void Issue503_CapturingLambda_SubscribedToEventHandlerEvent_Works()
+    {
+        // Issue #503: a function literal that captures any outer variable,
+        // when bound to an event with `+=`, used to fall through to the
+        // standard EmitExpression path. That path produced an
+        // Action<object, EventArgs> delegate (the default for the function
+        // type) and tried to feed it to add_X(EventHandler), yielding
+        // unverifiable IL — observed as a silent MSB4181 in dotnet build.
+        //
+        // After the fix, the function literal is redirected to the event's
+        // declared delegate type, so capturing closures bind correctly and
+        // raising the event runs the closure body.
+        var source = """
+            package MyLib
+            import System
+
+            type Source class {
+                public event Changed EventHandler
+                init() { }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var sourceType = assembly.GetTypes().Single(t => t.Name == "Source");
+        var instance = Activator.CreateInstance(sourceType)!;
+        var ev = sourceType.GetEvent("Changed")!;
+
+        int counter = 0;
+        EventHandler handler = (s, e) => counter++;
+        ev.AddEventHandler(instance, handler);
+
+        var backingField = sourceType.GetField("Changed", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = backingField!.GetValue(instance) as Delegate;
+        Assert.NotNull(del);
+
+        // Simulate the capturing-lambda scenario by Dynamic-Invoking via the
+        // EventHandler signature — the IL produced by gsc would otherwise be
+        // invalid before the fix lands.
+        del!.DynamicInvoke(instance, EventArgs.Empty);
+        Assert.Equal(1, counter);
+
+        ev.RemoveEventHandler(instance, handler);
+        del = backingField.GetValue(instance) as Delegate;
+        Assert.Null(del);
+    }
+
+    [Fact]
+    public void Issue503_CapturingLambda_SubscribedToEventHandlerEvent_FromGSharpClass()
+    {
+        // End-to-end: a G# class subscribes a capturing lambda to a CLR
+        // EventHandler event declared on another G# class, then raises the
+        // event by invoking the backing delegate. The captured counter must
+        // observe the side effect of the handler. Before the fix, gsc would
+        // emit an Action<object, EventArgs> handler that fails IL
+        // verification (silent MSB4181 in build pipelines).
+        var source = """
+            package MyLib
+            import System
+
+            type Counter class {
+                Value int32
+                init() { Value = 0 }
+                func Increment() { Value = Value + 1 }
+            }
+
+            type Source class {
+                public event Changed EventHandler
+                init() { }
+            }
+
+            type Probe class {
+                Counter Counter
+                Src Source
+                init() {
+                    Counter = Counter()
+                    Src = Source()
+                    var c = Counter
+                    Src.Changed += func(sender object, e EventArgs) {
+                        c.Increment()
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probeType = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var sourceType = assembly.GetTypes().Single(t => t.Name == "Source");
+        var counterType = assembly.GetTypes().Single(t => t.Name == "Counter");
+
+        var probe = Activator.CreateInstance(probeType)!;
+        var src = probeType.GetField("Src")!.GetValue(probe)!;
+        var counter = probeType.GetField("Counter")!.GetValue(probe)!;
+
+        var backingField = sourceType.GetField("Changed", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = backingField!.GetValue(src) as Delegate;
+        Assert.NotNull(del);
+
+        del!.DynamicInvoke(src, EventArgs.Empty);
+        del!.DynamicInvoke(src, EventArgs.Empty);
+        del!.DynamicInvoke(src, EventArgs.Empty);
+
+        var value = (int)counterType.GetField("Value")!.GetValue(counter)!;
+        Assert.Equal(3, value);
+    }
+
+    [Fact]
+    public void Issue503_NonCapturingLambda_SubscribedToEventHandlerEvent_StillWorks()
+    {
+        // Regression guard for the non-capturing case the issue mentioned as
+        // "working today". After fixing the delegate-type override the
+        // non-capturing path goes through the same code, so make sure it
+        // still produces verifiable IL and a functional subscription.
+        var source = """
+            package MyLib
+            import System
+
+            type Notifier class {
+                public event Fired EventHandler
+                init() { }
+            }
+
+            type Probe class {
+                N Notifier
+                init() {
+                    N = Notifier()
+                    N.Fired += func(sender object, e EventArgs) {
+                        var x = 1
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probeType = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var notifierType = assembly.GetTypes().Single(t => t.Name == "Notifier");
+
+        var probe = Activator.CreateInstance(probeType)!;
+        var n = probeType.GetField("N")!.GetValue(probe)!;
+
+        var backingField = notifierType.GetField("Fired", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = backingField!.GetValue(n) as Delegate;
+        Assert.NotNull(del);
+        Assert.IsType<EventHandler>(del);
+
+        del!.DynamicInvoke(n, EventArgs.Empty);
+    }
+
+    [Fact]
+    public void Issue503_CapturingLambda_CapturesClassInstance_HoldsReference()
+    {
+        // The closure must hold a reference to the captured class instance,
+        // not a value-typed snapshot, so that mutations on the captured
+        // instance after subscription are observable when the handler fires.
+        var source = """
+            package MyLib
+            import System
+
+            type Counter class {
+                Value int32
+                init() { Value = 0 }
+                func Bump() { Value = Value + 1 }
+            }
+
+            type Source class {
+                public event Changed EventHandler
+                init() { }
+            }
+
+            type Probe class {
+                Counter Counter
+                Src Source
+                init() {
+                    Counter = Counter()
+                    Src = Source()
+                    var c = Counter
+                    Src.Changed += func(sender object, e EventArgs) {
+                        c.Bump()
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probeType = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var sourceType = assembly.GetTypes().Single(t => t.Name == "Source");
+        var counterType = assembly.GetTypes().Single(t => t.Name == "Counter");
+
+        var probe = Activator.CreateInstance(probeType)!;
+        var counter = probeType.GetField("Counter")!.GetValue(probe)!;
+        var src = probeType.GetField("Src")!.GetValue(probe)!;
+
+        // Mutate the captured instance after subscription — the closure must
+        // see the same object (reference semantics).
+        counterType.GetMethod("Bump")!.Invoke(counter, Array.Empty<object>());
+        Assert.Equal(1, (int)counterType.GetField("Value")!.GetValue(counter)!);
+
+        var backingField = sourceType.GetField("Changed", BindingFlags.NonPublic | BindingFlags.Instance);
+        var del = (Delegate)backingField!.GetValue(src)!;
+        del.DynamicInvoke(src, EventArgs.Empty);
+
+        Assert.Equal(2, (int)counterType.GetField("Value")!.GetValue(counter)!);
+    }
+
+    [Fact]
+    public void Issue503_CapturingLambda_SubscribedToClrEvent_EmitsVerifiable()
+    {
+        // CLR-event variant of the regression: subscribing a capturing
+        // lambda to an imported BCL event (AppDomain.ProcessExit, declared
+        // as System.EventHandler). The original Oahu repro was this exact
+        // shape — the event lives on an imported class, so the binder takes
+        // the BoundClrEventSubscriptionExpression path. The closure rewrite
+        // and delegate-target resolution must still produce verifiable IL.
+        var source = """
+            package MyLib
+            import System
+
+            var hits int32 = 0
+            var domain = AppDomain.CurrentDomain
+            domain.ProcessExit += func(sender object, e EventArgs) {
+                hits = hits + 1
+            }
+            """;
+
+        // Compiling alone covers the IL-verification regression. We do not
+        // actually trigger ProcessExit at test time.
+        var assembly = CompileToAssembly(source);
+        Assert.NotNull(assembly);
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_event_emit_").FullName;

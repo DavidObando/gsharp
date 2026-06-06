@@ -1165,6 +1165,30 @@ internal sealed class ReflectionMetadataEmitter
             this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
         }
 
+        // Issue #503: pre-register synthesized closure class ctor handles too.
+        // Closure classes live at the END of nonSmClasses (they are appended
+        // after user aggregates so user TypeDefs come first), but a user
+        // class's `init` body or instance method may construct a capturing
+        // lambda whose closure class hasn't had its ctor emitted yet —
+        // EmitFunctionLiteral would then throw "Closure class … has no
+        // emitted constructor". The closure ctor's MethodDef row is already
+        // reserved by the planner at line ~733, so claim that handle up-front
+        // (same trick used for SM classes above). The actual ctor body is
+        // still emitted in the planned row order during the main nonSmClasses
+        // loop below.
+        foreach (var c in nonSmClasses)
+        {
+            if (!this.synthesizedClosureClasses.Contains(c))
+            {
+                continue;
+            }
+
+            if (classCtorRows.TryGetValue(c, out var closureCtorRow))
+            {
+                this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(closureCtorRow);
+            }
+        }
+
         // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
         // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
         var programTypeDefHandles = new Dictionary<PackageSymbol, TypeDefinitionHandle>();
@@ -15420,7 +15444,26 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInstanceReceiver(node.Receiver);
             }
 
-            this.EmitExpression(node.Handler);
+            // Issue #503: function-literal handlers default to Action/Func
+            // when emitted standalone, but the add_X / remove_X accessor takes
+            // the event's declared delegate type (e.g. System.EventHandler, or
+            // a CLR-delegate named in the event clause). Without this
+            // redirection, an Action<object, EventArgs> is pushed and the IL
+            // is unverifiable / crashes at runtime — the silent MSB4181 the
+            // issue reports. Apply the same delegate-type override the CLR
+            // event path (EmitClrEventSubscription) already uses, so capturing
+            // and non-capturing lambdas both flow through the closure builder
+            // with the correct target delegate ctor (object, IntPtr).
+            if (node.Handler is BoundFunctionLiteralExpression literalHandler
+                && node.Event.Type?.ClrType != null)
+            {
+                var mappedDelegateType = this.outer.MapToReferenceClrType(node.Event.Type.ClrType);
+                this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
+            }
+            else
+            {
+                this.EmitExpression(node.Handler);
+            }
 
             if (this.outer.eventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
             {
