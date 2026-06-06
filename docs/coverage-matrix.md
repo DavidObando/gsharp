@@ -43,6 +43,7 @@ ColonToken
 CommaToken
 CommentToken
 CompilationUnit
+CompoundIndexAssignmentExpression
 ConditionalExpression
 ConditionalRefArgumentExpression
 ConstKeyword

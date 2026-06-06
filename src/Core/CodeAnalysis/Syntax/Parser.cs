@@ -3328,6 +3328,21 @@ public class Parser
             return new MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs, equalsToken, value);
         }
 
+        // Issue #507 follow-up: compound indexer assignment
+        // (`d[k] += v`, `obj.Map[k] -= 1`, ...). Mirrors the bare `=` lift above
+        // but routes through CompoundIndexAssignmentExpressionSyntax so the
+        // binder can evaluate the receiver chain exactly once via a synthesized
+        // temp local before desugaring to `tmp[k] = tmp[k] op v`. The
+        // bare-identifier form `id[k] op= v` also lands here (TryLift returns
+        // the IndexExpression directly when the expression already IS one).
+        if (SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _)
+            && TryLiftTrailingIndexer(expression, out var compoundIndexedLhs))
+        {
+            var compoundOpToken = NextToken();
+            var compoundRhs = ParseAssignmentExpression();
+            return new CompoundIndexAssignmentExpressionSyntax(syntaxTree, compoundIndexedLhs, compoundOpToken, compoundRhs);
+        }
+
         // ADR-0062: general two-arm conditional (ternary) expression
         // `cond ? a : b`. Right-associative; lower precedence than
         // logical-or and higher than assignment. When the `?` tail
@@ -3533,9 +3548,11 @@ public class Parser
     //   AccessorExpression(L, ., AccessorExpression(M, ., IndexExpression(t, [k])))
     //                                                            => IndexExpression(AccessorExpression(L, ., AccessorExpression(M, ., t)), [k])
     //
-    // Null-conditional accessors (`?.`) are intentionally left as-is so existing
-    // diagnostics continue to fire — chained null-conditional indexer assignment
-    // is out of scope for this fix.
+    // Issue #507 follow-up: null-conditional accessors (`?.`) are lifted too
+    // so `obj.A?.B[k] = v` becomes a valid LHS. The binder
+    // (BindMemberIndexAssignmentExpression) splits the receiver chain at the
+    // leftmost `?.` and emits a null-conditional write that no-ops when the
+    // captured intermediate is `nil`.
     private bool TryLiftTrailingIndexer(ExpressionSyntax expression, out IndexExpressionSyntax canonical)
     {
         if (expression is IndexExpressionSyntax direct)
@@ -3545,7 +3562,6 @@ public class Parser
         }
 
         if (expression is AccessorExpressionSyntax accessor
-            && !accessor.IsNullConditional
             && TryLiftTrailingIndexer(accessor.RightPart, out var inner))
         {
             var rebuiltReceiver = new AccessorExpressionSyntax(

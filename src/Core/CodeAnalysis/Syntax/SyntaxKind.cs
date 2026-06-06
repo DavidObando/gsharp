@@ -153,6 +153,7 @@ public enum SyntaxKind
     IndexExpression,
     IndexAssignmentExpression,
     MemberIndexAssignmentExpression,
+    CompoundIndexAssignmentExpression,
     PackageDeclaration,
     ImportDeclaration,
     FunctionDeclaration,
