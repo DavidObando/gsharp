@@ -3380,6 +3380,40 @@ public class Parser
 
         var expression = ParseBinaryExpression();
 
+        // Issue #507: indexer assignment whose target is an arbitrary expression
+        // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
+        // bare-identifier form `id[k] = v` is already handled above as
+        // IndexAssignmentExpressionSyntax; this branch handles any other LHS shape
+        // whose trailing primary is an index access. Because ParsePostfixChain
+        // recursively folds `[...]` into the right-hand side of the most recent
+        // `.`, the parsed tree for `obj.Member[k]` is
+        // `AccessorExpression(obj, ., IndexExpression(Member, [k]))` — not a
+        // top-level IndexExpression. TryLiftTrailingIndexer reshapes such chains
+        // into the canonical `IndexExpression(<receiver-chain>, [k])` form before
+        // wrapping in MemberIndexAssignmentExpressionSyntax.
+        if (Current.Kind == SyntaxKind.EqualsToken
+            && TryLiftTrailingIndexer(expression, out var indexedLhs))
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs, equalsToken, value);
+        }
+
+        // Issue #507 follow-up: compound indexer assignment
+        // (`d[k] += v`, `obj.Map[k] -= 1`, ...). Mirrors the bare `=` lift above
+        // but routes through CompoundIndexAssignmentExpressionSyntax so the
+        // binder can evaluate the receiver chain exactly once via a synthesized
+        // temp local before desugaring to `tmp[k] = tmp[k] op v`. The
+        // bare-identifier form `id[k] op= v` also lands here (TryLift returns
+        // the IndexExpression directly when the expression already IS one).
+        if (SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _)
+            && TryLiftTrailingIndexer(expression, out var compoundIndexedLhs))
+        {
+            var compoundOpToken = NextToken();
+            var compoundRhs = ParseAssignmentExpression();
+            return new CompoundIndexAssignmentExpressionSyntax(syntaxTree, compoundIndexedLhs, compoundOpToken, compoundRhs);
+        }
+
         // ADR-0062: general two-arm conditional (ternary) expression
         // `cond ? a : b`. Right-associative; lower precedence than
         // logical-or and higher than assignment. When the `?` tail
@@ -3572,6 +3606,51 @@ public class Parser
         }
 
         return current;
+    }
+
+    // Issue #507: lift a trailing index access out of an accessor chain so it can
+    // be reused as the LHS of an indexer assignment. Returns true and yields a
+    // canonical `IndexExpression(<receiver-chain>, [k])` when the expression's
+    // rightmost primary is an index access; returns false otherwise.
+    //
+    // Shapes handled (rebuilt accessor chain shown after `=>`):
+    //   IndexExpression(t, [k])                                 => itself
+    //   AccessorExpression(L, ., IndexExpression(t, [k]))       => IndexExpression(AccessorExpression(L, ., t), [k])
+    //   AccessorExpression(L, ., AccessorExpression(M, ., IndexExpression(t, [k])))
+    //                                                            => IndexExpression(AccessorExpression(L, ., AccessorExpression(M, ., t)), [k])
+    //
+    // Issue #507 follow-up: null-conditional accessors (`?.`) are lifted too
+    // so `obj.A?.B[k] = v` becomes a valid LHS. The binder
+    // (BindMemberIndexAssignmentExpression) splits the receiver chain at the
+    // leftmost `?.` and emits a null-conditional write that no-ops when the
+    // captured intermediate is `nil`.
+    private bool TryLiftTrailingIndexer(ExpressionSyntax expression, out IndexExpressionSyntax canonical)
+    {
+        if (expression is IndexExpressionSyntax direct)
+        {
+            canonical = direct;
+            return true;
+        }
+
+        if (expression is AccessorExpressionSyntax accessor
+            && TryLiftTrailingIndexer(accessor.RightPart, out var inner))
+        {
+            var rebuiltReceiver = new AccessorExpressionSyntax(
+                syntaxTree,
+                accessor.LeftPart,
+                accessor.DotToken,
+                inner.Target);
+            canonical = new IndexExpressionSyntax(
+                syntaxTree,
+                rebuiltReceiver,
+                inner.OpenBracketToken,
+                inner.Index,
+                inner.CloseBracketToken);
+            return true;
+        }
+
+        canonical = null;
+        return false;
     }
 
     private ExpressionSyntax ParseFunctionLiteralExpression()

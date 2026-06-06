@@ -43,6 +43,7 @@ ColonToken
 CommaToken
 CommentToken
 CompilationUnit
+CompoundIndexAssignmentExpression
 ConditionalExpression
 ConditionalRefArgumentExpression
 ConstKeyword
@@ -119,6 +120,7 @@ MakeChannelExpression
 MapCreationExpression
 MapEntry
 MapKeyword
+MemberIndexAssignmentExpression
 MinusEqualsToken
 MinusMinusToken
 MinusToken

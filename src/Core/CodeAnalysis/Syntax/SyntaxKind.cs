@@ -152,6 +152,8 @@ public enum SyntaxKind
     MapEntry,
     IndexExpression,
     IndexAssignmentExpression,
+    MemberIndexAssignmentExpression,
+    CompoundIndexAssignmentExpression,
     PackageDeclaration,
     ImportDeclaration,
     FunctionDeclaration,

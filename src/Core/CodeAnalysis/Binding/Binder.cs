@@ -6493,6 +6493,10 @@ public sealed class Binder
                 return BindIndexExpression((IndexExpressionSyntax)syntax);
             case SyntaxKind.IndexAssignmentExpression:
                 return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.MemberIndexAssignmentExpression:
+                return BindMemberIndexAssignmentExpression((MemberIndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.CompoundIndexAssignmentExpression:
+                return BindCompoundIndexAssignmentExpression((CompoundIndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.StructLiteralExpression:
                 return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
             case SyntaxKind.TupleLiteralExpression:
@@ -12511,6 +12515,17 @@ public sealed class Binder
             return receiver;
         }
 
+        return BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart);
+    }
+
+    // Issue #507 follow-up: shared core for binding a `?.<rhs>` access against
+    // an already-bound receiver expression. Used by BindNullConditionalAccessExpression
+    // (when the receiver is the left side of the outermost accessor) and by the
+    // BindAccessorStep nested-accessor case (when a `?.` accessor appears as the
+    // right side of an outer `.` chain — e.g. `o.InnerObj?.Map`, which
+    // ParseNameOrCallExpression folds into `AccessorExpression(o, ., AccessorExpression(InnerObj, ?., Map))`).
+    private BoundExpression BindNullConditionalAccessExpressionCore(BoundExpression receiver, ExpressionSyntax rightPart)
+    {
         var receiverType = receiver.Type;
         TypeSymbol underlying;
         if (receiverType is NullableTypeSymbol nullable)
@@ -12542,7 +12557,7 @@ public sealed class Binder
         scope.TryDeclareVariable(capture);
 
         var captureRef = new BoundVariableExpression(null, capture);
-        var whenNotNull = BindAccessorStep(captureRef, null, syntax.RightPart);
+        var whenNotNull = BindAccessorStep(captureRef, null, rightPart);
 
         scope = scope.Parent;
 
@@ -12831,10 +12846,37 @@ public sealed class Binder
                     return head;
                 }
 
+                // Issue #507 follow-up: ParseNameOrCallExpression folds the
+                // right-hand side of an accessor through ParsePostfixChain, so
+                // `a.b?.c` parses as `AccessorExpression(a, ., AccessorExpression(b, ?., c))`.
+                // The nested accessor's `?.` token must be honored here, or the
+                // read/write degenerates into a plain `.c` against `b`'s nullable
+                // type and reports "Cannot find member c".
+                if (nested.IsNullConditional)
+                {
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart);
+                }
+
                 return BindAccessorStep(head, null, nested.RightPart);
 
             case CallExpressionSyntax ce:
                 return BindAccessorCall(receiver, classSymbol, ce);
+
+            // Issue #507 follow-up: support indexer reads through a member chain
+            // (`obj.Member[k]`, `obj.A.B[k]`, `obj?.Member[k]`). ParsePostfixChain
+            // folds a trailing `[...]` into the right-hand side of the most
+            // recent `.`, so the indexer arrives here as the rightPart of an
+            // AccessorExpression. We bind the indexer's target through the
+            // accessor chain so we get the correct member-rooted bound receiver,
+            // then route the index resolution through the shared helper.
+            case IndexExpressionSyntax ix:
+                var indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target);
+                if (indexTarget is BoundErrorExpression)
+                {
+                    return indexTarget;
+                }
+
+                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
 
             case NameExpressionSyntax ne:
                 if (ne.IdentifierToken.IsMissing)
@@ -14160,21 +14202,32 @@ public sealed class Binder
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
     {
         var target = BindExpression(syntax.Target);
+        return BindIndexAgainstTarget(target, syntax.Index, syntax.Target.Location);
+    }
 
+    // Issue #507 follow-up: the read-side counterpart to BindIndexedAssignmentToVariable.
+    // Routes a bound target + index syntax through map / array / CLR-indexer
+    // resolution and returns the bound index read. Extracted from
+    // BindIndexExpression so the BindAccessorStep arm that handles
+    // `receiver.Member[k]` (where the parser folds `[...]` into the right side
+    // of the trailing `.`) can produce the same bound shape without re-running
+    // the accessor chain.
+    private BoundExpression BindIndexAgainstTarget(BoundExpression target, ExpressionSyntax indexSyntax, TextLocation targetLocation)
+    {
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
         // the bound representation reuses BoundIndexExpression with the
         // element type set to V.
         if (target.Type is MapTypeSymbol mapType)
         {
-            var key = BindConversion(syntax.Index, mapType.KeyType);
+            var key = BindConversion(indexSyntax, mapType.KeyType);
             return new BoundIndexExpression(null, target, key, mapType.ValueType);
         }
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
-            var index = BindConversion(syntax.Index, TypeSymbol.Int32);
+            var index = BindConversion(indexSyntax, TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, element);
         }
 
@@ -14184,13 +14237,13 @@ public sealed class Binder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
-        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx && TryResolveClrIndexer(clrAnnotIdx, new[] { syntax.Index }, out var idxPropAnnot, out var idxArgsAnnot))
+        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx && TryResolveClrIndexer(clrAnnotIdx, new[] { indexSyntax }, out var idxPropAnnot, out var idxArgsAnnot))
         {
             var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
             return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
         }
 
-        if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
+        if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { indexSyntax }, out var idxProp, out var idxArgs))
         {
             var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
             return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
@@ -14198,7 +14251,7 @@ public sealed class Binder
 
         if (target.Type != TypeSymbol.Error)
         {
-            Diagnostics.ReportTypeNotIndexable(syntax.Target.Location, target.Type);
+            Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
         }
 
         return new BoundErrorExpression(null);
@@ -14213,11 +14266,324 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
+        return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+    }
+
+    // Issue #507: indexer assignment whose target is an arbitrary expression
+    // (e.g. `obj.Member[k] = v`). The parser produces this node for any LHS
+    // shape that parses as an IndexExpression and is followed by `=`. We
+    // mirror the user-visible workaround (bind the indexed property to a
+    // local first) by synthesizing a temp local that holds the bound target
+    // value, then routing the indexer assignment through that temp via the
+    // existing variable-rooted path. This reuses every downstream code path
+    // (lowering, async spilling, side-effect spilling, evaluation, IL emit)
+    // without modification.
+    //
+    // Follow-up: also handles null-conditional receiver chains
+    // (`obj.A?.B[k] = v`). The receiver chain is split at the leftmost `?.`;
+    // the left part is captured into a synthetic null-check local and the
+    // write is wrapped in a `BoundNullConditionalAccessExpression` so the
+    // assignment no-ops when an intermediate is `nil`.
+    private BoundExpression BindMemberIndexAssignmentExpression(MemberIndexAssignmentExpressionSyntax syntax)
+    {
+        return BindIndexedWriteThroughChain(
+            chainBase: null,
+            remainingChain: syntax.Target.Target,
+            indexSyntax: syntax.Target.Index,
+            valueSyntax: syntax.Value,
+            boundValueOverride: null,
+            compoundOperatorToken: null,
+            compoundRhsSyntax: null,
+            diagnosticLocation: syntax.Target.Target.Location,
+            outerSyntax: syntax);
+    }
+
+    // Issue #507 follow-up: compound indexer assignment via member chain
+    // (`obj.Map[k] += v`, `d[k] -= 1`, ...). Shares the same chain-walking
+    // machinery as the plain `=` form so the receiver is evaluated exactly
+    // once. The synthesized binary expression (`tmp[k] op v`) is built inside
+    // BindIndexedWriteThroughChain after the receiver temp is established.
+    private BoundExpression BindCompoundIndexAssignmentExpression(CompoundIndexAssignmentExpressionSyntax syntax)
+    {
+        return BindIndexedWriteThroughChain(
+            chainBase: null,
+            remainingChain: syntax.Target.Target,
+            indexSyntax: syntax.Target.Index,
+            valueSyntax: null,
+            boundValueOverride: null,
+            compoundOperatorToken: syntax.OperatorToken,
+            compoundRhsSyntax: syntax.Value,
+            diagnosticLocation: syntax.OperatorToken.Location,
+            outerSyntax: syntax);
+    }
+
+    // Issue #507 follow-up: shared driver for indexer assignment through a
+    // member chain. Handles three orthogonal axes:
+    //   * `chainBase` is non-null when recursing past a `?.` capture; the
+    //     remainingChain is then bound against the capture via BindAccessorStep
+    //     rather than a fresh BindExpression on the syntax tree.
+    //   * `compoundOperatorToken` is non-null for `op=` forms; the helper then
+    //     synthesizes the `tmp[k] op rhs` binary expression after the receiver
+    //     temp is established.
+    //   * `boundValueOverride` is non-null when the caller already bound the
+    //     RHS (currently unused at top-level, kept for symmetry/future reuse).
+    //
+    // Null-conditional behaviour: if the chain contains a `?.`, the leftmost
+    // occurrence splits the chain. The left side is captured into a synthetic
+    // local; the right side (plus the indexer write) becomes the whenNotNull
+    // body of a `BoundNullConditionalAccessExpression`. Nested `?.` is handled
+    // by recursive splitting.
+    //
+    // Receiver evaluation: the chain receiver is evaluated exactly once. The
+    // index expression is bound twice for compound assignment (once for the
+    // read, once for the write) because both target the same syntax node;
+    // callers passing side-effecting index expressions should pre-bind them
+    // to a local. This matches the precedent set by the local compound
+    // assignment desugar (`x += 1` lowers to `x = x + 1` and double-evaluates
+    // `x` syntactically).
+    private BoundExpression BindIndexedWriteThroughChain(
+        BoundExpression chainBase,
+        ExpressionSyntax remainingChain,
+        ExpressionSyntax indexSyntax,
+        ExpressionSyntax valueSyntax,
+        BoundExpression boundValueOverride,
+        SyntaxToken compoundOperatorToken,
+        ExpressionSyntax compoundRhsSyntax,
+        TextLocation diagnosticLocation,
+        SyntaxNode outerSyntax)
+    {
+        if (TrySplitAtLeftmostNullConditional(remainingChain, out var leftSyntax, out var rightSyntax))
+        {
+            BoundExpression boundLeft = chainBase == null
+                ? BindExpression(leftSyntax)
+                : BindAccessorStep(chainBase, null, leftSyntax);
+            if (boundLeft is BoundErrorExpression || boundLeft.Type == TypeSymbol.Error)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            TypeSymbol underlying;
+            if (boundLeft.Type is NullableTypeSymbol nullable)
+            {
+                underlying = nullable.UnderlyingType;
+            }
+            else if (boundLeft.Type == TypeSymbol.Null)
+            {
+                // Statically nil receiver: assignment is a no-op. Produce a
+                // bound literal null so the surrounding expression sees a
+                // well-typed value; lowering treats `null` literals as
+                // statement-position no-ops.
+                return new BoundLiteralExpression(null, null);
+            }
+            else
+            {
+                // Non-nullable receiver: `?.` degenerates to `.`, but we still
+                // produce a nullable result type for syntactic consistency
+                // with the read-side null-conditional path.
+                underlying = boundLeft.Type;
+            }
+
+            var captureName = "$ncap_" + (++nullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
+            scope = new BoundScope(scope);
+            scope.TryDeclareVariable(capture);
+
+            var captureRef = new BoundVariableExpression(null, capture);
+            var whenNotNull = BindIndexedWriteThroughChain(
+                chainBase: captureRef,
+                remainingChain: rightSyntax,
+                indexSyntax,
+                valueSyntax,
+                boundValueOverride,
+                compoundOperatorToken,
+                compoundRhsSyntax,
+                diagnosticLocation,
+                outerSyntax);
+
+            scope = scope.Parent;
+
+            if (whenNotNull is BoundErrorExpression)
+            {
+                return whenNotNull;
+            }
+
+            var resultType = whenNotNull.Type is NullableTypeSymbol
+                ? whenNotNull.Type
+                : (TypeSymbol)NullableTypeSymbol.Get(whenNotNull.Type);
+
+            LocalVariableSymbol resultSlot = null;
+            if (whenNotNull.Type is not NullableTypeSymbol
+                && whenNotNull.Type?.ClrType is { IsValueType: true })
+            {
+                var resultSlotName = "$nres_" + nullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+            }
+
+            return new BoundNullConditionalAccessExpression(null, boundLeft, capture, whenNotNull, resultType, resultSlot);
+        }
+
+        BoundExpression boundReceiver = chainBase == null
+            ? BindExpression(remainingChain)
+            : BindAccessorStep(chainBase, null, remainingChain);
+        if (boundReceiver is BoundErrorExpression || boundReceiver.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type);
+        if (!scope.TryDeclareVariable(tempVar))
+        {
+            // Defensive: synthesized names cannot collide with user identifiers
+            // (the `<...>` prefix is not a valid identifier token), so a failure
+            // here means a duplicate synthesized name within the same scope,
+            // which Interlocked.Increment guarantees against. Treat as fatal.
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized index-assignment target local '{tempName}'.");
+        }
+
+        var declaration = new BoundVariableDeclaration(outerSyntax, tempVar, boundReceiver);
+
+        BoundExpression assignment;
+        if (compoundOperatorToken != null)
+        {
+            if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(compoundOperatorToken.Kind, out var baseOpKind))
+            {
+                // Defensive: parser only emits this node for kinds recognised
+                // by TryGetCompoundAssignmentBaseOperator above.
+                return new BoundErrorExpression(null);
+            }
+
+            var tempRef = new BoundVariableExpression(null, tempVar);
+            var indexRead = BindIndexAgainstTarget(tempRef, indexSyntax, diagnosticLocation);
+            if (indexRead is BoundErrorExpression)
+            {
+                return indexRead;
+            }
+
+            var rhsBound = BindExpression(compoundRhsSyntax);
+            if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            var binaryOp = BoundBinaryOperator.Bind(baseOpKind, indexRead.Type, rhsBound.Type);
+            if (binaryOp == null)
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(
+                    compoundOperatorToken.Location,
+                    compoundOperatorToken.Text,
+                    indexRead.Type,
+                    rhsBound.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var combined = new BoundBinaryExpression(null, indexRead, binaryOp, rhsBound);
+            assignment = BindIndexedAssignmentToVariableWithBoundValue(tempVar, indexSyntax, combined, diagnosticLocation);
+        }
+        else if (boundValueOverride != null)
+        {
+            assignment = BindIndexedAssignmentToVariableWithBoundValue(tempVar, indexSyntax, boundValueOverride, diagnosticLocation);
+        }
+        else
+        {
+            assignment = BindIndexedAssignmentToVariable(tempVar, indexSyntax, valueSyntax, diagnosticLocation);
+        }
+
+        if (assignment is BoundErrorExpression)
+        {
+            return assignment;
+        }
+
+        return new BoundBlockExpression(outerSyntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+    }
+
+    // Issue #507 follow-up: walks a left-recursive accessor chain to find the
+    // leftmost `?.` in source order. When found, splits the chain into the
+    // sub-expression LEFT of the `?.` (which is captured for null-checking)
+    // and the sub-expression to its RIGHT (which is bound against the
+    // capture). Returns false when the chain contains no `?.` at all.
+    private bool TrySplitAtLeftmostNullConditional(
+        ExpressionSyntax chain,
+        out ExpressionSyntax left,
+        out ExpressionSyntax right)
+    {
+        // ParseNameOrCallExpression makes accessor chains RIGHT-recursive: in
+        // `a.b?.c.d`, the outer accessor is `.` with LeftPart `a` and RightPart
+        // `AccessorExpression(b, ?., AccessorExpression(c, ., d))`. To find the
+        // leftmost `?.` we walk the RIGHT spine: if the current node is itself
+        // `?.`, it is the split point; otherwise recurse into RightPart and
+        // rebuild the LEFT side by re-attaching the prefix with the inner
+        // `?.` replaced by its own LeftPart.
+        if (chain is AccessorExpressionSyntax acc)
+        {
+            if (acc.IsNullConditional)
+            {
+                left = acc.LeftPart;
+                right = acc.RightPart;
+                return true;
+            }
+
+            if (TrySplitAtLeftmostNullConditional(acc.RightPart, out var innerLeft, out var innerRight))
+            {
+                left = new AccessorExpressionSyntax(acc.SyntaxTree, acc.LeftPart, acc.DotToken, innerLeft);
+                right = innerRight;
+                return true;
+            }
+        }
+
+        left = null;
+        right = null;
+        return false;
+    }
+
+    private BoundExpression BindIndexedAssignmentToVariable(
+        VariableSymbol variable,
+        ExpressionSyntax indexSyntax,
+        ExpressionSyntax valueSyntax,
+        TextLocation diagnosticLocation)
+    {
+        return BindIndexedAssignmentToVariableCore(
+            variable, indexSyntax, valueSyntax, boundValueOverride: null, diagnosticLocation);
+    }
+
+    // Issue #507 follow-up: compound assignment (`tmp[k] += v`) supplies a
+    // pre-bound RHS (the synthesized `tmp[k] op v` binary expression) so the
+    // shared body must skip re-binding the value syntax and just convert the
+    // bound value to the element type. Carries `diagnosticLocation` for the
+    // conversion error site, matching the caller's user-visible operator.
+    private BoundExpression BindIndexedAssignmentToVariableWithBoundValue(
+        VariableSymbol variable,
+        ExpressionSyntax indexSyntax,
+        BoundExpression boundValue,
+        TextLocation diagnosticLocation)
+    {
+        return BindIndexedAssignmentToVariableCore(
+            variable, indexSyntax, valueSyntax: null, boundValueOverride: boundValue, diagnosticLocation);
+    }
+
+    private BoundExpression BindIndexedAssignmentToVariableCore(
+        VariableSymbol variable,
+        ExpressionSyntax indexSyntax,
+        ExpressionSyntax valueSyntax,
+        BoundExpression boundValueOverride,
+        TextLocation diagnosticLocation)
+    {
+        BoundExpression BindValue(TypeSymbol elementType)
+        {
+            if (boundValueOverride != null)
+            {
+                return BindConversion(diagnosticLocation, boundValueOverride, elementType);
+            }
+
+            return BindConversion(valueSyntax, elementType);
+        }
+
         var element = GetIndexElementType(variable.Type);
         if (element != null)
         {
-            var index = BindConversion(syntax.Index, TypeSymbol.Int32);
-            var value = BindConversion(syntax.Value, element);
+            var index = BindConversion(indexSyntax, TypeSymbol.Int32);
+            var value = BindValue(element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
 
@@ -14225,28 +14591,28 @@ public sealed class Binder
         // value bound to V.
         if (variable.Type is MapTypeSymbol mapType)
         {
-            var keyExpr = BindConversion(syntax.Index, mapType.KeyType);
-            var valExpr = BindConversion(syntax.Value, mapType.ValueType);
+            var keyExpr = BindConversion(indexSyntax, mapType.KeyType);
+            var valExpr = BindValue(mapType.ValueType);
             return new BoundIndexAssignmentExpression(null, variable, keyExpr, valExpr, mapType.ValueType);
         }
 
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { syntax.Index }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
+        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { indexSyntax }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
         {
             if (!idxPropAnnotWr.CanWrite)
             {
-                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
                 return new BoundErrorExpression(null);
             }
 
             var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
-            var boundValueAnnotWr = BindConversion(syntax.Value, valueTypeAnnotWr);
+            var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
             return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
         }
 
-        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
+        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { indexSyntax }, out var idxProp, out var idxArgs))
         {
             // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
             // indexer is a `ref T`-returning getter and writes go through that
@@ -14260,27 +14626,27 @@ public sealed class Binder
                 {
                     if (IsReadOnlyRefReturn(idxProp, refGetter))
                     {
-                        Diagnostics.ReportCannotAssignReadOnlySpanElement(syntax.TargetIdentifier.Location, variable.Type);
+                        Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
                         return new BoundErrorExpression(null);
                     }
 
                     var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
-                    var refValue = BindConversion(syntax.Value, pointeeType);
+                    var refValue = BindValue(pointeeType);
                     return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
                 }
 
-                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
                 return new BoundErrorExpression(null);
             }
 
             var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
-            var boundValue = BindConversion(syntax.Value, valueType);
+            var boundValue = BindValue(valueType);
             return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
         }
 
         if (variable.Type != TypeSymbol.Error)
         {
-            Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
         }
 
         return new BoundErrorExpression(null);
