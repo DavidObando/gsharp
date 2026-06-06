@@ -480,6 +480,54 @@ public sealed class StructSymbol : TypeSymbol
         return false;
     }
 
+    /// <summary>
+    /// ADR-0063: returns every instance method whose name equals <paramref name="name"/> (the overload set).
+    /// </summary>
+    /// <param name="name">The method name.</param>
+    /// <returns>The overload set; empty if none.</returns>
+    public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethods(string name)
+    {
+        if (Methods.IsDefaultOrEmpty)
+        {
+            return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in Methods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// ADR-0063: returns every shared/static method whose name equals <paramref name="name"/> (the overload set).
+    /// </summary>
+    /// <param name="name">The method name.</param>
+    /// <returns>The overload set; empty if none.</returns>
+    public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetStaticMethods(string name)
+    {
+        if (StaticMethods.IsDefaultOrEmpty)
+        {
+            return System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var m in StaticMethods)
+        {
+            if (m.Name == name)
+            {
+                builder.Add(m);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
     /// <summary>Tries to find a field by name.</summary>
     /// <param name="name">The field name.</param>
     /// <param name="field">The found field on success.</param>

@@ -2008,6 +2008,57 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0263", $"Conditional expression branches have no common result type — the true branch is '{trueType}' and the false branch is '{falseType}'. Add an explicit conversion to align the two arms.");
     }
 
+    /// <summary>
+    /// ADR-0063: reports a second user-defined callable declaration whose signature
+    /// (parameter types + ref-kinds, excluding defaults and return type) duplicates an
+    /// already-declared overload in the same declaration space.
+    /// </summary>
+    /// <param name="location">The location of the offending declaration.</param>
+    /// <param name="name">The callable name.</param>
+    /// <param name="signature">A short rendering of the duplicated signature.</param>
+    public void ReportDuplicateOverloadSignature(TextLocation location, string name, string signature)
+    {
+        Report(location, "GS0264", $"An overload of '{name}' with signature '{signature}' is already declared. Two overloads must differ by parameter types or ref-kinds.");
+    }
+
+    /// <summary>
+    /// ADR-0063 §3: reports an optional-parameter declaration that violates a v1
+    /// restriction (non-constant default, optional <c>ref</c>/<c>out</c>/<c>in</c>, optional
+    /// variadic, default on the receiver parameter, or unrepresentable constant for
+    /// the parameter type).
+    /// </summary>
+    /// <param name="location">The location of the offending parameter clause.</param>
+    /// <param name="parameterName">The parameter's source name.</param>
+    /// <param name="reason">A short, user-visible reason for the rejection.</param>
+    public void ReportInvalidOptionalParameter(TextLocation location, string parameterName, string reason)
+    {
+        Report(location, "GS0265", $"Optional parameter '{parameterName}' is invalid: {reason}");
+    }
+
+    /// <summary>
+    /// ADR-0063 §6: reports a call whose argument list matches more than one applicable
+    /// overload after generic inference, conversion, optional-parameter ranking, and the
+    /// "fewest expanded defaults" tie-break.
+    /// </summary>
+    /// <param name="location">The call-site location.</param>
+    /// <param name="name">The callable name.</param>
+    public void ReportAmbiguousOverloadResolution(TextLocation location, string name)
+    {
+        Report(location, "GS0266", $"Call to '{name}' is ambiguous between multiple overloads. Disambiguate with explicit types or named arguments.");
+    }
+
+    /// <summary>
+    /// ADR-0063 §6: reports a call to a name that resolves to an overload set, but
+    /// no overload is applicable to the given argument list (after applying defaults
+    /// and named-argument reordering).
+    /// </summary>
+    /// <param name="location">The call-site location.</param>
+    /// <param name="name">The callable name.</param>
+    public void ReportNoApplicableOverload(TextLocation location, string name)
+    {
+        Report(location, "GS0267", $"No overload of '{name}' is applicable to the given argument list.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -17,6 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundScope
 {
     private Dictionary<string, Symbol> symbols;
+    private Dictionary<string, List<FunctionSymbol>> functions;
     private List<ImportSymbol> imports;
     private Dictionary<string, TypeSymbol> typeAliases;
     private List<FunctionSymbol> extensionFunctions;
@@ -108,7 +109,128 @@ public sealed class BoundScope
     /// <param name="function">The function to declare.</param>
     /// <returns>Whether the function was declared or not.</returns>
     public bool TryDeclareFunction(FunctionSymbol function)
-        => TryDeclareSymbol(function);
+    {
+        if (function?.Name == null)
+        {
+            return false;
+        }
+
+        // ADR-0063 §11: user-defined callable storage is name → overload set.
+        // A name conflict with a non-function symbol (variable, etc.) is still a
+        // hard duplicate. A second function with the same name is allowed if and
+        // only if its signature differs from every existing overload.
+        if (symbols != null && symbols.TryGetValue(function.Name, out var existing) && existing is not FunctionSymbol)
+        {
+            return false;
+        }
+
+        functions ??= new Dictionary<string, List<FunctionSymbol>>();
+        if (!functions.TryGetValue(function.Name, out var bucket))
+        {
+            bucket = new List<FunctionSymbol>();
+            functions.Add(function.Name, bucket);
+        }
+        else
+        {
+            foreach (var f in bucket)
+            {
+                if (FunctionSignaturesEqual(f, function))
+                {
+                    return false;
+                }
+            }
+        }
+
+        bucket.Add(function);
+
+        // Keep the first overload visible through the legacy `symbols` map so
+        // existing TryLookupSymbol/Get*<FunctionSymbol> callers see the name.
+        symbols ??= new Dictionary<string, Symbol>();
+        if (!symbols.ContainsKey(function.Name))
+        {
+            symbols.Add(function.Name, function);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0063 §11: returns every overload of the given function name visible
+    /// from this scope (walks parent scopes). Empty when no function with that
+    /// name is in scope.
+    /// </summary>
+    /// <param name="name">The function name.</param>
+    /// <returns>The overload set in declaration order (innermost scope first).</returns>
+    public ImmutableArray<FunctionSymbol> TryLookupFunctions(string name)
+    {
+        if (name == null)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.functions != null && s.functions.TryGetValue(name, out var bucket) && bucket.Count > 0)
+            {
+                builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                builder.AddRange(bucket);
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// ADR-0063 §1: compares two function symbols for overload-identity equality —
+    /// member name, callable parameter count, each parameter's type, and each
+    /// parameter's ref-kind. Return type, parameter names, accessibility, and
+    /// default values are deliberately not part of identity.
+    /// </summary>
+    /// <param name="a">First function symbol.</param>
+    /// <param name="b">Second function symbol.</param>
+    /// <returns>Whether the two functions share an overload signature.</returns>
+    public static bool FunctionSignaturesEqual(FunctionSymbol a, FunctionSymbol b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (!string.Equals(a.Name, b.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ap = SigCallableParameters(a);
+        var bp = SigCallableParameters(b);
+        if (ap.Length != bp.Length)
+        {
+            return false;
+        }
+
+        var aTypeParams = a.TypeParameters.IsDefault ? 0 : a.TypeParameters.Length;
+        var bTypeParams = b.TypeParameters.IsDefault ? 0 : b.TypeParameters.Length;
+        if (aTypeParams != bTypeParams)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < ap.Length; i++)
+        {
+            if (ap[i].RefKind != bp[i].RefKind)
+            {
+                return false;
+            }
+
+            if (!SigTypesEquivalent(ap[i].Type, bp[i].Type, a, b))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Tries to declare an extension function (Phase 3.B.6 / ADR-0019). Extension
@@ -278,11 +400,25 @@ public sealed class BoundScope
         => GetDeclaredSymbols<VariableSymbol>();
 
     /// <summary>
-    /// Gets an immutable array of all the declared functions.
+    /// Gets an immutable array of all the declared functions, including every
+    /// overload registered via <see cref="TryDeclareFunction"/> (ADR-0063 §11).
     /// </summary>
-    /// <returns>The declared functions.</returns>
+    /// <returns>The declared functions in declaration order.</returns>
     public ImmutableArray<FunctionSymbol> GetDeclaredFunctions()
-        => GetDeclaredSymbols<FunctionSymbol>();
+    {
+        if (functions == null || functions.Count == 0)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var bucket in functions.Values)
+        {
+            builder.AddRange(bucket);
+        }
+
+        return builder.ToImmutable();
+    }
 
     /// <summary>
     /// Gets an immutable array of all the declared imports.
@@ -377,6 +513,49 @@ public sealed class BoundScope
         => typeAliases == null
             ? ImmutableArray<DelegateTypeSymbol>.Empty
             : typeAliases.Values.OfType<DelegateTypeSymbol>().ToImmutableArray();
+
+    private static ImmutableArray<ParameterSymbol> SigCallableParameters(FunctionSymbol f)
+        => f.ExplicitReceiverParameter == null ? f.Parameters : f.Parameters.RemoveAt(0);
+
+    private static bool SigTypesEquivalent(TypeSymbol x, TypeSymbol y, FunctionSymbol fx, FunctionSymbol fy)
+    {
+        if (ReferenceEquals(x, y))
+        {
+            return true;
+        }
+
+        if (x == null || y == null)
+        {
+            return false;
+        }
+
+        if (x is TypeParameterSymbol xtp && y is TypeParameterSymbol ytp)
+        {
+            var xi = SigIndexOfTypeParameter(fx, xtp);
+            var yi = SigIndexOfTypeParameter(fy, ytp);
+            return xi >= 0 && xi == yi;
+        }
+
+        return x.Name == y.Name;
+    }
+
+    private static int SigIndexOfTypeParameter(FunctionSymbol f, TypeParameterSymbol tp)
+    {
+        if (f.TypeParameters.IsDefault)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < f.TypeParameters.Length; i++)
+        {
+            if (ReferenceEquals(f.TypeParameters[i], tp))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 
     private bool TryDeclareSymbol<TSymbol>(TSymbol symbol)
         where TSymbol : Symbol

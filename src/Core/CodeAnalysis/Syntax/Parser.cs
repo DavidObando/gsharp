@@ -1769,9 +1769,23 @@ public class Parser
         }
 
         var type = ParseTypeClause();
+
+        // ADR-0063: optional default-value clause. Parsed as a general expression here;
+        // the binder enforces the "compile-time constant representable in CLR parameter
+        // metadata" rule and emits diagnostics on misuse.
+        SyntaxToken equalsToken = null;
+        ExpressionSyntax defaultValue = null;
+        if (Current.Kind == SyntaxKind.EqualsToken)
+        {
+            equalsToken = NextToken();
+            defaultValue = ParseExpression();
+        }
+
         var parameter = new ParameterSyntax(syntaxTree, identifier, ellipsis, type).WithAnnotations(annotations);
         parameter.ScopedModifier = scopedModifier;
         parameter.RefKindModifier = refKindModifier;
+        parameter.EqualsToken = equalsToken;
+        parameter.DefaultValue = defaultValue;
         return parameter;
     }
 

@@ -113,7 +113,11 @@ type Point class {
 func (p Point) Sum() int32 { return 2 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("'Sum' is already declared."));
+
+        // ADR-0063: two `Sum()` methods on Point share the same signature, so the
+        // duplicate-overload diagnostic fires instead of the older
+        // "symbol already declared" one.
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("'Sum'") && (d.Message.Contains("already declared") || d.Message.Contains("overload")));
     }
 
     [Fact]

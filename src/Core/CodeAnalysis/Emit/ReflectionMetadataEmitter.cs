@@ -7338,6 +7338,13 @@ internal sealed class ReflectionMetadataEmitter
                 paramAttributes |= ParameterAttributes.In;
             }
 
+            // ADR-0063 §10: optional parameters with a compile-time constant
+            // default get the Optional+HasDefault flags plus a Constant row.
+            if (p.HasExplicitDefaultValue)
+            {
+                paramAttributes |= ParameterAttributes.Optional | ParameterAttributes.HasDefault;
+            }
+
             var paramHandle = this.metadata.AddParameter(
                 attributes: paramAttributes,
                 name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
@@ -7346,6 +7353,12 @@ internal sealed class ReflectionMetadataEmitter
             if (p.RefKind == RefKind.In)
             {
                 this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+            }
+
+            // ADR-0063 §10: emit the Constant row carrying the default value.
+            if (p.HasExplicitDefaultValue)
+            {
+                this.metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
             }
 
             paramHandles.Add((p, paramHandle));
