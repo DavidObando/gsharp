@@ -433,6 +433,58 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Formats a CLR method/constructor signature into a short human-readable
+    /// form suitable for a diagnostic: <c>Name[T1, T2](P1, P2, …)</c>. Used by
+    /// the ambiguous-overload diagnostic (issue #505) to list the competing
+    /// candidates so the caller can choose how to disambiguate (typically by
+    /// supplying an explicit type-argument list).
+    /// </summary>
+    /// <param name="method">The CLR method or constructor.</param>
+    /// <returns>The formatted signature.</returns>
+    public static string FormatMethodSignature(MethodBase method)
+    {
+        if (method is null)
+        {
+            return "<null>";
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append(method.Name);
+
+        if (method is MethodInfo mi && mi.IsGenericMethod)
+        {
+            sb.Append('[');
+            var typeArgs = mi.GetGenericArguments();
+            for (var i = 0; i < typeArgs.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(", ");
+                }
+
+                sb.Append(FormatTypeName(typeArgs[i]));
+            }
+
+            sb.Append(']');
+        }
+
+        sb.Append('(');
+        var parameters = method.GetParameters();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append(FormatTypeName(parameters[i].ParameterType));
+        }
+
+        sb.Append(')');
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Attempts to infer the type arguments of an open generic method
     /// definition from the supplied argument types. Implements a deliberately
     /// scoped subset of C# §7.5.2 "Type inference": only the input-type
@@ -895,16 +947,36 @@ internal static class OverloadResolution
     /// candidate set, returning the unique best, an ambiguity, or "none".
     /// Always called with at least two applicable candidates.
     /// </summary>
+    /// <remarks>
+    /// Issue #505 reworked this pass to match C# §7.5.3.2 semantics more
+    /// faithfully:
+    /// <list type="number">
+    ///   <item>
+    ///     <description>Pairwise <em>domination</em> removes candidates for
+    ///     which some other candidate is strictly better. A candidate that is
+    ///     not strictly worse than any other survives. (The previous
+    ///     implementation required strict dominance over <em>every</em>
+    ///     other candidate, which incorrectly rejected non-generic vs
+    ///     generic ties where neither dominates by pure conversion-kind ranking.)</description>
+    ///   </item>
+    ///   <item>
+    ///     <description>Among survivors, the standard tie-breakers run in C#
+    ///     order: fewer-parameters (fewer omitted optionals), more-specific
+    ///     parameter types, then non-generic-over-generic.</description>
+    ///   </item>
+    /// </list>
+    /// </remarks>
     private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)> applicable, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames)
         where T : MethodBase
     {
-        // Better-function-member pass: a candidate wins iff for all arguments
-        // its conversion is no worse than every other applicable candidate's,
-        // and for at least one argument it is strictly better.
-        var winners = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
+        // Phase 1 — drop candidates that are strictly dominated by another.
+        // C# §7.5.3.2: a candidate c is the best iff no other candidate is
+        // strictly better than c. Equivalently, c survives iff for every other
+        // candidate `other`, !IsStrictlyBetter(other, c).
+        var nonDominated = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
         foreach (var c in applicable)
         {
-            var isWinner = true;
+            var dominated = false;
             foreach (var other in applicable)
             {
                 if (ReferenceEquals(c.Method, other.Method))
@@ -912,30 +984,48 @@ internal static class OverloadResolution
                     continue;
                 }
 
-                if (!IsAtLeastAsGoodAs(c.Conversions, c.ParamTypes, other.Conversions, other.ParamTypes, argTypes))
+                if (IsAtLeastAsGoodAs(other.Conversions, other.ParamTypes, c.Conversions, c.ParamTypes, argTypes))
                 {
-                    isWinner = false;
+                    dominated = true;
                     break;
                 }
             }
 
-            if (isWinner)
+            if (!dominated)
             {
-                winners.Add(c);
+                nonDominated.Add(c);
             }
         }
 
-        if (winners.Count == 1)
+        if (nonDominated.Count == 1)
         {
-            return Result<T>.Single(winners[0].Method, BuildMappingArray(winners[0].Mapping, argumentNames));
+            return Result<T>.Single(nonDominated[0].Method, BuildMappingArray(nonDominated[0].Mapping, argumentNames));
         }
 
-        // When the better-function-member pass produced no strict winner (e.g.
-        // overloads whose conversions are identical over the supplied
-        // arguments), fall back to the full applicable set for tie-breaking.
-        var pool = winners.Count > 0 ? winners : applicable;
+        var pool = nonDominated.Count > 0 ? nonDominated : applicable;
 
-        // Tie-break: prefer the candidate whose parameter types are
+        // Phase 2a — issue #327: prefer the candidate that does not rely on
+        // omitted optional/default parameters (the smallest parameter count).
+        // Matches C# §7.5.3.2's preference for the member with no extra
+        // defaulted parameters.
+        if (pool.Count > 1)
+        {
+            var minParamCount = pool.Min(w => w.Method.GetParameters().Length);
+            var fewestParams = pool
+                .Where(w => w.Method.GetParameters().Length == minParamCount)
+                .ToList();
+            if (fewestParams.Count >= 1 && fewestParams.Count < pool.Count)
+            {
+                pool = fewestParams;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
+            }
+        }
+
+        // Phase 2b — prefer the candidate whose parameter types are
         // "more specific" (parameter-by-parameter assignability — a less
         // derived type is implicitly assignable from a more derived one).
         if (pool.Count > 1)
@@ -943,25 +1033,34 @@ internal static class OverloadResolution
             var mostSpecific = pool
                 .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
                 .ToList();
-            if (mostSpecific.Count == 1)
+            if (mostSpecific.Count >= 1 && mostSpecific.Count < pool.Count)
             {
-                return Result<T>.Single(mostSpecific[0].Method, BuildMappingArray(mostSpecific[0].Mapping, argumentNames));
+                pool = mostSpecific;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
             }
         }
 
-        // Issue #327: when candidates still tie, prefer the one that requires
-        // expanding the fewest optional/default parameters — i.e. the smallest
-        // parameter count. This matches C# §7.5.3.2's preference for the member
-        // that does not rely on omitted optional arguments.
+        // Phase 2c — issue #505: prefer a non-generic candidate over a generic
+        // one when the candidates are otherwise tied. Matches C# §7.5.3.2:
+        // "If MP is a non-generic method and MQ is a generic method, then MP
+        // is better than MQ." Without this tie-break, xUnit-style helpers like
+        // `Assert.Equal<T>(T, T)` collide with the non-generic
+        // `Assert.Equal(string, string)` overload for two string arguments.
         if (pool.Count > 1)
         {
-            var minParamCount = pool.Min(w => w.Method.GetParameters().Length);
-            var fewestParams = pool
-                .Where(w => w.Method.GetParameters().Length == minParamCount)
-                .ToList();
-            if (fewestParams.Count == 1)
+            var nonGeneric = pool.Where(w => !IsGenericMethod(w.Method)).ToList();
+            if (nonGeneric.Count >= 1 && nonGeneric.Count < pool.Count)
             {
-                return Result<T>.Single(fewestParams[0].Method, BuildMappingArray(fewestParams[0].Mapping, argumentNames));
+                pool = nonGeneric;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
             }
         }
 
@@ -971,6 +1070,9 @@ internal static class OverloadResolution
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
     }
+
+    private static bool IsGenericMethod(MethodBase method)
+        => method is MethodInfo mi && mi.IsGenericMethod;
 
     private static bool IsAtLeastAsGoodAs(
         ImplicitConversionKind[] a,
@@ -1042,6 +1144,59 @@ internal static class OverloadResolution
         }
 
         return true;
+    }
+
+    private static string FormatTypeName(Type type)
+    {
+        if (type is null)
+        {
+            return "<null>";
+        }
+
+        if (type.IsByRef)
+        {
+            return "ref " + FormatTypeName(type.GetElementType());
+        }
+
+        if (type.IsArray)
+        {
+            return FormatTypeName(type.GetElementType()) + "[]";
+        }
+
+        if (type.IsGenericParameter)
+        {
+            return type.Name;
+        }
+
+        if (type.IsGenericType)
+        {
+            var def = type.GetGenericTypeDefinition();
+            var defName = def.Name;
+            var tickIndex = defName.IndexOf('`');
+            if (tickIndex >= 0)
+            {
+                defName = defName.Substring(0, tickIndex);
+            }
+
+            var args = type.GetGenericArguments();
+            var sb = new System.Text.StringBuilder();
+            sb.Append(defName);
+            sb.Append('[');
+            for (var i = 0; i < args.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(", ");
+                }
+
+                sb.Append(FormatTypeName(args[i]));
+            }
+
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        return type.Name;
     }
 
     private static bool IsNumericWidening(Type source, Type target)

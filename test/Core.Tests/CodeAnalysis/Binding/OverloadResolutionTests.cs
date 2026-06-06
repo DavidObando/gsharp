@@ -363,6 +363,153 @@ public class OverloadResolutionTests
         Assert.False(OverloadResolution.IsFormattableStringTarget(null));
     }
 
+    [Fact]
+    public void Resolve_PrefersNonGenericOverGeneric_FromStringStringArgs()
+    {
+        // Issue #505: mirrors xUnit's Assert.Equal(string, string) (non-generic)
+        // vs Assert.Equal<T>(T, T) (generic). Both apply to (string, string) with
+        // identity conversions, but per C# §7.5.3.2 the non-generic overload is
+        // preferred. Without this tie-break, users had to write `Equal[string]`.
+        var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
+        var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { generic, nonGeneric },
+            new[] { typeof(string), typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(EqualLike.Equal_StringString), result.Best.Name);
+        Assert.False(result.Best.IsGenericMethod);
+    }
+
+    [Fact]
+    public void Resolve_PrefersNonGenericOverGeneric_AcrossFullEqualOverloadSet()
+    {
+        // Issue #505: full reproduction with the family of xUnit-style Equal
+        // overloads — non-generic Equal(string, string), generic Equal<T>(T, T),
+        // generic Equal<T>(T, T, IEqualityComparer<T>), and string/comparison
+        // overloads that take extra optional trailing booleans. (string, string)
+        // resolves uniquely to the non-generic Equal(string, string).
+        var candidates = typeof(EqualLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == "Equal" || m.Name.StartsWith("Equal_", StringComparison.Ordinal))
+            .ToList();
+
+        // Sanity: the fixture should include several overloads otherwise the
+        // test is not actually exercising the disambiguation pass.
+        Assert.True(candidates.Count >= 4, "expected a multi-overload fixture");
+
+        // Pass them in via the synthesized `Equal` name on a real CLR Equal
+        // probe class so this exercises the same EvaluateCandidate path.
+        var nameMatches = candidates.Where(m => m.Name == "Equal").ToList();
+        var result = OverloadResolution.Resolve(nameMatches, new[] { typeof(string), typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethod);
+        var parameters = result.Best.GetParameters();
+        Assert.Equal(2, parameters.Length);
+        Assert.Equal(typeof(string), parameters[0].ParameterType);
+        Assert.Equal(typeof(string), parameters[1].ParameterType);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitTypeArgumentStillBindsGeneric_FromStringStringArgs()
+    {
+        // Issue #505: `Equal[string]("a", "a")` continues to work — the
+        // explicit type-argument path picks the generic Equal<T>(T, T) and
+        // closes it with T=string. Verifies the explicit-arg path isn't
+        // broken by the new non-generic-preference tie-breaker.
+        var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
+        var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(
+            new[] { generic, nonGeneric },
+            new[] { typeof(string), typeof(string) },
+            explicitTypeArgs: new[] { typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.True(result.Best.IsGenericMethod);
+        Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_InferableGenericEqual_FromTwoIntArgs_PicksGeneric_NoAmbiguity()
+    {
+        // Issue #505: with int arguments and the same family of Equal overloads,
+        // only the generic Equal<T>(T, T) (closed with T=int) applies via
+        // identity conversion. The string-typed overloads are not applicable
+        // and the numeric-widening to other overloads would lose on conversion
+        // ranking, so the resolver returns a unique best without ambiguity.
+        var candidates = typeof(EqualLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == "Equal")
+            .ToList();
+        var result = OverloadResolution.Resolve(candidates, new[] { typeof(int), typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.True(result.Best.IsGenericMethod);
+        Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_InferableGenericNotEqual_FromTwoStringArgs_PicksNonGeneric()
+    {
+        // Issue #505 companion: same reasoning for NotEqual. Non-generic
+        // NotEqual(string, string) wins over generic NotEqual<T>(T, T).
+        var candidates = typeof(EqualLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == "NotEqual")
+            .ToList();
+        var result = OverloadResolution.Resolve(candidates, new[] { typeof(string), typeof(string) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.Best.IsGenericMethod);
+        var parameters = result.Best.GetParameters();
+        Assert.Equal(typeof(string), parameters[0].ParameterType);
+        Assert.Equal(typeof(string), parameters[1].ParameterType);
+    }
+
+    [Fact]
+    public void Resolve_TrulyAmbiguousOverloads_AreReported_WithCandidateList()
+    {
+        // Issue #505: when the surviving pool still ties after every C# tie-
+        // breaker (e.g. two non-generic overloads taking unrelated reference
+        // types, both reachable from the argument by reference conversion),
+        // the resolver returns Ambiguous with the competing candidates so the
+        // caller can format them into the GS0160 diagnostic.
+        var first = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
+        var second = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
+        var result = OverloadResolution.Resolve(new[] { first, second }, new[] { typeof(EqualLike.BothAB) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
+        Assert.Equal(2, result.Ambiguous.Length);
+        var signatures = result.Ambiguous.Select(OverloadResolution.FormatMethodSignature).ToArray();
+        Assert.Contains(signatures, s => s.Contains("IA"));
+        Assert.Contains(signatures, s => s.Contains("IB"));
+    }
+
+    [Fact]
+    public void FormatMethodSignature_FormatsGenericMethod_WithBracketedTypeArgs()
+    {
+        // Issue #505: the diagnostic helper must surface a readable signature
+        // including the closed generic type arguments.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
+        var closed = open.MakeGenericMethod(typeof(string));
+        var formatted = OverloadResolution.FormatMethodSignature(closed);
+        Assert.Equal("G_Identity[String](String)", formatted);
+    }
+
+    [Fact]
+    public void FormatMethodSignature_FormatsNonGenericMethod_PlainParens()
+    {
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
+        var formatted = OverloadResolution.FormatMethodSignature(method);
+        Assert.Equal("F_Int(Int32)", formatted);
+    }
+
+    [Fact]
+    public void FormatMethodSignature_FormatsGenericTypeArguments_InParameters()
+    {
+        // Generic parameter types like IEnumerable<T> should be rendered with
+        // bracketed arguments rather than mangled (`IEnumerable`1`) names.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var closed = method.MakeGenericMethod(typeof(int));
+        var formatted = OverloadResolution.FormatMethodSignature(closed);
+        Assert.Equal("G_Enumerable[Int32](IEnumerable[Int32])", formatted);
+    }
+
     public static class Fixture
     {
         public static void F_Int(int x) { _ = x; }
@@ -414,5 +561,61 @@ public class OverloadResolutionTests
         public static void F_FormattableString(System.FormattableString fs) { _ = fs; }
 
         public static void F_IFormattable(System.IFormattable f) { _ = f; }
+    }
+
+    /// <summary>
+    /// Issue #505: fixture that mirrors the xUnit
+    /// <c>Assert.Equal</c>/<c>Assert.NotEqual</c> overload set responsible for
+    /// the original ambiguous-overload diagnostic. The shape is deliberately
+    /// representative: a generic two-parameter form, a generic three-parameter
+    /// form with a comparer, a non-generic <c>(string, string)</c> form, and a
+    /// non-generic <c>(string, string, ...)</c> form with trailing optionals.
+    /// </summary>
+    public static class EqualLike
+    {
+        public static void Equal<T>(T expected, T actual) { _ = expected; _ = actual; }
+
+        public static void Equal<T>(T expected, T actual, System.Collections.Generic.IEqualityComparer<T> comparer) { _ = expected; _ = actual; _ = comparer; }
+
+        public static void Equal(string expected, string actual) { _ = expected; _ = actual; }
+
+        public static void Equal(string expected, string actual, bool ignoreCase = false, bool ignoreLineEndingDifferences = false, bool ignoreWhiteSpaceDifferences = false, bool ignoreAllWhiteSpace = false)
+        {
+            _ = expected;
+            _ = actual;
+            _ = ignoreCase;
+            _ = ignoreLineEndingDifferences;
+            _ = ignoreWhiteSpaceDifferences;
+            _ = ignoreAllWhiteSpace;
+        }
+
+        public static void NotEqual<T>(T expected, T actual) { _ = expected; _ = actual; }
+
+        public static void NotEqual(string expected, string actual) { _ = expected; _ = actual; }
+
+        // Companion overloads referenced by Resolve_PrefersNonGenericOverGeneric_FromStringStringArgs
+        // when it needs the two specific MethodInfo handles by name.
+        public static void Equal_TT<T>(T expected, T actual) => Equal(expected, actual);
+
+        public static void Equal_StringString(string expected, string actual) => Equal(expected, actual);
+
+        // Truly-ambiguous case: two non-generic overloads taking unrelated
+        // interfaces. A receiver implementing both leaves the resolver unable
+        // to pick a single best candidate.
+        public interface IA
+        {
+        }
+
+        public interface IB
+        {
+        }
+
+        public sealed class BothAB : IA, IB
+        {
+        }
+
+        public static void Take_IA(IA a) { _ = a; }
+
+        public static void Take_IB(IB b) { _ = b; }
     }
 }
