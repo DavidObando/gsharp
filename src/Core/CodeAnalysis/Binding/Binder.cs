@@ -1657,6 +1657,7 @@ public sealed class Binder
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
+                    methodSymbol.IsAsync = methodSyntax.IsAsync || IsAsyncIteratorReturnType(returnType);
                     AttachDocumentation(methodSymbol, methodSyntax);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
@@ -2168,6 +2169,7 @@ public sealed class Binder
                     methodSymbol.StaticOwnerType = structSymbol;
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
+                    methodSymbol.IsAsync = methodSyntax.IsAsync || IsAsyncIteratorReturnType(returnType);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
@@ -2746,6 +2748,7 @@ public sealed class Binder
                 Accessibility.Public,
                 receiverType: null);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
+            methodSymbol.IsAsync = methodSyntax.IsAsync || IsAsyncIteratorReturnType(returnType);
             AttachDocumentation(methodSymbol, methodSyntax);
 
             // ADR-0063 §11: detect duplicate-signature overloads on the interface.
@@ -12604,10 +12607,22 @@ public sealed class Binder
             if (substitution != null)
             {
                 var substitutedReturn = SubstituteType(method.Type, substitution);
+                if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
+                {
+                    substitutedReturn = WrapAsTask(substitutedReturn);
+                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
+                }
+
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
                     return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
                 }
+            }
+
+            if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
+            {
+                var asyncReturn = WrapAsTask(method.Type);
+                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn);
             }
 
             return new BoundCallExpression(null, method, convertedArgs.ToImmutable());
@@ -13832,10 +13847,25 @@ public sealed class Binder
         if (substitution != null)
         {
             var substitutedReturn = SubstituteType(method.Type, substitution);
+            if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
+            {
+                substitutedReturn = WrapAsTask(substitutedReturn);
+                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
+            }
+
             if (!ReferenceEquals(substitutedReturn, method.Type))
             {
                 return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn);
             }
+        }
+
+        // Issue #502: an async instance method's call-site return type is
+        // Task / Task[T], not the underlying T. Wrap here so the call
+        // expression's static type matches the kickoff method's return type.
+        if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
+        {
+            var asyncReturn = WrapAsTask(method.Type);
+            return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), asyncReturn);
         }
 
         return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable());

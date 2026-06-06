@@ -881,9 +881,15 @@ public class Parser
                 Current.Kind == SyntaxKind.PrivateKeyword)
             {
                 // Accessibility modifier may be followed by an optional
-                // `open`/`override` and then `func`, `prop`, or `event`.
+                // `open`/`override` and an optional `async` (only meaningful
+                // before `func`), then `func`, `prop`, or `event`.
                 var ahead = 1;
                 while (Peek(ahead).Kind == SyntaxKind.OpenKeyword || Peek(ahead).Kind == SyntaxKind.OverrideKeyword)
+                {
+                    ahead++;
+                }
+
+                if (Peek(ahead).Kind == SyntaxKind.AsyncKeyword && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
                 {
                     ahead++;
                 }
@@ -919,6 +925,17 @@ public class Parser
                 }
             }
 
+            // Issue #502 / ADR-0023: an optional `async` modifier may precede
+            // `func` on a class instance method, mirroring the top-level path
+            // in ParseMember. The modifier is consumed only when immediately
+            // followed by `func`; otherwise it is left for ParseFieldDeclaration
+            // (or another fallback) to surface a diagnostic.
+            SyntaxToken memberAsyncModifier = null;
+            if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                memberAsyncModifier = NextToken();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
             {
                 // Issue #306: standalone user-defined constructor
@@ -927,6 +944,11 @@ public class Parser
                 {
                     var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.OpenParenthesisToken);
+                }
+
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
                 if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
@@ -941,12 +963,22 @@ public class Parser
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 // ADR-0051: property declaration inside struct/class body.
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 var property = ParsePropertyDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
                 property.WithAnnotations(memberAnnotations);
                 properties.Add(property);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
             {
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 var eventDecl = ParseEventDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
                 eventDecl.WithAnnotations(memberAnnotations);
                 events.Add(eventDecl);
@@ -958,6 +990,11 @@ public class Parser
                 {
                     var loc = (memberAccessibility ?? memberOpenModifier ?? memberOverrideModifier).Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.IdentifierToken, SyntaxKind.OpenBraceToken);
+                }
+
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
                 var sharedBlock = ParseSharedBlock();
@@ -977,7 +1014,7 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
                 }
 
-                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier);
+                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
                 method.WithAnnotations(memberAnnotations);
                 methods.Add(method);
             }
@@ -987,6 +1024,12 @@ public class Parser
                 {
                     var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
+                }
+
+                if (memberAsyncModifier != null)
+                {
+                    // `async` not followed by `func` — surface as an unexpected token.
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
                 fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
@@ -1095,6 +1138,11 @@ public class Parser
                     ahead++;
                 }
 
+                if (Peek(ahead).Kind == SyntaxKind.AsyncKeyword && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
+                {
+                    ahead++;
+                }
+
                 if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
@@ -1103,20 +1151,43 @@ public class Parser
                 }
             }
 
+            // Issue #502: `async` modifier is allowed on static methods inside
+            // a `shared` block, mirroring the instance-method path above.
+            SyntaxToken sharedMemberAsyncModifier = null;
+            if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                sharedMemberAsyncModifier = NextToken();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
+                if (sharedMemberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 properties.Add(ParsePropertyDeclaration(memberAccessibility, null, null));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
             {
+                if (sharedMemberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 events.Add(ParseEventDeclaration(memberAccessibility, null, null));
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
-                methods.Add((FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, null, null));
+                methods.Add((FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, openModifier: null, overrideModifier: null, sharedMemberAsyncModifier));
             }
             else
             {
+                if (sharedMemberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
                 fields.Add(ParseFieldDeclaration());
             }
 
