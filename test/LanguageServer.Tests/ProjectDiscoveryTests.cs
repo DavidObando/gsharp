@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.IO;
 using System.Linq;
 using Xunit;
@@ -113,6 +114,167 @@ public class ProjectDiscoveryTests
         var project = ProjectDiscovery.DiscoverProject("/nonexistent/project.gsproj");
 
         Assert.Null(project);
+    }
+
+    [Fact]
+    public void DiscoverProject_ReturnsEmptyReferencesWhenNoRspExists()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var projPath = Path.Combine(tempDir, "Sample.gsproj");
+            File.WriteAllText(projPath, "<Project Sdk=\"Gsharp.NET.Sdk\"></Project>");
+
+            var project = ProjectDiscovery.DiscoverProject(projPath);
+
+            Assert.NotNull(project);
+            Assert.Empty(project.References);
+            Assert.Null(project.ReferenceSourcePath);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void DiscoverProject_ReadsReferencesFromResponseFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            var rspDir = Path.Combine(tempDir, "obj", "Debug", "net10.0");
+            Directory.CreateDirectory(rspDir);
+            var projPath = Path.Combine(tempDir, "Sample.gsproj");
+            File.WriteAllText(projPath, "<Project Sdk=\"Gsharp.NET.Sdk\"></Project>");
+
+            var rspPath = Path.Combine(rspDir, "Sample.rsp");
+            var fakeRefA = Path.Combine(tempDir, "PackageA.dll");
+            var fakeRefB = Path.Combine(tempDir, "PackageB.dll");
+            File.WriteAllLines(rspPath, new[]
+            {
+                "/out:obj/Debug/net10.0/Sample.dll",
+                "/target:exe",
+                "/r:" + fakeRefA,
+                "/reference:" + fakeRefB,
+                "/nowarn:NU5131",
+            });
+
+            var project = ProjectDiscovery.DiscoverProject(projPath);
+
+            Assert.NotNull(project);
+            Assert.Equal(Path.GetFullPath(rspPath), project.ReferenceSourcePath);
+            Assert.Equal(2, project.References.Count);
+            Assert.Contains(fakeRefA, project.References);
+            Assert.Contains(fakeRefB, project.References);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void DiscoverProject_UsesAssemblyNameWhenSet()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            var rspDir = Path.Combine(tempDir, "obj", "Debug", "net10.0");
+            Directory.CreateDirectory(rspDir);
+            var projPath = Path.Combine(tempDir, "Sample.gsproj");
+            File.WriteAllText(projPath,
+                "<Project Sdk=\"Gsharp.NET.Sdk\"><PropertyGroup><AssemblyName>Custom.Asm</AssemblyName></PropertyGroup></Project>");
+
+            // .rsp is named after AssemblyName, not the project file
+            var rspPath = Path.Combine(rspDir, "Custom.Asm.rsp");
+            var fakeRef = Path.Combine(tempDir, "PackageA.dll");
+            File.WriteAllLines(rspPath, new[] { "/r:" + fakeRef });
+
+            // A second rsp matching the project name should NOT be picked
+            File.WriteAllLines(Path.Combine(rspDir, "Sample.rsp"), new[] { "/r:should-not-be-picked.dll" });
+
+            var project = ProjectDiscovery.DiscoverProject(projPath);
+
+            Assert.NotNull(project);
+            Assert.Equal(Path.GetFullPath(rspPath), project.ReferenceSourcePath);
+            Assert.Single(project.References);
+            Assert.Equal(fakeRef, project.References[0]);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void DiscoverProject_PrefersMostRecentResponseFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var projPath = Path.Combine(tempDir, "Sample.gsproj");
+            File.WriteAllText(projPath, "<Project Sdk=\"Gsharp.NET.Sdk\"></Project>");
+
+            var debugDir = Path.Combine(tempDir, "obj", "Debug", "net10.0");
+            var releaseDir = Path.Combine(tempDir, "obj", "Release", "net10.0");
+            Directory.CreateDirectory(debugDir);
+            Directory.CreateDirectory(releaseDir);
+
+            var debugRsp = Path.Combine(debugDir, "Sample.rsp");
+            var releaseRsp = Path.Combine(releaseDir, "Sample.rsp");
+            File.WriteAllLines(debugRsp, new[] { "/r:debug.dll" });
+            File.WriteAllLines(releaseRsp, new[] { "/r:release.dll" });
+
+            // Release was written later
+            File.SetLastWriteTimeUtc(debugRsp, DateTime.UtcNow.AddMinutes(-5));
+            File.SetLastWriteTimeUtc(releaseRsp, DateTime.UtcNow);
+
+            var project = ProjectDiscovery.DiscoverProject(projPath);
+
+            Assert.NotNull(project);
+            Assert.Equal(Path.GetFullPath(releaseRsp), project.ReferenceSourcePath);
+            Assert.Single(project.References);
+            Assert.Equal("release.dll", project.References[0]);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ParseReferencesFromResponseFile_HandlesQuotedAndDashStyleSwitches()
+    {
+        var tempPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllLines(tempPath, new[]
+            {
+                "/out:foo.dll",
+                "/r:\"/path with spaces/A.dll\"",
+                "-reference:/path/B.dll",
+                "/nowarn:NU5131",
+                string.Empty,
+                "not-a-switch",
+            });
+
+            var refs = ProjectDiscovery.ParseReferencesFromResponseFile(tempPath);
+
+            Assert.Equal(2, refs.Count);
+            Assert.Equal("/path with spaces/A.dll", refs[0]);
+            Assert.Equal("/path/B.dll", refs[1]);
+        }
+        finally
+        {
+            File.Delete(tempPath);
+        }
     }
 
     private static string FindSamplesDir()

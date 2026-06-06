@@ -34,4 +34,28 @@ public class ReferencesHandlerTests
         Assert.Equal(2, tokens.Count);
         Assert.All(tokens, t => Assert.NotEqual(7, t.Position));
     }
+
+    [Fact]
+    public void ComputeReferences_RepeatedCallsReturnIdenticalResults()
+    {
+        // Hot-path regression: SemanticModel now memoizes the Symbol → tokens index
+        // so CodeLens (which calls FindReferences once per member) doesn't re-walk
+        // every tree on every call. The cache must return identical results across
+        // calls; if invalidation logic ever desyncs the cache, this test catches it.
+        const string source = "func F(x int32) int32 {\nlet y = x\nreturn x + y + x\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var pos = LanguageServerTestHelpers.PositionOf(source, "x");
+
+        var first = ReferencesComputer.ComputeReferenceTokens(content, pos, includeDeclaration: true);
+        var second = ReferencesComputer.ComputeReferenceTokens(content, pos, includeDeclaration: true);
+        var third = ReferencesComputer.ComputeReferenceTokens(content, pos, includeDeclaration: true);
+
+        Assert.Equal(first.Count, second.Count);
+        Assert.Equal(first.Count, third.Count);
+        for (var i = 0; i < first.Count; i++)
+        {
+            Assert.Equal(first[i].Position, second[i].Position);
+            Assert.Equal(first[i].Position, third[i].Position);
+        }
+    }
 }

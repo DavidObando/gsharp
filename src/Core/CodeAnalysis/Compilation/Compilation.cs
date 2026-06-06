@@ -25,6 +25,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation;
 public class Compilation
 {
     private BoundGlobalScope globalScope;
+    private BoundProgram boundProgram;
     private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
     private DebugInformationOptions debugInformation = new();
 
@@ -138,6 +139,37 @@ public class Compilation
             }
 
             return globalScope;
+        }
+    }
+
+    /// <summary>
+    /// Gets the fully-bound program — all function/method bodies and top-level
+    /// statements, plus any diagnostics surfaced during binding.
+    /// </summary>
+    /// <remarks>
+    /// Like <see cref="GlobalScope"/> this is lazily computed and cached on
+    /// the compilation. <see cref="BoundProgram"/> is a pure function of
+    /// <see cref="GlobalScope"/> and <see cref="References"/>; because both
+    /// are immutable on a given <see cref="Compilation"/> instance, the cache
+    /// invalidates naturally whenever a new <see cref="Compilation"/> is
+    /// constructed (e.g. when the language server replaces its cached
+    /// compilation after a file edit). Hot paths such as the language server's
+    /// per-keystroke diagnostics, hover, definition, and semantic-token
+    /// requests should reuse this cached instance rather than re-invoking
+    /// <see cref="Binder.BindProgram"/>, which can take hundreds of
+    /// milliseconds on projects with large reference graphs.
+    /// </remarks>
+    public BoundProgram BoundProgram
+    {
+        get
+        {
+            if (boundProgram == null)
+            {
+                var bp = Binder.BindProgram(GlobalScope, References);
+                Interlocked.CompareExchange(ref this.boundProgram, bp, null);
+            }
+
+            return boundProgram;
         }
     }
 

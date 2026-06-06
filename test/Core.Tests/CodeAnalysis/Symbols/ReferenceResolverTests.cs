@@ -188,6 +188,26 @@ public class ReferenceResolverTests
         Assert.Contains(typeof(ReferenceResolverTests).ToString(), ex.Message);
     }
 
+    [Fact]
+    public void TryResolveType_CachesHitsAndMissesForLifetimeOfResolver()
+    {
+        // Hot-path optimization: language-server binding issues thousands of
+        // TryResolveType calls for the same name. Each uncached call iterates
+        // every assembly in the reference set (~216 entries on a typical .NET
+        // project) and is observably slow (~0.1ms per miss). The resolver
+        // memoizes hits AND misses so the second lookup is O(1).
+        var resolver = BuildMetadataLoadContextResolver();
+
+        Assert.True(resolver.TryResolveType("System.String", out var first));
+        Assert.True(resolver.TryResolveType("System.String", out var second));
+        Assert.Same(first, second);
+
+        Assert.False(resolver.TryResolveType("Foo.Bar.NotARealType", out var missFirst));
+        Assert.False(resolver.TryResolveType("Foo.Bar.NotARealType", out var missSecond));
+        Assert.Null(missFirst);
+        Assert.Null(missSecond);
+    }
+
     private static ReferenceResolver BuildMetadataLoadContextResolver()
     {
         // Supplying explicit assembly paths forces ReferenceResolver to load

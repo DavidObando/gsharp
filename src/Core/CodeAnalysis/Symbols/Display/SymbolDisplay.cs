@@ -745,9 +745,31 @@ public static class SymbolDisplay
     private static bool IsByRefLikeType(Type type)
     {
         // System.Runtime.CompilerServices.IsByRefLikeAttribute is present on ref structs.
-        return type.IsValueType
-            && type.GetCustomAttributes(inherit: false)
-                .Any(a => a.GetType().FullName == "System.Runtime.CompilerServices.IsByRefLikeAttribute");
+        // Use GetCustomAttributesData (metadata-only) rather than GetCustomAttributes
+        // (which instantiates attribute objects). The latter throws under a
+        // MetadataLoadContext — the LSP loads references that way so it sees
+        // target-framework-bound assemblies (see ReferenceResolver.WithReferences).
+        if (!type.IsValueType)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var attr in type.GetCustomAttributesData())
+            {
+                if (attr.AttributeType?.FullName == "System.Runtime.CompilerServices.IsByRefLikeAttribute")
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Some loaders/assemblies can throw when enumerating metadata; degrade gracefully.
+        }
+
+        return false;
     }
 
     private static bool IsVoid(TypeSymbol type)

@@ -5,6 +5,7 @@
 #pragma warning disable SA1201 // a struct should not follow a class — ReferenceInfo is paired with ReferenceResolver by design
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -54,6 +55,27 @@ public sealed class ReferenceResolver
     private readonly MetadataLoadContext metadataContext;
     private readonly ImmutableArray<string> missingTransitiveReferences;
 
+    // Memoizes TryResolveType results for the lifetime of this resolver.
+    //
+    // Each lookup without a cache iterates every assembly in `assemblies` (216
+    // entries on the Oahu project) and calls Assembly.GetType. For a hit in
+    // CoreLib that is ~15µs per call; for a miss (or a hit in a late-ordered
+    // assembly like xunit.dll) it is ~100µs per call. Binding a real LSP
+    // compilation issues thousands of TryResolveType calls — both during
+    // GlobalScope (every `import` and every member access on an imported type)
+    // and BoundProgram (every name lookup during body binding). Without this
+    // cache the cumulative cost dwarfs the actual semantic work; with it,
+    // every unique name pays the probe cost at most once per resolver lifetime.
+    //
+    // The cache is invalidated naturally because a new ReferenceResolver is
+    // built whenever the project's .rsp changes (see ProjectState.GetCompilation).
+    // A sentinel singleton stands in for "we probed and found nothing" so that
+    // negative lookups are O(1) on the second call (the bulk of the binder's
+    // probes are speculative "is this name a type?" queries that come back
+    // empty).
+    private static readonly Type MissTypeSentinel = typeof(NotFoundSentinel);
+    private readonly ConcurrentDictionary<string, Type> resolveCache = new(StringComparer.Ordinal);
+
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
     {
@@ -64,6 +86,10 @@ public sealed class ReferenceResolver
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
+    }
+
+    private sealed class NotFoundSentinel
+    {
     }
 
     /// <summary>
@@ -240,6 +266,17 @@ public sealed class ReferenceResolver
             return false;
         }
 
+        if (resolveCache.TryGetValue(fullName, out var cached))
+        {
+            if (ReferenceEquals(cached, MissTypeSentinel))
+            {
+                return false;
+            }
+
+            type = cached;
+            return true;
+        }
+
         foreach (var asm in assemblies)
         {
             Type candidate;
@@ -258,11 +295,13 @@ public sealed class ReferenceResolver
 
             if (candidate != null)
             {
+                resolveCache.TryAdd(fullName, candidate);
                 type = candidate;
                 return true;
             }
         }
 
+        resolveCache.TryAdd(fullName, MissTypeSentinel);
         return false;
     }
 
