@@ -2386,6 +2386,18 @@ public sealed class Evaluator
         // enums -> zeroed) so a bare `var x T` declaration matches the rest of
         // the interpreter; fall back to CLR value-type instantiation for
         // imported value types (e.g. CancellationToken) and null for references.
+
+        // Issue #504: a NullableTypeSymbol's default is `nil`, not the
+        // underlying type's zero. The binder lowers `nil → Nullable<T>`
+        // (value-type) to a BoundDefaultExpression so the emitter can
+        // materialise `default(Nullable<T>)` via ldloca/initobj/ldloc; the
+        // interpreter must mirror that by producing the absent-value sentinel
+        // (null) so `?:`, `!!`, and equality checks see a missing value.
+        if (node.Type is Symbols.NullableTypeSymbol)
+        {
+            return null;
+        }
+
         var known = DefaultValue(node.Type);
         if (known != null)
         {

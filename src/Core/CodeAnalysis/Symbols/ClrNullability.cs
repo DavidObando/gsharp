@@ -29,6 +29,40 @@ public static class ClrNullability
     private const string MemberNotNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute";
 
     /// <summary>
+    /// Returns the GSharp <see cref="TypeSymbol"/> for a property's
+    /// declared type, with reference-type nullability applied (both
+    /// top-level and inner generic argument positions — issue #209).
+    /// Value-type <c>Nullable&lt;T&gt;</c> is handled inside
+    /// <see cref="TypeSymbol.FromClrType(Type)"/>.
+    /// </summary>
+    /// <param name="property">The property to inspect.</param>
+    /// <returns>The mapped type symbol.</returns>
+    public static TypeSymbol GetPropertyTypeSymbol(PropertyInfo property)
+    {
+        var baseSymbol = TypeSymbol.FromClrType(property.PropertyType);
+
+        // Properties have no dedicated `ReturnParameter` to attach
+        // `[NullableAttribute]` to in C# metadata; the attribute lands on
+        // the property itself. Walk the enclosing member chain via the
+        // declaring type to pick up any `[NullableContextAttribute]`
+        // fallback (matches the C# emit shape used by csc for
+        // e.g. `DirectoryInfo.Parent`).
+        return ApplyReferenceNullabilityFull(baseSymbol, property.PropertyType, property, property.DeclaringType);
+    }
+
+    /// <summary>
+    /// Returns the GSharp <see cref="TypeSymbol"/> for a field's
+    /// declared type, with reference-type nullability applied.
+    /// </summary>
+    /// <param name="field">The field to inspect.</param>
+    /// <returns>The mapped type symbol.</returns>
+    public static TypeSymbol GetFieldTypeSymbol(FieldInfo field)
+    {
+        var baseSymbol = TypeSymbol.FromClrType(field.FieldType);
+        return ApplyReferenceNullabilityFull(baseSymbol, field.FieldType, field, field.DeclaringType);
+    }
+
+    /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a method's return
     /// type, wrapping it in <see cref="NullableTypeSymbol"/> when the
     /// underlying CLR type is a reference type annotated as nullable, and

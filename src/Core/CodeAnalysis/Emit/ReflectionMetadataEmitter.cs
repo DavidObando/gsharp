@@ -10705,6 +10705,20 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
+    // Issue #504: a NullableTypeSymbol whose underlying CLR type is a value
+    // type maps to the CLR struct `System.Nullable<T>` — a distinct CLR
+    // value type with its own layout and ctor. NullableTypeSymbol over a
+    // reference type, by contrast, shares the CLR representation of T (the
+    // wrapper is a binder-level annotation; ldnull is a valid value for it).
+    // Emit-time conversion logic for value-type Nullable<T> needs a
+    // `newobj Nullable<T>::.ctor(T)` for the lift, an `initobj` for the
+    // default value, and `box Nullable<T>` for object widening — none of
+    // which the reference-type path handles.
+    private static bool IsValueTypeNullable(NullableTypeSymbol nullable)
+    {
+        return nullable?.UnderlyingType?.ClrType is { IsValueType: true };
+    }
+
     private void EncodeClrType(SignatureTypeEncoder encoder, Type type)
     {
         // ADR-0060 §13 / migration: same as EncodeTypeSymbol — a CLR `T&` (Type.IsByRef)
@@ -12389,22 +12403,70 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            // Phase 3.C.2 / ADR-0001: `nil` flows into any nullable or
-            // reference-typed slot; the IL value is already ldnull.
-            if (from == TypeSymbol.Null && (to is NullableTypeSymbol || (to is StructSymbol ts && ts.IsClass)))
+            // Phase 3.C.2 / ADR-0001: `nil` flows into any reference-typed
+            // slot; the IL value is already ldnull. A reference-typed
+            // `Nullable<T>` shares the CLR representation of the underlying
+            // reference type, so ldnull is a valid value for it too.
+            // Value-type `Nullable<T>` is the CLR struct `System.Nullable<T>`;
+            // the binder lowers `nil → Nullable<value-type>` to a
+            // BoundDefaultExpression so emission can materialise the proper
+            // `ldloca; initobj; ldloc` shape from a pre-allocated slot. The
+            // explicit IsValueTypeNullable guard here is defensive — if any
+            // future binder path forgets to lower, fail loudly instead of
+            // silently emitting an `ldnull` against a value-type slot
+            // (issue #504).
+            if (from == TypeSymbol.Null
+                && ((to is NullableTypeSymbol toNullForNil && !IsValueTypeNullable(toNullForNil))
+                    || (to is StructSymbol ts && ts.IsClass)))
             {
+                return;
+            }
+
+            if (from == TypeSymbol.Null && to is NullableTypeSymbol toValueNullForNil && IsValueTypeNullable(toValueNullForNil))
+            {
+                throw new InvalidOperationException(
+                    $"Conversion 'nil' -> '{to.Name}' (a value-type Nullable) must be lowered to a "
+                    + "BoundDefaultExpression by the binder so emit can allocate a temp slot for "
+                    + "ldloca/initobj/ldloc. Reaching EmitConversion indicates a missing lowering path.");
+            }
+
+            // Issue #504: value-type `T → Nullable<T>` is a true CLR widening;
+            // emit `newobj Nullable<T>::.ctor(T)`. This must run before the
+            // reference-compatibility shortcut below, which would otherwise
+            // misclassify the lift as a no-op (the underlying primitive `T`
+            // is trivially "compatible with" itself).
+            if (to is NullableTypeSymbol toValueNullableLift
+                && IsValueTypeNullable(toValueNullableLift)
+                && from == toValueNullableLift.UnderlyingType)
+            {
+                var innerClr = toValueNullableLift.UnderlyingType.ClrType
+                    ?? throw new InvalidOperationException(
+                        $"Nullable<{toValueNullableLift.UnderlyingType.Name}> lift has no CLR underlying type.");
+                var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClr);
+                var ctor = nullableClr.GetConstructor(new[] { innerClr })
+                    ?? throw new InvalidOperationException(
+                        $"Nullable<{innerClr.FullName}> has no single-arg constructor.");
+                this.il.OpCode(ILOpCode.Newobj);
+                this.il.Token(this.outer.GetCtorReference(ctor));
                 return;
             }
 
             // Phase 3 exit: widening to a nullable reference type (`T` -> `T?`)
             // is metadata-only because reference nullability shares the CLR
             // representation. The same applies to narrowing back via `!!`.
-            if (to is NullableTypeSymbol toNullable && IsReferenceCompatible(from, toNullable.UnderlyingType))
+            // Restrict to reference-type Nullable<T> — value-type Nullable<T>
+            // is a distinct CLR struct and was handled by the dedicated branch
+            // above (issue #504).
+            if (to is NullableTypeSymbol toNullable
+                && !IsValueTypeNullable(toNullable)
+                && IsReferenceCompatible(from, toNullable.UnderlyingType))
             {
                 return;
             }
 
-            if (from is NullableTypeSymbol fromNullable && IsReferenceCompatible(fromNullable.UnderlyingType, to))
+            if (from is NullableTypeSymbol fromNullable
+                && !IsValueTypeNullable(fromNullable)
+                && IsReferenceCompatible(fromNullable.UnderlyingType, to))
             {
                 return;
             }
