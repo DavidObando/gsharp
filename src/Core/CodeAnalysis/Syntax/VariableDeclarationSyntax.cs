@@ -93,6 +93,16 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     public bool IsScoped => ScopedModifier != null;
 
     /// <summary>
+    /// Gets or sets the optional <c>ref</c> contextual modifier token (ADR-0060 follow-up / issue #491).
+    /// When non-null, this declaration is a ref-aliasing local: the slot stores a managed pointer to the
+    /// initializer's lvalue and reads/writes through the local indirect through the alias.
+    /// </summary>
+    public SyntaxToken RefKindModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this declaration carries the <c>ref</c> aliasing modifier (issue #491).</summary>
+    public bool HasRefKindModifier => RefKindModifier != null;
+
+    /// <summary>
     /// Gets the variable identifier.
     /// </summary>
     public SyntaxToken Identifier { get; }

@@ -243,7 +243,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundReturnStatement(null, expression);
+        return new BoundReturnStatement(null, expression, node.IsRef);
     }
 
     /// <summary>

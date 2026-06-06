@@ -251,6 +251,18 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public bool IsOverride => OverrideModifier != null;
 
     /// <summary>
+    /// Gets or sets the optional <c>ref</c> contextual modifier preceding the function's
+    /// return type clause (issue #490 / ADR-0060 follow-up), e.g.
+    /// <c>func max(...) ref int32 { ... }</c>. When non-null, the function returns a
+    /// managed pointer to its declared return type and callers receive a <c>T&amp;</c>.
+    /// Assigned by the parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken ReturnRefModifier { get; set; }
+
+    /// <summary>Gets a value indicating whether this function declares a <c>ref</c> return (issue #490).</summary>
+    public bool IsRefReturn => ReturnRefModifier != null;
+
+    /// <summary>
     /// Gets the func keyword.
     /// </summary>
     public SyntaxToken FunctionKeyword { get; }

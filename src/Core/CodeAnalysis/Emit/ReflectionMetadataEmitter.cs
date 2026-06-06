@@ -5072,7 +5072,7 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(
                 method.Parameters.Length,
-                r => EncodeReturnSymbol(r, method.Type),
+                r => EncodeReturnSymbol(r, method.Type, method.ReturnRefKind),
                 ps =>
                 {
                     foreach (var p in method.Parameters)
@@ -5201,7 +5201,7 @@ internal sealed class ReflectionMetadataEmitter
                 var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
                 foreach (var t in localTypes)
                 {
-                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                    EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
@@ -5496,7 +5496,7 @@ internal sealed class ReflectionMetadataEmitter
                 var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
                 foreach (var t in localTypes)
                 {
-                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                    EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
@@ -5696,7 +5696,7 @@ internal sealed class ReflectionMetadataEmitter
                 var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
                 foreach (var t in localTypes)
                 {
-                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                    EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
@@ -6599,7 +6599,7 @@ internal sealed class ReflectionMetadataEmitter
                 var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
                 foreach (var t in localTypes)
                 {
-                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                    EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
@@ -7128,7 +7128,7 @@ internal sealed class ReflectionMetadataEmitter
                 var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
                 foreach (var t in localTypes)
                 {
-                    EncodeTypeSymbol(encoder.AddVariable().Type(), t);
+                    EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
                 localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
@@ -7204,7 +7204,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
                     else
                     {
-                        EncodeReturnSymbol(r, function.Type);
+                        EncodeReturnSymbol(r, function.Type, function.ReturnRefKind);
                     }
                 },
                 ps =>
@@ -7788,7 +7788,19 @@ internal sealed class ReflectionMetadataEmitter
                 && !(node.Variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv)))
             {
                 this.locals[node.Variable] = this.localTypes.Count;
-                this.localTypes.Add(node.Variable.Type);
+
+                // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's IL slot
+                // is the managed pointer `T&`, not the pointee `T`. Recording the
+                // slot type as ByRefTypeSymbol routes encoding through the byref
+                // local-sig path (EncodeLocalVariableType).
+                if (node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
+                {
+                    this.localTypes.Add(ByRefTypeSymbol.Get(lvs.Type));
+                }
+                else
+                {
+                    this.localTypes.Add(node.Variable.Type);
+                }
             }
 
             base.VisitVariableDeclaration(node);
@@ -9109,7 +9121,19 @@ internal sealed class ReflectionMetadataEmitter
                         if (!locals.ContainsKey(decl.Variable))
                         {
                             locals[decl.Variable] = localTypes.Count;
-                            localTypes.Add(decl.Variable.Type);
+
+                            // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's IL
+                            // slot is a managed pointer `T&`, not the pointee `T`.
+                            // Recording the slot type as ByRefTypeSymbol routes encoding
+                            // through the byref local-sig path (EncodeLocalVariableType).
+                            if (decl.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
+                            {
+                                localTypes.Add(ByRefTypeSymbol.Get(lvs.Type));
+                            }
+                            else
+                            {
+                                localTypes.Add(decl.Variable.Type);
+                            }
                         }
 
                         break;
@@ -10360,6 +10384,24 @@ internal sealed class ReflectionMetadataEmitter
         return this.stringConcatArrayRef;
     }
 
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): encodes a single local-variable signature slot.
+    /// A <see cref="ByRefTypeSymbol"/> entry signals a ref-aliasing local (<c>let ref</c> /
+    /// <c>var ref</c>) whose slot must carry <c>ELEMENT_TYPE_BYREF</c> wrapping the pointee
+    /// type. Non-byref entries forward to <see cref="EncodeTypeSymbol"/> unchanged.
+    /// </summary>
+    private void EncodeLocalVariableType(LocalVariableTypeEncoder enc, TypeSymbol t)
+    {
+        if (t is ByRefTypeSymbol byRef)
+        {
+            EncodeTypeSymbol(enc.Type(isByRef: true), byRef.PointeeType);
+        }
+        else
+        {
+            EncodeTypeSymbol(enc.Type(), t);
+        }
+    }
+
     private void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
     {
         // ADR-0060 §13 / migration: a managed-pointer type (ByRefTypeSymbol → T&) cannot
@@ -10527,6 +10569,14 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)
+        => EncodeReturnSymbol(encoder, type, RefKind.None);
+
+    /// <summary>
+    /// Issue #490 (ADR-0060 follow-up): a function whose <see cref="FunctionSymbol.ReturnRefKind"/>
+    /// is <see cref="RefKind.Ref"/> returns a managed pointer (<c>T&amp;</c>) — encode it via
+    /// the <c>ReturnTypeEncoder.Type(isByRef: true, ...)</c> overload.
+    /// </summary>
+    private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type, RefKind returnRefKind)
     {
         if (type == TypeSymbol.Void)
         {
@@ -10534,7 +10584,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else
         {
-            this.EncodeTypeSymbol(encoder.Type(), type);
+            this.EncodeTypeSymbol(encoder.Type(isByRef: returnRefKind == RefKind.Ref), type);
         }
     }
 
@@ -11505,12 +11555,17 @@ internal sealed class ReflectionMetadataEmitter
             base.VisitClrPropertyAssignmentExpression(node);
         }
 
-        // ADR-0060: assignments to ref-kind parameters lower to `ldarg; value;
-        // stind`. To preserve the assignment-as-expression result semantics
-        // without a re-read, the emitter spills the value to a temp local.
+        // ADR-0060 / issue #491: assignments to ref-kind parameters or to
+        // ref-aliasing locals lower to `<addr>; value; dup; stloc tmp; stind`.
+        // To preserve the assignment-as-expression result semantics without
+        // a re-read, the emitter spills the value to a temp local.
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
         {
             if (node.Variable is ParameterSymbol ps && ps.RefKind != RefKind.None)
+            {
+                this.sink.Add(node);
+            }
+            else if (node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
             {
                 this.sink.Add(node);
             }
@@ -11726,7 +11781,18 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundReturnStatement ret:
                     if (ret.Expression is not null)
                     {
-                        this.EmitExpression(ret.Expression);
+                        // Issue #490 (ADR-0060 follow-up): a `return ref <lvalue>` arrives
+                        // as a BoundAddressOfExpression wrapping the lvalue. Emit the address
+                        // (ldloca / ldarga / ldflda / ldelema / dereferenced pointer) so the
+                        // returned `T&` slot holds the managed pointer the signature declares.
+                        if (ret.IsRef && ret.Expression is BoundAddressOfExpression addrOf)
+                        {
+                            this.EmitAddressOf(addrOf);
+                        }
+                        else
+                        {
+                            this.EmitExpression(ret.Expression);
+                        }
                     }
 
                     this.il.OpCode(ILOpCode.Ret);
@@ -11863,6 +11929,21 @@ internal sealed class ReflectionMetadataEmitter
                         this.il.OpCode(ILOpCode.Dup);
                         this.il.StoreLocal(assignTmp);
                         this.EmitStoreIndirect(assignParam.Type);
+                        this.il.LoadLocal(assignTmp);
+                    }
+                    else if (a.Variable is LocalVariableSymbol assignLocal
+                        && assignLocal.RefKind != RefKind.None
+                        && this.locals.TryGetValue(assignLocal, out var refLocalSlot))
+                    {
+                        // Issue #491 (ADR-0060 follow-up): assign-through-ref-alias-local lowers to
+                        // `ldloc slot; value; dup; stloc tmp; stind.*; ldloc tmp`.
+                        // The temp slot is pre-allocated by AssignmentValueSpillCollector.
+                        var assignTmp = this.receiverSpillSlots[a];
+                        this.il.LoadLocal(refLocalSlot);
+                        this.EmitExpression(a.Expression);
+                        this.il.OpCode(ILOpCode.Dup);
+                        this.il.StoreLocal(assignTmp);
+                        this.EmitStoreIndirect(assignLocal.Type);
                         this.il.LoadLocal(assignTmp);
                     }
                     else
@@ -13492,6 +13573,15 @@ internal sealed class ReflectionMetadataEmitter
             if (this.locals.TryGetValue(variable, out var slot))
             {
                 this.il.LoadLocal(slot);
+
+                // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's slot
+                // stores a managed pointer T&; a read of the local in the body
+                // must indirect through the pointer to load the pointee value.
+                if (variable is LocalVariableSymbol refLocal && refLocal.RefKind != RefKind.None)
+                {
+                    this.EmitLoadIndirect(refLocal.Type);
+                }
+
                 return;
             }
 
@@ -16014,7 +16104,18 @@ internal sealed class ReflectionMetadataEmitter
 
             if (this.locals.TryGetValue(variable, out var slot))
             {
-                this.il.LoadLocalAddress(slot);
+                // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's slot
+                // already stores a managed pointer T&; load the slot value, not
+                // its address (ldloca would yield T&* which is wrong).
+                if (variable is LocalVariableSymbol refLocal && refLocal.RefKind != RefKind.None)
+                {
+                    this.il.LoadLocal(slot);
+                }
+                else
+                {
+                    this.il.LoadLocalAddress(slot);
+                }
+
                 return true;
             }
 

@@ -150,6 +150,24 @@ public sealed class Evaluator
 
     private void EvaluateVariableDeclaration(BoundVariableDeclaration node)
     {
+        // Issue #491 (ADR-0060 follow-up): a ref-aliasing local binds the symbol
+        // to an existing lvalue rather than copying its value. The initializer
+        // is a BoundAddressOfExpression whose operand is the aliased lvalue;
+        // store a RefAlias sentinel in the locals dictionary so subsequent
+        // reads re-evaluate the operand and writes route back to it.
+        if (node.Variable is LocalVariableSymbol refLocal
+            && refLocal.RefKind != RefKind.None
+            && node.Initializer is BoundAddressOfExpression refAddr)
+        {
+            var alias = new RefAlias(refAddr.Operand);
+            var locals = this.locals.Peek();
+            locals[node.Variable] = alias;
+
+            // Mirror the read-through semantics for `lastValue` (used by REPL).
+            lastValue = EvaluateExpression(refAddr.Operand);
+            return;
+        }
+
         var value = EvaluateExpression(node.Initializer);
         lastValue = value;
         Assign(node.Variable, value);
@@ -733,7 +751,17 @@ public sealed class Evaluator
         else
         {
             var locals = this.locals.Peek();
-            return locals[v.Variable];
+            var stored = locals[v.Variable];
+
+            // Issue #491 (ADR-0060 follow-up): a ref-aliasing local stores a
+            // RefAlias sentinel; reads re-evaluate the aliased operand so the
+            // local observes the current value of the underlying storage.
+            if (stored is RefAlias alias)
+            {
+                return EvaluateExpression(alias.Operand);
+            }
+
+            return stored;
         }
     }
 
@@ -2980,7 +3008,46 @@ public sealed class Evaluator
         else
         {
             var locals = this.locals.Peek();
+
+            // Issue #491 (ADR-0060 follow-up): writing to a ref-aliasing local
+            // routes the new value to the aliased storage (not replacing the
+            // alias itself).
+            if (locals.TryGetValue(variable, out var existing) && existing is RefAlias alias)
+            {
+                WriteBackToOperand(alias.Operand, value);
+                return;
+            }
+
             locals[variable] = value;
+        }
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): writes <paramref name="value"/> through a
+    /// bound lvalue expression (variable, field, property, or indexer access).
+    /// Shared between ref-aliasing local writes and the existing ref/out parameter
+    /// write-back path.
+    /// </summary>
+    private void WriteBackToOperand(Binding.BoundExpression operand, object value)
+    {
+        switch (operand)
+        {
+            case BoundVariableExpression bve:
+                Assign(bve.Variable, value);
+                break;
+            case BoundFieldAccessExpression fa:
+                WriteBackField(fa, value);
+                break;
+            case BoundPropertyAccessExpression pa:
+                WriteBackProperty(pa, value);
+                break;
+            case BoundIndexExpression idx:
+                WriteBackIndex(idx, value);
+                break;
+            case BoundDereferenceExpression deref:
+                // *p = v under interpreter: re-route through the inner operand.
+                WriteBackToOperand(deref.Operand, value);
+                break;
         }
     }
 
@@ -2993,6 +3060,21 @@ public sealed class Evaluator
             Found = true;
             return node;
         }
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): sentinel stored in the locals dictionary
+    /// for a ref-aliasing local. Reads of the local re-evaluate <see cref="Operand"/>;
+    /// writes are routed back to <see cref="Operand"/> via <see cref="WriteBackToOperand"/>.
+    /// </summary>
+    private sealed class RefAlias
+    {
+        public RefAlias(Binding.BoundExpression operand)
+        {
+            Operand = operand;
+        }
+
+        public Binding.BoundExpression Operand { get; }
     }
 
     private sealed class InterpAsyncEnumerableBuffer<T> :

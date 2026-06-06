@@ -1820,13 +1820,142 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #490 (ADR-0060 follow-up): a function declaration carries a <c>ref</c> return modifier
+    /// without an explicit return type clause (e.g. <c>func foo() ref { ... }</c>).
+    /// </summary>
+    /// <param name="location">The location of the <c>ref</c> modifier.</param>
+    public void ReportRefReturnRequiresReturnType(TextLocation location)
+    {
+        Report(location, "GS0248", "A 'ref' return modifier requires an explicit return type clause (e.g. 'ref int32').");
+    }
+
+    /// <summary>
+    /// Issue #490 (ADR-0060 follow-up): a <c>ref</c> return modifier was placed on an
+    /// <c>async</c> or sequence/async-sequence function; the state-machine rewriter cannot
+    /// hoist a managed pointer into a state-machine field (ELEMENT_TYPE_BYREF is illegal
+    /// in field signatures — ADR-0058 §2).
+    /// </summary>
+    /// <param name="location">The location of the <c>ref</c> modifier.</param>
+    /// <param name="kind">"async", "sequence", or "async sequence".</param>
+    public void ReportRefReturnOnAsyncOrIterator(TextLocation location, string kind)
+    {
+        Report(location, "GS0249", $"'ref' return is not legal on an {kind} function; the state-machine rewriter cannot hoist a managed pointer.");
+    }
+
+    /// <summary>
+    /// Issue #490: a <c>ref</c>-returning function declares its return type as <c>*T</c>
+    /// (a managed pointer). The two are redundant — write <c>ref T</c> instead of <c>ref *T</c>.
+    /// </summary>
+    /// <param name="location">The location of the <c>ref</c> modifier.</param>
+    public void ReportRefReturnOfByRefType(TextLocation location)
+    {
+        Report(location, "GS0250", "'ref' return modifier is redundant when the declared return type is already a managed pointer ('*T'); write 'ref T' instead.");
+    }
+
+    /// <summary>
+    /// Issue #490: a <c>return ref expr</c> statement appears inside a function whose
+    /// declaration does not carry the <c>ref</c> return modifier.
+    /// </summary>
+    /// <param name="location">The location of the <c>ref</c> keyword on the return statement.</param>
+    /// <param name="functionName">The enclosing function name.</param>
+    public void ReportRefReturnInNonRefReturningFunction(TextLocation location, string functionName)
+    {
+        Report(location, "GS0251", $"'return ref' is not allowed in '{functionName}' because its declaration does not specify a 'ref' return type.");
+    }
+
+    /// <summary>
+    /// Issue #490: a plain <c>return expr</c> statement appears inside a <c>ref</c>-returning function.
+    /// The body must use <c>return ref &lt;lvalue&gt;</c>.
+    /// </summary>
+    /// <param name="location">The location of the <c>return</c> keyword.</param>
+    /// <param name="functionName">The enclosing function name.</param>
+    public void ReportRefReturnRequiredOnRefReturningFunction(TextLocation location, string functionName)
+    {
+        Report(location, "GS0252", $"Function '{functionName}' returns by reference; use 'return ref <lvalue>' instead of a plain 'return'.");
+    }
+
+    /// <summary>
+    /// Issue #490: the operand of <c>return ref</c> is not an lvalue (literal, arithmetic
+    /// expression, call result, etc.). Only variables, fields, array elements, dereferences,
+    /// and conditional expressions whose branches are themselves lvalues can be returned by ref.
+    /// </summary>
+    /// <param name="location">The location of the offending expression.</param>
+    public void ReportRefReturnRequiresLvalue(TextLocation location)
+    {
+        Report(location, "GS0253", "The operand of 'return ref' must be an lvalue (variable, field, array element, or '*p').");
+    }
+
+    /// <summary>
+    /// Issue #490 (ADR-0058 ref-safe-to-escape): the operand of <c>return ref</c> refers to
+    /// storage that dies at function exit (a local variable, a <c>scoped</c> parameter, or a
+    /// field/element rooted in one of those). Returning that pointer would expose dangling
+    /// memory to the caller.
+    /// </summary>
+    /// <param name="location">The location of the offending expression.</param>
+    public void ReportRefReturnEscapesLocalScope(TextLocation location)
+    {
+        Report(location, "GS0254", "Cannot return a managed pointer to function-local storage; the reference would dangle once the function returns.");
+    }
+
+    /// <summary>
+    /// Issue #490 (ADR-0060 §9 extension): the overriding / interface-implementing method
+    /// disagrees with the base/interface declaration on whether the return is by reference.
+    /// </summary>
+    /// <param name="location">The location of the overriding declaration.</param>
+    /// <param name="memberName">The member name.</param>
+    /// <param name="expected">The expected return ref-kind text (e.g. "ref" or "by value").</param>
+    /// <param name="actual">The actual return ref-kind text on the derived/implementing declaration.</param>
+    public void ReportOverrideReturnRefKindMismatch(TextLocation location, string memberName, string expected, string actual)
+    {
+        Report(location, "GS0255", $"Override of '{memberName}' must match the base return ref-kind: base returns {expected}, this declaration returns {actual}.");
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local declaration whose
+    /// initializer is not an lvalue. <c>let ref</c> / <c>var ref</c> binds the local as
+    /// an alias for an existing storage slot — the RHS must therefore be a variable, a
+    /// field/property access, an indexer access, or a dereference of a managed pointer.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="exprText">The source text of the offending RHS expression.</param>
+    public void ReportRefLocalRhsMustBeLvalue(TextLocation location, string exprText)
+    {
+        Report(location, "GS0256", $"The right-hand side of a ref-aliasing local must be an lvalue (a variable, field/property, indexer access, or '*p' dereference); '{exprText}' is not assignable.");
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local whose initializer's
+    /// ref-safe-to-escape scope is narrower than the local's declaring scope. The aliased
+    /// storage would not outlive the local; reading or writing through the alias is therefore
+    /// unsafe. Reported, for example, when binding a ref local to a value whose pointee lives
+    /// in a <c>scoped</c> ref struct or to a temporary that the local would outlive.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="variableName">The local name.</param>
+    public void ReportRefLocalRhsHasNarrowerEscapeScope(TextLocation location, string variableName)
+    {
+        Report(location, "GS0257", $"Cannot bind ref-aliasing local '{variableName}' to a value whose ref-safe-to-escape scope is narrower than the local's scope; the alias would outlive its referent.");
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports the <c>ref</c> aliasing modifier on a
+    /// declaration that cannot legally store a managed pointer — a top-level binding
+    /// (emitted as a static field), a local in an <c>async</c> function or iterator
+    /// (hoisted into a state-machine field), or a <c>const</c> declaration.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="variableName">The local name.</param>
+    /// <param name="context">Description of the disallowed context (e.g. "a top-level variable").</param>
+    public void ReportRefLocalCannotBeDeclaredHere(TextLocation location, string variableName, string context)
+    {
+        Report(location, "GS0258", $"Ref-aliasing local '{variableName}' cannot be declared as {context}; managed pointers cannot be stored across this boundary.");
     /// ADR-0061: reports a conditional ref-argument expression that surfaces outside of
     /// a ref-kind modifier payload (<c>ref</c>/<c>out</c>/<c>in</c>) or an <c>&amp;</c> operand.
     /// </summary>
     /// <param name="location">The text location of the conditional expression.</param>
     public void ReportConditionalRefArgumentOutsideRefContext(TextLocation location)
     {
-        Report(location, "GS0248", "Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'.");
+        Report(location, "GS0259", "Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'.");
     }
 
     /// <summary>
@@ -1838,7 +1967,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="falseType">The type of the false-branch lvalue.</param>
     public void ReportConditionalRefArgumentBranchTypeMismatch(TextLocation location, string trueType, string falseType)
     {
-        Report(location, "GS0249", $"Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'.");
+        Report(location, "GS0260", $"Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'.");
     }
 
     /// <summary>
@@ -1849,7 +1978,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the offending inline declaration.</param>
     public void ReportInlineDeclarationInConditionalRefBranch(TextLocation location)
     {
-        Report(location, "GS0250", "An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead.");
+        Report(location, "GS0261", "An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead.");
     }
 
     /// <summary>
@@ -1861,7 +1990,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="innerModifier">The inner modifier text observed.</param>
     public void ReportConditionalRefArgumentInnerModifierMismatch(TextLocation location, string outerModifier, string innerModifier)
     {
-        Report(location, "GS0251", $"Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'.");
+        Report(location, "GS0262", $"Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'.");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

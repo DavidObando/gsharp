@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -38,4 +39,13 @@ public class LocalVariableSymbol : VariableSymbol
     /// function is rejected.
     /// </summary>
     public virtual bool IsScoped { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ADR-0060 follow-up (issue #491) by-reference aliasing kind of this local.
+    /// Defaults to <see cref="Binding.RefKind.None"/>. For a <c>let ref x = lvalue</c> / <c>var ref x = lvalue</c>
+    /// declaration this is <see cref="Binding.RefKind.Ref"/>: the local's IL slot stores a managed pointer
+    /// (<c>T&amp;</c>) to the aliased storage while the symbol's <see cref="VariableSymbol.Type"/> remains the
+    /// pointee type <c>T</c>. Reads/writes are implicitly indirected by the emitter and interpreter.
+    /// </summary>
+    public virtual RefKind RefKind { get; set; }
 }
