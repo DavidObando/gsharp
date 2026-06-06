@@ -3,7 +3,7 @@
 - **Status**: Proposed
 - **Date**: 2026-06-05
 - **Phase**: Phase 8 — language ergonomics / CLR-interop surface
-- **Related**: issue #492 (conditional ref-passing follow-up to ADR-0060); ADR-0060 (`ref`/`out`/`in` parameters), ADR-0058 (ref-safe-to-escape), ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`)
+- **Related**: issue #492 (conditional ref-passing follow-up to ADR-0060); ADR-0060 (`ref`/`out`/`in` parameters), ADR-0058 (ref-safe-to-escape), ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0062 (generalized ternary expression)
 
 ## Context
 
@@ -143,7 +143,7 @@ A conditional ref-argument may appear as the value of a named argument: `f(targe
 
 ## Follow-ups
 
-- **General ternary expression.** Sibling proposal once there is broader call for value-producing two-arm conditionals beyond ref positions. Would also generalise `let ref x = cond ? &a : &b`.
+- **General ternary expression.** Covered by ADR-0062. The binder/parser path here can be folded into the general conditional-expression pipeline once ADR-0062 is implemented.
 - **Composition with `let ref x = expr`.** Pairs naturally with the aliasing-locals follow-up.
 
 ## References

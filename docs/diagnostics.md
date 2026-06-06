@@ -342,3 +342,22 @@ Cause/fix examples:
 - **GS0257** — Reserved for the full ref-safety analysis. Will fire when the RHS storage cannot live as long as the alias (e.g. a `ref` returned from a callee that captured a shorter-lived local). V1 has no ref returns, so this code is defined for forward compatibility and currently does not fire.
 - **GS0258** — `let ref m = n` at top level, inside `async func`, inside an iterator (yield-returning) function, or written as `const ref`. Fix: move the declaration into a synchronous, non-iterator function body and use `let ref` / `var ref` (not `const ref`). Top-level `ref` locals would require a static field of `T&`, which the CLR forbids; async / iterator bodies would lift the slot onto a state-machine field, which the CLR likewise forbids.
 
+
+## Conditional expression diagnostics (GS0259–GS0263)
+
+ADR-0061 introduced a narrow ref-only ternary form (`cond ? a : b` only inside `ref`/`out`/`in` argument payloads and `&` operands) with diagnostics GS0259–GS0262. ADR-0062 generalises the ternary into a normal expression form. The conditional-outside-ref diagnostic GS0259 is therefore retired: a value-context `cond ? a : b` is now legal. The remaining ADR-0061 diagnostics still fire in their byref contexts; the new GS0263 covers the value-context "no common type" failure.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0259 | Error (retired by ADR-0062) | Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'. Now only fires for the legacy inner-ref-modifier shape outside ref context. |
+| GS0260 | Error | Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'. |
+| GS0261 | Error | An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead. |
+| GS0262 | Error | Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'. |
+| GS0263 | Error | Conditional expression branches have no common result type — the true branch is '{trueType}' and the false branch is '{falseType}'. Add an explicit conversion to align the two arms. |
+
+Cause/fix examples:
+
+- **GS0260** — `bump(ref true ? a32 : b64)` where `a32 int32` and `b64 int64`. Fix: align the branch types (e.g. introduce a local of the wider type or use a value ternary outside the `ref`).
+- **GS0261** — `produce(out true ? a : out var n)` — the inline `out var n` would declare a local that only exists on one branch. Fix: declare `var n int32` before the call.
+- **GS0262** — `bump(ref true ? in a : ref b)` — the inner `in` does not match the outer `ref`. Fix: use `bump(ref true ? a : b)` (the generalized ADR-0062 form requires no inner modifiers).
+- **GS0263** — `var x = pick ? true : "no"` — `bool` and `string` have no common type. Fix: explicitly convert one arm (e.g. `pick ? "yes" : "no"`).

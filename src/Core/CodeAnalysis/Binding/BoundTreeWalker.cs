@@ -299,6 +299,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ConditionalAddressExpression:
                 VisitConditionalAddressExpression((BoundConditionalAddressExpression)node);
                 break;
+            case BoundNodeKind.ConditionalExpression:
+                VisitConditionalExpression((BoundConditionalExpression)node);
+                break;
             case BoundNodeKind.DereferenceExpression:
                 VisitDereferenceExpression((BoundDereferenceExpression)node);
                 break;
@@ -803,6 +806,15 @@ public abstract class BoundTreeWalker
         VisitExpression(node.Condition);
         VisitExpression(node.WhenTrueOperand);
         VisitExpression(node.WhenFalseOperand);
+    }
+
+    /// <summary>ADR-0062: visits a general two-arm conditional (ternary) expression.</summary>
+    /// <param name="node">The conditional expression.</param>
+    protected virtual void VisitConditionalExpression(BoundConditionalExpression node)
+    {
+        VisitExpression(node.Condition);
+        VisitExpression(node.WhenTrue);
+        VisitExpression(node.WhenFalse);
     }
 
     protected virtual void VisitDereferenceExpression(BoundDereferenceExpression node)

@@ -426,6 +426,8 @@ public abstract class BoundTreeRewriter
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
             case BoundNodeKind.ConditionalAddressExpression:
                 return RewriteConditionalAddressExpression((BoundConditionalAddressExpression)node);
+            case BoundNodeKind.ConditionalExpression:
+                return RewriteConditionalExpression((BoundConditionalExpression)node);
             case BoundNodeKind.DereferenceExpression:
                 return RewriteDereferenceExpression((BoundDereferenceExpression)node);
             case BoundNodeKind.IndirectAssignmentExpression:
@@ -914,6 +916,24 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, node.PointeeType);
+    }
+
+    /// <summary>
+    /// ADR-0062: Rewrites a general two-arm conditional (ternary) expression.
+    /// </summary>
+    /// <param name="node">The conditional expression to rewrite.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteConditionalExpression(BoundConditionalExpression node)
+    {
+        var condition = RewriteExpression(node.Condition);
+        var whenTrue = RewriteExpression(node.WhenTrue);
+        var whenFalse = RewriteExpression(node.WhenFalse);
+        if (condition == node.Condition && whenTrue == node.WhenTrue && whenFalse == node.WhenFalse)
+        {
+            return node;
+        }
+
+        return new BoundConditionalExpression(null, condition, whenTrue, whenFalse, node.Type);
     }
 
     /// <summary>

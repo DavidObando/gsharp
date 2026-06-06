@@ -1996,6 +1996,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0262", $"Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'.");
     }
 
+    /// <summary>
+    /// ADR-0062: reports a general two-arm conditional whose branch types have no
+    /// common result type under the conditional's common-type selection rules.
+    /// </summary>
+    /// <param name="location">The text location of the conditional expression.</param>
+    /// <param name="trueType">The type of the true-branch expression.</param>
+    /// <param name="falseType">The type of the false-branch expression.</param>
+    public void ReportConditionalNoCommonResultType(TextLocation location, string trueType, string falseType)
+    {
+        Report(location, "GS0263", $"Conditional expression branches have no common result type — the true branch is '{trueType}' and the false branch is '{falseType}'. Add an explicit conversion to align the two arms.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

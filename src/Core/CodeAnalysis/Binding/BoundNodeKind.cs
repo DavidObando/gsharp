@@ -91,6 +91,12 @@ public enum BoundNodeKind
     // address-of forms feeding a single byref onto the evaluation stack.
     ConditionalAddressExpression,
 
+    // ADR-0062: a general two-arm conditional (ternary) value expression
+    // of the form `<cond> ? <ifTrue> : <ifFalse>`. Lowered to a CIL branch
+    // around two arm values feeding a single value onto the evaluation
+    // stack. Both arms are already converted to the result type by the binder.
+    ConditionalExpression,
+
     // ADR-0060 §13: indirect assignment `*p = expr` — stores a value
     // through a managed pointer. Lowered to `<load-address> <value>
     // stind.*` by the emitter. Used both for direct `*T`-local stores

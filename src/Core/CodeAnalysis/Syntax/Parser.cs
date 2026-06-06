@@ -3295,6 +3295,18 @@ public class Parser
 
         var expression = ParseBinaryExpression();
 
+        // ADR-0062: general two-arm conditional (ternary) expression
+        // `cond ? a : b`. Right-associative; lower precedence than
+        // logical-or and higher than assignment. When the `?` tail
+        // matches the legacy ADR-0061 inner-modifier form
+        // (`cond ? ref a : ref b`), produce a ConditionalRefArgumentExpression
+        // for backward compatibility; otherwise produce the general
+        // ConditionalExpressionSyntax.
+        if (Current.Kind == SyntaxKind.QuestionToken)
+        {
+            expression = ParseConditionalTail(expression);
+        }
+
         // ADR-0060 §13: indirect assignment `*p = expr`. Detected when the
         // parsed primary is a unary `*` dereference followed by `=`. The
         // binder produces a `BoundIndirectAssignmentExpression` which the
@@ -4135,12 +4147,48 @@ public class Parser
         return true;
     }
 
-    // ADR-0061: when the current token is `?`, treat <paramref name="condition"/>
-    // as the condition of a conditional lvalue and parse `?  [ref|in|out]? lvalue
-    // : [ref|in|out]? lvalue`. The outer modifier (when known — null for the
-    // bare `&` form) is recorded for inner-modifier mismatch diagnostics at
-    // bind time. When the current token is not `?`, the original expression
-    // is returned unchanged.
+    // ADR-0062: parse a ternary tail `? a : b` starting at the current `?`
+    // token, given the already-parsed condition expression. Right-associative.
+    // When the inner branches use legacy ADR-0061 inner ref-kind modifiers,
+    // returns a ConditionalRefArgumentExpressionSyntax (for back-compat) so
+    // the binder can reject mismatches; otherwise returns the general
+    // ConditionalExpressionSyntax (ADR-0062).
+    private ExpressionSyntax ParseConditionalTail(ExpressionSyntax condition)
+    {
+        var questionToken = NextToken();
+        var whenTrueMod = TryConsumeInnerRefModifier();
+        var whenTrue = ParseAssignmentExpression();
+        var colonToken = MatchToken(SyntaxKind.ColonToken);
+        var whenFalseMod = TryConsumeInnerRefModifier();
+        var whenFalse = ParseAssignmentExpression();
+
+        if (whenTrueMod != null || whenFalseMod != null)
+        {
+            // Legacy ADR-0061 inner-modifier shape: keep producing the
+            // dedicated ref-arg node so the binder retains GS0262 etc.
+            return new ConditionalRefArgumentExpressionSyntax(
+                syntaxTree,
+                condition,
+                questionToken,
+                whenTrueMod,
+                whenTrue,
+                colonToken,
+                whenFalseMod,
+                whenFalse);
+        }
+
+        return new ConditionalExpressionSyntax(
+            syntaxTree,
+            condition,
+            questionToken,
+            whenTrue,
+            colonToken,
+            whenFalse);
+    }
+
+    // ADR-0061 transitional: kept only to avoid touching the few callers
+    // that still want the legacy ref-only node when the `?` follows
+    // certain ref-context shapes. Forwards to ParseConditionalTail.
     private ExpressionSyntax MaybeParseConditionalRefArgumentTail(ExpressionSyntax condition, SyntaxToken outerModifier)
     {
         if (Current.Kind != SyntaxKind.QuestionToken)
@@ -4148,23 +4196,8 @@ public class Parser
             return condition;
         }
 
-        var questionToken = NextToken();
-        var whenTrueMod = TryConsumeInnerRefModifier();
-        var whenTrue = ParseExpression();
-        var colonToken = MatchToken(SyntaxKind.ColonToken);
-        var whenFalseMod = TryConsumeInnerRefModifier();
-        var whenFalse = ParseExpression();
-
         _ = outerModifier; // bind-time check uses outer modifier; parser only records.
-        return new ConditionalRefArgumentExpressionSyntax(
-            syntaxTree,
-            condition,
-            questionToken,
-            whenTrueMod,
-            whenTrue,
-            colonToken,
-            whenFalseMod,
-            whenFalse);
+        return ParseConditionalTail(condition);
     }
 
     // ADR-0061: parse an optional inner `ref`/`in`/`out` modifier on a branch

@@ -43,6 +43,7 @@ ColonToken
 CommaToken
 CommentToken
 CompilationUnit
+ConditionalExpression
 ConditionalRefArgumentExpression
 ConstKeyword
 ConstantPattern
@@ -242,6 +243,7 @@ ClrPropertyAssignmentExpression
 ClrStaticCallExpression
 ClrUnaryOperatorExpression
 ConditionalAddressExpression
+ConditionalExpression
 ConditionalGotoStatement
 ConstantPattern
 ConstructorCallExpression

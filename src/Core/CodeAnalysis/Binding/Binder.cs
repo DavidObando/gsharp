@@ -6354,12 +6354,19 @@ public sealed class Binder
                 Diagnostics.ReportOutDeclarationOutsideOutArgument(syntax.Location);
                 return new BoundErrorExpression(null);
             case SyntaxKind.ConditionalRefArgumentExpression:
-                // ADR-0061: a conditional ref-argument expression is only
-                // valid as the payload of a ref-kind modifier or as the
-                // operand of `&`. Those sites dispatch to the dedicated
-                // binders below; anywhere else is a hard error.
+                // ADR-0061: a legacy conditional ref-argument expression
+                // (with inner ref-kind modifiers) is only valid as the
+                // payload of a ref-kind modifier or as the operand of `&`.
+                // Those sites dispatch to the dedicated binders below;
+                // anywhere else is a hard error.
                 Diagnostics.ReportConditionalRefArgumentOutsideRefContext(syntax.Location);
                 return new BoundErrorExpression(null);
+            case SyntaxKind.ConditionalExpression:
+                // ADR-0062: general two-arm conditional in value context.
+                // In ref-kind argument payloads and as the operand of `&`,
+                // the call sites short-circuit to BindConditionalAddress
+                // before reaching this dispatch.
+                return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
             default:
@@ -7882,6 +7889,14 @@ public sealed class Binder
             return BindConditionalRefArgument(condOperand, outerModifier: null);
         }
 
+        // ADR-0062: a general conditional expression as the operand of `&`
+        // binds to the conditional-address path (preserving ADR-0061 byref
+        // safety) when both arms are lvalues of a common pointee type.
+        if (rawOperand is ConditionalExpressionSyntax generalCond)
+        {
+            return BindConditionalAddressFromGeneral(generalCond, outerModifier: null);
+        }
+
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {
@@ -8069,6 +8084,14 @@ public sealed class Binder
             return BindConditionalRefArgument(condSyntax, syntax.RefKindModifier);
         }
 
+        // ADR-0062: a general conditional expression as the payload of
+        // ref/out/in binds to the conditional-address path (preserving
+        // ADR-0061 byref safety).
+        if (rawExpr is ConditionalExpressionSyntax generalCondSyntax)
+        {
+            return BindConditionalAddressFromGeneral(generalCondSyntax, syntax.RefKindModifier);
+        }
+
         var operand = BindExpression(syntax.Expression);
         if (operand is BoundErrorExpression)
         {
@@ -8207,6 +8230,262 @@ public sealed class Binder
         }
 
         return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+    }
+
+    /// <summary>
+    /// ADR-0062: binds a general conditional expression as a conditional
+    /// address-of when used as the payload of a ref-kind modifier or as the
+    /// operand of <c>&amp;</c>. Reuses the same validation rules as
+    /// <see cref="BindConditionalRefArgument"/> minus the inner-modifier
+    /// checks (which the generalized syntax does not carry).
+    /// </summary>
+    /// <param name="syntax">The general conditional expression syntax.</param>
+    /// <param name="outerModifier">The outer ref-kind modifier token (<see langword="null"/> for the bare <c>&amp;</c> operand form).</param>
+    /// <returns>The bound conditional address expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
+    private BoundExpression BindConditionalAddressFromGeneral(
+        ConditionalExpressionSyntax syntax,
+        SyntaxToken outerModifier)
+    {
+        // Condition must be bool.
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+
+        var whenTrue = BindExpression(syntax.WhenTrue);
+        var whenFalse = BindExpression(syntax.WhenFalse);
+
+        if (whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!IsLvalue(whenTrue))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        if (!IsLvalue(whenFalse))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        // Branch types must match exactly — no implicit widening, since the
+        // resulting byref selects between slots whose physical type must agree.
+        if (!ReferenceEquals(whenTrue.Type, whenFalse.Type)
+            && !string.Equals(whenTrue.Type?.Name, whenFalse.Type?.Name, System.StringComparison.Ordinal))
+        {
+            Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
+                syntax.Location,
+                whenTrue.Type?.Name ?? "?",
+                whenFalse.Type?.Name ?? "?");
+            return new BoundErrorExpression(null);
+        }
+
+        string outerText = outerModifier?.Text ?? "&";
+        bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
+        if (requiresWritable)
+        {
+            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+    }
+
+    /// <summary>
+    /// ADR-0062: binds a general two-arm conditional expression in value
+    /// context. Validates the condition is <c>bool</c>, computes a common
+    /// result type using identity / one-way implicit conversion / numeric
+    /// tie-break rules, and produces a <see cref="BoundConditionalExpression"/>.
+    /// </summary>
+    /// <param name="syntax">The conditional expression syntax.</param>
+    /// <returns>The bound conditional expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
+    private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax)
+    {
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+        var whenTrue = BindExpression(syntax.WhenTrue);
+        var whenFalse = BindExpression(syntax.WhenFalse);
+
+        if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = ComputeConditionalCommonType(whenTrue.Type, whenFalse.Type);
+        if (resultType == null)
+        {
+            Diagnostics.ReportConditionalNoCommonResultType(
+                syntax.Location,
+                whenTrue.Type?.Name ?? "?",
+                whenFalse.Type?.Name ?? "?");
+            return new BoundErrorExpression(null);
+        }
+
+        var convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType);
+        var convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType);
+        if (convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        return new BoundConditionalExpression(null, condition, convertedTrue, convertedFalse, resultType);
+    }
+
+    /// <summary>
+    /// ADR-0062: chooses a common result type for two conditional branches
+    /// using the following ordered rules (mirroring the ADR §2 common-type
+    /// procedure):
+    /// <list type="number">
+    ///   <item><description>Identity (<c>Tx == Ty</c>).</description></item>
+    ///   <item><description>One-way implicit conversion (<c>Tx → Ty</c> but not <c>Ty → Tx</c>, or vice versa).</description></item>
+    ///   <item><description>Both convertible implicitly — pick the wider via the numeric tie-break rule (ADR-0037) when both are numeric; otherwise no common type.</description></item>
+    ///   <item><description><c>nil</c> compatibility — when one arm is the nil/null sentinel and the other is reference- or nullable-compatible, use the other arm's type.</description></item>
+    /// </list>
+    /// Returns <see langword="null"/> when no common type exists.
+    /// </summary>
+    /// <param name="left">The true-arm type.</param>
+    /// <param name="right">The false-arm type.</param>
+    /// <returns>The chosen common type, or <see langword="null"/>.</returns>
+    private static TypeSymbol ComputeConditionalCommonType(TypeSymbol left, TypeSymbol right)
+    {
+        if (left == null || right == null)
+        {
+            return null;
+        }
+
+        if (left == TypeSymbol.Error || right == TypeSymbol.Error)
+        {
+            return TypeSymbol.Error;
+        }
+
+        // Identity.
+        if (ReferenceEquals(left, right))
+        {
+            return left;
+        }
+
+        // Nil/null compatibility: when one arm is the null sentinel and the
+        // other is non-null, pick the non-null. The conversion machinery
+        // accepts the trivial null → reference/nullable widening.
+        if (left == TypeSymbol.Null)
+        {
+            return right;
+        }
+
+        if (right == TypeSymbol.Null)
+        {
+            return left;
+        }
+
+        var leftToRight = Conversion.Classify(left, right);
+        var rightToLeft = Conversion.Classify(right, left);
+
+        bool leftImplicit = leftToRight.IsImplicit;
+        bool rightImplicit = rightToLeft.IsImplicit;
+
+        // Identity already handled; treat IsIdentity here as implicit too.
+        if (leftImplicit && !rightImplicit)
+        {
+            return right;
+        }
+
+        if (rightImplicit && !leftImplicit)
+        {
+            return left;
+        }
+
+        if (leftImplicit && rightImplicit)
+        {
+            // ADR-0037 numeric tie-break: prefer the wider canonical numeric
+            // target when both arms are numeric.
+            var widened = TryNumericTieBreak(left, right);
+            if (widened != null)
+            {
+                return widened;
+            }
+
+            // Both convert to each other and neither is numeric — they're
+            // effectively identical; pick the left arm deterministically.
+            return left;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// ADR-0037-style numeric tie-break: when both arms are numeric primitives,
+    /// pick the wider canonical type using a simple rank. Returns
+    /// <see langword="null"/> when either type isn't a recognised primitive.
+    /// </summary>
+    private static TypeSymbol TryNumericTieBreak(TypeSymbol a, TypeSymbol b)
+    {
+        int ra = NumericRank(a);
+        int rb = NumericRank(b);
+        if (ra == 0 || rb == 0)
+        {
+            return null;
+        }
+
+        return ra >= rb ? a : b;
+    }
+
+    private static int NumericRank(TypeSymbol t)
+    {
+        if (t == TypeSymbol.Int8 || t == TypeSymbol.UInt8)
+        {
+            return 1;
+        }
+
+        if (t == TypeSymbol.Int16 || t == TypeSymbol.UInt16)
+        {
+            return 2;
+        }
+
+        if (t == TypeSymbol.Int32 || t == TypeSymbol.UInt32)
+        {
+            return 3;
+        }
+
+        if (t == TypeSymbol.Int64 || t == TypeSymbol.UInt64)
+        {
+            return 4;
+        }
+
+        if (t == TypeSymbol.Float32)
+        {
+            return 5;
+        }
+
+        if (t == TypeSymbol.Float64)
+        {
+            return 6;
+        }
+
+        return 0;
+    }
+
+    private BoundExpression ConvertConditionalBranch(TextLocation location, BoundExpression branch, TypeSymbol target)
+    {
+        if (target == TypeSymbol.Error || branch.Type == TypeSymbol.Error)
+        {
+            return branch;
+        }
+
+        if (ReferenceEquals(branch.Type, target))
+        {
+            return branch;
+        }
+
+        return BindConversion(location, branch, target);
     }
 
     /// <summary>
