@@ -247,19 +247,21 @@ produce(out true ? a : out var n)
     }
 
     [Fact]
-    public void ConditionalRefArgument_OutsideRefContext_ReportsDiagnostic()
+    public void ConditionalRefArgument_OutsideRefContext_IsNowValidValueExpression()
     {
+        // ADR-0062 supersedes GS0259: a `cond ? a : b` expression is now
+        // legal in any expression position; both arms select an int value.
         const string Source = @"package CondOutsideRef
 import System
 
-var a = 0
-var b = 0
+var a = 1
+var b = 2
 var useA = true
 var picked = (useA ? a : b)
 Console.WriteLine(picked)
 ";
-        var diags = CompileExpectingDiagnostics(Source);
-        Assert.Contains(diags, d => d.Id == "GS0259");
+        var output = CompileAndRun(Source, "CondOutsideRef");
+        Assert.Contains("1", output);
     }
 
     [Fact]

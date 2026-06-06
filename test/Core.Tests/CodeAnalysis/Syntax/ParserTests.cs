@@ -160,6 +160,47 @@ let x = switch v { case 1 -> ""a"" default -> ""b"" }
         Assert.IsType<CallExpressionSyntax>(accessor.RightPart);
     }
 
+    [Fact]
+    public void Parses_GeneralTernary_AsConditionalExpression()
+    {
+        // ADR-0062: `cond ? a : b` is a ConditionalExpressionSyntax.
+        var expr = ParseExpressionStatement("true ? 1 : 2");
+        var cond = Assert.IsType<ConditionalExpressionSyntax>(expr);
+        Assert.IsType<LiteralExpressionSyntax>(cond.Condition);
+        Assert.IsType<LiteralExpressionSyntax>(cond.WhenTrue);
+        Assert.IsType<LiteralExpressionSyntax>(cond.WhenFalse);
+    }
+
+    [Fact]
+    public void Ternary_IsRightAssociative()
+    {
+        // `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+        var expr = ParseExpressionStatement("true ? 1 : false ? 2 : 3");
+        var outer = Assert.IsType<ConditionalExpressionSyntax>(expr);
+        Assert.IsType<LiteralExpressionSyntax>(outer.WhenTrue);
+        var inner = Assert.IsType<ConditionalExpressionSyntax>(outer.WhenFalse);
+        Assert.IsType<LiteralExpressionSyntax>(inner.WhenTrue);
+        Assert.IsType<LiteralExpressionSyntax>(inner.WhenFalse);
+    }
+
+    [Fact]
+    public void Ternary_HasLowerPrecedenceThanLogicalOr()
+    {
+        // `a || b ? 1 : 2` parses as `(a || b) ? 1 : 2`.
+        var expr = ParseExpressionStatement("true || false ? 1 : 2");
+        var cond = Assert.IsType<ConditionalExpressionSyntax>(expr);
+        Assert.IsType<BinaryExpressionSyntax>(cond.Condition);
+    }
+
+    [Fact]
+    public void Ternary_LegacyInnerRef_StillRoutesToConditionalRefArg()
+    {
+        // ADR-0061 back-compat: `cond ? ref a : ref b` keeps producing the
+        // legacy ConditionalRefArgumentExpressionSyntax for the binder.
+        var expr = ParseExpressionStatement("true ? ref a : ref b");
+        Assert.IsType<ConditionalRefArgumentExpressionSyntax>(expr);
+    }
+
     private static ExpressionSyntax ParseExpressionStatement(string source)
     {
         var tree = SyntaxTree.Parse(source);

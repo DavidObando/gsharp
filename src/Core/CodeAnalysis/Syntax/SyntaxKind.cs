@@ -261,8 +261,17 @@ public enum SyntaxKind
     // `<cond> ? <lvalue> : <lvalue>` recognised inside the payload of a
     // ref-kind modifier (`ref`/`out`/`in`) and as the operand of `&`.
     // The two branches may optionally carry a matching inner ref-kind
-    // modifier (e.g. `ref c ? ref a : ref b`).
+    // modifier (e.g. `ref c ? ref a : ref b`). Retained for backward
+    // compatibility with the inner-modifier shape; ADR-0062 supersedes
+    // the general case with `ConditionalExpression`.
     ConditionalRefArgumentExpression,
+
+    // ADR-0062: a general two-arm conditional (ternary) expression of
+    // the form `<cond> ? <ifTrue> : <ifFalse>`. Valid in any expression
+    // position. In ref-kind argument payloads and as the operand of `&`,
+    // the binder reinterprets this syntax as a conditional address-of
+    // (preserving ADR-0061's byref semantics).
+    ConditionalExpression,
 
     // ADR-0060 §13: indirect assignment `*p = expr`. The LHS is a
     // pointer dereference; the emitter lowers to `<load-address> <value>

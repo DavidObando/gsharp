@@ -105,6 +105,17 @@ internal static class SideEffectAnalyzer
                     || HasObservableSideEffect(ca.WhenFalseOperand);
             }
 
+            case BoundNodeKind.ConditionalExpression:
+            {
+                // ADR-0062: a general ternary is pure when all three
+                // sub-expressions are pure — the lowering is a CIL branch
+                // around two value-producing arms.
+                var c = (BoundConditionalExpression)expression;
+                return HasObservableSideEffect(c.Condition)
+                    || HasObservableSideEffect(c.WhenTrue)
+                    || HasObservableSideEffect(c.WhenFalse);
+            }
+
             case BoundNodeKind.DereferenceExpression:
                 return HasObservableSideEffect(((BoundDereferenceExpression)expression).Operand);
 

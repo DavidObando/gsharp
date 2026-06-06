@@ -262,6 +262,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.AddressOfExpression:
                 WriteAddressOfExpression((BoundAddressOfExpression)node, writer);
                 break;
+            case BoundNodeKind.ConditionalAddressExpression:
+                WriteConditionalAddressExpression((BoundConditionalAddressExpression)node, writer);
+                break;
+            case BoundNodeKind.ConditionalExpression:
+                WriteConditionalExpression((BoundConditionalExpression)node, writer);
+                break;
             case BoundNodeKind.DereferenceExpression:
                 WriteDereferenceExpression((BoundDereferenceExpression)node, writer);
                 break;
@@ -1481,6 +1487,35 @@ public static class BoundNodePrinter
     {
         writer.WritePunctuation(SyntaxKind.AmpersandToken);
         node.Operand.WriteTo(writer);
+    }
+
+    private static void WriteConditionalAddressExpression(BoundConditionalAddressExpression node, IndentedTextWriter writer)
+    {
+        writer.WritePunctuation(SyntaxKind.AmpersandToken);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        node.Condition.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.QuestionToken);
+        writer.WriteSpace();
+        node.WhenTrueOperand.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.ColonToken);
+        writer.WriteSpace();
+        node.WhenFalseOperand.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteConditionalExpression(BoundConditionalExpression node, IndentedTextWriter writer)
+    {
+        node.Condition.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.QuestionToken);
+        writer.WriteSpace();
+        node.WhenTrue.WriteTo(writer);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.ColonToken);
+        writer.WriteSpace();
+        node.WhenFalse.WriteTo(writer);
     }
 
     private static void WriteDereferenceExpression(BoundDereferenceExpression node, IndentedTextWriter writer)

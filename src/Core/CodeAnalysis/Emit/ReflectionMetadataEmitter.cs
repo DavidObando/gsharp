@@ -12096,6 +12096,10 @@ internal sealed class ReflectionMetadataEmitter
                     // ADR-0061: conditional address-of (`cond ? &a : &b`).
                     this.EmitConditionalAddress(conditionalAddress);
                     break;
+                case BoundConditionalExpression conditionalValue:
+                    // ADR-0062: general two-arm conditional value expression.
+                    this.EmitConditional(conditionalValue);
+                    break;
                 case BoundDereferenceExpression deref:
                     this.EmitDereference(deref);
                     break;
@@ -16230,6 +16234,27 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitAddressOf(new BoundAddressOfExpression(null, node.WhenFalseOperand));
 
             // doneLabel:
+            this.il.MarkLabel(doneLabel);
+        }
+
+        /// <summary>
+        /// ADR-0062: Emits a general two-arm conditional (ternary) as a CIL
+        /// branch that selects one of two value-producing arms onto the
+        /// evaluation stack. Both arms have already been converted to the
+        /// node's result type by the binder.
+        /// </summary>
+        /// <param name="node">The conditional expression bound node.</param>
+        private void EmitConditional(BoundConditionalExpression node)
+        {
+            var falseLabel = this.il.DefineLabel();
+            var doneLabel = this.il.DefineLabel();
+
+            this.EmitExpression(node.Condition);
+            this.il.Branch(ILOpCode.Brfalse, falseLabel);
+            this.EmitExpression(node.WhenTrue);
+            this.il.Branch(ILOpCode.Br, doneLabel);
+            this.il.MarkLabel(falseLabel);
+            this.EmitExpression(node.WhenFalse);
             this.il.MarkLabel(doneLabel);
         }
 
