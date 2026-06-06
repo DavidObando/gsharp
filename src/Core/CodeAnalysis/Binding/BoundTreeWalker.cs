@@ -151,12 +151,14 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.DefaultExpression:
             case BoundNodeKind.TypeOfExpression:
             case BoundNodeKind.FunctionLiteralExpression:
-            case BoundNodeKind.MethodGroupExpression:
             case BoundNodeKind.StateMachineAwaitOnCompleted:
             case BoundNodeKind.StateMachineBuilderMoveNext:
                 // Leaves (or, for FunctionLiteralExpression, intentionally
                 // opaque since the body is a separate lexical scope —
                 // matching BoundTreeRewriter).
+                break;
+            case BoundNodeKind.MethodGroupExpression:
+                VisitMethodGroupExpression((BoundMethodGroupExpression)node);
                 break;
             case BoundNodeKind.AssignmentExpression:
                 VisitAssignmentExpression((BoundAssignmentExpression)node);
@@ -652,6 +654,14 @@ public abstract class BoundTreeWalker
     }
 
     protected virtual void VisitClrMethodGroupExpression(BoundClrMethodGroupExpression node)
+    {
+        if (node.Receiver != null)
+        {
+            VisitExpression(node.Receiver);
+        }
+    }
+
+    protected virtual void VisitMethodGroupExpression(BoundMethodGroupExpression node)
     {
         if (node.Receiver != null)
         {

@@ -1165,6 +1165,30 @@ internal sealed class ReflectionMetadataEmitter
             this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
         }
 
+        // Issue #503: pre-register synthesized closure class ctor handles too.
+        // Closure classes live at the END of nonSmClasses (they are appended
+        // after user aggregates so user TypeDefs come first), but a user
+        // class's `init` body or instance method may construct a capturing
+        // lambda whose closure class hasn't had its ctor emitted yet —
+        // EmitFunctionLiteral would then throw "Closure class … has no
+        // emitted constructor". The closure ctor's MethodDef row is already
+        // reserved by the planner at line ~733, so claim that handle up-front
+        // (same trick used for SM classes above). The actual ctor body is
+        // still emitted in the planned row order during the main nonSmClasses
+        // loop below.
+        foreach (var c in nonSmClasses)
+        {
+            if (!this.synthesizedClosureClasses.Contains(c))
+            {
+                continue;
+            }
+
+            if (classCtorRows.TryGetValue(c, out var closureCtorRow))
+            {
+                this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(closureCtorRow);
+            }
+        }
+
         // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
         // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
         var programTypeDefHandles = new Dictionary<PackageSymbol, TypeDefinitionHandle>();
@@ -12764,18 +12788,48 @@ internal sealed class ReflectionMetadataEmitter
         /// user-declared named delegate type using its emitted <c>.ctor</c>
         /// MethodDef handle. Mirrors
         /// <see cref="EmitMethodGroup(BoundMethodGroupExpression, Type)"/>.
+        /// Issue #503 follow-up: instance method groups load the receiver
+        /// first so the resulting delegate's <c>Target</c> binds to the
+        /// captured instance.
         /// </summary>
         private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, MethodDefinitionHandle delegateCtorHandle)
         {
-            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var staticHandle))
+            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
+                && !this.outer.methodHandles.TryGetValue(methodGroup.Function, out staticHandle))
             {
                 throw new InvalidOperationException(
                     $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
             }
 
-            this.il.OpCode(ILOpCode.Ldnull);
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(staticHandle);
+            if (methodGroup.Receiver == null)
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(staticHandle);
+            }
+            else
+            {
+                this.EmitExpression(methodGroup.Receiver);
+
+                if (IsValueTypeSymbol(methodGroup.Receiver.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
+                }
+
+                if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride)
+                {
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.il.OpCode(ILOpCode.Ldvirtftn);
+                    this.il.Token(staticHandle);
+                }
+                else
+                {
+                    this.il.OpCode(ILOpCode.Ldftn);
+                    this.il.Token(staticHandle);
+                }
+            }
+
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(delegateCtorHandle);
         }
@@ -15536,7 +15590,26 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitInstanceReceiver(node.Receiver);
             }
 
-            this.EmitExpression(node.Handler);
+            // Issue #503: function-literal handlers default to Action/Func
+            // when emitted standalone, but the add_X / remove_X accessor takes
+            // the event's declared delegate type (e.g. System.EventHandler, or
+            // a CLR-delegate named in the event clause). Without this
+            // redirection, an Action<object, EventArgs> is pushed and the IL
+            // is unverifiable / crashes at runtime — the silent MSB4181 the
+            // issue reports. Apply the same delegate-type override the CLR
+            // event path (EmitClrEventSubscription) already uses, so capturing
+            // and non-capturing lambdas both flow through the closure builder
+            // with the correct target delegate ctor (object, IntPtr).
+            if (node.Handler is BoundFunctionLiteralExpression literalHandler
+                && node.Event.Type?.ClrType != null)
+            {
+                var mappedDelegateType = this.outer.MapToReferenceClrType(node.Event.Type.ClrType);
+                this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
+            }
+            else
+            {
+                this.EmitExpression(node.Handler);
+            }
 
             if (this.outer.eventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
             {
@@ -15892,9 +15965,17 @@ internal sealed class ReflectionMetadataEmitter
         // <Delegate>::.ctor(object, IntPtr)`. The delegate type is the target
         // when one is supplied (a `Func[...]`/`Action[...]` conversion target),
         // otherwise the native delegate for the function's own signature.
+        //
+        // Issue #503 follow-up: when the method group binds an instance method
+        // (e.g. `this.OnHit` or a bare `OnHit` inside the declaring class) the
+        // emitter loads the receiver first and uses `ldftn`/`ldvirtftn` so the
+        // resulting delegate's `Target` is the captured instance. This is the
+        // user-event method-group subscription path; CLR-event method groups
+        // already go through EmitClrMethodGroup.
         private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type overrideDelegateType)
         {
-            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var methodHandle))
+            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
+                && !this.outer.methodHandles.TryGetValue(methodGroup.Function, out methodHandle))
             {
                 throw new InvalidOperationException(
                     $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
@@ -15903,9 +15984,42 @@ internal sealed class ReflectionMetadataEmitter
             var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
             var delegateCtor = delegateType.GetConstructors()[0];
 
-            this.il.OpCode(ILOpCode.Ldnull);
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(methodHandle);
+            if (methodGroup.Receiver == null)
+            {
+                this.il.OpCode(ILOpCode.Ldnull);
+                this.il.OpCode(ILOpCode.Ldftn);
+                this.il.Token(methodHandle);
+            }
+            else
+            {
+                this.EmitExpression(methodGroup.Receiver);
+
+                // Box value-type receivers so the resulting delegate's Target
+                // slot (typed `object`) holds a reference. Mirrors the
+                // defensive box in EmitClrMethodGroup.
+                if (IsValueTypeSymbol(methodGroup.Receiver.Type))
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
+                }
+
+                // For an `open` (virtual) instance method, honor virtual
+                // dispatch via `ldvirtftn` so an override on a derived
+                // receiver is invoked. Non-virtual / sealed methods use
+                // `ldftn` directly.
+                if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride)
+                {
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.il.OpCode(ILOpCode.Ldvirtftn);
+                    this.il.Token(methodHandle);
+                }
+                else
+                {
+                    this.il.OpCode(ILOpCode.Ldftn);
+                    this.il.Token(methodHandle);
+                }
+            }
+
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(delegateCtor));
         }

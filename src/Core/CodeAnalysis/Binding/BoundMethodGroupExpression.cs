@@ -23,20 +23,40 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundMethodGroupExpression : BoundExpression
 {
     public BoundMethodGroupExpression(SyntaxNode syntax, FunctionSymbol function, FunctionTypeSymbol type)
+        : this(syntax, receiver: null, function, type)
+    {
+    }
+
+    public BoundMethodGroupExpression(SyntaxNode syntax, ImmutableArray<FunctionSymbol> candidates)
+        : this(syntax, receiver: null, candidates)
+    {
+    }
+
+    public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol function, FunctionTypeSymbol type)
         : base(syntax)
     {
+        Receiver = receiver;
         Function = function;
         FunctionType = type;
         Candidates = ImmutableArray.Create(function);
     }
 
-    public BoundMethodGroupExpression(SyntaxNode syntax, ImmutableArray<FunctionSymbol> candidates)
+    public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, ImmutableArray<FunctionSymbol> candidates)
         : base(syntax)
     {
+        Receiver = receiver;
         Function = candidates.IsDefaultOrEmpty ? null : candidates[0];
         FunctionType = null;
         Candidates = candidates;
     }
+
+    /// <summary>
+    /// Gets the bound receiver expression for an instance method group, or
+    /// <see langword="null"/> for a static/free-function method group. When
+    /// non-null, the emitter binds the resulting delegate's <c>Target</c> to
+    /// this receiver (<c>ldarg/ldfld; ldftn</c> or <c>dup; ldvirtftn</c>).
+    /// </summary>
+    public BoundExpression Receiver { get; }
 
     public FunctionSymbol Function { get; }
 
