@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -226,4 +227,14 @@ public sealed class FunctionSymbol : Symbol
     /// types live under <c>Lowering.Async</c>); callers cast to
     /// <c>SynthesizedStateMachineType</c>.</summary>
     public object StateMachineType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the by-reference passing mode of this function's return value
+    /// (issue #490 / ADR-0060 follow-up). Defaults to <see cref="Binding.RefKind.None"/>.
+    /// When set to <see cref="Binding.RefKind.Ref"/>, the function returns a managed
+    /// pointer (<c>T&amp;</c>) and the body must use <c>return ref &lt;lvalue&gt;</c>.
+    /// Only <see cref="Binding.RefKind.None"/> and <see cref="Binding.RefKind.Ref"/> are
+    /// valid here; <c>out</c>/<c>in</c> are not meaningful on a return position.
+    /// </summary>
+    public RefKind ReturnRefKind { get; set; } = RefKind.None;
 }

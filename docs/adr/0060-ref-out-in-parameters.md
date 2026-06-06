@@ -276,14 +276,14 @@ Func-typed parameters expressed via the structural `func(T1, T2) R` clause (ADR-
 
 **Foreclosed:**
 
-- `ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.
+- ~~`ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.~~ **Implemented in issue #490** — `func foo(ref x int32) ref int32 { return ref x }` is now parsed, bound, emitted (CLR `T&` return), and consumable from C# via reflection. Diagnostics GS0248–GS0255 cover the full surface, override / interface ref-return matching extends GS0240 with a dedicated GS0255, and the function-local escape check rejects `return ref local`.
 - `ref` local variables outside the existing `*T` form. Not addressed; users who want a managed-pointer local continue to use `var p *int32 = &x` per ADR-0039.
 - `params` / variadic `ref`/`out`/`in` parameters. Rejected by GS0236 at parse/bind time and not on any roadmap (the CLR has no array-of-byref encoding).
 - Conditional ref-passing (`f(ok ? ref x : ref y)`). The ternary form requires both branches to produce the same lvalue *category*, which is a meaningful escape-analysis question; deferred until there is concrete demand.
 
 **Other ADRs constrained:**
 
-- A future ADR introducing `ref` returns must compose with §5's body lowering: the `BoundIndirectAssignmentExpression` shape extends naturally to `BoundRefReturnStatement`.
+- ~~A future ADR introducing `ref` returns must compose with §5's body lowering: the `BoundIndirectAssignmentExpression` shape extends naturally to `BoundRefReturnStatement`.~~ **Implemented in issue #490** — `BoundReturnStatement` gained an `IsRef` flag and wraps the operand in `BoundAddressOfExpression`; the emitter emits `EmitAddressOf` before `ret`, mirroring the `BoundIndirectAssignmentExpression` lowering shape.
 - A future relaxation of GS0237 (auto-spill at `in` argument positions) would convert the warning into a silent compiler-inserted temp; it should preserve the *option* to opt back in to strict mode via a package-level pragma.
 - The `customize` partial-class support (multi-package emit, ADR-0028) must propagate `ParameterSymbol.RefKind` across partial declarations and surface a mismatch diagnostic if two partial declarations disagree on the modifier.
 
@@ -351,7 +351,7 @@ The opposite extreme of Option E: deprecate ADR-0039's `*T` type and `&x` operat
 ## Follow-ups
 
 - **`ref` returns.** A G# function returning `ref T` (managed-pointer return) requires escape-analysis integration per ADR-0058. Tracked separately.
-- **`ref` locals beyond `*T`.** ✅ Implemented in issue #491: `let ref x = expr` / `var ref x = expr` binds `x` as an alias to an lvalue. The local's IL slot is `T&`; reads emit `ldloc; ldind.*`, writes `ldloc; value; stind.*`. Aliasing is rejected at top level, inside `async`/iterator functions, and as `const ref` (diagnostics GS0248–GS0250). Cross-function escape (ref returns / RSTE) is still tracked under "ref returns" above.
+- **`ref` locals beyond `*T`.** ✅ Implemented in issue #491: `let ref x = expr` / `var ref x = expr` binds `x` as an alias to an lvalue. The local's IL slot is `T&`; reads emit `ldloc; ldind.*`, writes `ldloc; value; stind.*`. Aliasing is rejected at top level, inside `async`/iterator functions, and as `const ref` (diagnostics GS0256–GS0258). Cross-function escape (ref returns / RSTE) is still tracked under "ref returns" above.
 - **`in`-elision opt-in.** If GS0237 proves uniformly silenced by users mechanically adding `in`, a future ADR may revisit and either tighten (to error) or relax (with a compiler-inserted temp under an opt-in pragma). Today the design errs toward visible cost.
 - **Conditional ref-passing.** `f(cond ? ref x : ref y)` and similar lvalue-ternary forms; a focused mini-ADR after ref-safe-to-escape's data-flow tracker is mature.
 - **`scoped ref` / `scoped out` / `scoped in` parameters.** §2 admits `scoped ref` syntactically; ADR-0058 specifies the enforcement for `scoped` on `*T`. The full propagation matrix for the keyword-form ref-kind parameters needs a follow-up test-pass once §11's diagnostics are wired up.

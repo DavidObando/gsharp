@@ -1527,6 +1527,7 @@ public sealed class Binder
                     var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
                     var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
                     var methodParameters = parameters.ToImmutable();
+                    var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
@@ -1541,25 +1542,38 @@ public sealed class Binder
                         {
                             Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
                         }
-                        else if (!SignaturesMatch(baseMethod, methodParameters, returnType))
+                        else if (!SignaturesMatch(baseMethod, methodParameters, returnType, methodReturnRefKind))
                         {
                             // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
                             // a general signature mismatch (the existing diagnostic), so the
                             // user sees the specific parameter and modifier that disagree.
-                            var refMismatchIdx = FindRefKindMismatchIndex(baseMethod, methodParameters, returnType);
-                            if (refMismatchIdx >= 0)
+                            // Issue #490: also surface a dedicated diagnostic when only the
+                            // *return* ref-kind disagrees.
+                            if (baseMethod.Type == returnType && baseMethod.ReturnRefKind != methodReturnRefKind)
                             {
-                                var baseCallable = GetCallableParameters(baseMethod);
-                                Diagnostics.ReportOverrideRefKindMismatch(
+                                Diagnostics.ReportOverrideReturnRefKindMismatch(
                                     methodSyntax.Identifier.Location,
                                     methodName,
-                                    methodParameters[refMismatchIdx].Name,
-                                    RefKindToString(baseCallable[refMismatchIdx].RefKind),
-                                    RefKindToString(methodParameters[refMismatchIdx].RefKind));
+                                    baseMethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
+                                    methodReturnRefKind == RefKind.Ref ? "by ref" : "by value");
                             }
                             else
                             {
-                                Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                                var refMismatchIdx = FindRefKindMismatchIndex(baseMethod, methodParameters, returnType);
+                                if (refMismatchIdx >= 0)
+                                {
+                                    var baseCallable = GetCallableParameters(baseMethod);
+                                    Diagnostics.ReportOverrideRefKindMismatch(
+                                        methodSyntax.Identifier.Location,
+                                        methodName,
+                                        methodParameters[refMismatchIdx].Name,
+                                        RefKindToString(baseCallable[refMismatchIdx].RefKind),
+                                        RefKindToString(methodParameters[refMismatchIdx].RefKind));
+                                }
+                                else
+                                {
+                                    Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                                }
                             }
                         }
                         else
@@ -1587,6 +1601,7 @@ public sealed class Binder
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.TypeParameters = methodTypeParameters;
+                    methodSymbol.ReturnRefKind = methodReturnRefKind;
                     AttachDocumentation(methodSymbol, methodSyntax);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
@@ -2061,6 +2076,7 @@ public sealed class Binder
 
                     var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
                     var methodAccessibility = ResolveAccessibility(methodSyntax.AccessibilityModifier);
+                    var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
                     var methodSymbol = new FunctionSymbol(
                         methodName,
@@ -2073,6 +2089,7 @@ public sealed class Binder
                     methodSymbol.IsStatic = true;
                     methodSymbol.StaticOwnerType = structSymbol;
                     methodSymbol.TypeParameters = methodTypeParameters;
+                    methodSymbol.ReturnRefKind = methodReturnRefKind;
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
@@ -2396,29 +2413,42 @@ public sealed class Binder
                             iface.Name,
                             imethod.Name);
                     }
-                    else if (!SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type))
+                    else if (!SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type, impl.ReturnRefKind))
                     {
                         // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
                         // an unrelated signature mismatch (the existing diagnostic).
-                        var refMismatchIdx = FindRefKindMismatchIndex(imethod, GetCallableParameters(impl), impl.Type);
-                        if (refMismatchIdx >= 0)
+                        // Issue #490: also surface a dedicated diagnostic when only the
+                        // *return* ref-kind disagrees.
+                        if (imethod.Type == impl.Type && imethod.ReturnRefKind != impl.ReturnRefKind)
                         {
-                            var implCallable = GetCallableParameters(impl);
-                            var ifaceCallable = GetCallableParameters(imethod);
-                            Diagnostics.ReportOverrideRefKindMismatch(
+                            Diagnostics.ReportOverrideReturnRefKindMismatch(
                                 syntax.Identifier.Location,
                                 imethod.Name,
-                                ifaceCallable[refMismatchIdx].Name,
-                                RefKindToString(ifaceCallable[refMismatchIdx].RefKind),
-                                RefKindToString(implCallable[refMismatchIdx].RefKind));
+                                imethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
+                                impl.ReturnRefKind == RefKind.Ref ? "by ref" : "by value");
                         }
                         else
                         {
-                            Diagnostics.ReportInterfaceMethodNotImplemented(
-                                syntax.Identifier.Location,
-                                structSymbol.Name,
-                                iface.Name,
-                                imethod.Name);
+                            var refMismatchIdx = FindRefKindMismatchIndex(imethod, GetCallableParameters(impl), impl.Type);
+                            if (refMismatchIdx >= 0)
+                            {
+                                var implCallable = GetCallableParameters(impl);
+                                var ifaceCallable = GetCallableParameters(imethod);
+                                Diagnostics.ReportOverrideRefKindMismatch(
+                                    syntax.Identifier.Location,
+                                    imethod.Name,
+                                    ifaceCallable[refMismatchIdx].Name,
+                                    RefKindToString(ifaceCallable[refMismatchIdx].RefKind),
+                                    RefKindToString(implCallable[refMismatchIdx].RefKind));
+                            }
+                            else
+                            {
+                                Diagnostics.ReportInterfaceMethodNotImplemented(
+                                    syntax.Identifier.Location,
+                                    structSymbol.Name,
+                                    iface.Name,
+                                    imethod.Name);
+                            }
                         }
                     }
                 }
@@ -2593,6 +2623,7 @@ public sealed class Binder
             }
 
             var returnType = BindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+            var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
             var methodSymbol = new FunctionSymbol(
                 methodName,
                 parameters.ToImmutable(),
@@ -2601,6 +2632,7 @@ public sealed class Binder
                 package,
                 Accessibility.Public,
                 receiverType: null);
+            methodSymbol.ReturnRefKind = methodReturnRefKind;
             AttachDocumentation(methodSymbol, methodSyntax);
             methodsBuilder.Add(methodSymbol);
         }
@@ -2853,6 +2885,13 @@ public sealed class Binder
             // ADR-0041: bind the return type with async-aware alias resolution.
             var type = BindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
 
+            // Issue #490 (ADR-0060 follow-up): a `ref` return modifier on the declaration
+            // is only valid when an explicit return-type clause is present, the function is
+            // not async, and the return is not a sequence/async-sequence (the state-machine
+            // rewriter cannot hoist a managed pointer into a field — same constraint as
+            // ref-kind parameters per ADR-0058 §4).
+            var returnRefKind = ValidateReturnRefKind(syntax, type);
+
             // ADR-0060 §10: post-bind check — if this is a sequence/async-sequence
             // function, ref-kind parameters are forbidden. (The async-only check
             // is handled earlier in the parameter loop.)
@@ -2977,6 +3016,7 @@ public sealed class Binder
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
                 function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+                function.ReturnRefKind = returnRefKind;
                 AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
                 methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
@@ -2986,6 +3026,7 @@ public sealed class Binder
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || IsAsyncIteratorReturnType(type);
+            function.ReturnRefKind = returnRefKind;
             AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);
 
@@ -3147,8 +3188,18 @@ public sealed class Binder
     }
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)
+        => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, RefKind.None);
+
+    private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType, RefKind derivedReturnRefKind)
     {
         if (baseMethod.Type != derivedReturnType)
+        {
+            return false;
+        }
+
+        // Issue #490: ref-returning methods must agree on the ref-return-ness with their
+        // base or interface; otherwise the override is signature-incompatible.
+        if (baseMethod.ReturnRefKind != derivedReturnRefKind)
         {
             return false;
         }
@@ -3179,7 +3230,7 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// ADR-0060 §9: when <see cref="SignaturesMatch"/> rejected an override / interface
+    /// ADR-0060 §9: when <see cref="SignaturesMatch(FunctionSymbol, ImmutableArray{ParameterSymbol}, TypeSymbol)"/> rejected an override / interface
     /// implementation, returns the index of the first parameter whose ref-kind disagrees
     /// (return type and pointee types all matching). Returns -1 when the disagreement is
     /// something other than a ref-kind mismatch (so the caller can fall back to the generic
@@ -3219,6 +3270,52 @@ public sealed class Binder
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #490 (ADR-0060 follow-up): validates a function's optional <c>ref</c> return modifier
+    /// against the declared return type and async/iterator constraints, reporting diagnostics
+    /// for invalid combinations. Returns <see cref="RefKind.Ref"/> when the function should be
+    /// modeled as ref-returning, <see cref="RefKind.None"/> otherwise.
+    /// </summary>
+    private RefKind ValidateReturnRefKind(FunctionDeclarationSyntax syntax, TypeSymbol returnType)
+    {
+        if (!syntax.IsRefReturn)
+        {
+            return RefKind.None;
+        }
+
+        if (syntax.Type == null)
+        {
+            Diagnostics.ReportRefReturnRequiresReturnType(syntax.ReturnRefModifier.Location);
+            return RefKind.None;
+        }
+
+        if (syntax.IsAsync)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "async");
+            return RefKind.None;
+        }
+
+        if (returnType is SequenceTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "sequence");
+            return RefKind.None;
+        }
+
+        if (returnType is AsyncSequenceTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "async sequence");
+            return RefKind.None;
+        }
+
+        if (returnType is ByRefTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOfByRefType(syntax.ReturnRefModifier.Location);
+            return RefKind.None;
+        }
+
+        return RefKind.Ref;
+    }
 
     private static Accessibility ResolveAccessibility(SyntaxToken modifier)
     {
@@ -5995,6 +6092,33 @@ public sealed class Binder
 
         var expression = syntax.Expression == null ? null : BindExpression(syntax.Expression);
 
+        // Issue #490 (ADR-0060 follow-up): validate the `return ref` / `return` form
+        // against the function's declared return ref-kind. Then, for ref returns, wrap
+        // the operand in a BoundAddressOfExpression and run lvalue + escape-scope checks.
+        var isRefReturn = false;
+        if (function != null)
+        {
+            var fnIsRefReturning = function.ReturnRefKind == RefKind.Ref;
+
+            if (syntax.IsRefReturn && !fnIsRefReturning)
+            {
+                Diagnostics.ReportRefReturnInNonRefReturningFunction(
+                    syntax.RefKeyword.Location,
+                    function.Name);
+            }
+            else if (!syntax.IsRefReturn && fnIsRefReturning && syntax.Expression != null)
+            {
+                // The function is ref-returning but the statement omits `ref`.
+                Diagnostics.ReportRefReturnRequiredOnRefReturningFunction(
+                    syntax.ReturnKeyword.Location,
+                    function.Name);
+            }
+            else if (syntax.IsRefReturn && fnIsRefReturning)
+            {
+                isRefReturn = true;
+            }
+        }
+
         if (function == null)
         {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location);
@@ -6026,7 +6150,9 @@ public sealed class Binder
             // ADR-0039 §4 / ADR-0058: a managed-pointer (*T) value cannot be returned from
             // a function — the callee's stack frame (containing the pointed-to variable) is
             // invalid after the function returns. Diagnose with GS9004.
-            if (expression.Type is ByRefTypeSymbol)
+            // Exception (issue #490): a ref-returning function legitimately yields T&; the
+            // managed-pointer wrap happens via the synthesized BoundAddressOfExpression below.
+            if (expression.Type is ByRefTypeSymbol && !isRefReturn)
             {
                 Diagnostics.ReportByRefCannotEscape(
                     syntax.Expression.Location,
@@ -6046,7 +6172,100 @@ public sealed class Binder
             }
         }
 
-        return new BoundReturnStatement(syntax, expression);
+        // Issue #490: convert a `return ref <lvalue>` into a BoundAddressOfExpression so the
+        // emitter knows to take the address (ldloca / ldarga / ldflda / ldelema) and the
+        // method signature returns T&. Validate lvalue-ness and ref-safe-to-escape scope.
+        if (isRefReturn && expression != null && expression.Type != TypeSymbol.Error)
+        {
+            if (!IsLvalueForRefReturn(expression))
+            {
+                Diagnostics.ReportRefReturnRequiresLvalue(syntax.Expression.Location);
+            }
+            else if (HasFunctionLocalRefScope(expression))
+            {
+                Diagnostics.ReportRefReturnEscapesLocalScope(syntax.Expression.Location);
+            }
+
+            expression = new BoundAddressOfExpression(syntax.Expression, expression);
+        }
+
+        return new BoundReturnStatement(syntax, expression, isRefReturn);
+    }
+
+    /// <summary>
+    /// Issue #490: returns true when <paramref name="expr"/> denotes a stable lvalue whose
+    /// address can be safely taken for a <c>return ref</c>.
+    /// </summary>
+    private static bool IsLvalueForRefReturn(BoundExpression expr)
+    {
+        switch (expr)
+        {
+            case BoundVariableExpression:
+                return true;
+            case BoundFieldAccessExpression:
+                return true;
+            case BoundIndexExpression:
+                return true;
+            case BoundDereferenceExpression:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #490: returns true when <paramref name="expr"/>'s ref-safe-to-escape scope is
+    /// function-local — i.e. the underlying storage dies at function exit and cannot be
+    /// returned as a managed pointer. ADR-0058 conservative single-pass propagation:
+    /// returning a local variable, a <c>scoped</c> parameter, a field of a local, or any
+    /// expression rooted in those is rejected. Returning a parameter (non-<c>scoped</c>) or
+    /// a field/element of one is permitted (the caller's slot outlives the callee).
+    /// </summary>
+    private static bool HasFunctionLocalRefScope(BoundExpression expr)
+    {
+        switch (expr)
+        {
+            case BoundVariableExpression v:
+                // Plain locals die with the frame; non-scoped parameters / globals survive.
+                if (v.Variable is ParameterSymbol p)
+                {
+                    return p.IsScoped;
+                }
+
+                if (v.Variable is GlobalVariableSymbol)
+                {
+                    return false;
+                }
+
+                // Any other LocalVariableSymbol (let/var inside the function body) is local-scope.
+                return v.Variable is LocalVariableSymbol;
+            case BoundFieldAccessExpression fa:
+                // Reference type fields live in a heap object — safe regardless of receiver scope.
+                if (fa.Receiver.Type is StructSymbol s && s.IsClass)
+                {
+                    return false;
+                }
+
+                // Static field: lives on the type, safe.
+                if (fa.Receiver == null)
+                {
+                    return false;
+                }
+
+                // Value-type field: inherits the receiver's storage scope.
+                return HasFunctionLocalRefScope(fa.Receiver);
+            case BoundIndexExpression idx:
+                // Array / slice elements live on the heap (System.Array / underlying buffer);
+                // the element's storage outlives the function frame regardless of the local
+                // alias used to reach it.
+                return false;
+            case BoundDereferenceExpression deref:
+                // *p has whatever scope `p` itself yields; conservative — if p is a local
+                // variable of *T, its current value points into the local frame.
+                return HasFunctionLocalRefScope(deref.Operand);
+            default:
+                return true;
+        }
     }
 
     private BoundStatement BindExpressionStatement(ExpressionStatementSyntax syntax)

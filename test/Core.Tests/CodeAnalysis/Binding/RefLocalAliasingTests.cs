@@ -75,7 +75,7 @@ tweak()
     }
 
     [Fact]
-    public void LetRef_NonLvalueRhs_ReportsGS0248()
+    public void LetRef_NonLvalueRhs_ReportsGS0256()
     {
         var source = @"
 func tweak() {
@@ -85,11 +85,11 @@ tweak()
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0248");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0256");
     }
 
     [Fact]
-    public void LetRef_LiteralRhs_ReportsGS0248()
+    public void LetRef_LiteralRhs_ReportsGS0256()
     {
         var source = @"
 func tweak() {
@@ -99,7 +99,7 @@ tweak()
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0248");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0256");
     }
 
     [Fact]
@@ -119,7 +119,7 @@ tweak()
     }
 
     [Fact]
-    public void LetRef_AtTopLevel_ReportsGS0250()
+    public void LetRef_AtTopLevel_ReportsGS0258()
     {
         var source = @"
 var n int32 = 7
@@ -127,11 +127,11 @@ let ref m = n
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0250");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
     }
 
     [Fact]
-    public void LetRef_InAsyncFunction_ReportsGS0250()
+    public void LetRef_InAsyncFunction_ReportsGS0258()
     {
         var source = @"
 async func tweak() {
@@ -142,7 +142,7 @@ tweak()
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0250");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
     }
 
     [Fact]
@@ -157,7 +157,7 @@ tweak()
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0250");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
     }
 
     [Fact]
