@@ -560,19 +560,23 @@ public sealed class Binder
         // instance methods, the constructor body sees `this`, the constructor
         // parameters, and the class's fields (via bare names). The body is keyed
         // in functionBodies by the constructor's underlying FunctionSymbol.
+        // ADR-0063 §9: a class may declare multiple init(...) constructors; each
+        // body is bound independently.
         foreach (var structSym in globalScope.Structs)
         {
-            var ctor = structSym.ExplicitConstructor;
-            if (ctor == null)
+            if (structSym.ExplicitConstructors.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            var ctorBinder = new Binder(parentScope, ctor.Function);
-            var ctorBody = ctorBinder.BindStatement(ctor.Declaration.Body);
-            var ctorLoweredBody = Lowerer.Lower(ctorBody, structSym);
-            functionBodies.Add(ctor.Function, ctorLoweredBody);
-            diagnostics.AddRange(ctorBinder.Diagnostics);
+            foreach (var ctor in structSym.ExplicitConstructors)
+            {
+                var ctorBinder = new Binder(parentScope, ctor.Function);
+                var ctorBody = ctorBinder.BindStatement(ctor.Declaration.Body);
+                var ctorLoweredBody = Lowerer.Lower(ctorBody, structSym);
+                functionBodies.Add(ctor.Function, ctorLoweredBody);
+                diagnostics.AddRange(ctorBinder.Diagnostics);
+            }
         }
 
         // ADR-0051: bind computed property accessor bodies. These are analogous
@@ -1541,21 +1545,47 @@ public sealed class Binder
                     FunctionSymbol overriddenMethod = null;
                     if (methodSyntax.IsOverride)
                     {
-                        if (structSymbol.BaseClass == null || !structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var baseMethod))
+                        // ADR-0063 §8: when the base exposes a name-overload set, the
+                        // override targets the entry whose signature matches exactly;
+                        // an unrelated same-name overload no longer steals the slot.
+                        var baseOverloads = structSymbol.BaseClass?.GetMethodsIncludingInherited(methodName)
+                            ?? System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
+                        FunctionSymbol baseMethod = null;
+                        FunctionSymbol baseSignatureMatch = null;
+                        foreach (var candidate in baseOverloads)
+                        {
+                            baseMethod ??= candidate;
+                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind))
+                            {
+                                baseSignatureMatch = candidate;
+                                break;
+                            }
+                        }
+
+                        if (baseMethod == null)
                         {
                             Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                        }
+                        else if (baseSignatureMatch != null)
+                        {
+                            if (!baseSignatureMatch.IsOpen)
+                            {
+                                Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                            }
+                            else
+                            {
+                                overriddenMethod = baseSignatureMatch;
+                            }
                         }
                         else if (!baseMethod.IsOpen)
                         {
                             Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
                         }
-                        else if (!SignaturesMatch(baseMethod, methodParameters, returnType, methodReturnRefKind))
+                        else
                         {
-                            // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
-                            // a general signature mismatch (the existing diagnostic), so the
-                            // user sees the specific parameter and modifier that disagree.
-                            // Issue #490: also surface a dedicated diagnostic when only the
-                            // *return* ref-kind disagrees.
+                            // No matching overload signature: surface the most specific
+                            // diagnostic against the first (this-first) base overload to
+                            // preserve the existing error message shape.
                             if (baseMethod.Type == returnType && baseMethod.ReturnRefKind != methodReturnRefKind)
                             {
                                 Diagnostics.ReportOverrideReturnRefKindMismatch(
@@ -1583,17 +1613,27 @@ public sealed class Binder
                                 }
                             }
                         }
-                        else
-                        {
-                            overriddenMethod = baseMethod;
-                        }
                     }
-                    else if (structSymbol.BaseClass != null
-                        && structSymbol.BaseClass.TryGetMethodIncludingInherited(methodName, out var shadowed)
-                        && shadowed.IsOpen)
+                    else if (structSymbol.BaseClass != null)
                     {
-                        // Method shadows an overridable base method without `override`.
-                        Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                        // ADR-0063 §8: only diagnose missing-override against a base
+                        // overload whose signature is the same as the new declaration.
+                        // A new same-name overload that does not match any base entry
+                        // is a brand-new overload, not an accidental shadow.
+                        var baseOverloads = structSymbol.BaseClass.GetMethodsIncludingInherited(methodName);
+                        foreach (var shadowed in baseOverloads)
+                        {
+                            if (!shadowed.IsOpen)
+                            {
+                                continue;
+                            }
+
+                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind))
+                            {
+                                Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                                break;
+                            }
+                        }
                     }
 
                     var methodSymbol = new FunctionSymbol(
@@ -2453,7 +2493,23 @@ public sealed class Binder
             {
                 foreach (var imethod in iface.Methods)
                 {
-                    if (!structSymbol.TryGetMethodIncludingInherited(imethod.Name, out var impl))
+                    // ADR-0063 §8: implementing class may have multiple methods
+                    // with the same name; pick the one whose signature matches
+                    // this specific interface overload exactly.
+                    var implCandidates = structSymbol.GetMethodsIncludingInherited(imethod.Name);
+                    FunctionSymbol impl = null;
+                    FunctionSymbol signatureMatch = null;
+                    foreach (var candidate in implCandidates)
+                    {
+                        impl ??= candidate;
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind))
+                        {
+                            signatureMatch = candidate;
+                            break;
+                        }
+                    }
+
+                    if (impl == null)
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
@@ -2461,7 +2517,7 @@ public sealed class Binder
                             iface.Name,
                             imethod.Name);
                     }
-                    else if (!SignaturesMatch(imethod, GetCallableParameters(impl), impl.Type, impl.ReturnRefKind))
+                    else if (signatureMatch == null)
                     {
                         // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
                         // an unrelated signature mismatch (the existing diagnostic).
@@ -8958,13 +9014,82 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// ADR-0063 §6: simple best-overload selector for user-defined functions.
-    /// Filters the candidate set by applicability (arity / optional / variadic
-    /// reach + named-argument names match a parameter), then picks the one
-    /// whose argument types best match. Sets <paramref name="ambiguous"/>
-    /// when two candidates tie.
+    /// ADR-0063: thin wrapper around <see cref="SelectBestInstanceOverload"/>
+    /// that reports the standard ambiguity / no-applicable-overload diagnostics
+    /// when more than one candidate is supplied. When a single candidate is
+    /// supplied the wrapper returns it unchanged so legacy single-overload
+    /// callsites keep their existing diagnostics (wrong arity, etc.).
     /// </summary>
+    private FunctionSymbol SelectInstanceOverloadOrReport(
+        ImmutableArray<FunctionSymbol> overloads,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        string methodName,
+        ImmutableArray<string> argumentNames)
+    {
+        if (overloads.Length <= 1)
+        {
+            return overloads.Length == 1 ? overloads[0] : null;
+        }
+
+        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous);
+        if (selected != null)
+        {
+            return selected;
+        }
+
+        if (ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverloadResolution(ce.Identifier.Location, methodName);
+        }
+        else
+        {
+            Diagnostics.ReportNoApplicableOverload(ce.Identifier.Location, methodName);
+        }
+
+        return null;
+    }
+
     private FunctionSymbol SelectBestUserOverload(
+        ImmutableArray<FunctionSymbol> candidates,
+        int argumentCount,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        out bool ambiguous)
+    {
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous);
+    }
+
+    /// <summary>
+    /// ADR-0063 §6: instance-method overload selection. Filters a candidate set
+    /// of methods (each may or may not carry an explicit receiver parameter) by
+    /// callable arity, named-argument compatibility, and optional-parameter
+    /// applicability, then ranks by exact-type matches and defaulted slots.
+    /// </summary>
+    private FunctionSymbol SelectBestInstanceOverload(
+        ImmutableArray<FunctionSymbol> candidates,
+        int argumentCount,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression> boundArguments,
+        out bool ambiguous)
+    {
+        ambiguous = false;
+        if (candidates.Length == 0)
+        {
+            return null;
+        }
+
+        if (candidates.Length == 1)
+        {
+            return candidates[0];
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Length);
+        builder.AddRange(boundArguments);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous);
+    }
+
+    private FunctionSymbol SelectBestUserOverloadCore(
         ImmutableArray<FunctionSymbol> candidates,
         int argumentCount,
         ImmutableArray<string> argumentNames,
@@ -9001,8 +9126,9 @@ public sealed class Binder
         var tie = false;
         foreach (var cand in applicable)
         {
-            var paramLen = cand.Parameters.Length;
-            var isVariadic = paramLen > 0 && cand.Parameters[paramLen - 1].IsVariadic;
+            var parameterOffset = cand.ExplicitReceiverParameter == null ? 0 : 1;
+            var paramLen = cand.Parameters.Length - parameterOffset;
+            var isVariadic = paramLen > 0 && cand.Parameters[cand.Parameters.Length - 1].IsVariadic;
             var paramCountForScore = isVariadic ? paramLen - 1 : paramLen;
             var defaultsUsed = paramCountForScore - argumentCount;
             if (defaultsUsed < 0)
@@ -9017,7 +9143,7 @@ public sealed class Binder
             for (var i = 0; i < paramCountForScore && i < boundArguments.Count; i++)
             {
                 var argType = boundArguments[i]?.Type;
-                var paramType = cand.Parameters[i].Type;
+                var paramType = cand.Parameters[i + parameterOffset].Type;
                 if (argType != null && paramType != null && argType == paramType)
                 {
                     score -= 10;
@@ -9051,15 +9177,16 @@ public sealed class Binder
     /// </summary>
     private static bool IsApplicableUserCallable(FunctionSymbol candidate, int argumentCount, ImmutableArray<string> argumentNames)
     {
-        var paramLen = candidate.Parameters.Length;
-        var isVariadic = paramLen > 0 && candidate.Parameters[paramLen - 1].IsVariadic;
+        var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+        var paramLen = candidate.Parameters.Length - parameterOffset;
+        var isVariadic = paramLen > 0 && candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
 
         // Compute required (non-optional) leading-parameter count.
         var requiredParamCount = paramLen;
         for (var i = paramLen - 1; i >= 0; i--)
         {
-            if (candidate.Parameters[i].HasExplicitDefaultValue)
+            if (candidate.Parameters[i + parameterOffset].HasExplicitDefaultValue)
             {
                 requiredParamCount = i;
             }
@@ -9095,7 +9222,7 @@ public sealed class Binder
                 var found = false;
                 for (var p = 0; p < paramLen; p++)
                 {
-                    if (candidate.Parameters[p].Name == n)
+                    if (candidate.Parameters[p + parameterOffset].Name == n)
                     {
                         found = true;
                         break;
@@ -10190,41 +10317,124 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
-        var parameters = classType.ExplicitConstructor.Parameters;
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        // ADR-0063 §9: when the class declares multiple init(...) constructors,
+        // bind the arguments first, then pick the constructor whose signature
+        // best matches the call. With a single constructor the existing
+        // single-overload diagnostics (wrong arity) still fire below.
+        var ctorOverloads = classType.ExplicitConstructors;
+        var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {
             // Issue #343: peel any named-argument wrapper before binding so the
             // value is bound in source order. We will permute below.
             var argument = UnwrapNamedArgumentValue(syntax.Arguments[ai]);
-            ParameterSymbol parameterForArg = ai < parameters.Length ? parameters[ai] : null;
+            ParameterSymbol parameterForArg = null;
+            if (ctorOverloads.Length == 1 && ai < ctorOverloads[0].Parameters.Length)
+            {
+                parameterForArg = ctorOverloads[0].Parameters[ai];
+            }
+
             if (argument is RefArgumentExpressionSyntax refArg)
             {
-                boundArguments.Add(BindRefArgumentExpression(refArg, parameterForArg));
+                boundArgumentsBuilder.Add(BindRefArgumentExpression(refArg, parameterForArg));
             }
             else
             {
-                boundArguments.Add(BindExpression(argument));
+                boundArgumentsBuilder.Add(BindExpression(argument));
             }
         }
 
-        if (syntax.Arguments.Count != parameters.Length)
+        ConstructorSymbol selectedCtor;
+        if (ctorOverloads.Length <= 1)
         {
-            Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, classType.Name, parameters.Length, syntax.Arguments.Count);
+            selectedCtor = classType.ExplicitConstructor;
+        }
+        else
+        {
+            var ctorFunctions = ImmutableArray.CreateBuilder<FunctionSymbol>(ctorOverloads.Length);
+            foreach (var c in ctorOverloads)
+            {
+                ctorFunctions.Add(c.Function);
+            }
+
+            var selectedFn = SelectBestInstanceOverload(
+                ctorFunctions.MoveToImmutable(),
+                syntax.Arguments.Count,
+                argumentNames,
+                boundArgumentsBuilder.ToImmutable(),
+                out var ambiguous);
+
+            if (selectedFn == null)
+            {
+                if (ambiguous)
+                {
+                    Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, classType.Name);
+                }
+                else
+                {
+                    Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                }
+
+                return new BoundErrorExpression(syntax);
+            }
+
+            selectedCtor = null;
+            foreach (var c in ctorOverloads)
+            {
+                if (ReferenceEquals(c.Function, selectedFn))
+                {
+                    selectedCtor = c;
+                    break;
+                }
+            }
+        }
+
+        var parameters = selectedCtor.Parameters;
+
+        // ADR-0063: synthesize defaults for any unsupplied trailing/middle
+        // optional parameters. Both arity-with-named-omission and
+        // trailing-omission go through this path.
+        var requestedArgCount = syntax.Arguments.Count;
+        if (requestedArgCount < parameters.Length)
+        {
+            var minRequired = parameters.Length;
+            for (var i = parameters.Length - 1; i >= 0; i--)
+            {
+                if (parameters[i].HasExplicitDefaultValue)
+                {
+                    minRequired = i;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (requestedArgCount < minRequired)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, classType.Name, parameters.Length, requestedArgCount);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+        else if (requestedArgCount > parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, classType.Name, parameters.Length, requestedArgCount);
             return new BoundErrorExpression(syntax);
         }
 
         // Issue #343: reorder into parameter order when the call mixes
-        // positional and named arguments.
+        // positional and named arguments. ADR-0063: also slot defaults for
+        // unsupplied optional parameters.
         ExpressionSyntax[] parameterSyntax;
-        if (!argumentNames.IsDefault)
+        var boundArguments = boundArgumentsBuilder;
+        if (!argumentNames.IsDefault || requestedArgCount < parameters.Length)
         {
-            if (!TryReorderUserCallArguments(
+            if (!TryReorderUserCallArgumentsWithDefaults(
                     syntax.Arguments,
                     boundArguments.ToImmutable(),
-                    parameters.Length,
-                    p => parameters[p].Name,
+                    parameters,
                     classType.Name,
+                    syntax.Identifier.Location,
                     out parameterSyntax,
                     out var permutedBound))
             {
@@ -10255,7 +10465,8 @@ public sealed class Binder
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
-            if (parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
+            if (i < parameterSyntax.Length
+                && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && IsFormattableStringTargetType(parameter.Type))
             {
                 convertedArguments.Add(BindInterpolatedStringAsFormattable(interpolatedCtorArg, parameter.Type));
@@ -10286,6 +10497,7 @@ public sealed class Binder
                 }
             }
 
+            var argLocation = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -10297,7 +10509,7 @@ public sealed class Binder
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(argLocation, parameter.Name, parameter.Type, argument.Type);
                 }
 
                 hasErrors = true;
@@ -10305,7 +10517,7 @@ public sealed class Binder
             }
             else
             {
-                convertedArguments.Add(BindConversion(parameterSyntax[i].Location, argument, parameter.Type));
+                convertedArguments.Add(BindConversion(argLocation, argument, parameter.Type));
             }
         }
 
@@ -10314,7 +10526,110 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
-        return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable());
+        return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable(), selectedCtor);
+    }
+
+    /// <summary>
+    /// ADR-0063 §9: variant of <c>TryReorderUserCallArguments</c> for constructor
+    /// calls that may omit trailing or middle optional parameters. For each
+    /// parameter slot not filled by a positional/named argument we synthesize a
+    /// default-value bound expression from the parameter symbol.
+    /// </summary>
+    private bool TryReorderUserCallArgumentsWithDefaults(
+        SeparatedSyntaxList<ExpressionSyntax> rawArguments,
+        ImmutableArray<BoundExpression> boundPositionalAndNamed,
+        ImmutableArray<ParameterSymbol> parameters,
+        string callableName,
+        TextLocation diagnosticLocation,
+        out ExpressionSyntax[] parameterSyntax,
+        out ImmutableArray<BoundExpression> permutedBound)
+    {
+        parameterSyntax = new ExpressionSyntax[parameters.Length];
+        var slotted = new BoundExpression[parameters.Length];
+        var filled = new bool[parameters.Length];
+
+        var firstNamedIndex = -1;
+        for (var i = 0; i < rawArguments.Count; i++)
+        {
+            if (rawArguments[i] is NamedArgumentExpressionSyntax)
+            {
+                firstNamedIndex = i;
+                break;
+            }
+        }
+
+        var positionalCount = firstNamedIndex >= 0 ? firstNamedIndex : rawArguments.Count;
+        if (positionalCount > parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(diagnosticLocation, callableName, parameters.Length, rawArguments.Count);
+            permutedBound = ImmutableArray<BoundExpression>.Empty;
+            return false;
+        }
+
+        for (var i = 0; i < positionalCount; i++)
+        {
+            slotted[i] = boundPositionalAndNamed[i];
+            filled[i] = true;
+            parameterSyntax[i] = rawArguments[i];
+        }
+
+        for (var i = positionalCount; i < rawArguments.Count; i++)
+        {
+            if (rawArguments[i] is not NamedArgumentExpressionSyntax named)
+            {
+                Diagnostics.ReportPositionalArgumentAfterNamedArgument(rawArguments[i].Location);
+                permutedBound = ImmutableArray<BoundExpression>.Empty;
+                return false;
+            }
+
+            var name = named.NameToken.Text;
+            var matched = false;
+            for (var p = 0; p < parameters.Length; p++)
+            {
+                if (parameters[p].Name == name)
+                {
+                    if (filled[p])
+                    {
+                        Diagnostics.ReportDuplicateNamedArgument(named.NameToken.Location, name);
+                        permutedBound = ImmutableArray<BoundExpression>.Empty;
+                        return false;
+                    }
+
+                    slotted[p] = boundPositionalAndNamed[i];
+                    filled[p] = true;
+                    parameterSyntax[p] = rawArguments[i];
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(named.NameToken.Location, callableName, name);
+                permutedBound = ImmutableArray<BoundExpression>.Empty;
+                return false;
+            }
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (filled[i])
+            {
+                continue;
+            }
+
+            if (!parameters[i].HasExplicitDefaultValue)
+            {
+                Diagnostics.ReportWrongArgumentCount(diagnosticLocation, callableName, parameters.Length, rawArguments.Count);
+                permutedBound = ImmutableArray<BoundExpression>.Empty;
+                return false;
+            }
+
+            slotted[i] = CreateOptionalUserDefaultArgument(parameters[i]);
+        }
+
+        permutedBound = ImmutableArray.Create(slotted);
+        return true;
     }
 
     private BoundExpression BindCallExpression(CallExpressionSyntax syntax)
@@ -10399,11 +10714,20 @@ public sealed class Binder
             // name matches a sibling method on the receiver type, dispatch via
             // `this.<method>(args)` automatically.
             if (this.function?.ThisParameter != null
-                && this.function.ReceiverType is StructSymbol implicitReceiverStruct
-                && implicitReceiverStruct.TryGetMethodIncludingInherited(syntax.Identifier.Text, out var implicitMethod))
+                && this.function.ReceiverType is StructSymbol implicitReceiverStruct)
             {
-                var implicitReceiver = new BoundVariableExpression(null, this.function.ThisParameter);
-                return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
+                var implicitOverloads = implicitReceiverStruct.GetMethodsIncludingInherited(syntax.Identifier.Text);
+                if (implicitOverloads.Length > 0)
+                {
+                    var implicitMethod = SelectInstanceOverloadOrReport(implicitOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    if (implicitMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var implicitReceiver = new BoundVariableExpression(null, this.function.ThisParameter);
+                    return BindUserInstanceCall(implicitReceiver, implicitMethod, boundArguments.ToImmutable(), syntax, argumentNames);
+                }
             }
 
             Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
@@ -12579,25 +12903,54 @@ public sealed class Binder
 
             // Phase 3.B.4: dispatch to a user-defined interface method when
             // the static receiver type is an interface.
-            if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv && ifaceRecv.TryGetMethod(methodName, out var ifaceMethod))
+            if (receiver != null && receiver.Type is InterfaceSymbol ifaceRecv)
             {
-                return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce, argumentNames);
+                var ifaceOverloads = ifaceRecv.GetMethods(methodName);
+                if (ifaceOverloads.Length > 0)
+                {
+                    var ifaceMethod = SelectInstanceOverloadOrReport(ifaceOverloads, arguments, ce, methodName, argumentNames);
+                    if (ifaceMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return BindUserInstanceCall(receiver, ifaceMethod, arguments, ce, argumentNames);
+                }
             }
 
             // Phase 4.2b / ADR-0020: dispatch through a type parameter's
             // sealed-interface constraint, just as if the receiver were
             // typed as the interface itself.
-            if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null
-                && tpRecv.InterfaceConstraint.TryGetMethod(methodName, out var tpIfaceMethod))
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null)
             {
-                return BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce, argumentNames);
+                var tpOverloads = tpRecv.InterfaceConstraint.GetMethods(methodName);
+                if (tpOverloads.Length > 0)
+                {
+                    var tpIfaceMethod = SelectInstanceOverloadOrReport(tpOverloads, arguments, ce, methodName, argumentNames);
+                    if (tpIfaceMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return BindUserInstanceCall(receiver, tpIfaceMethod, arguments, ce, argumentNames);
+                }
             }
 
             // Phase 3.B.3 sub-step 2b: dispatch to a user-defined class method
             // if receiver is a user struct symbol.
-            if (receiver != null && receiver.Type is StructSymbol userClass && userClass.TryGetMethodIncludingInherited(methodName, out var userMethod))
+            if (receiver != null && receiver.Type is StructSymbol userClass)
             {
-                return BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames);
+                var userOverloads = userClass.GetMethodsIncludingInherited(methodName);
+                if (userOverloads.Length > 0)
+                {
+                    var userMethod = SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames);
+                    if (userMethod == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames);
+                }
             }
 
             // Phase 3.B.6 / ADR-0019: extension function fallback for
@@ -12635,9 +12988,19 @@ public sealed class Binder
         // Prefer a user-defined class method when the receiver is a user
         // class symbol that has one with this name. (BCL lookup is the
         // fallback for imported CLR types.)
-        if (receiver.Type is StructSymbol userClassPriority && userClassPriority.TryGetMethodIncludingInherited(methodName, out var userMethodPriority))
+        if (receiver.Type is StructSymbol userClassPriority)
         {
-            return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames);
+            var priorityOverloads = userClassPriority.GetMethodsIncludingInherited(methodName);
+            if (priorityOverloads.Length > 0)
+            {
+                var userMethodPriority = SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames);
+                if (userMethodPriority == null)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames);
+            }
         }
 
         var clrType = receiver.Type.ClrType;
@@ -14747,15 +15110,57 @@ public sealed class Binder
             return;
         }
 
-        // Only a single explicit constructor is supported today; additional
-        // declarations are diagnosed rather than silently dropped.
-        for (var c = 1; c < syntax.Constructors.Length; c++)
+        // ADR-0063 §9: bind every declared init(...) constructor. Duplicate
+        // signatures are diagnosed as GS0264 the same way as duplicate method
+        // overloads, so each surviving ConstructorSymbol carries a unique
+        // signature within the overload family.
+        var ctorBuilder = ImmutableArray.CreateBuilder<ConstructorSymbol>();
+        foreach (var ctorSyntax in syntax.Constructors)
         {
-            Diagnostics.ReportMultipleConstructorsUnsupported(syntax.Constructors[c].InitKeyword.Location, structSymbol.Name);
+            var ctor = BindSingleConstructorDeclaration(ctorSyntax, structSymbol, package, baseClassSymbol, importedBaseType);
+            if (ctor == null)
+            {
+                continue;
+            }
+
+            var duplicate = false;
+            foreach (var existing in ctorBuilder)
+            {
+                if (BoundScope.FunctionSignaturesEqual(existing.Function, ctor.Function))
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (duplicate)
+            {
+                Diagnostics.ReportDuplicateOverloadSignature(
+                    ctorSyntax.InitKeyword.Location,
+                    "init",
+                    FormatOverloadSignature(ctor.Function));
+                continue;
+            }
+
+            ctorBuilder.Add(ctor);
         }
 
-        var ctorSyntax = syntax.Constructors[0];
+        structSymbol.SetExplicitConstructors(ctorBuilder.ToImmutable());
+    }
 
+    /// <summary>
+    /// ADR-0063 §9: binds a single <c>init(...)</c> constructor declaration into a
+    /// <see cref="ConstructorSymbol"/> with the optional <c>: base(args)</c> initializer
+    /// resolved. The caller is responsible for collecting all constructors and
+    /// rejecting same-signature duplicates.
+    /// </summary>
+    private ConstructorSymbol BindSingleConstructorDeclaration(
+        ConstructorDeclarationSyntax ctorSyntax,
+        StructSymbol structSymbol,
+        PackageSymbol package,
+        StructSymbol baseClassSymbol,
+        TypeSymbol importedBaseType)
+    {
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
         var seenParameterNames = new HashSet<string>();
         foreach (var parameterSyntax in ctorSyntax.Parameters)
@@ -14845,7 +15250,7 @@ public sealed class Binder
             }
         }
 
-        structSymbol.SetExplicitConstructor(constructorSymbol);
+        return constructorSymbol;
     }
 
     /// <summary>

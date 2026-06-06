@@ -262,7 +262,21 @@ public sealed class StructSymbol : TypeSymbol
     /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
     /// suppresses the auto-generated parameterless / primary constructor.
     /// </summary>
+    /// <remarks>
+    /// ADR-0063: when the class declares an overload family of <c>init(...)</c>
+    /// constructors, <see cref="ExplicitConstructor"/> still surfaces the
+    /// <em>first</em> declaration so single-constructor callers keep working;
+    /// the full overload set lives on <see cref="ExplicitConstructors"/>.
+    /// </remarks>
     public ConstructorSymbol ExplicitConstructor { get; private set; }
+
+    /// <summary>
+    /// Gets every user-defined <c>init(...)</c> constructor declared on
+    /// this class in declaration order (ADR-0063). Empty when the class has no
+    /// explicit constructor declarations. The first element always equals
+    /// <see cref="ExplicitConstructor"/>.
+    /// </summary>
+    public ImmutableArray<ConstructorSymbol> ExplicitConstructors { get; private set; } = ImmutableArray<ConstructorSymbol>.Empty;
 
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
@@ -283,6 +297,22 @@ public sealed class StructSymbol : TypeSymbol
     public void SetExplicitConstructor(ConstructorSymbol constructor)
     {
         ExplicitConstructor = constructor;
+        ExplicitConstructors = constructor == null
+            ? ImmutableArray<ConstructorSymbol>.Empty
+            : ImmutableArray.Create(constructor);
+    }
+
+    /// <summary>
+    /// ADR-0063: sets <see cref="ExplicitConstructors"/> (and surfaces the first
+    /// declaration as the legacy <see cref="ExplicitConstructor"/>). Intended to
+    /// be called exactly once by the binder for a class that declares one or
+    /// more <c>init(...)</c> constructors.
+    /// </summary>
+    /// <param name="constructors">The resolved standalone constructors in declaration order.</param>
+    public void SetExplicitConstructors(ImmutableArray<ConstructorSymbol> constructors)
+    {
+        ExplicitConstructors = constructors.IsDefault ? ImmutableArray<ConstructorSymbol>.Empty : constructors;
+        ExplicitConstructor = ExplicitConstructors.Length == 0 ? null : ExplicitConstructors[0];
     }
 
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
@@ -502,6 +532,60 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// ADR-0063: returns every method named <paramref name="name"/> visible on this
+    /// class, walking the inheritance chain this-first. Derived methods that share
+    /// a signature with a base method (i.e. real overrides) hide the base entry so
+    /// the overload set surfaced to overload resolution contains exactly one
+    /// FunctionSymbol per visible signature.
+    /// </summary>
+    /// <param name="name">The method name.</param>
+    /// <returns>The merged overload set; empty if none found.</returns>
+    public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethodsIncludingInherited(string name)
+    {
+        System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var c = this; c != null; c = c.BaseClass)
+        {
+            if (c.Methods.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (var m in c.Methods)
+            {
+                if (m.Name != name)
+                {
+                    continue;
+                }
+
+                if (builder != null)
+                {
+                    var hiddenByDerived = false;
+                    foreach (var existing in builder)
+                    {
+                        if (BoundScope.FunctionSignaturesEqual(existing, m))
+                        {
+                            hiddenByDerived = true;
+                            break;
+                        }
+                    }
+
+                    if (hiddenByDerived)
+                    {
+                        continue;
+                    }
+                }
+
+                builder ??= System.Collections.Immutable.ImmutableArray.CreateBuilder<FunctionSymbol>();
+                builder.Add(m);
+            }
+        }
+
+        return builder == null
+            ? System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty
+            : builder.ToImmutable();
     }
 
     /// <summary>

@@ -1308,7 +1308,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundConstructorCallExpression(null, node.StructType, builder.ToImmutable());
+        return builder == null ? node : new BoundConstructorCallExpression(null, node.StructType, builder.ToImmutable(), node.SelectedConstructor);
     }
 
     /// <summary>Rewrites a CLR constructor call (Phase 4 exit).</summary>
