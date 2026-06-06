@@ -51,7 +51,7 @@ public static class DocumentationIdProvider
     public static string GetDocumentationId(Type type)
     {
         var builder = new StringBuilder("T:");
-        AppendTypeDeclarationName(builder, type.IsGenericType && !type.IsGenericTypeDefinition ? type.GetGenericTypeDefinition() : type);
+        AppendTypeDeclarationName(builder, NormalizeToGenericDefinition(type));
         return builder.ToString();
     }
 
@@ -60,6 +60,13 @@ public static class DocumentationIdProvider
     /// <returns>The method DocID.</returns>
     public static string GetDocumentationId(MethodBase method)
     {
+        // Normalize a member reflected off a constructed generic type (e.g. List<int>.Add)
+        // to its counterpart on the generic definition (List<>.Add) so both the declaration
+        // path (`List`1.Add`) AND the parameter signature (`(`0)` instead of `(System.Int32)`)
+        // match the XML doc key. Without this, every member on a constructed generic type
+        // would produce a DocID Roslyn never emits (issue #393).
+        method = NormalizeToOpenGenericDeclaringType(method) ?? method;
+
         var builder = new StringBuilder("M:");
         AppendTypeDeclarationName(builder, method.DeclaringType);
         builder.Append('.');
@@ -86,6 +93,8 @@ public static class DocumentationIdProvider
     /// <returns>The property DocID.</returns>
     public static string GetDocumentationId(PropertyInfo property)
     {
+        property = NormalizeToOpenGenericDeclaringType(property) ?? property;
+
         var builder = new StringBuilder("P:");
         AppendTypeDeclarationName(builder, property.DeclaringType);
         builder.Append('.').Append(EncodeName(property.Name));
@@ -98,6 +107,8 @@ public static class DocumentationIdProvider
     /// <returns>The field DocID.</returns>
     public static string GetDocumentationId(FieldInfo field)
     {
+        field = NormalizeToOpenGenericDeclaringType(field) ?? field;
+
         var builder = new StringBuilder("F:");
         AppendTypeDeclarationName(builder, field.DeclaringType);
         builder.Append('.').Append(EncodeName(field.Name));
@@ -109,10 +120,68 @@ public static class DocumentationIdProvider
     /// <returns>The event DocID.</returns>
     public static string GetDocumentationId(EventInfo @event)
     {
+        @event = NormalizeToOpenGenericDeclaringType(@event) ?? @event;
+
         var builder = new StringBuilder("E:");
         AppendTypeDeclarationName(builder, @event.DeclaringType);
         builder.Append('.').Append(EncodeName(@event.Name));
         return builder.ToString();
+    }
+
+    // Normalizes a constructed generic type (e.g. List<int>) to its generic definition
+    // (List<>) so the declaration-name path produces arity-backticked output (`List`1`)
+    // that matches XML doc keys. Non-generic and already-open generic types pass through
+    // unchanged. Null in → null out (callers handle the null DeclaringType case).
+    private static Type NormalizeToGenericDefinition(Type type)
+    {
+        if (type is { IsGenericType: true, IsGenericTypeDefinition: false })
+        {
+            return type.GetGenericTypeDefinition();
+        }
+
+        return type;
+    }
+
+    // Re-resolves a member reflected off a *constructed* generic type to the equivalent
+    // member on the generic *definition*. This is what makes DocIDs match the XML doc
+    // keys for things like `typeof(List<int>).GetMethod("Add")`: not only must the
+    // declaring type be `List`1`, but the parameter signature must be `(`0)` rather than
+    // the bound `(System.Int32)`. Matching by metadata token within the same module is
+    // the standard reflection trick for going from constructed → open form.
+    // Returns null when the member is already open or normalization isn't possible.
+    private static T NormalizeToOpenGenericDeclaringType<T>(T member)
+        where T : MemberInfo
+    {
+        var declaring = member.DeclaringType;
+        if (declaring is not { IsGenericType: true, IsGenericTypeDefinition: false })
+        {
+            return null;
+        }
+
+        Type openType;
+        try
+        {
+            openType = declaring.GetGenericTypeDefinition();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        const BindingFlags AllDeclared = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+
+        foreach (var candidate in openType.GetMembers(AllDeclared))
+        {
+            if (candidate is T typed
+                && candidate.MetadataToken == member.MetadataToken
+                && candidate.Module == member.Module)
+            {
+                return typed;
+            }
+        }
+
+        return null;
     }
 
     private static void AppendMethodName(StringBuilder builder, MethodBase method)

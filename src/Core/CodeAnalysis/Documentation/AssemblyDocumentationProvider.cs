@@ -26,6 +26,17 @@ namespace GSharp.Core.CodeAnalysis.Documentation;
 /// first lookup, not at construction — and <em>XXE-safe</em> (DTD processing prohibited,
 /// no external resolver, bounded size). Any failure (missing file, malformed xml, oversize)
 /// degrades silently to "docs unavailable": ingestion never fails a hover or a build.
+///
+/// <para>Thread safety: all lookup state is immutable after construction. The per-assembly
+/// <see cref="ConditionalWeakTable{TKey,TValue}"/> cache is documented thread-safe for
+/// concurrent <see cref="ConditionalWeakTable{TKey,TValue}.GetValue"/> callers, and the
+/// <see cref="Lazy{T}"/> wrapping the index uses <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/>
+/// so concurrent first-time lookups produce exactly one <see cref="Dictionary{TKey,TValue}"/>
+/// instance. That dictionary is read-only after publication: <see cref="LoadIndex"/> writes
+/// to a local <c>result</c> before publishing it through the <c>Lazy</c>, and
+/// <see cref="TryGetDocumentation"/> only performs <see cref="Dictionary{TKey,TValue}.TryGetValue"/>
+/// reads — which are safe for concurrent readers when no writer is present. The provider is
+/// therefore safe to share across concurrent hover requests.</para>
 /// </remarks>
 public sealed class AssemblyDocumentationProvider
 {
