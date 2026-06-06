@@ -75,6 +75,16 @@ type Status enum { Pending, Complete, Failed }
 
 Function types use `func(...) R`. Async function type clauses use `async func(...) R` and represent task-returning functions. Function values can convert to compatible CLR delegate types, including named delegates and common `Action` or `Func` shapes.
 
+A **named delegate type** is declared with `type Name = delegate func(...)` (ADR-0059) and emits as a real CLR `MulticastDelegate`-derived type. Use a named delegate when you want a stable, C#-visible handler type (for example, as the type of a G# `event`):
+
+```gsharp
+type Handler = delegate func(sender Object, e EventArgs)
+
+type Button class {
+    event Click Handler
+}
+```
+
 ## Generics and variance
 
 G# uses bracketed generics: declarations such as `type Box[T any] class { ... }` and instantiations such as `Box[int32]`. Type parameters can use `in` and `out` variance markers and named constraints. The implementation supports metadata specs and inference, but some open or partially constructed generic shapes are erased to `object` in emit paths. See [ADR-0004](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0004-generics-scope.md), [ADR-0020](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0020-generic-brackets.md), and [ADR-0021](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0021-generic-variance.md).

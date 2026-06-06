@@ -1,4 +1,15 @@
 {
+  "Package + import header": {
+    "prefix": "pkg",
+    "body": [
+      "package ${1:GSharp.Example}",
+      "",
+      "import ${2:System}",
+      "",
+      "$0"
+    ],
+    "description": "Top-of-file package + import header."
+  },
   "Function declaration": {
     "prefix": "fn",
     "body": [
@@ -6,7 +17,43 @@
       "\t$0",
       "}"
     ],
-    "description": "Function declaration"
+    "description": "Function declaration."
+  },
+  "Async function": {
+    "prefix": "afn",
+    "body": [
+      "async func ${1:name}(${2:params}) ${3:Task} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Async function declaration."
+  },
+  "Extension function": {
+    "prefix": "extfn",
+    "body": [
+      "func (${1:self} ${2:Type}) ${3:Name}(${4:params}) ${5:returnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Extension function with a receiver clause."
+  },
+  "Func literal (lambda)": {
+    "prefix": "lambda",
+    "body": [
+      "func(${1:params}) ${2:returnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Anonymous func literal."
+  },
+  "Main entry point": {
+    "prefix": "main",
+    "body": [
+      "func Main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Explicit entry-point function."
   },
   "If statement": {
     "prefix": "if",
@@ -15,7 +62,7 @@
       "\t$0",
       "}"
     ],
-    "description": "If statement"
+    "description": "If statement."
   },
   "If/else statement": {
     "prefix": "ife",
@@ -26,16 +73,25 @@
       "\t$0",
       "}"
     ],
-    "description": "If/else statement"
+    "description": "If/else statement."
   },
-  "For loop": {
+  "For loop (C-style)": {
     "prefix": "for",
     "body": [
       "for ${1:i} := ${2:0}; ${1:i} < ${3:count}; ${1:i}++ {",
       "\t$0",
       "}"
     ],
-    "description": "For loop"
+    "description": "C-style for loop."
+  },
+  "For-range loop": {
+    "prefix": "forin",
+    "body": [
+      "for ${1:item} := range ${2:collection} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For-range over a sequence."
   },
   "While loop": {
     "prefix": "while",
@@ -44,75 +100,256 @@
       "\t$0",
       "}"
     ],
-    "description": "While loop (for with condition)"
+    "description": "While loop (for with condition only)."
   },
   "Class declaration": {
     "prefix": "class",
     "body": [
-      "class ${1:Name} {",
+      "type ${1:Name} class {",
       "\t$0",
       "}"
     ],
-    "description": "Class declaration"
+    "description": "Class declaration."
+  },
+  "Class with primary constructor": {
+    "prefix": "classp",
+    "body": [
+      "type ${1:Name} class(${2:params}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Class declaration with a primary constructor."
   },
   "Struct declaration": {
     "prefix": "struct",
     "body": [
-      "struct ${1:Name} {",
+      "type ${1:Name} struct {",
       "\t$0",
       "}"
     ],
-    "description": "Struct declaration"
+    "description": "Struct declaration."
+  },
+  "Data struct declaration": {
+    "prefix": "datastruct",
+    "body": [
+      "type ${1:Name} data struct {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Data struct (value semantics, synthesized members)."
+  },
+  "Inline struct declaration": {
+    "prefix": "inlinestruct",
+    "body": [
+      "type ${1:Name} inline struct(${2:value} ${3:int32})"
+    ],
+    "description": "Inline (single-field) struct wrapper."
+  },
+  "Record declaration": {
+    "prefix": "record",
+    "body": [
+      "type ${1:Name} record {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Record declaration."
   },
   "Enum declaration": {
     "prefix": "enum",
     "body": [
-      "enum ${1:Name} {",
+      "type ${1:Name} enum {",
       "\t${2:Value1},",
-      "\t${3:Value2},",
+      "\t${3:Value2}",
       "\t$0",
       "}"
     ],
-    "description": "Enum declaration"
+    "description": "Enum declaration."
   },
-  "Match expression": {
+  "Interface declaration": {
+    "prefix": "interface",
+    "body": [
+      "type ${1:Name} interface {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Interface declaration."
+  },
+  "Named delegate type": {
+    "prefix": "delegate",
+    "body": [
+      "type ${1:Name} = delegate func(${2:params}) ${3:returnType}"
+    ],
+    "description": "Named delegate type (ADR-0059)."
+  },
+  "Property declaration": {
+    "prefix": "prop",
+    "body": [
+      "prop ${1:Name} ${2:Type} {",
+      "\tget { $0 }",
+      "\tset { }",
+      "}"
+    ],
+    "description": "Property with explicit get/set."
+  },
+  "Auto property": {
+    "prefix": "autoprop",
+    "body": [
+      "prop ${1:Name} ${2:Type} { get; set; }"
+    ],
+    "description": "Auto-implemented property."
+  },
+  "Event declaration": {
+    "prefix": "event",
+    "body": [
+      "event ${1:Name} ${2:DelegateType}"
+    ],
+    "description": "Event declaration."
+  },
+  "Shared block": {
+    "prefix": "shared",
+    "body": [
+      "shared {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Per-type shared (static) block."
+  },
+  "Switch / pattern match": {
     "prefix": "match",
     "body": [
       "switch ${1:value} {",
-      "\tcase ${2:pattern}:",
+      "\tcase ${2:pattern} {",
       "\t\t$0",
-      "\tdefault:",
+      "\t}",
+      "\tdefault {",
       "\t\t",
+      "\t}",
       "}"
     ],
-    "description": "Match/switch expression"
+    "description": "Switch statement with pattern cases (brace-block arms)."
   },
-  "Async function": {
-    "prefix": "async",
+  "Switch expression arrow": {
+    "prefix": "matchexpr",
     "body": [
-      "async func ${1:name}(${2:params}) ${3:returnType} {",
-      "\t$0",
+      "let ${1:result} = switch ${2:value} {",
+      "\tcase ${3:pattern} -> ${4:expr}",
+      "\tdefault -> ${5:expr}",
       "}"
     ],
-    "description": "Async function declaration"
+    "description": "Switch expression with `->` arms."
   },
-  "Try/catch/finally": {
+  "Ternary expression": {
+    "prefix": "ternary",
+    "body": [
+      "${1:condition} ? ${2:whenTrue} : ${3:whenFalse}"
+    ],
+    "description": "Generalized ternary expression (ADR-0062)."
+  },
+  "Try/catch": {
     "prefix": "try",
     "body": [
       "try {",
       "\t$1",
-      "} catch (${2:ex}) {",
+      "} catch (${2:ex} ${3:Exception}) {",
       "\t$0",
       "}"
     ],
-    "description": "Try/catch/finally block"
+    "description": "Try/catch block."
   },
-  "Main entry point": {
-    "prefix": "main",
+  "Defer statement": {
+    "prefix": "defer",
     "body": [
-      "// Main entry point",
-      "$0"
+      "defer ${1:expr}"
     ],
-    "description": "Entry point (top-level program)"
+    "description": "Defer a call until scope exit."
+  },
+  "Go (spawn) statement": {
+    "prefix": "go",
+    "body": [
+      "go ${1:expr}"
+    ],
+    "description": "Spawn a concurrent call."
+  },
+  "Scope block": {
+    "prefix": "scope",
+    "body": [
+      "scope ${1:s} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Structured concurrency scope."
+  },
+  "Select statement": {
+    "prefix": "select",
+    "body": [
+      "select {",
+      "\tcase ${1:value} := <-${2:ch} {",
+      "\t\t$0",
+      "\t}",
+      "\tdefault {",
+      "\t\t",
+      "\t}",
+      "}"
+    ],
+    "description": "Select on channel operations."
+  },
+  "Channel creation": {
+    "prefix": "chan",
+    "body": [
+      "${1:ch} := make(chan ${2:int32}${3:, ${4:cap}})"
+    ],
+    "description": "Create a channel via make()."
+  },
+  "Using statement": {
+    "prefix": "using",
+    "body": [
+      "using ${1:resource} := ${2:expr} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Scoped resource (Dispose at exit)."
+  },
+  "Ref parameter": {
+    "prefix": "refparam",
+    "body": [
+      "func ${1:name}(ref ${2:p} ${3:Type}) ${4:returnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function with a `ref` parameter (ADR-0060)."
+  },
+  "Out parameter": {
+    "prefix": "outparam",
+    "body": [
+      "func ${1:name}(out ${2:p} ${3:Type}) ${4:returnType} {",
+      "\t$2 = ${5:default}",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function with an `out` parameter (ADR-0060)."
+  },
+  "Ref-aliasing local": {
+    "prefix": "letref",
+    "body": [
+      "let ref ${1:alias} = ${2:lvalue}"
+    ],
+    "description": "Immutable ref-aliasing local (ADR-0060 follow-up)."
+  },
+  "Documentation comment": {
+    "prefix": "doc",
+    "body": [
+      "/// ${1:Summary line.}",
+      "/// ",
+      "/// @param ${2:name} ${3:Description.}",
+      "/// @returns ${4:Description.}"
+    ],
+    "description": "Markdown documentation comment (ADR-0057)."
+  },
+  "Annotation": {
+    "prefix": "ann",
+    "body": [
+      "@${1:Name}(${2:args})"
+    ],
+    "description": "Kotlin-style attribute annotation."
   }
 }

@@ -1,7 +1,8 @@
 # ADR-0062: Generalized ternary expression — `cond ? ifTrue : ifFalse`
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-05
+- **Implemented**: 2026-06-05 (PR [#497](https://github.com/DavidObando/gsharp/pull/497))
 - **Phase**: Phase 8 — language ergonomics / expression surface
 - **Related**: issue #495 (limited ref-only ternary), ADR-0061 (conditional ref-arguments), ADR-0060 (`ref`/`out`/`in` parameters), ADR-0058 (ref-safe-to-escape), ADR-0037 (numeric tie-breaking)
 

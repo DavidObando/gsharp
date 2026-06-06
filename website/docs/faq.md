@@ -47,9 +47,15 @@ G# combines a Go-shaped surface with .NET primitives. `go f()` starts a concurre
 
 `async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. In emitted code, G# lowers async functions and lambdas to .NET state machines; in the interpreter, awaits block on the awaiter for simple test and REPL behavior. See [ADR-0023](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0023-async-state-machine.md).
 
-## Why are there no default or optional parameter values in G# functions?
+## How do optional parameters, named arguments, and overloading work in G# functions?
 
-User-defined G# function declarations do not have parameter default-value syntax. Calls may use named arguments only in limited supported cases, such as data-struct copy ergonomics and imported CLR methods that already declare optional or default arguments. This keeps G# function declarations simple while preserving compatibility with .NET APIs that expose optional parameters.
+User-defined G# functions support all three:
+
+- **Optional parameters**: declare a default value with `=` after the type — `func greet(name string = "world")` (ADR-0063). Defaults must be compile-time constants and trailing optional parameters cannot precede required ones. Misuse reports `GS0265`.
+- **Named arguments**: any call site can name an argument — `greet(name: "Ada")` — for free functions, user methods, user constructors, extension functions, and inherited CLR methods. The call-site form is `name: value` (the older `name = value` is still accepted for `.copy(...)` and attribute arg lists). Indirect calls through a function-typed variable and variadic call sites do not accept names because the target does not preserve parameter names. Diagnostics `GS0244`–`GS0247`.
+- **Overloading**: two declarations of the same function name are allowed as long as they differ by parameter types, arity, or ref-kinds (ADR-0063). Duplicate signatures report `GS0264`; ambiguous calls report `GS0266`; no-applicable-overload reports `GS0267`.
+
+This is a recent change — earlier docs described G# as having no parameter defaults and only "partial" named-argument support. That is no longer accurate.
 
 ## How do generics work?
 

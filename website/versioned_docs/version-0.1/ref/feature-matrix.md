@@ -16,9 +16,10 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Packages, imports, import aliases | Supported | Supported | Emit supports multi-package assemblies; interpreter binds the same model. |
 | Implicit `System` import | Supported | Supported | Enabled by default; disabled with `/noimplicitimports` or `/no-implicit-imports`. |
 | Top-level statements and `func Main` | Supported | Supported | Mixing top-level statements and explicit `Main` is diagnosed by `GS0165`/`GS0166`. |
-| Comments | Supported | Supported | Line and block comments are accepted by the compiler lexer; editor grammar may lag. |
+| Comments | Supported | Supported | Line (`//`), block (`/* … */`), and Markdown documentation (`///`, ADR-0057) comments. |
 | String, raw string, and interpolated string literals | Supported | Supported | Sigil-free interpolation with `$name`/`${expr,alignment:format}`, delimiter-aware multiline holes, and `DefaultInterpolatedStringHandler`/`FormattableString` lowering (ADR-0055). |
 | Character literals | Supported | Supported | Character diagnostics are `GS0191` through `GS0195`. |
+| Documentation comments | Supported | Supported | `///` Markdown comments round-trip to CLR XML doc; hover renders CLR XML docs for imported APIs. Diagnostics `GS0227`–`GS0231`. |
 
 ## Types and values
 
@@ -45,6 +46,10 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Generics and method inference | Supported | Supported for binding/evaluation | Metadata specs plus type-erased handling for open type-parameter-containing shapes. |
 | Variance and constraints | Supported semantically | Supported semantically | Diagnostics include `GS0150` through `GS0153`. |
 | By-ref and pointers | Partial | Limited/not supported | `&` / `*` / `*T` for CLR `ref`/`out`/`in` interop (ADR-0039); ref returns auto-dereference in rvalue position (ADR-0056 §1). Evaluator rejects generic address/deref execution. |
+| `ref`/`out`/`in` parameters | Supported | Supported | Declaration-site and call-site modifiers per ADR-0060; diagnostics `GS0235`–`GS0243`. Includes `out var/let/_` inline declarations. |
+| Ref-aliasing locals (`let ref` / `var ref`) | Supported | Supported | Local whose IL slot is `T&` and aliases another lvalue. Diagnostics `GS0256`–`GS0258`. |
+| `ref`-returning functions | Supported | Supported | `func f(...) ref T { ... }` paired with `return ref <lvalue>`. Diagnostics `GS0248`–`GS0255`. |
+| `scoped` parameter modifier | Supported | Supported | Constrains a `ref struct` / managed-pointer parameter from escaping; enforced by `GS9004` / `GS9006`. |
 | Spans and `ref struct` types | Mostly supported | Limited | Stack-only consumption of `Span[T]` / `ReadOnlySpan[T]` and user `type X ref struct`: element read/write, `[]T`→span conversion, closed generic value-type fields (ADR-0056). Escape rules are `GS0219`; `ReadOnlySpan[T]` writes are `GS0226`. Full ref-safe-to-escape analysis is deferred (#376). |
 
 ## Declarations and members
@@ -57,7 +62,9 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Operator declarations | Supported | Supported where evaluator invokes user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
 | Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. |
 | Inheritance and overrides | Supported | Partially supported | Base classes must be `open`; override diagnostics are implemented. |
-| Default parameter values in G# declarations | Not supported | Not supported | Parser parameter grammar has no initializer. |
+| Default parameter values in G# declarations | Supported | Supported | ADR-0063. Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
+| Method overloading (user functions) | Supported | Supported | ADR-0063. Functions can carry overload sets differing by parameter types or ref-kinds; duplicates report `GS0264`, ambiguous calls report `GS0266`, no-applicable reports `GS0267`. |
+| Named delegate types | Supported | Supported | ADR-0059. `type X = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type; diagnostics `GS0233`–`GS0234`. |
 
 ## Statements and control flow
 
@@ -83,7 +90,9 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
 | Calls and generic calls | Supported | Supported | Bracketed type arguments. |
-| Named arguments | Partial | Partial | Accepted for data-struct copy and imported optional/default argument scenarios. |
+| Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`. |
+| Conditional (`?:`) ternary expression | Supported | Supported | Generalized in ADR-0062; `cond ? a : b` is a normal expression. `GS0263` covers the "no common type" failure. |
+| Conditional ref-arguments (`ref cond ? a : b`) | Supported | Supported | ADR-0061. Branches must produce same-typed lvalues. Diagnostics `GS0260`–`GS0262`. |
 | Struct, array, and map literals | Supported | Supported | Map literals bind to `Dictionary[K,V]` backing. |
 | Indexing and index assignment | Supported | Supported | Arrays, slices, maps, and imported CLR indexers. |
 | Null-conditional access | Supported | Supported | `?.` represented in the bound tree. |
@@ -129,4 +138,5 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Reference assemblies | Supported | N/A | SDK can produce reference assemblies. |
 | SDK `.gsproj` build/run/pack | Supported | N/A | `Gsharp.NET.Sdk` integrates with MSBuild and `dotnet`. |
 | REPL | N/A | Supported | Interpreter executable starts a REPL with no file argument. |
-| Language server and VS Code extension | N/A | N/A | Tooling uses parser/binder services and provides rich editor capabilities. |
+| Language server and VS Code extension | N/A | N/A | Pull-based diagnostics, semantic tokens, hover for CLR XML docs, CodeLens reference counts on members of types/structs/interfaces/enums, signature help, inlay hints, completion, go-to-definition, references, rename, formatting, debug + test integration. |
+| VS Code color themes | N/A | N/A | Six bundled themes (Ember, Magma, Synthwave — Dark + Light each). |

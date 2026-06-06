@@ -10,11 +10,13 @@ G# expression syntax is compact and Go-like, with CLR-oriented additions for nul
 
 ## Operators
 
-Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, and null-coalescing levels are implemented. User operator overloads are supported through receiver `operator` declarations; see [ADR-0026](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0026-operator-by-name-deferral.md) and [ADR-0035](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0035-user-operator-overloads.md).
+Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, and null-coalescing levels are implemented. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression (ADR-0062); both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver `operator` declarations; see [ADR-0026](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0026-operator-by-name-deferral.md) and [ADR-0035](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0035-user-operator-overloads.md).
 
 ## Calls, access, and literals
 
 Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, and indexing uses brackets. These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString()`, which is ambiguous with float-literal lexing (see [ADR-0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md)). Struct literals use field labels; data structs can be copied with `with` updates.
+
+Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-prefixed (`f(ref x)`, `f(out var n)`, `f(in z)`). Named arguments work for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`); indirect calls through a function-typed variable and variadic call sites do not accept names. Ref-kind modifiers must match the parameter declaration (`GS0235`); passing a value to an `in` parameter requires an explicit `in` at the call site (`GS0242`).
 
 ```gsharp
 let p = Point{X: 3, Y: 4}

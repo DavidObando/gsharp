@@ -80,6 +80,8 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0014](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0014-visibility-default.md) | Visibility defaults — `public` for top-level declarations | Makes unmodified top-level declarations public by default. |
 | [0054](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0054-postfix-member-access-on-primary-expressions.md) | Postfix member/index access on primary expressions | Chains `.`/`?.`/`[]` after any primary except a bare numeric literal (`(42).Member`). |
 | [0055](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0055-string-interpolation-revamp.md) | String interpolation revamp | Delimiter-aware multiline holes, alignment/format clauses, late context-driven lowering (`DefaultInterpolatedStringHandler`/`FormattableString`), and full IDE support inside holes. |
+| [0057](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0057-documentation-comments.md) | Documentation comments | Markdown-authored `///` documentation comments with lossless CLR XML-doc round-trip; hover renders the merged XML on imported APIs. Diagnostics `GS0227`–`GS0231`. |
+| [0062](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0062-generalized-ternary-expression.md) | Generalized ternary expression | Promotes `cond ? a : b` from the narrow ADR-0061 ref form to a normal expression; retires `GS0259` in value contexts and adds `GS0263`. |
 
 ## CLR interop
 
@@ -94,6 +96,11 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0039](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0039-byref-pointers-and-clr-interop.md) | By-ref pointers and CLR interop for `ref` / `out` / `in` parameters | Introduces `*T`, `&`, dereference, `ref` arguments, and related diagnostics. |
 | [0047](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0047-attribute-syntax-and-declaration.md) | Attribute consumption and declaration (Kotlin-style annotations) | Defines `@` annotation syntax, use-site targets, attribute arguments, and `@Attribute` sugar. |
 | [0056](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0056-span-consumption-v1.md) | Span consumption v1 — ref-returning members, span element access, closed generic value-type fields | Auto-dereferences ref-returning members in rvalue position, makes spans indexable (read/write), applies `[]T → Span[T]` conversion in argument position, and gives closed generic value-type fields real layout. |
+| [0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) | Ref-safe-to-escape and the `scoped` modifier | Adds the `scoped` parameter modifier and the supporting `GS9004`/`GS9006` ref-pointer escape diagnostics. |
+| [0059](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0059-named-delegate-types.md) | Named delegate types | `type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type; diagnostics `GS0233`–`GS0234`. |
+| [0060](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0060-ref-out-in-parameters.md) | `ref`/`out`/`in` parameters | Declaration-site and call-site ref-kind modifiers with diagnostics `GS0235`–`GS0243`; ref-aliasing locals (`let ref`/`var ref`) and ref returns are follow-ups (`GS0248`–`GS0258`). |
+| [0061](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0061-conditional-ref-arguments.md) | Conditional ref-arguments | Narrow `ref cond ? a : b` form inside ref-kind argument payloads; diagnostics `GS0259`–`GS0262`. |
+| [0063](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0063-method-overloading-and-optional-parameters.md) | Method overloading and optional parameters | Lifts the v0 "one declaration per name" rule and adds default parameter values; diagnostics `GS0264`–`GS0267`. |
 
 ## Emit and tooling
 

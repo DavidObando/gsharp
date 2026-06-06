@@ -76,11 +76,15 @@ This document specifies the design and implementation plan for a Visual Studio C
 
 A TextMate grammar (`syntaxes/gsharp.tmLanguage.json`) provides tokenization for syntax highlighting. The grammar should cover:
 
-- Keywords (from `SyntaxFacts.GetKeywordKind` in the parser): `async`, `await`, `break`, `case`, `catch`, `chan`, `class`, `const`, `continue`, `default`, `defer`, `else`, `enum`, `fallthrough`, `false`, `finally`, `for`, `func`, `go`, `goto`, `if`, `import`, `interface`, `internal`, `is`, `let`, `map`, `nil`, `open`, `operator`, `override`, `package`, `private`, `public`, `range`, `return`, `scope`, `sealed`, `select`, `sequence`, `struct`, `switch`, `throw`, `true`, `try`, `type`, `using`, `var`
+- Keywords (from `SyntaxFacts.GetKeywordKind` in the parser): `async`, `await`, `break`, `case`, `catch`, `chan`, `class`, `const`, `continue`, `default`, `defer`, `else`, `enum`, `fallthrough`, `false`, `finally`, `for`, `func`, `go`, `goto`, `if`, `import`, `interface`, `internal`, `is`, `let`, `map`, `nil`, `open`, `operator`, `override`, `package`, `private`, `public`, `range`, `return`, `scope`, `sealed`, `select`, `sequence`, `struct`, `switch`, `throw`, `true`, `try`, `type`, `using`, `var`, `with`, `yield`, `from`, `where`, `when`
+- Contextual modifiers (matched as identifiers in the parser but colorized as `storage.modifier.gsharp`): `data`, `inline`, `record`, `delegate`, `event`, `prop`, `init`, `shared`, `partial`, `readonly`, `static`, `abstract`, `virtual`, `extern`, `scoped`
+- Ref-kind modifiers: `ref`, `out` (and `in` as a clause keyword via `keyword.control.gsharp`)
+- Accessor names (inside property/event bodies): `get`, `set`, `add`, `remove`, `raise`
 - Built-in types (from `TypeSymbol` statics): `bool`, `uint8`, `int8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `nint`, `nuint`, `float32`, `float64`, `decimal`, `char`, `string`, `object`, `void`
-- Operators: arithmetic, comparison, logical, assignment, bitwise
-- Literals: integers, floats, strings (including interpolated), characters
-- Comments: `//` line comments; we still don't support `/* */` block comments
+- Operators: arithmetic, comparison, logical, assignment, bitwise, plus G#-specific `:=` (short variable declaration), `?.` (null-conditional), `??`/`??=` (null-coalescing), `?` and `:` (ternary, ADR-0062), `!!` (null-forgiving), `...` (range), `->` (switch arm), `=>` (lambda arrow)
+- Literals: integers (with `lLuU` suffixes), floats (with `fFdDmM` suffixes), hex (`0x`), binary (`0b`), strings (interpreted and raw-backtick), characters
+- Comments: `//` line comments, `/* … */` block comments (`ReadMultiLineComment`), and `///` documentation comments (`ReadDocumentationComment`, ADR-0057). Doc comments are scoped `comment.line.documentation.gsharp` and additionally highlight the `@summary`, `@param`, `@typeparam`, `@returns`, `@value`, `@remarks`, `@exception`, `@seealso`, `@inheritdoc` block tags.
+- Annotations: `@Identifier(args)` patterns scoped `meta.annotation.gsharp` with the leading `@` as `punctuation.definition.annotation.gsharp` and the name as `storage.type.annotation.gsharp`.
 - Identifiers, function calls, type annotations
 
 G# is sigil-free for interpolation (ADR-0055): interpolation lives inside an ordinary interpreted string `"…"`, not a `$"…"` literal. The `strings` repository therefore distinguishes two forms and emits these scopes:
@@ -88,7 +92,7 @@ G# is sigil-free for interpolation (ADR-0055): interpolation lives inside an ord
 - `string.quoted.double.gsharp` — an interpreted `"…"` string. `applyEndPatternLast` is set so a doubled-quote escape `""` (`constant.character.escape.quote.gsharp`) is consumed before the closing `"`. A literal-`$` escape `$$` is `constant.character.escape.dollar.gsharp`.
 - `string.quoted.raw.backtick.gsharp` — a raw backtick string `` `…` ``; it is **non-interpolating** (no `$` patterns apply inside it).
 - `variable.other.interpolation.gsharp` — the identifier of a `$ident` hole; the `$` is `punctuation.definition.interpolation.begin.gsharp`.
-- `meta.interpolation.gsharp` — a `${ … }` hole. `${` / `}` are `punctuation.definition.interpolation.begin/end.gsharp`; the body recursively includes `source.gsharp`, so the hole expression is highlighted as real code (and a nested `"…"` literal or balanced inner `{ … }` block does not prematurely end the hole).
+- `meta.interpolation.gsharp` — a `${ … }` hole. `${` / `}` are `punctuation.definition.interpolation.begin/end.gsharp`; the body recursively includes `source.gsharp`, so the hole expression is highlighted as real code (and a nested `"…"` literal or balanced inner `{ … }` block does not prematurely end the hole). Inside the hole, an alignment clause `,-?N` is `constant.numeric.alignment.gsharp` and a format clause `:fmt` is `string.unquoted.format.gsharp`.
 
 
 ```jsonc
@@ -111,27 +115,56 @@ Provide a `snippets/gsharp.json` file with common patterns:
 
 | Prefix | Description |
 | --- | --- |
+| `pkg` | `package` + `import` header |
 | `fn` | Function declaration |
+| `afn` | Async function declaration |
+| `extfn` | Extension function (receiver clause) |
+| `lambda` | Anonymous `func(...)` literal |
+| `main` | Explicit `Main` entry point |
 | `if` | If statement |
 | `ife` | If/else statement |
-| `for` | For loop |
-| `while` | While loop |
-| `class` | Class declaration |
+| `for` | C-style for loop |
+| `forin` | For-range over a sequence |
+| `while` | While loop (`for cond { … }`) |
+| `class` | Class declaration (`type X class { … }`) |
+| `classp` | Class with primary constructor |
 | `struct` | Struct declaration |
+| `datastruct` | `data struct` (value-semantics record) |
+| `inlinestruct` | `inline struct(field T)` wrapper |
+| `record` | Record declaration |
 | `enum` | Enum declaration |
-| `match` | Match/pattern expression |
-| `async` | Async function |
-| `try` | Try/catch/finally |
-| `main` | Entry point (top-level program) |
+| `interface` | Interface declaration |
+| `delegate` | Named delegate type (ADR-0059) |
+| `prop` | Property with explicit `get`/`set` |
+| `autoprop` | Auto-implemented property |
+| `event` | Event declaration |
+| `shared` | `shared { … }` block (per-type static) |
+| `match` | `switch` with brace-block cases |
+| `matchexpr` | Switch *expression* with `->` arms |
+| `ternary` | Generalized ternary (ADR-0062) |
+| `try` | Try/catch block |
+| `defer` | Deferred call |
+| `go` | Spawn a concurrent call |
+| `scope` | Structured-concurrency scope |
+| `select` | Channel `select` statement |
+| `chan` | `make(chan T)` channel creation |
+| `using` | Scoped resource (Dispose at exit) |
+| `refparam` | Function with a `ref` parameter (ADR-0060) |
+| `outparam` | Function with an `out` parameter (ADR-0060) |
+| `letref` | `let ref` aliasing local |
+| `doc` | Documentation comment (ADR-0057) |
+| `ann` | Kotlin-style annotation |
 
 ### 3.4 Themes
 
-Ship two bundled color themes optimized for GSharp's semantic token types:
+Ship six bundled color themes inspired by the G# logo, optimized for GSharp's semantic token types. Each palette ships a dark and light variant:
 
-- `GSharp Dark` — dark theme based on VS 2022 dark
-- `GSharp Light` — light theme based on VS 2022 light
+- `GSharp Ember Dark` / `GSharp Ember Light` — warm reds and amber glows.
+- `GSharp Magma Dark` / `GSharp Magma Light` — saturated lava palette.
+- `GSharp Synthwave Dark` / `GSharp Synthwave Light` — high-contrast neon pinks/cyans.
 
 ### 3.5 Configuration Settings
+
 
 ```jsonc
 {

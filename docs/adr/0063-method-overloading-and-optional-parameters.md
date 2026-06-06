@@ -1,7 +1,8 @@
 # ADR-0063: Method overloading and optional parameters
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-06
+- **Implemented**: 2026-06-05 (PR [#498](https://github.com/DavidObando/gsharp/pull/498))
 - **Phase**: Phase 9 — language depth / call binding
 - **Related**: ADR-0034 (imported CLR interop); ADR-0037 (numeric tie-breaking); ADR-0038 (generic method inference); ADR-0017 (method virtuality); ADR-0019 (extension functions); ADR-0024 (methods vs. extensions canonical style); ADR-0060 (`ref`/`out`/`in` parameters)
 
