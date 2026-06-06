@@ -1949,6 +1949,9 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportRefLocalCannotBeDeclaredHere(TextLocation location, string variableName, string context)
     {
         Report(location, "GS0258", $"Ref-aliasing local '{variableName}' cannot be declared as {context}; managed pointers cannot be stored across this boundary.");
+    }
+
+    /// <summary>
     /// ADR-0061: reports a conditional ref-argument expression that surfaces outside of
     /// a ref-kind modifier payload (<c>ref</c>/<c>out</c>/<c>in</c>) or an <c>&amp;</c> operand.
     /// </summary>

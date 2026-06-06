@@ -188,7 +188,7 @@ var b int64 = 0
 bump(ref true ? a : b)
 ";
         var diags = CompileExpectingDiagnostics(Source);
-        Assert.Contains(diags, d => d.Id == "GS0249");
+        Assert.Contains(diags, d => d.Id == "GS0260");
     }
 
     [Fact]
@@ -204,7 +204,7 @@ var a = 0
 bump(ref true ? a : (a + 1))
 ";
         var diags = CompileExpectingDiagnostics(Source);
-        Assert.Contains(diags, d => d.Id == "GS9006" || d.Id == "GS0249" || d.Id == "GS0244"
+        Assert.Contains(diags, d => d.Id == "GS9006" || d.Id == "GS0260" || d.Id == "GS0244"
                                     || d.Message.Contains("Cannot take address", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -222,7 +222,7 @@ var b = 0
 bump(ref true ? in a : ref b)
 ";
         var diags = CompileExpectingDiagnostics(Source);
-        Assert.Contains(diags, d => d.Id == "GS0251");
+        Assert.Contains(diags, d => d.Id == "GS0262");
     }
 
     [Fact]
@@ -232,7 +232,7 @@ bump(ref true ? in a : ref b)
         // syntactically reachable inside a conditional branch — the inner
         // modifier consumer only accepts `ref|in|out <identifier>`, never
         // `out var <ident>`. We assert that the program is rejected (the
-        // exact diagnostic may be a parser error or GS0250).
+        // exact diagnostic may be a parser error or GS0261).
         const string Source = @"package CondInlineDecl
 
 func produce(out v int32) {
@@ -259,7 +259,7 @@ var picked = (useA ? a : b)
 Console.WriteLine(picked)
 ";
         var diags = CompileExpectingDiagnostics(Source);
-        Assert.Contains(diags, d => d.Id == "GS0248");
+        Assert.Contains(diags, d => d.Id == "GS0259");
     }
 
     [Fact]
