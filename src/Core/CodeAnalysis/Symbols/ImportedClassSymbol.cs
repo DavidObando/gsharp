@@ -107,10 +107,31 @@ public sealed class ImportedClassSymbol : Symbol
     /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
     public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
+        => TryLookupFunction(text, callExpression, arguments, out function, out parameterMapping, out isAmbiguous, out _, explicitTypeArgs, typeArgSymbols, projectTypeArgument, argumentNames);
+
+    /// <summary>
+    /// Issue #505: extended overload that, on ambiguity, also returns the
+    /// applicable candidate set so the caller can surface the competing
+    /// signatures in the GS0160 diagnostic.
+    /// </summary>
+    /// <param name="text">The name of the function.</param>
+    /// <param name="callExpression">The call expression.</param>
+    /// <param name="arguments">The bound arguments.</param>
+    /// <param name="function">The resulting function, if one is found.</param>
+    /// <param name="parameterMapping">Per-source-argument → parameter-position map (issue #343); default when none.</param>
+    /// <param name="isAmbiguous">Set to <see langword="true"/> when two or more candidates tied under "better function member" rules.</param>
+    /// <param name="ambiguousMethods">When <paramref name="isAmbiguous"/> is set, the tied candidates in source-encounter order; otherwise the empty array.</param>
+    /// <param name="explicitTypeArgs">Resolved CLR type arguments from an explicit type-argument list.</param>
+    /// <param name="typeArgSymbols">Explicit type-argument symbols in source order, or default.</param>
+    /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
+    /// <param name="argumentNames">Per-source-argument names parallel to <paramref name="arguments"/>.</param>
+    /// <returns>Whether we found a matching function or not.</returns>
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
     {
         function = null;
         parameterMapping = default;
         isAmbiguous = false;
+        ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         var methods = ClrTypeUtilities.SafeGetMethods(ClassType, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
         var nameMatches = methods.Where(m => m.Name == text).ToList();
         if (nameMatches.Count == 0)
@@ -152,6 +173,7 @@ public sealed class ImportedClassSymbol : Symbol
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 isAmbiguous = true;
+                ambiguousMethods = result.Ambiguous;
                 return false;
             default:
                 return false;

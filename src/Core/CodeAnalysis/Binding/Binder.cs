@@ -11946,7 +11946,7 @@ public sealed class Binder
                     ctorMapping = resolution.ParameterMapping;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length);
+                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                     return false;
                 default:
                     break;
@@ -12945,7 +12945,7 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
             {
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters, staticMapping);
@@ -12958,7 +12958,10 @@ public sealed class Binder
 
             if (staticAmbiguous)
             {
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, candidateCount: 2);
+                // Issue #505: surface the competing candidate signatures so the
+                // caller can pick a disambiguation (typically an explicit
+                // type-argument list).
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, staticAmbiguousMethods.Length, staticAmbiguousMethods.Select(OverloadResolution.FormatMethodSignature));
                 return new BoundErrorExpression(null);
             }
 
@@ -13127,7 +13130,7 @@ public sealed class Binder
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
-                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                         return new BoundErrorExpression(null);
                     default:
                         break;
@@ -13221,7 +13224,7 @@ public sealed class Binder
                 result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                 result = new BoundErrorExpression(null);
                 return true;
             default:
@@ -13493,7 +13496,7 @@ public sealed class Binder
             case OverloadResolution.ResolutionOutcome.Resolved:
                 break;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length);
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                 result = new BoundErrorExpression(null);
                 return true;
             default:
@@ -15265,7 +15268,7 @@ public sealed class Binder
                     bestCtor = resolution.Best as ConstructorInfo;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length);
+                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                     return null;
                 default:
                     break;

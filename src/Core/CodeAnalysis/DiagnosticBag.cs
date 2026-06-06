@@ -4,6 +4,7 @@
 
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -773,9 +774,38 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the call expression.</param>
     /// <param name="name">The function or constructor name.</param>
     /// <param name="candidateCount">The number of tied applicable candidates.</param>
-    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount)
+    /// <param name="candidateSignatures">
+    /// Issue #505: optional list of pre-formatted candidate signatures
+    /// (e.g. <c>Equal[T](T, T)</c>). When supplied, the diagnostic enumerates
+    /// the competing overloads so the caller can decide how to disambiguate
+    /// (typically by adding an explicit type argument or casting). Pass
+    /// <see langword="null"/> when the call site only knows the count.
+    /// </param>
+    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string> candidateSignatures = null)
     {
         var message = $"Call to '{name}' is ambiguous between {candidateCount} applicable overloads.";
+        if (candidateSignatures != null)
+        {
+            var lines = candidateSignatures.Where(s => !string.IsNullOrEmpty(s)).ToArray();
+            if (lines.Length > 0)
+            {
+                var builder = new System.Text.StringBuilder(message);
+                builder.Append(" Candidates: ");
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append("; ");
+                    }
+
+                    builder.Append(lines[i]);
+                }
+
+                builder.Append('.');
+                message = builder.ToString();
+            }
+        }
+
         Report(location, "GS0160", message);
     }
 
