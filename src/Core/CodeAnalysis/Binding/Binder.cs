@@ -9223,6 +9223,91 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// Issue #506: synthesises C#-style <c>params T[]</c> expansion for a CLR
+    /// call site that won overload resolution in expanded form. The trailing
+    /// positional arguments (those mapped to the final <c>params</c> parameter)
+    /// are individually converted to the element type and packed into a
+    /// <see cref="BoundArrayCreationExpression"/>; the returned argument list
+    /// has length equal to <paramref name="parameters"/>.Length so the
+    /// remaining call-binding pipeline (handler rewrite, ref-kind validation,
+    /// ordered-mapping fill) treats the call uniformly with normal-form calls.
+    /// </summary>
+    /// <param name="arguments">The source-order bound arguments. Includes a synthesised receiver slot for imported extension calls; the receiver always sits at the leading parameter positions, never the params slot.</param>
+    /// <param name="parameters">The resolved method's parameter list.</param>
+    /// <param name="callSyntax">The originating call expression; used to surface conversion diagnostics for individual variadic elements when present.</param>
+    /// <param name="receiverArgCount">The number of leading argument slots reserved for a synthesised receiver (0 for plain calls, 1 for imported extension calls).</param>
+    /// <returns>An argument list of length <paramref name="parameters"/>.Length whose final element is the packed array.</returns>
+    private ImmutableArray<BoundExpression> ExpandParamsArguments(
+        ImmutableArray<BoundExpression> arguments,
+        System.Reflection.ParameterInfo[] parameters,
+        CallExpressionSyntax callSyntax,
+        int receiverArgCount = 0)
+    {
+        var paramsIndex = parameters.Length - 1;
+        var paramArrayType = parameters[paramsIndex].ParameterType;
+        var elementClrType = paramArrayType.GetElementType();
+        var elementTypeSymbol = elementClrType == null
+            ? TypeSymbol.Object
+            : TypeSymbol.FromClrType(elementClrType);
+        var sliceType = SliceTypeSymbol.Get(elementTypeSymbol);
+
+        var fixedCount = paramsIndex;
+        var tailCount = arguments.Length - fixedCount;
+        if (tailCount < 0)
+        {
+            // Shouldn't happen: overload resolution rejects expanded-form
+            // candidates whose fixed leading parameters are not all supplied.
+            // Defensive fallback: leave the arguments unchanged.
+            return arguments;
+        }
+
+        var packed = ImmutableArray.CreateBuilder<BoundExpression>(tailCount);
+        for (var i = 0; i < tailCount; i++)
+        {
+            var sourceIndex = fixedCount + i;
+            var arg = arguments[sourceIndex];
+            var converted = arg;
+            if (arg.Type != null && arg.Type != TypeSymbol.Error && arg.Type != elementTypeSymbol)
+            {
+                if (Conversion.Classify(arg.Type, elementTypeSymbol).Exists)
+                {
+                    var conversionSyntaxIndex = sourceIndex - receiverArgCount;
+                    TextLocation location;
+                    if (callSyntax != null
+                        && conversionSyntaxIndex >= 0
+                        && conversionSyntaxIndex < callSyntax.Arguments.Count)
+                    {
+                        location = callSyntax.Arguments[conversionSyntaxIndex].Location;
+                    }
+                    else
+                    {
+                        location = callSyntax?.Location ?? default;
+                    }
+
+                    converted = BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
+                }
+                else if (TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var udc))
+                {
+                    converted = udc;
+                }
+            }
+
+            packed.Add(converted);
+        }
+
+        var arrayExpr = new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable());
+
+        var result = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+        for (var i = 0; i < fixedCount; i++)
+        {
+            result.Add(arguments[i]);
+        }
+
+        result.Add(arrayExpr);
+        return result.MoveToImmutable();
+    }
+
+    /// <summary>
     /// ADR-0063: thin wrapper around <see cref="SelectBestInstanceOverload"/>
     /// that reports the standard ambiguity / no-applicable-overload diagnostics
     /// when more than one candidate is supplied. When a single candidate is
@@ -12128,6 +12213,7 @@ public sealed class Binder
 
         ConstructorInfo bestCtor = null;
         ImmutableArray<int> ctorMapping = default;
+        bool ctorIsExpanded = false;
         if (argsAllTyped)
         {
             var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
@@ -12136,6 +12222,7 @@ public sealed class Binder
                 case OverloadResolution.ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best;
                     ctorMapping = resolution.ParameterMapping;
+                    ctorIsExpanded = resolution.IsExpanded;
                     break;
                 case OverloadResolution.ResolutionOutcome.Ambiguous:
                     Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
@@ -12162,7 +12249,11 @@ public sealed class Binder
 
         var ctorParameters = bestCtor.GetParameters();
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorRebound = RebindFormattableInterpolationArguments(boundArguments.MoveToImmutable(), syntax.Arguments, ctorParameters, ctorMapping);
+        var ctorRawArgs = boundArguments.MoveToImmutable();
+        var ctorExpandedArgs = ctorIsExpanded
+            ? ExpandParamsArguments(ctorRawArgs, ctorParameters, syntax)
+            : ctorRawArgs;
+        var ctorRebound = RebindFormattableInterpolationArguments(ctorExpandedArgs, syntax.Arguments, ctorParameters, ctorMapping);
         var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorMapping);
         var ctorArgs = BuildOrderedCallArguments(ctorHandlerArgs, ctorMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
@@ -13186,10 +13277,13 @@ public sealed class Binder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
             {
                 var staticParameters = staticFn.Method.GetParameters();
-                var staticRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, staticParameters, staticMapping);
+                var staticExpandedArgs = staticIsExpanded
+                    ? ExpandParamsArguments(arguments, staticParameters, ce)
+                    : arguments;
+                var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticMapping);
                 var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticMapping);
                 var staticArguments = BuildOrderedCallArguments(staticHandlerArgs, staticMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
@@ -13362,7 +13456,10 @@ public sealed class Binder
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
                         var instParameters = resolution.Best.GetParameters();
                         var instMapping = resolution.ParameterMapping;
-                        var instRebound = RebindFormattableInterpolationArguments(arguments, ce.Arguments, instParameters, instMapping);
+                        var instExpandedArgs = resolution.IsExpanded
+                            ? ExpandParamsArguments(arguments, instParameters, ce)
+                            : arguments;
+                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instMapping);
                         var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instMapping);
                         var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instMapping);
                         var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce, instMapping);
@@ -13456,7 +13553,10 @@ public sealed class Binder
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? TypeSymbol.FromClrType(resolution.Best.ReturnType);
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
-                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, arguments, receiver, ce.Location, inheritedMapping);
+                var inheritedExpandedArgs = resolution.IsExpanded
+                    ? ExpandParamsArguments(arguments, inheritedParameters, ce)
+                    : arguments;
+                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedMapping);
                 var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedMapping);
                 var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedMapping);
                 var inheritedArguments = BuildOrderedCallArguments(inheritedConvertedArgs, inheritedMapping, inheritedParameters);
@@ -13760,10 +13860,21 @@ public sealed class Binder
         allArguments.AddRange(arguments);
         var bound = allArguments.MoveToImmutable();
 
+        // Issue #506: when overload resolution selected the expanded form of a
+        // `params T[]` extension method (e.g. `MyEnumerable.Concat(this src,
+        // params string[] tail)` called with positional tail args), pack the
+        // trailing positional arguments into a synthesised slice/array first.
+        // The receiver occupies parameter slot 0; the params slot is always
+        // the last parameter, so it never collides with the receiver.
+        var parameters = best.GetParameters();
+        if (resolution.IsExpanded)
+        {
+            bound = ExpandParamsArguments(bound, parameters, ce, receiverArgCount: 1);
+        }
+
         // Issue #327 / #343: re-order arguments into parameter positions when
         // named arguments were used; otherwise fall through to the existing
         // trailing-optional fill.
-        var parameters = best.GetParameters();
         bound = BuildOrderedCallArguments(bound, resolution.ParameterMapping, parameters);
 
         var refKinds = ComputeArgumentRefKinds(parameters);
