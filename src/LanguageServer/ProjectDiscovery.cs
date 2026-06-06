@@ -57,11 +57,84 @@ public static class ProjectDiscovery
         var projectDir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
         var sourceFiles = DiscoverSourceFiles(projectFilePath, projectDir);
         var projectReferences = DiscoverProjectReferences(projectFilePath, projectDir);
+        var (references, referenceSourcePath) = DiscoverReferences(projectFilePath, projectDir);
 
         return new DiscoveredProject(
             Path.GetFullPath(projectFilePath),
             sourceFiles,
-            projectReferences);
+            projectReferences,
+            references,
+            referenceSourcePath);
+    }
+
+    /// <summary>
+    /// Parses <c>/r:</c> and <c>/reference:</c> lines from an MSBuild-style
+    /// response file. Mirrors the switch parsing in
+    /// <c>GSharp.Compiler.Program.ParseCommandLine</c> for the subset of
+    /// arguments the language server cares about. Exposed for
+    /// <see cref="ProjectState"/> to refresh references when the response file
+    /// is rewritten between project rediscoveries (e.g. after a fresh
+    /// <c>dotnet build</c>).
+    /// </summary>
+    /// <param name="rspPath">Absolute path to the response file.</param>
+    /// <returns>Absolute reference paths; empty if the file cannot be read.</returns>
+    internal static IReadOnlyList<string> ParseReferencesFromResponseFile(string rspPath)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(rspPath);
+        }
+        catch (IOException)
+        {
+            return Array.Empty<string>();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+
+        var refs = new List<string>(lines.Length);
+        foreach (var raw in lines)
+        {
+            var trimmed = raw?.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                continue;
+            }
+
+            if (!(trimmed[0] == '/' || trimmed[0] == '-'))
+            {
+                continue;
+            }
+
+            var body = trimmed.Substring(1);
+            var colon = body.IndexOf(':');
+            if (colon < 0)
+            {
+                continue;
+            }
+
+            var name = body.Substring(0, colon);
+            if (!string.Equals(name, "r", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(name, "reference", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = body.Substring(colon + 1).Trim();
+            if (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
+            {
+                value = value.Substring(1, value.Length - 2);
+            }
+
+            if (value.Length > 0)
+            {
+                refs.Add(value);
+            }
+        }
+
+        return refs;
     }
 
     /// <summary>
@@ -115,6 +188,96 @@ public static class ProjectDiscovery
         {
             return Array.Empty<string>();
         }
+    }
+
+    /// <summary>
+    /// Discovers external assembly references for a project by parsing the most
+    /// recently written MSBuild response file under <c>obj/</c>. The SDK writes
+    /// the same <c>/r:</c> list it passes to the compiler to
+    /// <c>$(IntermediateOutputPath)$(TargetName).rsp</c>; the language server
+    /// reads that file so completion, hover, and diagnostics see the same
+    /// imported CLR types as the command-line build.
+    /// </summary>
+    /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
+    /// <param name="projectDir">The project directory.</param>
+    /// <returns>The discovered references plus the source <c>.rsp</c> path. Both are empty/null when no response file has been produced (e.g. the project has not been built or restored yet).</returns>
+    private static (IReadOnlyList<string> References, string ReferenceSourcePath) DiscoverReferences(string projectFilePath, string projectDir)
+    {
+        if (!Directory.Exists(projectDir))
+        {
+            return (Array.Empty<string>(), null);
+        }
+
+        var objDir = Path.Combine(projectDir, "obj");
+        if (!Directory.Exists(objDir))
+        {
+            return (Array.Empty<string>(), null);
+        }
+
+        var rspName = ResolveAssemblyName(projectFilePath) + ".rsp";
+        string[] candidates;
+        try
+        {
+            candidates = Directory.GetFiles(objDir, rspName, SearchOption.AllDirectories);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return (Array.Empty<string>(), null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return (Array.Empty<string>(), null);
+        }
+
+        if (candidates.Length == 0)
+        {
+            return (Array.Empty<string>(), null);
+        }
+
+        // Multi-targeted or multi-configuration projects produce one .rsp per (TFM, Configuration).
+        // Pick the most recently written so the LSP tracks whatever the user last built.
+        var rspPath = candidates
+            .OrderByDescending(p =>
+            {
+                try
+                {
+                    return File.GetLastWriteTimeUtc(p);
+                }
+                catch (IOException)
+                {
+                    return DateTime.MinValue;
+                }
+            })
+            .First();
+
+        var references = ParseReferencesFromResponseFile(rspPath);
+        return (references, Path.GetFullPath(rspPath));
+    }
+
+    /// <summary>
+    /// Resolves the project's effective <c>AssemblyName</c>, which the SDK uses
+    /// as the base of the response-file name. Defaults to the project file's
+    /// base name (matching MSBuild's <c>$(TargetName)</c> default).
+    /// </summary>
+    private static string ResolveAssemblyName(string projectFilePath)
+    {
+        var defaultName = Path.GetFileNameWithoutExtension(projectFilePath);
+        try
+        {
+            var doc = XDocument.Load(projectFilePath);
+            var explicitName = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
+            if (!string.IsNullOrWhiteSpace(explicitName))
+            {
+                return explicitName.Trim();
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the default below.
+        }
+
+        return defaultName;
     }
 
     private static bool IsDefaultCompileItemsDisabled(string projectFilePath)

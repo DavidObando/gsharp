@@ -79,7 +79,7 @@ public static class DocumentSyncHandler
 
         if (!skipBinding)
         {
-            var program = Binder.BindProgram(compilation.GlobalScope);
+            var program = compilation.BoundProgram;
             foreach (var d in program.Diagnostics)
             {
                 if (useProject && d.Location.Text != syntaxTree.Text)

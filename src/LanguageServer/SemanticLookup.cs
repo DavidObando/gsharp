@@ -16,6 +16,17 @@ namespace GSharp.LanguageServer;
 
 public static class SemanticLookup
 {
+    // Cache the SemanticModel per Compilation. BuildModel iterates every global
+    // symbol and re-binds every function/method body (via Compilation.BoundProgram),
+    // which is expensive — hundreds of milliseconds on projects with large reference
+    // graphs. Every LSP request that needs symbol info (hover, definition, references,
+    // semantic tokens, code lens, inlay hints) routes through here, so without this
+    // cache the user pays that cost per request. The cache key is the Compilation
+    // itself; because each file edit constructs a fresh Compilation (see
+    // ProjectState.GetCompilation), invalidation is automatic and the old entry
+    // becomes unreachable so the ConditionalWeakTable frees it.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, SemanticModel> ModelCache = new();
+
     public static SyntaxToken FindTokenAt(SyntaxTree tree, int position)
     {
         SyntaxToken best = null;
@@ -63,6 +74,45 @@ public static class SemanticLookup
 
         var model = BuildModel(compilation);
         return model.Resolve(identifierToken);
+    }
+
+    /// <summary>
+    /// Pre-builds the per-compilation <c>SemanticModel</c> and its references
+    /// index. Intended for the workspace warm-up path so that the first
+    /// user-facing CodeLens / hover / definition request returns from cache
+    /// instead of paying the SemanticModel build cost.
+    /// </summary>
+    /// <param name="compilation">The compilation to warm up.</param>
+    public static void WarmUp(Compilation compilation)
+    {
+        if (compilation == null)
+        {
+            return;
+        }
+
+        var model = BuildModel(compilation);
+
+        // Force the references index to be built. We don't care about the
+        // result, only the side effect of populating the cache. Use a sentinel
+        // global symbol so the call short-circuits on Symbol.null without
+        // walking trees needlessly when the index is already built.
+        foreach (var function in compilation.GlobalScope.Functions)
+        {
+            _ = model.GetReferences(function);
+            break;
+        }
+
+        // If the project has no functions at all, fall back to any struct so
+        // the index gets built. (BuildReferencesIndex is invoked on the first
+        // GetReferences call regardless of which symbol is queried.)
+        if (compilation.GlobalScope.Functions.Length == 0)
+        {
+            foreach (var s in compilation.GlobalScope.Structs)
+            {
+                _ = model.GetReferences(s);
+                break;
+            }
+        }
     }
 
     /// <summary>
@@ -124,25 +174,18 @@ public static class SemanticLookup
     {
         if (target == null)
         {
-            yield break;
+            return Array.Empty<SyntaxToken>();
         }
 
-        var model = BuildModel(compilation);
-        foreach (var tree in compilation.SyntaxTrees)
-        {
-            foreach (var token in EnumerateTokens(tree.Root))
-            {
-                if (token.IsMissing)
-                {
-                    continue;
-                }
-
-                if (token.Kind == SyntaxKind.IdentifierToken && ReferenceEquals(model.Resolve(token), target))
-                {
-                    yield return token;
-                }
-            }
-        }
+        // FindReferences is called once per member by CodeLensComputer. Without a
+        // cache, every call walks every token in every syntax tree and re-resolves
+        // each one — and each Resolve for a non-declaration token re-walks the
+        // entire compilation looking for the containing function / enclosing
+        // struct method (see SemanticModel.FindContainingFunction and
+        // ResolveImplicitThisMember). On a small project with a handful of files
+        // this still adds up to many seconds. Caching the reverse index on the
+        // SemanticModel collapses N FindReferences calls into one walk.
+        return BuildModel(compilation).GetReferences(target);
     }
 
     public static bool IsValidIdentifier(string text)
@@ -286,6 +329,11 @@ public static class SemanticLookup
     }
 
     private static SemanticModel BuildModel(Compilation compilation)
+    {
+        return ModelCache.GetValue(compilation, BuildModelUncached);
+    }
+
+    private static SemanticModel BuildModelUncached(Compilation compilation)
     {
         var declarations = new Dictionary<SyntaxToken, Symbol>();
         var globals = new Dictionary<string, Symbol>(StringComparer.Ordinal);
@@ -506,7 +554,7 @@ public static class SemanticLookup
         BoundProgram program;
         try
         {
-            program = Binder.BindProgram(compilation.GlobalScope);
+            program = compilation.BoundProgram;
         }
         catch (InvalidOperationException)
         {
@@ -669,6 +717,20 @@ public static class SemanticLookup
         private readonly Dictionary<(string FileName, int SpanStart, int SpanEnd), Symbol> declarationsBySpan;
         private readonly Dictionary<string, Symbol> globals;
         private readonly Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations;
+        private readonly object referencesLock = new object();
+        private Dictionary<Symbol, List<SyntaxToken>> referencesIndex;
+
+        // Cached tree-walk results. Resolve's fallback path used to call
+        // FindNodes<FunctionDeclarationSyntax> and FindNodes<StructDeclarationSyntax>
+        // for *every* unresolved token, re-walking every tree on each call. With
+        // many tokens (and FindReferences calling Resolve per token, per member,
+        // per CodeLens request) this dominated request latency. Precomputing the
+        // per-tree node lists in BuildModelUncached makes those fallback paths
+        // O(number of decls), not O(number of nodes across the workspace).
+        private FunctionDeclarationSyntax[] cachedFunctionDeclarations;
+        private StructDeclarationSyntax[] cachedStructDeclarations;
+        private Dictionary<SyntaxTree, AccessorExpressionSyntax[]> cachedAccessorsByTree;
+        private Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]> cachedFieldAssignmentsByTree;
 
         public SemanticModel(
             Compilation compilation,
@@ -696,6 +758,15 @@ public static class SemanticLookup
                     this.declarationsBySpan[key.Value] = pair.Value;
                 }
             }
+
+            // Precompute per-compilation node lists once so the Resolve fallback
+            // chain doesn't re-walk every tree on every token. See the field
+            // declarations above for the motivation.
+            var trees = this.compilation.SyntaxTrees;
+            this.cachedFunctionDeclarations = FindNodes<FunctionDeclarationSyntax>(trees.Select(t => t.Root)).ToArray();
+            this.cachedStructDeclarations = FindNodes<StructDeclarationSyntax>(trees.Select(t => t.Root)).ToArray();
+            this.cachedAccessorsByTree = trees.ToDictionary(t => t, t => FindNodes<AccessorExpressionSyntax>(t.Root).ToArray());
+            this.cachedFieldAssignmentsByTree = trees.ToDictionary(t => t, t => FindNodes<FieldAssignmentExpressionSyntax>(t.Root).ToArray());
         }
 
         public Symbol Resolve(SyntaxToken token)
@@ -764,6 +835,66 @@ public static class SemanticLookup
             return Array.Empty<VariableSymbol>();
         }
 
+        public IReadOnlyList<SyntaxToken> GetReferences(Symbol target)
+        {
+            if (target == null)
+            {
+                return Array.Empty<SyntaxToken>();
+            }
+
+            // Build the reverse `Symbol → List<SyntaxToken>` index lazily, on the
+            // first call. Walking every identifier in every syntax tree (and
+            // invoking the multi-tree-walk Resolve fallback chain on each) is
+            // expensive; doing it once per compilation amortizes that cost across
+            // every member's FindReferences call from CodeLensComputer.
+            var index = this.referencesIndex;
+            if (index == null)
+            {
+                lock (this.referencesLock)
+                {
+                    if (this.referencesIndex == null)
+                    {
+                        this.referencesIndex = this.BuildReferencesIndex();
+                    }
+
+                    index = this.referencesIndex;
+                }
+            }
+
+            return index.TryGetValue(target, out var tokens) ? tokens : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
+        }
+
+        private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex()
+        {
+            var index = new Dictionary<Symbol, List<SyntaxToken>>();
+            foreach (var tree in this.compilation.SyntaxTrees)
+            {
+                foreach (var token in EnumerateTokens(tree.Root))
+                {
+                    if (token.IsMissing || token.Kind != SyntaxKind.IdentifierToken)
+                    {
+                        continue;
+                    }
+
+                    var symbol = this.Resolve(token);
+                    if (symbol == null)
+                    {
+                        continue;
+                    }
+
+                    if (!index.TryGetValue(symbol, out var list))
+                    {
+                        list = new List<SyntaxToken>();
+                        index[symbol] = list;
+                    }
+
+                    list.Add(token);
+                }
+            }
+
+            return index;
+        }
+
         private static (string FileName, int SpanStart, int SpanEnd)? SpanKey(SyntaxToken token)
         {
             if (token == null || token.SyntaxTree?.Text == null)
@@ -819,7 +950,7 @@ public static class SemanticLookup
             // implicit `this` receiver.
             StructDeclarationSyntax enclosing = null;
             var enclosingBodyLength = int.MaxValue;
-            foreach (var decl in FindNodes<StructDeclarationSyntax>(this.compilation.SyntaxTrees.Select(t => t.Root)))
+            foreach (var decl in this.cachedStructDeclarations)
             {
                 foreach (var method in decl.Methods)
                 {
@@ -867,7 +998,7 @@ public static class SemanticLookup
                 && string.Equals(candidate.Text, token.Text, StringComparison.Ordinal);
         }
 
-        private static bool IsRightOfMemberAccess(SyntaxToken token)
+        private bool IsRightOfMemberAccess(SyntaxToken token)
         {
             // Cheap text-free check used to suppress fallback lookups. A token whose tree
             // contains an AccessorExpressionSyntax or FieldAssignmentExpressionSyntax at this
@@ -878,21 +1009,27 @@ public static class SemanticLookup
                 return false;
             }
 
-            foreach (var accessor in FindNodes<AccessorExpressionSyntax>(token.SyntaxTree.Root))
+            if (this.cachedAccessorsByTree.TryGetValue(token.SyntaxTree, out var accessors))
             {
-                if (accessor.RightPart.Span.Start <= token.Span.Start
-                    && token.Span.End <= accessor.RightPart.Span.End
-                    && AccessorRightContainsMemberToken(accessor.RightPart, token))
+                foreach (var accessor in accessors)
                 {
-                    return true;
+                    if (accessor.RightPart.Span.Start <= token.Span.Start
+                        && token.Span.End <= accessor.RightPart.Span.End
+                        && AccessorRightContainsMemberToken(accessor.RightPart, token))
+                    {
+                        return true;
+                    }
                 }
             }
 
-            foreach (var assign in FindNodes<FieldAssignmentExpressionSyntax>(token.SyntaxTree.Root))
+            if (this.cachedFieldAssignmentsByTree.TryGetValue(token.SyntaxTree, out var assignments))
             {
-                if (TokenMatches(assign.FieldIdentifier, token))
+                foreach (var assign in assignments)
                 {
-                    return true;
+                    if (TokenMatches(assign.FieldIdentifier, token))
+                    {
+                        return true;
+                    }
                 }
             }
 
@@ -938,7 +1075,8 @@ public static class SemanticLookup
 
             foreach (var tree in trees)
             {
-                foreach (var accessor in FindNodes<AccessorExpressionSyntax>(tree.Root)
+                var accessors = this.GetAccessorsForTree(tree);
+                foreach (var accessor in accessors
                              .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
                              .OrderBy(a => a.Span.Length))
                 {
@@ -953,7 +1091,7 @@ public static class SemanticLookup
                     }
                 }
 
-                foreach (var assign in FindNodes<FieldAssignmentExpressionSyntax>(tree.Root))
+                foreach (var assign in this.GetFieldAssignmentsForTree(tree))
                 {
                     if (!TokenMatches(assign.FieldIdentifier, token))
                     {
@@ -970,6 +1108,23 @@ public static class SemanticLookup
             }
 
             return null;
+        }
+
+        private AccessorExpressionSyntax[] GetAccessorsForTree(SyntaxTree tree)
+        {
+            // The cache covers every tree currently in the compilation; trees that arrive
+            // here from outside the compilation (a stale DocumentContent) fall back to a
+            // one-off walk.
+            return this.cachedAccessorsByTree.TryGetValue(tree, out var cached)
+                ? cached
+                : FindNodes<AccessorExpressionSyntax>(tree.Root).ToArray();
+        }
+
+        private FieldAssignmentExpressionSyntax[] GetFieldAssignmentsForTree(SyntaxTree tree)
+        {
+            return this.cachedFieldAssignmentsByTree.TryGetValue(tree, out var cached)
+                ? cached
+                : FindNodes<FieldAssignmentExpressionSyntax>(tree.Root).ToArray();
         }
 
         private static bool TryDriveAccessorTarget(
@@ -1079,10 +1234,18 @@ public static class SemanticLookup
 
         private FunctionDeclarationSyntax FindContainingFunction(SyntaxToken token)
         {
-            return FindNodes<FunctionDeclarationSyntax>(this.compilation.SyntaxTrees.Select(t => t.Root))
-                .Where(f => f.Span.Start <= token.Span.Start && token.Span.End <= f.Span.End)
-                .OrderBy(f => f.Span.Length)
-                .FirstOrDefault();
+            FunctionDeclarationSyntax best = null;
+            var bestLength = int.MaxValue;
+            foreach (var f in this.cachedFunctionDeclarations)
+            {
+                if (f.Span.Start <= token.Span.Start && token.Span.End <= f.Span.End && f.Span.Length < bestLength)
+                {
+                    best = f;
+                    bestLength = f.Span.Length;
+                }
+            }
+
+            return best;
         }
 
         private Symbol ResolvePrimitiveOrImportedType(string text)

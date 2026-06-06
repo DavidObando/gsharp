@@ -769,6 +769,9 @@ public sealed class LspServer
                 if (discovered != null)
                 {
                     var project = this.workspaceState.AddProject(discovered.ProjectFilePath);
+                    project.ProjectReferences = discovered.ProjectReferences;
+                    project.ReferenceSourcePath = discovered.ReferenceSourcePath;
+                    project.References = discovered.References;
                     foreach (var source in discovered.SourceFiles)
                     {
                         project.AddFileFromDisk(source);
@@ -783,6 +786,9 @@ public sealed class LspServer
                 var rediscovered = existing != null ? ProjectDiscovery.DiscoverProject(filePath) : null;
                 if (rediscovered != null)
                 {
+                    existing.ProjectReferences = rediscovered.ProjectReferences;
+                    existing.ReferenceSourcePath = rediscovered.ReferenceSourcePath;
+                    existing.References = rediscovered.References;
                     foreach (var source in rediscovered.SourceFiles)
                     {
                         if (!existing.ContainsFile(source))
