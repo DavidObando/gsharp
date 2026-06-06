@@ -6490,6 +6490,8 @@ public sealed class Binder
                 return BindIndexExpression((IndexExpressionSyntax)syntax);
             case SyntaxKind.IndexAssignmentExpression:
                 return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.MemberIndexAssignmentExpression:
+                return BindMemberIndexAssignmentExpression((MemberIndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.StructLiteralExpression:
                 return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
             case SyntaxKind.TupleLiteralExpression:
@@ -13981,11 +13983,60 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
+        return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+    }
+
+    // Issue #507: indexer assignment whose target is an arbitrary expression
+    // (e.g. `obj.Member[k] = v`). The parser produces this node for any LHS
+    // shape that parses as an IndexExpression and is followed by `=`. We
+    // mirror the user-visible workaround (bind the indexed property to a
+    // local first) by synthesizing a temp local that holds the bound target
+    // value, then routing the indexer assignment through that temp via the
+    // existing variable-rooted path. This reuses every downstream code path
+    // (lowering, async spilling, side-effect spilling, evaluation, IL emit)
+    // without modification.
+    private BoundExpression BindMemberIndexAssignmentExpression(MemberIndexAssignmentExpressionSyntax syntax)
+    {
+        var indexed = syntax.Target;
+        var boundReceiver = BindExpression(indexed.Target);
+        if (boundReceiver.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type);
+        if (!scope.TryDeclareVariable(tempVar))
+        {
+            // Defensive: synthesized names cannot collide with user identifiers
+            // (the `<...>` prefix is not a valid identifier token), so a failure
+            // here means a duplicate synthesized name within the same scope,
+            // which Interlocked.Increment guarantees against. Treat as fatal.
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized index-assignment target local '{tempName}'.");
+        }
+
+        var declaration = new BoundVariableDeclaration(syntax, tempVar, boundReceiver);
+        var assignment = BindIndexedAssignmentToVariable(tempVar, indexed.Index, syntax.Value, indexed.Target.Location);
+        if (assignment is BoundErrorExpression)
+        {
+            return assignment;
+        }
+
+        return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+    }
+
+    private BoundExpression BindIndexedAssignmentToVariable(
+        VariableSymbol variable,
+        ExpressionSyntax indexSyntax,
+        ExpressionSyntax valueSyntax,
+        TextLocation diagnosticLocation)
+    {
         var element = GetIndexElementType(variable.Type);
         if (element != null)
         {
-            var index = BindConversion(syntax.Index, TypeSymbol.Int32);
-            var value = BindConversion(syntax.Value, element);
+            var index = BindConversion(indexSyntax, TypeSymbol.Int32);
+            var value = BindConversion(valueSyntax, element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
 
@@ -13993,28 +14044,28 @@ public sealed class Binder
         // value bound to V.
         if (variable.Type is MapTypeSymbol mapType)
         {
-            var keyExpr = BindConversion(syntax.Index, mapType.KeyType);
-            var valExpr = BindConversion(syntax.Value, mapType.ValueType);
+            var keyExpr = BindConversion(indexSyntax, mapType.KeyType);
+            var valExpr = BindConversion(valueSyntax, mapType.ValueType);
             return new BoundIndexAssignmentExpression(null, variable, keyExpr, valExpr, mapType.ValueType);
         }
 
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { syntax.Index }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
+        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { indexSyntax }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
         {
             if (!idxPropAnnotWr.CanWrite)
             {
-                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
                 return new BoundErrorExpression(null);
             }
 
             var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
-            var boundValueAnnotWr = BindConversion(syntax.Value, valueTypeAnnotWr);
+            var boundValueAnnotWr = BindConversion(valueSyntax, valueTypeAnnotWr);
             return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
         }
 
-        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { syntax.Index }, out var idxProp, out var idxArgs))
+        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { indexSyntax }, out var idxProp, out var idxArgs))
         {
             // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
             // indexer is a `ref T`-returning getter and writes go through that
@@ -14028,27 +14079,27 @@ public sealed class Binder
                 {
                     if (IsReadOnlyRefReturn(idxProp, refGetter))
                     {
-                        Diagnostics.ReportCannotAssignReadOnlySpanElement(syntax.TargetIdentifier.Location, variable.Type);
+                        Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
                         return new BoundErrorExpression(null);
                     }
 
                     var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
-                    var refValue = BindConversion(syntax.Value, pointeeType);
+                    var refValue = BindConversion(valueSyntax, pointeeType);
                     return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
                 }
 
-                Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
                 return new BoundErrorExpression(null);
             }
 
             var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
-            var boundValue = BindConversion(syntax.Value, valueType);
+            var boundValue = BindConversion(valueSyntax, valueType);
             return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
         }
 
         if (variable.Type != TypeSymbol.Error)
         {
-            Diagnostics.ReportTypeNotIndexable(syntax.TargetIdentifier.Location, variable.Type);
+            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
         }
 
         return new BoundErrorExpression(null);

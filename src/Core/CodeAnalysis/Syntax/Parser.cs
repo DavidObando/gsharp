@@ -3309,6 +3309,25 @@ public class Parser
 
         var expression = ParseBinaryExpression();
 
+        // Issue #507: indexer assignment whose target is an arbitrary expression
+        // (e.g. `obj.Member[k] = v`, `a.b.c[k] = v`, `(GetThing())[i] = v`). The
+        // bare-identifier form `id[k] = v` is already handled above as
+        // IndexAssignmentExpressionSyntax; this branch handles any other LHS shape
+        // whose trailing primary is an index access. Because ParsePostfixChain
+        // recursively folds `[...]` into the right-hand side of the most recent
+        // `.`, the parsed tree for `obj.Member[k]` is
+        // `AccessorExpression(obj, ., IndexExpression(Member, [k]))` — not a
+        // top-level IndexExpression. TryLiftTrailingIndexer reshapes such chains
+        // into the canonical `IndexExpression(<receiver-chain>, [k])` form before
+        // wrapping in MemberIndexAssignmentExpressionSyntax.
+        if (Current.Kind == SyntaxKind.EqualsToken
+            && TryLiftTrailingIndexer(expression, out var indexedLhs))
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs, equalsToken, value);
+        }
+
         // ADR-0062: general two-arm conditional (ternary) expression
         // `cond ? a : b`. Right-associative; lower precedence than
         // logical-or and higher than assignment. When the `?` tail
@@ -3501,6 +3520,50 @@ public class Parser
         }
 
         return current;
+    }
+
+    // Issue #507: lift a trailing index access out of an accessor chain so it can
+    // be reused as the LHS of an indexer assignment. Returns true and yields a
+    // canonical `IndexExpression(<receiver-chain>, [k])` when the expression's
+    // rightmost primary is an index access; returns false otherwise.
+    //
+    // Shapes handled (rebuilt accessor chain shown after `=>`):
+    //   IndexExpression(t, [k])                                 => itself
+    //   AccessorExpression(L, ., IndexExpression(t, [k]))       => IndexExpression(AccessorExpression(L, ., t), [k])
+    //   AccessorExpression(L, ., AccessorExpression(M, ., IndexExpression(t, [k])))
+    //                                                            => IndexExpression(AccessorExpression(L, ., AccessorExpression(M, ., t)), [k])
+    //
+    // Null-conditional accessors (`?.`) are intentionally left as-is so existing
+    // diagnostics continue to fire — chained null-conditional indexer assignment
+    // is out of scope for this fix.
+    private bool TryLiftTrailingIndexer(ExpressionSyntax expression, out IndexExpressionSyntax canonical)
+    {
+        if (expression is IndexExpressionSyntax direct)
+        {
+            canonical = direct;
+            return true;
+        }
+
+        if (expression is AccessorExpressionSyntax accessor
+            && !accessor.IsNullConditional
+            && TryLiftTrailingIndexer(accessor.RightPart, out var inner))
+        {
+            var rebuiltReceiver = new AccessorExpressionSyntax(
+                syntaxTree,
+                accessor.LeftPart,
+                accessor.DotToken,
+                inner.Target);
+            canonical = new IndexExpressionSyntax(
+                syntaxTree,
+                rebuiltReceiver,
+                inner.OpenBracketToken,
+                inner.Index,
+                inner.CloseBracketToken);
+            return true;
+        }
+
+        canonical = null;
+        return false;
     }
 
     private ExpressionSyntax ParseFunctionLiteralExpression()
