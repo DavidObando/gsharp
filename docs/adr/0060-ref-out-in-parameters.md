@@ -351,7 +351,7 @@ The opposite extreme of Option E: deprecate ADR-0039's `*T` type and `&x` operat
 ## Follow-ups
 
 - **`ref` returns.** A G# function returning `ref T` (managed-pointer return) requires escape-analysis integration per ADR-0058. Tracked separately.
-- **`ref` locals beyond `*T`.** A `let ref x = expr` shorthand for "bind `x` as an alias to an lvalue" would be a natural extension once `ref` returns land.
+- **`ref` locals beyond `*T`.** ✅ Implemented in issue #491: `let ref x = expr` / `var ref x = expr` binds `x` as an alias to an lvalue. The local's IL slot is `T&`; reads emit `ldloc; ldind.*`, writes `ldloc; value; stind.*`. Aliasing is rejected at top level, inside `async`/iterator functions, and as `const ref` (diagnostics GS0256–GS0258). Cross-function escape (ref returns / RSTE) is still tracked under "ref returns" above.
 - **`in`-elision opt-in.** If GS0237 proves uniformly silenced by users mechanically adding `in`, a future ADR may revisit and either tighten (to error) or relax (with a compiler-inserted temp under an opt-in pragma). Today the design errs toward visible cost.
 - **Conditional ref-passing.** `f(cond ? ref x : ref y)` and similar lvalue-ternary forms; a focused mini-ADR after ref-safe-to-escape's data-flow tracker is mature.
 - **`scoped ref` / `scoped out` / `scoped in` parameters.** §2 admits `scoped ref` syntactically; ADR-0058 specifies the enforcement for `scoped` on `*T`. The full propagation matrix for the keyword-form ref-kind parameters needs a follow-up test-pass once §11's diagnostics are wired up.

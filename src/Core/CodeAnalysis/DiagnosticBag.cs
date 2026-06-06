@@ -1910,6 +1910,47 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0255", $"Override of '{memberName}' must match the base return ref-kind: base returns {expected}, this declaration returns {actual}.");
     }
 
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local declaration whose
+    /// initializer is not an lvalue. <c>let ref</c> / <c>var ref</c> binds the local as
+    /// an alias for an existing storage slot — the RHS must therefore be a variable, a
+    /// field/property access, an indexer access, or a dereference of a managed pointer.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="exprText">The source text of the offending RHS expression.</param>
+    public void ReportRefLocalRhsMustBeLvalue(TextLocation location, string exprText)
+    {
+        Report(location, "GS0256", $"The right-hand side of a ref-aliasing local must be an lvalue (a variable, field/property, indexer access, or '*p' dereference); '{exprText}' is not assignable.");
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local whose initializer's
+    /// ref-safe-to-escape scope is narrower than the local's declaring scope. The aliased
+    /// storage would not outlive the local; reading or writing through the alias is therefore
+    /// unsafe. Reported, for example, when binding a ref local to a value whose pointee lives
+    /// in a <c>scoped</c> ref struct or to a temporary that the local would outlive.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="variableName">The local name.</param>
+    public void ReportRefLocalRhsHasNarrowerEscapeScope(TextLocation location, string variableName)
+    {
+        Report(location, "GS0257", $"Cannot bind ref-aliasing local '{variableName}' to a value whose ref-safe-to-escape scope is narrower than the local's scope; the alias would outlive its referent.");
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): reports the <c>ref</c> aliasing modifier on a
+    /// declaration that cannot legally store a managed pointer — a top-level binding
+    /// (emitted as a static field), a local in an <c>async</c> function or iterator
+    /// (hoisted into a state-machine field), or a <c>const</c> declaration.
+    /// </summary>
+    /// <param name="location">The <c>ref</c> modifier location.</param>
+    /// <param name="variableName">The local name.</param>
+    /// <param name="context">Description of the disallowed context (e.g. "a top-level variable").</param>
+    public void ReportRefLocalCannotBeDeclaredHere(TextLocation location, string variableName, string context)
+    {
+        Report(location, "GS0258", $"Ref-aliasing local '{variableName}' cannot be declared as {context}; managed pointers cannot be stored across this boundary.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

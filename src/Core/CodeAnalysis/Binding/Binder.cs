@@ -3639,6 +3639,17 @@ public sealed class Binder
 
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
     {
+        // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
+        // ref-aliasing local. The local's IL slot stores a managed pointer (`T&`) into the
+        // initializer's lvalue; the symbol's static type remains `T` and reads/writes through
+        // the local are implicitly indirected by the lowering & emitter. The slot itself
+        // never carries a `const` value, so the assignability of the alias matches the
+        // mutability of the aliased lvalue (writes through the alias write the storage).
+        if (syntax.HasRefKindModifier)
+        {
+            return BindRefAliasLocalDeclaration(syntax);
+        }
+
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
             || syntax.Keyword?.Kind == SyntaxKind.LetKeyword;
         var type = BindTypeClause(syntax.TypeClause);
@@ -3742,6 +3753,126 @@ public sealed class Binder
         }
 
         return new BoundVariableDeclaration(syntax, variable, convertedInitializer, constValue);
+    }
+
+    /// <summary>
+    /// Issue #491 (ADR-0060 follow-up): binds a <c>let ref name [T] = lvalue</c> or
+    /// <c>var ref name [T] = lvalue</c> declaration. The local is recorded with
+    /// <see cref="RefKind.Ref"/> and its initializer is normalized to a
+    /// <see cref="BoundAddressOfExpression"/> over the aliased lvalue so the emitter / interpreter
+    /// can populate the alias slot with a managed pointer at the declaration site and
+    /// route subsequent reads/writes through the indirection.
+    /// </summary>
+    private BoundStatement BindRefAliasLocalDeclaration(VariableDeclarationSyntax syntax)
+    {
+        var refModifierLoc = syntax.RefKindModifier.Location;
+        var declaredType = BindTypeClause(syntax.TypeClause);
+
+        // `const ref` is rejected: a `const` binding is a compile-time constant,
+        // not a runtime storage slot, so there is no storage to alias.
+        if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword)
+        {
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, "a 'const' binding");
+        }
+
+        // An initializer is required: the local must alias an existing lvalue.
+        if (syntax.Initializer == null)
+        {
+            Diagnostics.ReportRefLocalRhsMustBeLvalue(refModifierLoc, "<missing>");
+            var errorVar = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, declaredType ?? TypeSymbol.Error, ResolveAccessibility(syntax.AccessibilityModifier));
+            return new BoundVariableDeclaration(syntax, errorVar, new BoundErrorExpression(null));
+        }
+
+        var initializer = BindExpression(syntax.Initializer);
+        if (initializer is BoundErrorExpression)
+        {
+            var errorVar = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, declaredType ?? TypeSymbol.Error, ResolveAccessibility(syntax.AccessibilityModifier));
+            return new BoundVariableDeclaration(syntax, errorVar, initializer);
+        }
+
+        // Validate the RHS is a writable lvalue: a variable that is not read-only,
+        // a field/property access, an indexer access, or a managed-pointer dereference.
+        // The same restrictions that govern `&expr` apply here (issue #491 / ADR-0039 §3).
+        var rhsValid = true;
+        if (initializer is BoundVariableExpression bve && bve.Variable.IsReadOnly)
+        {
+            // Aliasing a read-only binding would let the alias mutate it; mirror
+            // the existing `&readonly` rejection (GS9005 / GS0242 for `in`).
+            if (bve.Variable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
+            {
+                Diagnostics.ReportCannotAssignToInParameter(refModifierLoc, inParam.Name);
+            }
+            else
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(refModifierLoc, bve.Variable.Name);
+            }
+
+            rhsValid = false;
+        }
+        else if (!IsLvalue(initializer))
+        {
+            var exprText = syntax.Initializer.ToString();
+            Diagnostics.ReportRefLocalRhsMustBeLvalue(refModifierLoc, exprText);
+            rhsValid = false;
+        }
+
+        // Pointee type: the user may write an explicit type clause that must match
+        // the initializer's static type; otherwise infer from the initializer.
+        var pointeeType = initializer.Type ?? TypeSymbol.Error;
+        if (declaredType != null && rhsValid && pointeeType != TypeSymbol.Error && declaredType != pointeeType)
+        {
+            Diagnostics.ReportCannotConvert(syntax.Initializer.Location, pointeeType, declaredType);
+            rhsValid = false;
+        }
+
+        var slotType = declaredType ?? pointeeType;
+
+        // Context restrictions: a ref-aliasing local cannot escape its declaring
+        // function frame. The CLR cannot encode a managed pointer as a static
+        // field (top-level / `customize` partial) or as a hoisted state-machine
+        // field (`async`/iterator functions).
+        if (function == null)
+        {
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, "a top-level variable (it would be emitted as a heap-rooted static field)");
+            rhsValid = false;
+        }
+        else if (function.IsAsync || IsIteratorReturnType(function.Type))
+        {
+            var context = function.IsAsync ? "a local in an async function" : "a local in an iterator";
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, context + " (it would be hoisted into the state machine)");
+            rhsValid = false;
+        }
+
+        var accessibility = ResolveAccessibility(syntax.AccessibilityModifier);
+        var variable = BindVariableDeclaration(syntax.Identifier, isReadOnly: false, slotType, accessibility);
+        if (variable is LocalVariableSymbol localVar)
+        {
+            // The alias slot itself is function-local; never returnable.
+            localVar.RefKind = RefKind.Ref;
+            localVar.IsScoped = true;
+        }
+
+        // Annotations attach to the symbol unchanged (e.g. @Obsolete on a top-level
+        // alias would still be observed if it ever became legal at top level).
+        if (variable != null && !syntax.Annotations.IsDefaultOrEmpty)
+        {
+            var positionDescription = "a local variable declaration";
+            var boundAttrs = BindAttributes(
+                syntax.Annotations,
+                AttributeTargetKind.Field,
+                VariableDeclarationAllowedTargets,
+                positionDescription,
+                System.AttributeTargets.Field);
+            variable.SetAttributes(boundAttrs);
+        }
+
+        // Lower the initializer to BoundAddressOfExpression so the emitter
+        // populates the alias slot with the managed pointer (§5 / §6 of ADR-0060).
+        BoundExpression boundInitializer = rhsValid
+            ? new BoundAddressOfExpression(syntax.Initializer, initializer)
+            : new BoundErrorExpression(null);
+
+        return new BoundVariableDeclaration(syntax, variable, boundInitializer);
     }
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
