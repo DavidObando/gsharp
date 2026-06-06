@@ -3331,6 +3331,17 @@ public class Parser
         {
             var operatorToken = NextToken();
             var operand = ParseBinaryExpression(unaryOperatorPrecedence);
+
+            // ADR-0061: support `&<cond> ? <lvalue> : <lvalue>` as a bare
+            // address-of of a conditional lvalue. Without this special case,
+            // a stray `?` after `&x` would otherwise be unparseable (there is
+            // no general ternary in G#).
+            if (operatorToken.Kind == SyntaxKind.AmpersandToken
+                && Current.Kind == SyntaxKind.QuestionToken)
+            {
+                operand = MaybeParseConditionalRefArgumentTail(operand, operatorToken);
+            }
+
             left = new UnaryExpressionSyntax(syntaxTree, operatorToken, operand);
         }
         else if (Current.Kind == SyntaxKind.AwaitKeyword)
@@ -4042,13 +4053,25 @@ public class Parser
             bool payloadIsDiscard = nextKind == SyntaxKind.IdentifierToken && nextText == "_";
             bool payloadIsLvalueStart = nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken;
 
+            // ADR-0061: `out` may also be followed by a conditional-ref
+            // condition expression — relax the disambiguation for literal
+            // keywords and number/unary tokens that can never be an
+            // out-parameter target. A `?` later turns these into the
+            // conditional form; without `?` the binder reports the standard
+            // non-lvalue diagnostic.
+            bool payloadIsConditionalConditionStart = nextKind == SyntaxKind.TrueKeyword
+                || nextKind == SyntaxKind.FalseKeyword
+                || nextKind == SyntaxKind.NumberToken
+                || nextKind == SyntaxKind.BangToken
+                || nextKind == SyntaxKind.MinusToken;
+
             // A bare identifier follower could be the parameter name (use `out`).
             // It is treated as `out lvalue` only when the lookahead is unambiguous.
             // We follow the ADR's rule: if the modifier is followed by an
             // identifier (not the named-argument `=` form), recognise it as
             // a ref-kind argument. A trailing `=` (named argument) is already
             // handled above; anything else with an ident lookahead is `out`.
-            if (!(payloadIsDecl || payloadIsDiscard || payloadIsLvalueStart))
+            if (!(payloadIsDecl || payloadIsDiscard || payloadIsLvalueStart || payloadIsConditionalConditionStart))
             {
                 return false;
             }
@@ -4082,21 +4105,93 @@ public class Parser
             }
 
             var lvalue = ParseExpression();
+            lvalue = MaybeParseConditionalRefArgumentTail(lvalue, outToken);
             result = new RefArgumentExpressionSyntax(syntaxTree, outToken, lvalue);
             return true;
         }
 
-        // `ref` / `in` — only legal followers are an identifier (lvalue) or
-        // a parenthesised lvalue. Named-argument `=` form is handled above.
-        if (!(nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken))
+        // `ref` / `in` — legal followers are an identifier (lvalue), a
+        // parenthesised lvalue, or (ADR-0061) any token that can start a
+        // conditional ref-argument's condition expression — literal keywords,
+        // number tokens, or unary operators that combine to form a bool
+        // condition. The conditional form requires a `?` later on the line;
+        // when one is absent these cases are rejected at bind time as
+        // expected ("cannot take address of non-lvalue").
+        if (!(nextKind == SyntaxKind.IdentifierToken
+              || nextKind == SyntaxKind.OpenParenthesisToken
+              || nextKind == SyntaxKind.TrueKeyword
+              || nextKind == SyntaxKind.FalseKeyword
+              || nextKind == SyntaxKind.NumberToken
+              || nextKind == SyntaxKind.BangToken
+              || nextKind == SyntaxKind.MinusToken))
         {
             return false;
         }
 
         var modifier = NextToken();
         var inner = ParseExpression();
+        inner = MaybeParseConditionalRefArgumentTail(inner, modifier);
         result = new RefArgumentExpressionSyntax(syntaxTree, modifier, inner);
         return true;
+    }
+
+    // ADR-0061: when the current token is `?`, treat <paramref name="condition"/>
+    // as the condition of a conditional lvalue and parse `?  [ref|in|out]? lvalue
+    // : [ref|in|out]? lvalue`. The outer modifier (when known — null for the
+    // bare `&` form) is recorded for inner-modifier mismatch diagnostics at
+    // bind time. When the current token is not `?`, the original expression
+    // is returned unchanged.
+    private ExpressionSyntax MaybeParseConditionalRefArgumentTail(ExpressionSyntax condition, SyntaxToken outerModifier)
+    {
+        if (Current.Kind != SyntaxKind.QuestionToken)
+        {
+            return condition;
+        }
+
+        var questionToken = NextToken();
+        var whenTrueMod = TryConsumeInnerRefModifier();
+        var whenTrue = ParseExpression();
+        var colonToken = MatchToken(SyntaxKind.ColonToken);
+        var whenFalseMod = TryConsumeInnerRefModifier();
+        var whenFalse = ParseExpression();
+
+        _ = outerModifier; // bind-time check uses outer modifier; parser only records.
+        return new ConditionalRefArgumentExpressionSyntax(
+            syntaxTree,
+            condition,
+            questionToken,
+            whenTrueMod,
+            whenTrue,
+            colonToken,
+            whenFalseMod,
+            whenFalse);
+    }
+
+    // ADR-0061: parse an optional inner `ref`/`in`/`out` modifier on a branch
+    // of a conditional ref-argument. Returns the consumed token or null.
+    private SyntaxToken TryConsumeInnerRefModifier()
+    {
+        if (Current.Kind != SyntaxKind.IdentifierToken)
+        {
+            return null;
+        }
+
+        var text = Current.Text;
+        if (text != "ref" && text != "in" && text != "out")
+        {
+            return null;
+        }
+
+        var nextKind = Peek(1).Kind;
+
+        // Only treat as a modifier if the next token starts a legal lvalue
+        // payload (identifier or `(`). Otherwise leave it as a plain identifier.
+        if (!(nextKind == SyntaxKind.IdentifierToken || nextKind == SyntaxKind.OpenParenthesisToken))
+        {
+            return null;
+        }
+
+        return NextToken();
     }
 
     // ADR-0060 helper for the optional `out var name T` / `out let name T` /
@@ -4213,6 +4308,15 @@ public class Parser
     {
         var left = MatchToken(SyntaxKind.OpenParenthesisToken);
         var expression = ParseExpression();
+
+        // ADR-0061: `(cond ? lvalue : lvalue)` parses as a conditional ref-arg
+        // expression when a `?` immediately follows the inner expression. The
+        // resulting node is only legal in ref-argument / `&` operand contexts;
+        // the binder rejects it otherwise.
+        if (Current.Kind == SyntaxKind.QuestionToken)
+        {
+            expression = MaybeParseConditionalRefArgumentTail(expression, outerModifier: null);
+        }
 
         // Phase 4.5: `(a, b, ...)` is a tuple literal. Detection is purely
         // post-fix: parse the first expression, then if a comma follows we
