@@ -7591,6 +7591,15 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #503 follow-up: `A.B.Event += handler` (chained-receiver
+        // subscription). The parser produces a *right-associative* accessor
+        // chain — `A . (B . Event)` — so accessor.RightPart is itself an
+        // AccessorExpressionSyntax and the event name is at the rightmost
+        // leaf. Rotate the chain into the canonical left-associative form
+        // `(A . B) . Event` so the existing receiver/event-name resolution
+        // below (which assumes the right part is a single name) just works.
+        accessor = NormalizeAccessorLeftAssociative(accessor);
+
         if (accessor.RightPart is not NameExpressionSyntax eventNameSyntax)
         {
             Diagnostics.ReportUnableToFindMember(accessor.RightPart.Location, syntax.OperatorToken.Text);
@@ -7627,7 +7636,7 @@ public sealed class Binder
 
             if (ev != null)
             {
-                var userHandler = BindExpression(syntax.Value);
+                var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                 return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
             }
 
@@ -7656,7 +7665,7 @@ public sealed class Binder
                 var ev = userStruct.Events.FirstOrDefault(e => e.Name == eventName);
                 if (ev != null)
                 {
-                    var userHandler = BindExpression(syntax.Value);
+                    var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                     return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
                 }
             }
@@ -7679,24 +7688,28 @@ public sealed class Binder
         }
 
         var handlerType = eventInfo.EventHandlerType;
-        var boundHandler = BindExpression(syntax.Value);
+        var handlerTypeSymbol = TypeSymbol.FromClrType(handlerType);
+        var boundHandler = BindEventSubscriptionHandler(syntax.Value, handlerTypeSymbol);
 
         // The handler is most useful when expressed as a function literal of
         // matching signature. For that path we skip BindConversion (which has
         // no generic fn → custom-delegate rule) and rely on the evaluator /
         // emitter to materialize the right delegate type. Otherwise fall back
         // to the standard conversion (covers null, already-typed delegate
-        // variables, etc.).
+        // variables, etc.). Method-group handlers were already routed through
+        // BindEventSubscriptionHandler above and arrive here resolved.
         BoundExpression convertedHandler;
-        if (boundHandler.Type is FunctionTypeSymbol fn
-            && IsSignatureCompatibleWithDelegate(fn, handlerType))
+        if (boundHandler is BoundFunctionLiteralExpression
+            || boundHandler is BoundMethodGroupExpression
+            || boundHandler is BoundClrMethodGroupExpression
+            || (boundHandler.Type is FunctionTypeSymbol fn
+                && IsSignatureCompatibleWithDelegate(fn, handlerType)))
         {
             convertedHandler = boundHandler;
         }
         else
         {
-            var handlerSymbol = TypeSymbol.FromClrType(handlerType);
-            convertedHandler = BindConversion(syntax.Value.Location, boundHandler, handlerSymbol);
+            convertedHandler = BindConversion(syntax.Value.Location, boundHandler, handlerTypeSymbol);
         }
 
         return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
@@ -7728,7 +7741,7 @@ public sealed class Binder
                 if (ev != null)
                 {
                     var receiver = new BoundVariableExpression(null, function.ThisParameter);
-                    var handler = BindExpression(syntax.Value);
+                    var handler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                     return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
                 }
             }
@@ -7819,6 +7832,176 @@ public sealed class Binder
         }
 
         return new BoundAssignmentExpression(null, variable, convertedResult);
+    }
+
+    /// <summary>
+    /// Issue #503 follow-up: rotates a right-associative member-access chain
+    /// into the canonical left-associative form so the rightmost identifier is
+    /// the immediate <see cref="AccessorExpressionSyntax.RightPart"/>. The
+    /// parser produces <c>A . (B . C)</c> for <c>A.B.C</c>; this helper
+    /// rewrites it as <c>(A . B) . C</c> so the event-subscription binder can
+    /// treat the LHS uniformly (receiver expression on the left, event name on
+    /// the right) regardless of how many segments the receiver chain has.
+    /// </summary>
+    private AccessorExpressionSyntax NormalizeAccessorLeftAssociative(AccessorExpressionSyntax accessor)
+    {
+        while (accessor.RightPart is AccessorExpressionSyntax rightChain)
+        {
+            var newLeft = new AccessorExpressionSyntax(
+                accessor.SyntaxTree,
+                accessor.LeftPart,
+                accessor.DotToken,
+                rightChain.LeftPart);
+            accessor = new AccessorExpressionSyntax(
+                accessor.SyntaxTree,
+                newLeft,
+                rightChain.DotToken,
+                rightChain.RightPart);
+        }
+
+        return accessor;
+    }
+
+    /// <summary>
+    /// Issue #503 follow-up: binds the right-hand side of an event
+    /// subscription against the event's declared handler delegate type. This
+    /// is the unified entry point for both user-event and CLR-event
+    /// subscriptions, so method-group conversions (<c>src.Changed +=
+    /// this.OnHit</c>, <c>src.Changed += OnHit</c>) are resolved consistently
+    /// against the event delegate's <c>Invoke</c> signature.
+    ///
+    /// The helper first inspects the syntactic form of the handler:
+    ///   * A bare <see cref="NameExpressionSyntax"/> that names an instance
+    ///     method on the implicit <c>this</c> is bound as an instance method
+    ///     group captured against <c>this</c>.
+    ///   * An <see cref="AccessorExpressionSyntax"/> whose left part
+    ///     evaluates to a user-defined class and whose right part names an
+    ///     instance method on that class is bound as an instance method
+    ///     group captured against the bound receiver.
+    /// If neither pattern matches, the handler is bound through
+    /// <c>BindExpression</c> as usual.
+    ///
+    /// Once bound, a method-group handler is routed through
+    /// <c>BindConversion</c> with the event's declared delegate type
+    /// so the resolved overload, target delegate, and (for instance groups)
+    /// captured receiver are all known by the time the emitter runs.
+    /// </summary>
+    private BoundExpression BindEventSubscriptionHandler(ExpressionSyntax handlerSyntax, TypeSymbol targetDelegateType)
+    {
+        // Bare `OnHit` inside the declaring class: implicit-`this` instance
+        // method group. Recognized before the general BindExpression because
+        // a non-event name lookup would otherwise emit GS0125 for instance
+        // methods (which aren't surfaced as variables).
+        if (handlerSyntax is NameExpressionSyntax bareName
+            && function?.ThisParameter != null
+            && function.ReceiverType is StructSymbol implicitThisStruct)
+        {
+            var methods = implicitThisStruct.GetMethodsIncludingInherited(bareName.IdentifierToken.Text);
+            if (!methods.IsDefaultOrEmpty)
+            {
+                var receiver = new BoundVariableExpression(null, function.ThisParameter);
+                var group = BuildInstanceMethodGroup(receiver, methods);
+                return BindConversion(handlerSyntax.Location, group, targetDelegateType);
+            }
+        }
+
+        // `recv.OnHit` where recv is a user-defined class: bind the receiver
+        // once, then surface the named instance method as a method group
+        // captured against that receiver. We bind the LeftPart inline so the
+        // fallback `BindExpression(handlerSyntax)` doesn't re-emit any
+        // diagnostics produced during LeftPart binding.
+        if (handlerSyntax is AccessorExpressionSyntax memberAccess
+            && memberAccess.RightPart is NameExpressionSyntax memberName
+            && !memberAccess.IsNullConditional)
+        {
+            var boundReceiver = BindExpression(memberAccess.LeftPart);
+            if (boundReceiver is BoundErrorExpression || boundReceiver.Type == TypeSymbol.Error)
+            {
+                // LeftPart already reported its own diagnostic; surface the
+                // error directly to avoid re-binding (and re-reporting) below.
+                return boundReceiver;
+            }
+
+            if (boundReceiver.Type is StructSymbol receiverStruct)
+            {
+                var methods = receiverStruct.GetMethodsIncludingInherited(memberName.IdentifierToken.Text);
+                if (!methods.IsDefaultOrEmpty)
+                {
+                    var group = BuildInstanceMethodGroup(boundReceiver, methods);
+                    return BindConversion(handlerSyntax.Location, group, targetDelegateType);
+                }
+            }
+
+            // Not an instance method on a user class — fall through to the
+            // standard accessor binder via a synthetic accessor reusing the
+            // already-bound LeftPart. The fast path is `recv.MemberName`
+            // where the rebind is cheap; the slower path materializes the
+            // bound receiver into a synthetic local so it isn't re-evaluated.
+            return BindEventSubscriptionHandlerFromBoundAccessor(memberAccess, boundReceiver, targetDelegateType);
+        }
+
+        var bound = BindExpression(handlerSyntax);
+
+        if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
+        {
+            return BindConversion(handlerSyntax.Location, clrGroup, targetDelegateType);
+        }
+
+        if (bound is BoundMethodGroupExpression userGroup)
+        {
+            return BindConversion(handlerSyntax.Location, userGroup, targetDelegateType);
+        }
+
+        return bound;
+    }
+
+    /// <summary>
+    /// Helper for <see cref="BindEventSubscriptionHandler"/>: completes
+    /// binding for an <c>obj.Member</c> handler when <c>obj</c> has already
+    /// been bound (so we don't re-bind it and double-report diagnostics) and
+    /// the member isn't a user-instance method. Defers to the standard
+    /// accessor binder for the simple <c>name.member</c> shape; for any
+    /// other shape we still re-bind the full syntax (no duplicate diagnostic
+    /// risk since this branch is entered only when <c>boundReceiver</c>
+    /// produced no errors).
+    /// </summary>
+    private BoundExpression BindEventSubscriptionHandlerFromBoundAccessor(
+        AccessorExpressionSyntax memberAccess,
+        BoundExpression boundReceiver,
+        TypeSymbol targetDelegateType)
+    {
+        _ = boundReceiver;
+        var bound = BindExpression(memberAccess);
+
+        if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
+        {
+            return BindConversion(memberAccess.Location, clrGroup, targetDelegateType);
+        }
+
+        if (bound is BoundMethodGroupExpression userGroup)
+        {
+            return BindConversion(memberAccess.Location, userGroup, targetDelegateType);
+        }
+
+        return bound;
+    }
+
+    private static BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods)
+    {
+        if (methods.Length == 1)
+        {
+            var only = methods[0];
+            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(only.Parameters.Length);
+            foreach (var p in only.Parameters)
+            {
+                paramTypes.Add(p.Type);
+            }
+
+            var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), only.Type ?? TypeSymbol.Void);
+            return new BoundMethodGroupExpression(null, receiver, only, fnType);
+        }
+
+        return new BoundMethodGroupExpression(null, receiver, methods);
     }
 
     /// <summary>
@@ -14997,7 +15180,7 @@ public sealed class Binder
         }
 
         var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);
-        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, pick, pickFnType);
+        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, group.Receiver, pick, pickFnType);
 
         // If the target is the native function type matching the pick exactly,
         // identity-convert; otherwise let the regular conversion machinery turn

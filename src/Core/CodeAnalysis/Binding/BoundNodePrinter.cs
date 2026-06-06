@@ -1420,7 +1420,20 @@ public static class BoundNodePrinter
 
     private static void WriteMethodGroupExpression(BoundMethodGroupExpression node, IndentedTextWriter writer)
     {
-        writer.WriteIdentifier(node.Function.Name);
+        if (node.Receiver != null)
+        {
+            node.Receiver.WriteTo(writer);
+            writer.WritePunctuation(".");
+        }
+
+        if (node.Function != null)
+        {
+            writer.WriteIdentifier(node.Function.Name);
+        }
+        else if (!node.Candidates.IsDefaultOrEmpty)
+        {
+            writer.WriteIdentifier(node.Candidates[0].Name);
+        }
     }
 
     private static void WriteClrMethodGroupExpression(BoundClrMethodGroupExpression node, IndentedTextWriter writer)

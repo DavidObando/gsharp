@@ -1683,7 +1683,20 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
     {
-        return node;
+        if (node.Receiver == null)
+        {
+            return node;
+        }
+
+        var receiver = RewriteExpression(node.Receiver);
+        if (receiver == node.Receiver)
+        {
+            return node;
+        }
+
+        return node.FunctionType != null
+            ? new BoundMethodGroupExpression(node.Syntax, receiver, node.Function, node.FunctionType)
+            : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates);
     }
 
     /// <summary>Rewrites a CLR method-group expression (issue #337).</summary>
