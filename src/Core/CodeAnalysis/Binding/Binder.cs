@@ -7443,15 +7443,16 @@ public sealed class Binder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticWritable))
+            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
                 return new BoundErrorExpression(null);
             }
 
             _ = staticWritable;
-            var staticConverted = BindConversion(syntax.Value.Location, staticValue, TypeSymbol.FromClrType(staticTargetType));
-            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, TypeSymbol.FromClrType(staticTargetType));
+            _ = staticTargetType;
+            var staticConverted = BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
 
         // ADR-0053: user-defined struct/class type → static field write.
@@ -7515,16 +7516,17 @@ public sealed class Binder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instWritable))
+            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instTargetSymbol, out var instWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 return new BoundErrorExpression(null);
             }
 
             _ = instWritable;
+            _ = instTargetType;
             var instReceiver = new BoundVariableExpression(null, variable);
-            var instConverted = BindConversion(syntax.Value.Location, value, TypeSymbol.FromClrType(instTargetType));
-            return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, TypeSymbol.FromClrType(instTargetType));
+            var instConverted = BindConversion(syntax.Value.Location, value, instTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, instTargetSymbol);
         }
 
         if (!(variable.Type is StructSymbol structSymbol))
@@ -7937,20 +7939,23 @@ public sealed class Binder
         return fnRetClr == invoke.ReturnType;
     }
 
-    private static bool TryGetWritableClrMember(MemberInfo member, out Type targetType, out bool writable)
+    private static bool TryGetWritableClrMember(MemberInfo member, out Type targetType, out TypeSymbol targetTypeSymbol, out bool writable)
     {
         switch (member)
         {
             case PropertyInfo p:
                 targetType = p.PropertyType;
+                targetTypeSymbol = ClrNullability.GetPropertyTypeSymbol(p);
                 writable = p.CanWrite && p.GetSetMethod(nonPublic: false) != null;
                 return writable;
             case FieldInfo f:
                 targetType = f.FieldType;
+                targetTypeSymbol = ClrNullability.GetFieldTypeSymbol(f);
                 writable = !f.IsInitOnly && !f.IsLiteral;
                 return writable;
             default:
                 targetType = null;
+                targetTypeSymbol = null;
                 writable = false;
                 return false;
         }
@@ -12753,13 +12758,24 @@ public sealed class Binder
                     var prop = ClrTypeUtilities.SafeGetProperty(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
-                        return AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, MapClrMemberType(prop.PropertyType)));
+                        // Issue #504 follow-up: properties with NRT
+                        // annotations (e.g. `DirectoryInfo.Parent` is
+                        // `DirectoryInfo?`) must surface as
+                        // NullableTypeSymbol so callers can compare to
+                        // `nil` without GS0129. ByRef-returning properties
+                        // are rare on CLR types and stay on the existing
+                        // MapClrMemberType path, which preserves the
+                        // ByRefTypeSymbol wrapper.
+                        var propType = prop.PropertyType.IsByRef
+                            ? MapClrMemberType(prop.PropertyType)
+                            : ClrNullability.GetPropertyTypeSymbol(prop);
+                        return AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
                     }
 
                     var fld = ClrTypeUtilities.SafeGetField(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (fld != null)
                     {
-                        return new BoundClrPropertyAccessExpression(null, receiver, fld, TypeSymbol.FromClrType(fld.FieldType));
+                        return new BoundClrPropertyAccessExpression(null, receiver, fld, ClrNullability.GetFieldTypeSymbol(fld));
                     }
 
                     // Issue #337: an instance member name that resolves to a
@@ -14412,6 +14428,25 @@ public sealed class Binder
         {
             Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
             return new BoundErrorExpression(null);
+        }
+
+        // Issue #504: lower `nil → Nullable<value-type>` to a
+        // BoundDefaultExpression of the target Nullable<T>. Value-type
+        // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
+        // against a `valuetype System.Nullable<T>` slot produces invalid IL
+        // ("Common Language Runtime detected an invalid program"). The
+        // default-expression emit path materialises `default(Nullable<T>)`
+        // via a pre-allocated `ldloca/initobj/ldloc` slot, which is the
+        // verifiable representation of a missing-value Nullable<T>. The
+        // reference-type Nullable<T> case (e.g. `nil → string?`) still
+        // shares the CLR representation of `T` and is fine emitting `ldnull`,
+        // so it continues through the normal BoundConversionExpression path
+        // below.
+        if (expression.Type == TypeSymbol.Null
+            && type is NullableTypeSymbol nilTargetNullable
+            && nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            return new BoundDefaultExpression(null, type);
         }
 
         return new BoundConversionExpression(null, type, expression);
