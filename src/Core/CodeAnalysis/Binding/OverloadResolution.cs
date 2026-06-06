@@ -304,8 +304,14 @@ internal static class OverloadResolution
     public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
         where T : MethodBase
     {
-        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
-        foreach (var rawCandidate in candidates)
+        var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
+
+        // Materialize the candidate set so we can run both the normal-form pass
+        // and (if necessary) a second params-expansion pass without re-querying
+        // the underlying enumerable.
+        var candidateList = candidates as IReadOnlyCollection<T> ?? candidates.ToList();
+
+        foreach (var rawCandidate in candidateList)
         {
             // Issue #321: an overload's signature may reference types that cannot
             // be loaded or projected under the MetadataLoadContext used for
@@ -327,6 +333,26 @@ internal static class OverloadResolution
             }
         }
 
+        // Issue #506: when no candidate applies in its normal (non-expanded)
+        // form, attempt C#-style `params T[]` expansion. The expanded form is
+        // only ever considered as a fallback so that a normal-form candidate
+        // always beats an expanded-form one (C# §7.5.3.2 better-function-member
+        // rule).
+        if (applicable.Count == 0)
+        {
+            foreach (var rawCandidate in candidateList)
+            {
+                try
+                {
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames);
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    continue;
+                }
+            }
+        }
+
         if (applicable.Count == 0)
         {
             return Result<T>.NoneApplicable();
@@ -335,10 +361,91 @@ internal static class OverloadResolution
         if (applicable.Count == 1)
         {
             var only = applicable[0];
-            return Result<T>.Single(only.Method, BuildMappingArray(only.Mapping, argumentNames));
+            return Result<T>.Single(only.Method, BuildMappingArray(only.Mapping, argumentNames), only.IsExpanded);
         }
 
         return RankApplicable(applicable, argTypes, argumentNames);
+    }
+
+    /// <summary>
+    /// Issue #506: returns <see langword="true"/> when <paramref name="parameter"/>
+    /// is the trailing <c>params T[]</c> parameter — i.e. carries the
+    /// <see cref="ParamArrayAttribute"/> marker and is a single-dimensional
+    /// array. Detected via <see cref="CustomAttributeData"/> so the check works
+    /// even when the candidate is reflected through a MetadataLoadContext.
+    /// </summary>
+    /// <param name="parameter">The parameter to inspect.</param>
+    /// <returns>Whether the parameter is a <c>params</c> array.</returns>
+    public static bool IsParamsArrayParameter(ParameterInfo parameter)
+    {
+        if (parameter == null)
+        {
+            return false;
+        }
+
+        var paramType = parameter.ParameterType;
+        if (paramType == null || !paramType.IsArray || paramType.GetArrayRank() != 1)
+        {
+            return false;
+        }
+
+        IList<CustomAttributeData> attrs;
+        try
+        {
+            attrs = parameter.GetCustomAttributesData();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        if (attrs == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < attrs.Count; i++)
+        {
+            var name = attrs[i]?.AttributeType?.FullName;
+            if (string.Equals(name, "System.ParamArrayAttribute", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #506: returns the position of the trailing <c>params T[]</c>
+    /// parameter on <paramref name="method"/>, or -1 when there is none.
+    /// </summary>
+    /// <param name="method">The method to inspect.</param>
+    /// <returns>The params parameter position, or -1.</returns>
+    public static int GetParamsParameterIndex(MethodBase method)
+    {
+        if (method == null)
+        {
+            return -1;
+        }
+
+        ParameterInfo[] parameters;
+        try
+        {
+            parameters = method.GetParameters();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return -1;
+        }
+
+        if (parameters.Length == 0)
+        {
+            return -1;
+        }
+
+        var lastIndex = parameters.Length - 1;
+        return IsParamsArrayParameter(parameters[lastIndex]) ? lastIndex : -1;
     }
 
     /// <summary>
@@ -579,7 +686,7 @@ internal static class OverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null)
         where T : MethodBase
     {
         {
@@ -732,9 +839,316 @@ internal static class OverloadResolution
 
             if (ok)
             {
-                applicable.Add((candidate, conversions, paramTypes, mapping));
+                applicable.Add((candidate, conversions, paramTypes, mapping, false));
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #506: evaluates a candidate in <em>expanded</em> form — the trailing
+    /// <c>params T[]</c> parameter accepts zero or more positional arguments, each
+    /// assignable to the element type <c>T</c>. Closes open generic candidates
+    /// (e.g. <c>Bar&lt;T&gt;(params T[] items)</c>) by inferring <c>T</c> from
+    /// the trailing arguments via the same unification used by
+    /// <see cref="TryInferTypeArguments"/>. Honours named arguments that bind to
+    /// a leading fixed parameter (the params parameter itself is never nameable
+    /// from caller-side under G#'s positional-before-named layout); the leftover
+    /// positional surplus is packed into the synthesised array. Mirrors the
+    /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
+    /// trailing parameter type to the element type for ranking purposes.
+    /// </summary>
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null)
+        where T : MethodBase
+    {
+        T candidate = rawCandidate;
+
+        // Issue #506 follow-up: close open generic candidates before applicability
+        // classification. Explicit type arguments win; otherwise infer from the
+        // supplied positional/named args (trailing positionals beyond the params
+        // index unify against T).
+        if (explicitTypeArgs != null)
+        {
+            if (rawCandidate is MethodInfo gmi
+                && gmi.IsGenericMethodDefinition
+                && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
+            {
+                MethodInfo closed;
+                try
+                {
+                    closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
+                }
+                catch (ArgumentException)
+                {
+                    return;
+                }
+
+                candidate = (T)(MethodBase)closed;
+            }
+            else
+            {
+                return;
+            }
+        }
+        else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+        {
+            if (!TryInferTypeArgumentsForExpandedParams(mi, argTypes, argumentNames, out var typeArgs))
+            {
+                return;
+            }
+
+            if (projectTypeArgument != null)
+            {
+                for (var t = 0; t < typeArgs.Length; t++)
+                {
+                    typeArgs[t] = projectTypeArgument(typeArgs[t]) ?? typeArgs[t];
+                }
+            }
+
+            MethodInfo closed;
+            try
+            {
+                closed = mi.MakeGenericMethod(typeArgs);
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            candidate = (T)(MethodBase)closed;
+        }
+
+        var parameters = candidate.GetParameters();
+        if (parameters.Length == 0)
+        {
+            return;
+        }
+
+        var paramsIndex = parameters.Length - 1;
+        if (!IsParamsArrayParameter(parameters[paramsIndex]))
+        {
+            return;
+        }
+
+        var elementType = parameters[paramsIndex].ParameterType.GetElementType();
+        if (elementType == null)
+        {
+            return;
+        }
+
+        // G#'s positional-before-named rule guarantees the layout
+        //   [positional_0 … positional_{P-1}, named_0 … named_{N-1}].
+        // The leading positionals fill slots 0..min(P, paramsIndex)-1; the
+        // surplus past the params slot (positionals at indices
+        // [paramsIndex..P-1]) is packed into the synthesised array; the named
+        // arguments fill the remaining fixed slots by parameter name. A named
+        // argument that targets the params parameter or a slot already filled
+        // positionally rejects the candidate.
+        var positionalCount = argTypes.Count;
+        var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
+        if (hasNamed)
+        {
+            positionalCount = 0;
+            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
+            {
+                positionalCount++;
+            }
+
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                if (argumentNames[i] == null)
+                {
+                    return;
+                }
+            }
+        }
+
+        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
+        var tailCount = positionalCount > paramsIndex ? positionalCount - paramsIndex : 0;
+
+        var mapping = new int[argTypes.Count];
+        var filled = new bool[parameters.Length];
+        for (var i = 0; i < fixedFilledByPositional; i++)
+        {
+            mapping[i] = i;
+            filled[i] = true;
+        }
+
+        for (var i = fixedFilledByPositional; i < positionalCount; i++)
+        {
+            mapping[i] = paramsIndex;
+        }
+
+        if (tailCount > 0)
+        {
+            filled[paramsIndex] = true;
+        }
+
+        if (hasNamed)
+        {
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                var name = argumentNames[i];
+                var paramIdx = FindParameterIndex(parameters, name);
+                if (paramIdx < 0 || paramIdx == paramsIndex || filled[paramIdx])
+                {
+                    return;
+                }
+
+                mapping[i] = paramIdx;
+                filled[paramIdx] = true;
+            }
+        }
+
+        // Every non-params fixed slot left empty must be optional. The params
+        // slot is virtually optional in expanded form (zero trailing args
+        // allocates an empty array).
+        for (var i = 0; i < paramsIndex; i++)
+        {
+            if (!filled[i] && !parameters[i].IsOptional)
+            {
+                return;
+            }
+        }
+
+        var conversions = new ImplicitConversionKind[argTypes.Count];
+        var paramTypes = new Type[argTypes.Count];
+        for (var i = 0; i < argTypes.Count; i++)
+        {
+            var slot = mapping[i];
+            Type target;
+            if (slot == paramsIndex && i >= fixedFilledByPositional)
+            {
+                target = elementType;
+            }
+            else
+            {
+                target = parameters[slot].ParameterType;
+            }
+
+            paramTypes[i] = target;
+            var conv = ClassifyImplicit(target, argTypes[i]);
+            if (conv == ImplicitConversionKind.None)
+            {
+                return;
+            }
+
+            conversions[i] = conv;
+        }
+
+        // When all arguments are purely positional, drop the mapping so the
+        // existing ExpandParamsArguments fast path remains the canonical
+        // post-resolution lowering (matches the prior signature).
+        var storedMapping = hasNamed ? mapping : null;
+        applicable.Add((candidate, conversions, paramTypes, storedMapping, true));
+    }
+
+    /// <summary>
+    /// Issue #506 follow-up: infers method type arguments for an open generic
+    /// candidate in <c>params T[]</c> expanded form. Each fixed leading
+    /// parameter unifies against its positional/named argument; trailing
+    /// positionals beyond the params index unify against the params element
+    /// type. Returns <see langword="false"/> when any type parameter cannot
+    /// be bound.
+    /// </summary>
+    private static bool TryInferTypeArgumentsForExpandedParams(MethodInfo openMethod, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames, out Type[] typeArgs)
+    {
+        typeArgs = null;
+        var parameters = openMethod.GetParameters();
+        if (parameters.Length == 0)
+        {
+            return false;
+        }
+
+        var paramsIndex = parameters.Length - 1;
+        if (!IsParamsArrayParameter(parameters[paramsIndex]))
+        {
+            return false;
+        }
+
+        var elementType = parameters[paramsIndex].ParameterType.GetElementType();
+        if (elementType == null)
+        {
+            return false;
+        }
+
+        var positionalCount = argTypes.Count;
+        var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
+        if (hasNamed)
+        {
+            positionalCount = 0;
+            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
+            {
+                positionalCount++;
+            }
+        }
+
+        var typeParams = openMethod.GetGenericArguments();
+        var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
+
+        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
+
+        for (var i = 0; i < fixedFilledByPositional; i++)
+        {
+            if (argTypes[i] == null)
+            {
+                continue;
+            }
+
+            if (!UnifyForInference(parameters[i].ParameterType, argTypes[i], bounds))
+            {
+                return false;
+            }
+        }
+
+        for (var i = fixedFilledByPositional; i < positionalCount; i++)
+        {
+            if (argTypes[i] == null)
+            {
+                continue;
+            }
+
+            if (!UnifyForInference(elementType, argTypes[i], bounds))
+            {
+                return false;
+            }
+        }
+
+        if (hasNamed)
+        {
+            for (var i = positionalCount; i < argTypes.Count; i++)
+            {
+                var name = argumentNames[i];
+                var paramIdx = FindParameterIndex(parameters, name);
+                if (paramIdx < 0 || paramIdx == paramsIndex)
+                {
+                    return false;
+                }
+
+                if (argTypes[i] == null)
+                {
+                    continue;
+                }
+
+                if (!UnifyForInference(parameters[paramIdx].ParameterType, argTypes[i], bounds))
+                {
+                    return false;
+                }
+            }
+        }
+
+        var result = new Type[typeParams.Length];
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            if (!bounds.TryGetValue(typeParams[i].Name, out var bound))
+            {
+                return false;
+            }
+
+            result[i] = bound;
+        }
+
+        typeArgs = result;
+        return true;
     }
 
     /// <summary>
@@ -965,15 +1379,18 @@ internal static class OverloadResolution
     ///     parameter types, then non-generic-over-generic.</description>
     ///   </item>
     /// </list>
+    /// Issue #506: the tuple carries an <c>IsExpanded</c> flag so the winning
+    /// candidate's <c>params T[]</c>-expanded form is propagated to the
+    /// caller through <see cref="Result{T}.IsExpanded"/>.
     /// </remarks>
-    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)> applicable, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames)
+    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<Type> argTypes, IReadOnlyList<string> argumentNames)
         where T : MethodBase
     {
         // Phase 1 — drop candidates that are strictly dominated by another.
         // C# §7.5.3.2: a candidate c is the best iff no other candidate is
         // strictly better than c. Equivalently, c survives iff for every other
         // candidate `other`, !IsStrictlyBetter(other, c).
-        var nonDominated = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping)>();
+        var nonDominated = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
         foreach (var c in applicable)
         {
             var dominated = false;
@@ -999,7 +1416,7 @@ internal static class OverloadResolution
 
         if (nonDominated.Count == 1)
         {
-            return Result<T>.Single(nonDominated[0].Method, BuildMappingArray(nonDominated[0].Mapping, argumentNames));
+            return Result<T>.Single(nonDominated[0].Method, BuildMappingArray(nonDominated[0].Mapping, argumentNames), nonDominated[0].IsExpanded);
         }
 
         var pool = nonDominated.Count > 0 ? nonDominated : applicable;
@@ -1021,7 +1438,7 @@ internal static class OverloadResolution
 
             if (pool.Count == 1)
             {
-                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
             }
         }
 
@@ -1040,7 +1457,7 @@ internal static class OverloadResolution
 
             if (pool.Count == 1)
             {
-                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
             }
         }
 
@@ -1060,7 +1477,7 @@ internal static class OverloadResolution
 
             if (pool.Count == 1)
             {
-                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames));
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
             }
         }
 
@@ -1366,12 +1783,13 @@ internal static class OverloadResolution
     public readonly struct Result<T>
         where T : MethodBase
     {
-        private Result(ResolutionOutcome outcome, T best, ImmutableArray<T> ambiguous, ImmutableArray<int> parameterMapping)
+        private Result(ResolutionOutcome outcome, T best, ImmutableArray<T> ambiguous, ImmutableArray<int> parameterMapping, bool isExpanded)
         {
             Outcome = outcome;
             Best = best;
             Ambiguous = ambiguous;
             ParameterMapping = parameterMapping;
+            IsExpanded = isExpanded;
         }
 
         /// <summary>Gets the resolution outcome.</summary>
@@ -1392,12 +1810,25 @@ internal static class OverloadResolution
         /// </summary>
         public ImmutableArray<int> ParameterMapping { get; }
 
-        internal static Result<T> NoneApplicable() => new(ResolutionOutcome.NoneApplicable, default, ImmutableArray<T>.Empty, default);
+        /// <summary>
+        /// Gets a value indicating whether issue #506: the resolved candidate
+        /// was selected in <em>expanded</em> form, i.e. the trailing
+        /// <c>params T[]</c> parameter packs zero or more positional arguments
+        /// from the call site into a synthesised <c>T[]</c>. Callers must
+        /// repack the trailing arguments into a slice/array creation before
+        /// emit. Always <see langword="false"/> when <see cref="Outcome"/> is
+        /// not <see cref="ResolutionOutcome.Resolved"/>.
+        /// </summary>
+        public bool IsExpanded { get; }
 
-        internal static Result<T> Single(T best) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, default);
+        internal static Result<T> NoneApplicable() => new(ResolutionOutcome.NoneApplicable, default, ImmutableArray<T>.Empty, default, false);
 
-        internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping);
+        internal static Result<T> Single(T best) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, default, false);
 
-        internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied, default);
+        internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping, false);
+
+        internal static Result<T> Single(T best, ImmutableArray<int> parameterMapping, bool isExpanded) => new(ResolutionOutcome.Resolved, best, ImmutableArray<T>.Empty, parameterMapping, isExpanded);
+
+        internal static Result<T> AmbiguousResult(ImmutableArray<T> tied) => new(ResolutionOutcome.Ambiguous, default, tied, default, false);
     }
 }
