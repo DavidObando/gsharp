@@ -1,7 +1,8 @@
 # ADR-0061: Conditional ref-arguments — `cond ? lvalue : lvalue` at ref-argument positions
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-05
+- **Implemented**: 2026-06-05 (PR [#495](https://github.com/DavidObando/gsharp/pull/495))
 - **Phase**: Phase 8 — language ergonomics / CLR-interop surface
 - **Related**: issue #492 (conditional ref-passing follow-up to ADR-0060); ADR-0060 (`ref`/`out`/`in` parameters), ADR-0058 (ref-safe-to-escape), ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0062 (generalized ternary expression)
 

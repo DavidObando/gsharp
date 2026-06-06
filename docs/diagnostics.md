@@ -173,7 +173,30 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0204 | **Warning** (Error if `IsError=true`) | Reference to a symbol marked `[Obsolete]`. | Calling a function, instantiating a class (`Old(5)`), writing a struct literal (`Old{}`), naming a struct/class/interface/enum in a type clause, reading an obsolete parameter, reading/writing an obsolete `var`/`let`/`const`, reading an obsolete enum member (`Color.Red`), or reading/writing an obsolete struct/class field (`p.Old`) — all declared with `@Obsolete("use Bar")`. Severity is promoted to error when the attribute's second argument is `true`. |
 | GS0205 | Error | Attribute is reserved for compiler synthesis. | `@CompilerGenerated`, `@Extension`, `@AsyncStateMachine`, `@Nullable`, or `@NullableContext` written in user source. |
 | GS0206 | Error | Annotations are only allowed on variable declarations, not on this statement. | `@Obsolete\nreturn` inside a function body — annotations may precede `var`/`let`/`const` but no other statement kind. |
+| GS0207 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but has type `{type}`; only `System.Threading.CancellationToken` parameters can carry this annotation. | `@EnumeratorCancellation` placed on a `string` parameter. |
+| GS0208 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but its enclosing function is not an async sequence (does not return `IAsyncEnumerable[T]`). | `@EnumeratorCancellation` on a sync function or a non-sequence async function. |
+| GS0209 | Error | Attribute `{name}` is not valid on this position; its `[AttributeUsage]` permits only: `{targets}`. | Applying a `@field`-targeted attribute to a method. |
+| GS0210 | Error | Duplicate attribute `{name}`; this attribute type does not allow multiple applications (`AllowMultiple = false`). | Two `@Trace(...)` annotations on the same declaration. |
 | GS0211 | Error | Attribute `[DllImport]` is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature. | `@DllImport("user32.dll") func MessageBox() {}` — emit support and the `extern` body marker arrive after v1.0. |
+| GS0212 | Error | Function `{name}` is marked `@Conditional` but does not return `void`; conditional methods must return `void` because calls may be elided at the call site. | `@Conditional("DEBUG") func Probe() int32 { return 0 }`. |
+
+### Class / constructor diagnostics (GS0213–GS0217)
+
+Issue #306 covers user class constructor flow — explicit `init(...)` constructors, primary constructors, and `base(...)` initializers.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0213 | Error | A base-constructor argument list requires an explicit base class. | `init() : base(1) { }` written on a class with no `: BaseType` clause. |
+| GS0214 | Error | Class `{base}` has no accessible constructor that takes `{N}` argument(s). | `init() : base(1, 2)` when the base only declares `init()`. |
+| GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `type Customer class(id int32) { init(name string) { } }`. |
+| GS0216 | Error | Class `{name}` declares multiple `init` constructors; only a single explicit constructor is supported. | Two `init(...)` declarations in the same class body. |
+| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `type Box[T] class { init(x T) { } }` then `Box[int32](42)`. |
+
+### Delegate conversion diagnostics (GS0218)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0218 | Error | Cannot convert method group `{name}` to `{type}`. No overload matches the target delegate signature. | `var a Action = SomeOverloaded` where no overload of `SomeOverloaded` has signature `() -> void`. |
 
 ### String interpolation diagnostics (GS0220–GS0225)
 
@@ -237,6 +260,7 @@ ADR-0056 §1/§2 makes spans indexable: a `Span[T]` / `ReadOnlySpan[T]` indexer 
 | GS9004 | Error | By-ref value cannot escape its declaration scope. | Returning a `*T` (managed-pointer) value from a function, capturing a `*T` local in a closure, hoisting a `*T` local into an `async`/iterator state machine, or using a `*T` return type in a function literal. Also raised when returning a `ref struct` parameter annotated as `scoped`. |
 | GS9005 | Error | Cannot take the address of a constant. | `&myConst` where `myConst` is declared `const`. |
 | GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type. |
+| GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 
 ### Reference closure diagnostics (GS9100)
 
@@ -258,10 +282,10 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0227 | Warning | Documentation comment is not attached to a declaration. |
-| GS0228 | Warning | Missing documentation comment on public member '{name}'. (opt-in) |
-| GS0229 | Warning | Documentation @param '{name}' does not match any parameter of '{symbol}'. |
-| GS0230 | Warning | Unsupported documentation Markdown: {detail}. |
-| GS0231 | Warning | Unknown documentation tag '{tag}'. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso. |
+| GS0228 | Warning | Missing documentation comment on public member `{name}`. (opt-in) |
+| GS0229 | Warning | Documentation @param `{name}` does not match any parameter of `{symbol}`. |
+| GS0230 | Warning | Unsupported documentation Markdown: `{detail}`. |
+| GS0231 | Warning | Unknown documentation tag `{tag}`. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso. |
 
 ## Data struct diagnostics (GS0232)
 
@@ -269,7 +293,7 @@ ADR-0029 / Issue #410: every `data struct` synthesizes a fixed contract of value
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0232 | Error | Data struct '{type}' synthesizes member '{member}'; it cannot be declared explicitly. |
+| GS0232 | Error | Data struct `{type}` synthesizes member `{member}`; it cannot be declared explicitly. |
 
 ## Named delegate type diagnostics (GS0233–GS0234)
 
@@ -278,7 +302,7 @@ ADR-0059 / Issue #255: `type Name = delegate func(...)` declares a real CLR `Mul
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)'). |
-| GS0234 | Error | Generic delegate declaration '{name}' is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up). |
+| GS0234 | Error | Generic delegate declaration `{name}` is not yet supported; declare a non-generic named delegate type (ADR-0059 follow-up). |
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 
@@ -286,14 +310,14 @@ ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at b
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0235 | Error | Argument {index} (parameter '{name}') passes with ref-kind '{actual}' but the parameter is declared '{expected}'. |
+| GS0235 | Error | Argument `{index}` (parameter `{name}`) passes with ref-kind `{actual}` but the parameter is declared `{expected}`. |
 | GS0236 | Error | An 'out var/let/_' inline declaration is only valid on an 'out' argument. |
-| GS0237 | Error | Cannot assign to 'in' parameter '{name}' — it is read-only. |
-| GS0238 | Error | The 'out' parameter '{name}' must be assigned on every path before the function returns. |
-| GS0239 | Error | The variable '{name}' must be definitely assigned before it can be passed by 'ref'. |
-| GS0240 | Error | Override of '{name}' must match the base ref-kind on parameter '{parameter}' ('{baseKind}' vs '{overrideKind}'). |
+| GS0237 | Error | Cannot assign to 'in' parameter `{name}` — it is read-only. |
+| GS0238 | Error | The 'out' parameter `{name}` must be assigned on every path before the function returns. |
+| GS0239 | Error | The variable `{name}` must be definitely assigned before it can be passed by 'ref'. |
+| GS0240 | Error | Override of `{name}` must match the base ref-kind on parameter `{parameter}` (`{baseKind}` vs `{overrideKind}`). |
 | GS0241 | Error | A variadic parameter cannot carry a ref-kind modifier ('ref'/'out'/'in'). |
-| GS0242 | Warning | Argument {index} (parameter '{name}') is passed by 'in' implicitly; add 'in' at the call site to make the read-only pass explicit. |
+| GS0242 | Warning | Argument `{index}` (parameter `{name}`) is passed by 'in' implicitly; add 'in' at the call site to make the read-only pass explicit. |
 | GS0243 | Error | A pointer type '*T' is not a valid parameter type; use the appropriate ref-kind modifier instead (e.g. 'ref T', 'out T', 'in T'). |
 
 Cause/fix examples:
@@ -315,9 +339,9 @@ Issue #343 introduces named arguments at call sites — `Foo(timeout: 30, retrie
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0244 | Error | Positional argument cannot follow a named argument. |
-| GS0245 | Error | Named argument '{name}' is specified more than once. |
-| GS0246 | Error | The best overload of '{callee}' does not have a parameter named '{name}'. |
-| GS0247 | Error | Named argument '{name}' specifies a parameter for which a positional argument has already been given. |
+| GS0245 | Error | Named argument `{name}` is specified more than once. |
+| GS0246 | Error | The best overload of `{callee}` does not have a parameter named `{name}`. |
+| GS0247 | Error | Named argument `{name}` specifies a parameter for which a positional argument has already been given. |
 
 Cause/fix examples:
 
@@ -350,10 +374,10 @@ ADR-0061 introduced a narrow ref-only ternary form (`cond ? a : b` only inside `
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0259 | Error (retired by ADR-0062) | Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'. Now only fires for the legacy inner-ref-modifier shape outside ref context. |
-| GS0260 | Error | Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'. |
+| GS0260 | Error | Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is `{trueType}` and the false branch is `{falseType}`. |
 | GS0261 | Error | An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead. |
-| GS0262 | Error | Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'. |
-| GS0263 | Error | Conditional expression branches have no common result type — the true branch is '{trueType}' and the false branch is '{falseType}'. Add an explicit conversion to align the two arms. |
+| GS0262 | Error | Inner ref-kind modifier `{innerModifier}` on a conditional ref-argument branch must match the outer modifier `{outerModifier}`. |
+| GS0263 | Error | Conditional expression branches have no common result type — the true branch is `{trueType}` and the false branch is `{falseType}`. Add an explicit conversion to align the two arms. |
 
 Cause/fix examples:
 
@@ -361,3 +385,47 @@ Cause/fix examples:
 - **GS0261** — `produce(out true ? a : out var n)` — the inline `out var n` would declare a local that only exists on one branch. Fix: declare `var n int32` before the call.
 - **GS0262** — `bump(ref true ? in a : ref b)` — the inner `in` does not match the outer `ref`. Fix: use `bump(ref true ? a : b)` (the generalized ADR-0062 form requires no inner modifiers).
 - **GS0263** — `var x = pick ? true : "no"` — `bool` and `string` have no common type. Fix: explicitly convert one arm (e.g. `pick ? "yes" : "no"`).
+
+## Ref-return diagnostics (GS0248–GS0255)
+
+Issue #490 (ADR-0060 follow-up) introduces `ref`-returning functions — declarations of the form `func f(...) ref T { ... }` that return a managed pointer `T&` rather than a copied value, paired with the `return ref <expr>` statement form. The diagnostics below guard the declaration and return-site rules.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0248 | Error | A 'ref' return modifier requires an explicit return type clause (e.g. 'ref int32'). |
+| GS0249 | Error | 'ref' return is not legal on an `{async/iterator}` function; the state-machine rewriter cannot hoist a managed pointer. |
+| GS0250 | Error | 'ref' return modifier is redundant when the declared return type is already a managed pointer ('*T'); write 'ref T' instead. |
+| GS0251 | Error | 'return ref' is not allowed in `{functionName}` because its declaration does not specify a 'ref' return type. |
+| GS0252 | Error | Function `{functionName}` returns by reference; use `return ref <expr>` instead of a plain 'return'. |
+| GS0253 | Error | The operand of 'return ref' must be an lvalue (variable, field, array element, or '*p'). |
+| GS0254 | Error | Cannot return a managed pointer to function-local storage; the reference would dangle once the function returns. |
+| GS0255 | Error | Override of `{memberName}` must match the base return ref-kind: base returns `{expected}`, this declaration returns `{actual}`. |
+
+Cause/fix examples:
+
+- **GS0248** — `func f(x int32) ref { return ref x }` — `ref` requires the element type. Fix: `func f(x int32) ref int32`.
+- **GS0249** — `async func f() ref int32 { ... }` or a yield-iterator body. Fix: drop `ref` from the return — `async` / iterator state-machine fields cannot hold managed pointers.
+- **GS0250** — `func f(p *int32) ref *int32 { return p }`. Fix: write `ref int32` (or drop `ref` and return the pointer).
+- **GS0251** — a `return ref x` statement in a function whose declaration is `func f() int32`. Fix: add `ref` to the return type, or drop `ref` from the return statement.
+- **GS0252** — a plain `return x` in a `ref`-returning function. Fix: write `return ref x`.
+- **GS0253** — `return ref (a + b)` or `return ref Foo()`. Fix: alias an addressable expression first (`let ref t = arr[i]; return ref t`) or restructure to return a pointer to durable storage.
+- **GS0254** — `func f() ref int32 { var x = 0; return ref x }`. Fix: do not return references to function locals; consume the value by copy or alias storage that outlives the call.
+- **GS0255** — overriding a base method declared `int32` with a `ref int32` override (or vice versa). Fix: match the base return ref-kind exactly.
+
+## Method-overloading and optional-parameter diagnostics (GS0264–GS0267)
+
+ADR-0063 lifts the v0 "one declaration per name" rule, so G# user functions can carry overload sets (differing by parameter types or ref-kinds) and optional parameters with default values. The diagnostics below cover overload-set construction and overload resolution.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0264 | Error | An overload of `{name}` with signature `{signature}` is already declared. Two overloads must differ by parameter types or ref-kinds. |
+| GS0265 | Error | Optional parameter `{parameterName}` is invalid: `{reason}`. |
+| GS0266 | Error | Call to `{name}` is ambiguous between multiple overloads. Disambiguate with explicit types or named arguments. |
+| GS0267 | Error | No overload of `{name}` is applicable to the given argument list. |
+
+Cause/fix examples:
+
+- **GS0264** — two `func F(x int32) {}` declarations, or two declarations that differ only in return type. Fix: change the parameter list (different types, arity, or ref-kinds); return type alone is not a distinguishing signature.
+- **GS0265** — a default-value expression that is not constant, a parameter whose default depends on another parameter, an optional parameter preceding a required one without all trailing parameters also optional, or an optional ref/out parameter. Fix: use a compile-time-constant default, place optional parameters at the end of the list, and avoid combining `ref`/`out` with defaults.
+- **GS0266** — `Greet("ada")` when both `Greet(string)` and `Greet(name string)` are visible via different paths. Fix: rename one, change one signature, or use a named argument that only one overload accepts.
+- **GS0267** — `Greet(42)` when only `Greet(string)` is declared. Fix: pass a value of the expected type, or add an overload covering the new argument shape.

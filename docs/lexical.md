@@ -133,7 +133,13 @@ A *contextual target type* is supplied by a typed `let` declaration, a function 
 
 ## Comments
 
-Single-line comments start with `//` and run to the end of the line. (Block-comment syntax is not yet implemented; see the execution plan.)
+GSharp supports three comment forms:
+
+* **Single-line comments** start with `//` and run to the end of the line.
+* **Block comments** start with `/*` and end with `*/`. They do not nest. An unterminated block comment is **GS0002**. The lexer handles them in `Lexer.ReadMultiLineComment`.
+* **Documentation comments** start with `///` and run to the end of the line. Each line contributes one paragraph of authored doc text after one optional leading space is stripped (`Lexer.ReadDocumentationComment`). The tokens emit as `DocumentationCommentToken` and are later attached to the following declaration, parsed as Markdown, and lowered to CLR XML doc. See ADR-0057 and `docs/lsp.md` (hover).
+
+Doc-comment authoring uses Markdown with a small set of `@`-prefixed block tags drawn from the CLR XML-doc vocabulary: `@summary` (the default; usually elided so prose-only `///` comments become the summary), `@param name`, `@typeparam name`, `@returns`, `@value`, `@remarks`, `@exception TypeName`, and `@seealso TypeName`. The fenced `xmldoc` info string lets the author drop raw `<...>` XML through unchanged for constructs Markdown cannot express. Unknown tags warn as **GS0231**; floating (unattached) doc comments warn as **GS0227**; `@param`/`@typeparam` mismatches as **GS0229**; unsupported Markdown as **GS0230**; and optional missing-doc warnings on public members ship as **GS0228**.
 
 ## Annotation lead-ins
 
@@ -153,3 +159,4 @@ Spaces, tabs, and line terminators are insignificant outside of string literals.
 * `docs/adr/0045-object-universal-upper-bound.md` — `object` as the universal upper bound.
 * `docs/adr/0046-char-literal-grammar.md` — `char` literals and escape grammar.
 * `docs/adr/0047-attribute-syntax-and-declaration.md` — Kotlin-style attribute syntax (`@Foo(...)`) and `@Attribute` declaration sugar.
+* `docs/adr/0057-documentation-comments.md` — Markdown-authored `///` documentation comments with lossless CLR XML-doc round-trip.

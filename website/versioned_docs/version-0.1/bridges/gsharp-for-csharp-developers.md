@@ -28,7 +28,15 @@ G# is a .NET language with Go-inspired syntax. It emits CLR assemblies, imports 
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
 | `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds Go-shaped structured concurrency. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
-| optional parameter defaults | imported CLR optional args only | G# user functions do not define default parameter values. |
+| `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults (ADR-0063). |
+| `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape (ADR-0063); duplicates report `GS0264`. |
+| named arg `M(timeout: 30)` | `M(timeout: 30)` (or `M(timeout = 30)` legacy) | Named arguments at call sites for user functions, methods, constructors, extensions, and CLR methods. |
+| `ref int M(int[] a, int i)` | `func M(a []int32, i int32) ref int32` paired with `return ref a[i]` | Ref returns (ADR-0060 follow-up). |
+| `ref int local = ref arr[i]` | `let ref local = arr[i]` or `var ref local = arr[i]` | Ref-aliasing locals. |
+| `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations (ADR-0060). |
+| `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types (ADR-0059). |
+| `cond ? a : b` | `cond ? a : b` | Ternary expression (ADR-0062). |
+| `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML (ADR-0057). |
 | lambda `x => x + 1` | `func(x int32) int32 { return x + 1 }` | Func literals are the lambda form; parameters and return type are explicit. |
 | extension method | `func (r Receiver) M()` | A receiver clause declares a CLR-visible extension method. |
 
@@ -60,9 +68,29 @@ func add(a int32, b int32) int32 {
 
 C# source uses aliases such as `int` and `long`. G# spells the widths: `int32`, `int64`, `uint32`, `float64`, and so on. This makes interop signatures visually match CLR metadata.
 
-## Defaults and optional arguments differ
+## Defaults, named arguments, and overloading
 
-G# user-defined functions do not declare default parameter values. Imported CLR methods and extension methods can still expose optional arguments from metadata, and G# callers may omit those arguments.
+G# user functions support optional parameters with compile-time-constant defaults, named arguments at the call site, and overload sets — all introduced in ADR-0063 and complementary issues:
+
+```gsharp
+func greet(name string = "world", excited bool = false) string {
+    return excited ? "hi, $name!" : "hi, $name"
+}
+
+// Default values: both optional.
+let a = greet()                      // "hi, world"
+let b = greet("Ada")                 // "hi, Ada"
+
+// Named arguments: arrive in any order, skip leading defaults.
+let c = greet(excited: true)         // "hi, world!"
+let d = greet(name: "Ada", excited: true)
+
+// Overloading by parameter shape.
+func area(width int32, height int32) int32 { return width * height }
+func area(side int32) int32                { return side * side }
+```
+
+Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. The legacy `name = value` named-argument form is still accepted for `.copy(...)` calls and attribute argument lists.
 
 ## Data shapes are richer than plain classes
 

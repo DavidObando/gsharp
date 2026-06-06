@@ -22,7 +22,7 @@ A compilation unit consists of an optional package declaration, zero or more imp
 
 ### Comments
 
-Line comments begin with `//` and run to the end of the line. Block comments begin with `/*` and end with `*/`; they do not nest. An unterminated block comment is a lexical diagnostic.
+Line comments begin with `//` and run to the end of the line. Block comments begin with `/*` and end with `*/`; they do not nest. An unterminated block comment is a lexical diagnostic. Documentation comments begin with `///` and run to the end of the line; consecutive `///` lines are concatenated, the first leading space is stripped, and the block is attached to the following declaration where it is parsed as Markdown and lowered to CLR XML doc. See [Documentation comments](#documentation-comments).
 
 ### Tokens
 
@@ -299,25 +299,30 @@ Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "("
 
 ### Functions and methods
 
-Functions use `func`. Receiver clauses declare receiver-style methods and extension functions. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream. Parameters do not have default-value syntax in G# declarations.
+Functions use `func`. Receiver clauses declare receiver-style methods and extension functions. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream. Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`, ADR-0060) and may declare a compile-time-constant default value to become optional (ADR-0063). User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`.
 
 ```ebnf
-FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName ) TypeParamList? "(" Parameters? ")" TypeClause? Block .
+FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? Block .
 AsyncFunctionDecl = "async" FunctionDecl .
 ReceiverClause    = "(" Parameter ")" .
 OperatorName      = "operator" OperatorToken .
 TypeParamList     = "[" TypeParameter { "," TypeParameter } "]" .
 TypeParameter     = ( "in" | "out" )? identifier ConstraintName? .
 Parameters        = Parameter { "," Parameter } .
-Parameter         = Annotation* identifier "..."? TypeClause .
+Parameter         = Annotation* ParameterModifier? identifier "..."? TypeClause ( "=" ConstantExpression )? .
+ParameterModifier = "ref" | "out" | "in" | "scoped" .
+RefReturnClause   = "ref"? TypeClause .
 ```
+
+A function declared `func f(...) ref T` returns a managed pointer and pairs with the `return ref <lvalue>` statement form (diagnostics `GS0248`–`GS0255`). The `scoped` modifier on a `ref struct` / managed-pointer parameter constrains the value from escaping the call (enforced by the by-ref-like rules in `GS9004` / `GS9006`).
 
 ### Type declarations
 
 ```ebnf
-TypeDecl          = "type" identifier TypeParamList? ( TypeAliasTail | StructDeclTail | ClassDeclTail | EnumDeclTail | InterfaceDeclTail ) .
+TypeDecl          = "type" identifier TypeParamList? ( TypeAliasTail | DelegateAliasTail | StructDeclTail | ClassDeclTail | EnumDeclTail | InterfaceDeclTail ) .
 TypeAliasTail     = "=" identifier .
-StructDeclTail    = Data? Inline? Open? "struct" PrimaryCtor? StructBody .
+DelegateAliasTail = "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
+StructDeclTail    = Data? Inline? Open? Ref? "struct" PrimaryCtor? StructBody .
 ClassDeclTail     = Open? "class" PrimaryCtor? BaseClause? StructBody .
 RecordDeclTail    = ( "record" | Data? "record" ) StructBody .
 EnumDeclTail      = "enum" "{" EnumMemberList? "}" .
@@ -325,6 +330,8 @@ InterfaceDeclTail = Sealed? "interface" InterfaceBody .
 PrimaryCtor       = "(" Parameters? ")" .
 BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," QualifiedTypeName } .
 ```
+
+A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type (ADR-0059), so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Diagnostics `GS0233`–`GS0234` cover malformed declarations.
 
 ### Members
 
@@ -351,18 +358,24 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 
 | Precedence | Operators | Meaning |
 | --- | --- | --- |
-| 6 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
-| 5 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
-| 4 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
-| 3 | `==`, `!=`, `<`, `<=`, `>`, `>=` | equality and comparison |
-| 2 | `&&` | logical and |
-| 1 | `\|\|`, `?:` | logical or and null coalescing |
+| 7 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
+| 6 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
+| 5 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
+| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | equality and comparison |
+| 3 | `&&` | logical and |
+| 2 | `\|\|`, `?:` | logical or and null coalescing |
+| 1 | `?` … `:` … | conditional (ternary, right-associative) |
+
+The conditional expression `cond ? whenTrue : whenFalse` (ADR-0062) requires `cond` to be `bool` and the two branches to share a common type. Mismatched branches report `GS0263`. The narrow ADR-0061 form `ref cond ? lhs : rhs` (and its `out` / `in` siblings) survives as a payload to a ref-kind argument; diagnostics `GS0260`–`GS0262` apply there.
 
 Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, tuple literals, `make(chan ...)`, `typeof(...)`, and `nameof(...)`. Calls support positional and named arguments syntactically; named arguments are accepted semantically for data-struct copy and imported CLR optional/default-argument scenarios, while normal G# calls reject unexpected named arguments.
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, tuple literals, `make(chan ...)`, `typeof(...)`, and `nameof(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+
+- **Named arguments** — `Foo(timeout: 30, retries: 3)` (or the legacy `Foo(timeout = 30)` shape) for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
+- **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)` (ADR-0060). The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
 
 Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
 
@@ -432,6 +445,12 @@ Statement = Block | Annotation* VariableDecl | IfStmt | ForStmt | BreakStmt | Co
 
 Short declaration is `name := expr`. Multi-target assignment supports `a, b = x, y` and `a, b := x, y` for identifier target lists. Increment and decrement are statements, not expressions.
 
+A `let` or `var` may carry a `ref` prefix to declare a **ref-aliasing local** (ADR-0060 follow-up): `let ref m = arr[i]` produces a local whose IL slot is a managed pointer (`T&`) that aliases the right-hand-side storage. The RHS must be an lvalue (`GS0256`); ref locals are illegal at top level, inside `async` / iterator bodies, and as `const` (`GS0258`). Reads and writes through the alias forward to the underlying storage.
+
+```ebnf
+RefLocalDecl = ( "let" | "var" ) "ref" identifier "=" Expression .
+```
+
 ### If statements
 
 `if` accepts an optional simple statement before a semicolon, then a condition and body, with an optional `else` body.
@@ -463,7 +482,7 @@ ForStmt = "for" Statement
 
 ### Return and yield
 
-`return` may have no expression, one expression, or a comma-separated expression list, which is represented as a tuple literal. `yield expr` is contextual and valid in iterator functions returning `sequence[T]` or async sequence forms as appropriate.
+`return` may have no expression, one expression, or a comma-separated expression list, which is represented as a tuple literal. In a `ref`-returning function (`func f(...) ref T`), the return statement form is `return ref <lvalue>` — plain `return expr` reports `GS0252`, and a non-lvalue operand reports `GS0253`. `yield expr` is contextual and valid in iterator functions returning `sequence[T]` or async sequence forms as appropriate.
 
 ### Defer and using
 
@@ -526,6 +545,36 @@ G# imports can resolve CLR namespaces and metadata references. CLR primitive typ
 Attributes use `@Name(...)` and optional use-site targets such as `@field:`, `@param:`, and `@return:`. The current implementation recognizes attributes, but user P/Invoke or extern declarations are not supported.
 
 Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
+
+## Documentation comments
+
+ADR-0057 introduces Markdown-authored documentation comments that round-trip losslessly to CLR XML doc. A documentation comment is a run of consecutive `///` lines; each line contributes one paragraph of authored text after one optional leading space is stripped. The block is attached to the immediately following declaration (free function, type, member, or top-level constant) and is parsed as Markdown plus a small set of `@`-prefixed block tags drawn from the CLR XML-doc vocabulary.
+
+Recognised tags:
+
+| Tag | Meaning |
+| --- | --- |
+| `@summary` | Default; usually elided. Prose-only `///` blocks become the summary. |
+| `@param name` | Documents parameter `name`. |
+| `@typeparam name` | Documents type parameter `name`. |
+| `@returns` | Documents the return value. |
+| `@value` | Documents a property's value. |
+| `@remarks` | Long-form remarks. |
+| `@exception TypeName` | Documents a thrown exception. |
+| `@seealso TypeName` | Cross-reference. |
+| `@inheritdoc` | Inherit documentation from a base/interface member. |
+
+Authors can drop raw `<...>` XML through unchanged by writing it inside a fenced ```` ```xmldoc ```` code block, for constructs Markdown cannot express.
+
+The compiler renders the merged documentation in hover for both G# declarations and imported CLR APIs (their `.xml` doc files are ingested and rendered identically). Diagnostics:
+
+| Code | Severity | Cause |
+| --- | --- | --- |
+| `GS0227` | Warning | Documentation comment is not attached to a declaration. |
+| `GS0228` | Warning (opt-in) | Missing documentation on a public member. |
+| `GS0229` | Warning | `@param` / `@typeparam` name does not match any parameter. |
+| `GS0230` | Warning | Unsupported documentation Markdown construct. |
+| `GS0231` | Warning | Unknown documentation tag. |
 
 ## Appendix: full parser grammar
 

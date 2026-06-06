@@ -9,20 +9,40 @@ G# is pre-1.0. The repository's version base is currently `0.1`, and product ver
 
 ## Unreleased
 
-This documentation set is the initial public documentation release for the G# website. The language and tooling are under active development, so future entries should call out breaking changes clearly and link to the relevant design decision or reference page.
+The G# compiler, language server, and VS Code extension absorbed a large stack of additions this cycle. The summary below groups them by area; each item links to the design decision (ADR) or implementation reference.
 
 ### Added
 
-- Authored public documentation pages for the FAQ and release notes.
-- Established this page as the release-history location for future G# documentation updates.
+- **Documentation comments** ([ADR-0057](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0057-documentation-comments.md)) — Markdown-authored `///` documentation comments that round-trip losslessly to CLR XML doc. Hover renders the merged documentation for both G# declarations and imported CLR APIs. New warnings: `GS0227` (unattached), `GS0228` (missing on public, opt-in), `GS0229` (`@param` mismatch), `GS0230` (unsupported Markdown), `GS0231` (unknown tag).
+- **Named delegate types** ([ADR-0059](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0059-named-delegate-types.md)) — `type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Diagnostics `GS0233`–`GS0234`.
+- **`ref`/`out`/`in` parameters** ([ADR-0060](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0060-ref-out-in-parameters.md)) — Declaration-site and call-site ref-kind modifiers, including inline `out var/let/_` declarations. Diagnostics `GS0235`–`GS0243`. Passing a value to an `in` parameter without writing `in` at the call site is the warning `GS0242` rather than a silent spill (a deliberate departure from C#).
+- **Ref-aliasing locals** (ADR-0060 follow-up) — `let ref m = arr[i]` / `var ref v = c.Field` produces a local whose IL slot is `T&` and aliases another lvalue. Diagnostics `GS0256`–`GS0258`.
+- **Ref returns** (ADR-0060 follow-up, issue #490) — `func f(...) ref T { return ref <expr> }`. Diagnostics `GS0248`–`GS0255` cover the surrounding rules (escape, async/iterator ban, override match).
+- **Conditional ref-arguments** ([ADR-0061](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0061-conditional-ref-arguments.md)) — narrow `ref cond ? a : b` form inside ref-kind argument payloads; diagnostics `GS0260`–`GS0262`.
+- **Generalized ternary expression** ([ADR-0062](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0062-generalized-ternary-expression.md)) — `cond ? a : b` is now a normal expression. `GS0259` is retired in value contexts; the new `GS0263` covers the "no common type" failure.
+- **Method overloading and optional parameters** ([ADR-0063](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0063-method-overloading-and-optional-parameters.md)) — user G# functions can carry overload sets (differing by parameter types or ref-kinds) and optional parameters with compile-time-constant defaults. Diagnostics `GS0264`–`GS0267`.
+- **Named arguments at call sites** (issue #343) — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). Diagnostics `GS0244`–`GS0247`. The legacy `name = value` form is still accepted for `.copy(...)` and attribute argument lists.
+- **`scoped` parameter modifier** ([ADR-0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md)) — constrains a `ref struct` / managed-pointer parameter from escaping; enforced by `GS9004` / `GS9006`.
+- **`data struct` synthesis completed** ([ADR-0029](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0029-data-struct-synthesized-members.md), issue #410) — every `data struct` synthesizes `Equals(object)`, `Equals(T)`, `GetHashCode()`, `ToString()`, `op_Equality`, `op_Inequality`, and `Deconstruct(...)`. Hand-written versions are rejected (`GS0232`).
+- **Editor features** — hover for CLR XML docs (#397), live pull-based diagnostics (#362), CodeLens reference counts on members of structs, interfaces, and enums (#403), implicit `this` for properties/methods/events (#412), hover for `this` (#413), bare static-member access from instance methods (#485), chained-member hover (#402), and six VS Code color themes inspired by the G# logo (Ember, Magma, Synthwave — Dark + Light each, #357).
 
 ### Changed
 
-- No runtime or language change is implied by this documentation entry.
+- The website spec, feature matrix, FAQ, bridges page, guide pages, and design-decisions index were refreshed to match the compiler ground truth — most visibly, "Parameters do not have default-value syntax" and "Named arguments — Partial" are no longer correct and were rewritten.
+- The repo `docs/lexical.md` block-comment paragraph (which incorrectly claimed block comments were not implemented) is corrected, and a documentation-comments subsection was added.
+- The VS Code TextMate grammar adds the missing contextual keywords (`data`, `inline`, `record`, `delegate`, `event`, `prop`, `init`, `shared`, `scoped`, accessor names `get`/`set`/`add`/`remove`/`raise`, ref-kinds `ref`/`out`), operators (`:=`, `?.`, `??`, `?`/`:`, `!!`, `...`, `=>`), an `@Annotation` scope, and a `///` documentation-comment scope with `@tag` highlighting. The VS Code snippet set was rewritten to match current grammar.
 
 ### Fixed
 
-- No product fixes are recorded in this documentation entry.
+- Numerous IL-emit hardening rounds (issues #418, #419, #420, #421) and a new `ilverify` gate (#478) ensure emitted assemblies pass CLR verification.
+- Determinism golden test (#475) freezes emitted bytes for byte-for-byte reproducibility.
+- `FieldAccessException` on class auto-properties (#399).
+- CodeLens 0-refs and stale-tree fixes (#414).
+
+### Known issues
+
+- The full ref-safe-to-escape escape analysis is partial; `GS0257` is reserved for a future pass.
+- Async state-machine emit shapes that are not yet supported continue to report `GS0190`.
 
 ## 0.1
 

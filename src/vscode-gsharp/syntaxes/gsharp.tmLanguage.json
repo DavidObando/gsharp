@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#characters" },
     { "include": "#numbers" },
+    { "include": "#annotations" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -18,6 +19,20 @@
   "repository": {
     "comments": {
       "patterns": [
+        {
+          "name": "comment.line.documentation.gsharp",
+          "begin": "///",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.documentation.gsharp" }
+          },
+          "patterns": [
+            {
+              "name": "storage.type.class.gsharp.doc",
+              "match": "@(summary|remarks|param|typeparam|returns|value|exception|seealso|inheritdoc)\\b"
+            }
+          ]
+        },
         {
           "name": "comment.block.gsharp",
           "begin": "/\\*",
@@ -69,9 +84,23 @@
         "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
       },
       "patterns": [
+        { "include": "#interpolation-format" },
+        { "include": "#interpolation-alignment" },
         { "include": "#interpolation-nested-braces" },
         { "include": "source.gsharp" }
       ]
+    },
+    "interpolation-alignment": {
+      "match": ",\\s*(-?[0-9]+)",
+      "captures": {
+        "1": { "name": "constant.numeric.alignment.gsharp" }
+      }
+    },
+    "interpolation-format": {
+      "match": ":([^}]*)",
+      "captures": {
+        "1": { "name": "string.unquoted.format.gsharp" }
+      }
     },
     "interpolation-nested-braces": {
       "begin": "\\{",
@@ -116,11 +145,23 @@
         }
       ]
     },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.gsharp",
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.gsharp" },
+            "2": { "name": "storage.type.annotation.gsharp" }
+          }
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.gsharp",
-          "match": "\\b(if|else|for|switch|case|default|break|continue|return|goto|fallthrough|range|select)\\b"
+          "match": "\\b(if|else|for|switch|case|default|break|continue|return|goto|fallthrough|range|select|in|from|where|when|yield)\\b"
         },
         {
           "name": "keyword.control.flow.gsharp",
@@ -132,15 +173,23 @@
         },
         {
           "name": "keyword.declaration.gsharp",
-          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence)\\b"
+          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence|record|delegate|event|prop|init)\\b"
         },
         {
-          "name": "keyword.modifier.gsharp",
-          "match": "\\b(public|private|internal|open|sealed|override|const|shared)\\b"
+          "name": "storage.modifier.gsharp",
+          "match": "\\b(public|private|internal|protected|open|sealed|override|abstract|virtual|static|const|shared|partial|readonly|data|inline|extern|scoped)\\b"
+        },
+        {
+          "name": "storage.modifier.refkind.gsharp",
+          "match": "\\b(ref|out)\\b"
+        },
+        {
+          "name": "keyword.other.accessor.gsharp",
+          "match": "\\b(get|set|add|remove|raise)\\b"
         },
         {
           "name": "keyword.other.gsharp",
-          "match": "\\b(import|package|using|var|let|is|scope|chan|map)\\b"
+          "match": "\\b(import|package|using|var|let|is|as|scope|chan|map|with|make|nameof|typeof)\\b"
         }
       ]
     },
@@ -148,7 +197,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.gsharp",
-          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void)\\b"
+          "match": "\\b(bool|uint8|int8|int16|uint16|int32|uint32|int64|uint64|nint|nuint|float32|float64|decimal|char|string|object|void|byte|sbyte|ushort|short|uint|long|ulong|float|double)\\b"
         }
       ]
     },
@@ -164,12 +213,40 @@
         },
         {
           "name": "constant.language.null.gsharp",
-          "match": "\\bnil\\b"
+          "match": "\\b(nil|null)\\b"
+        },
+        {
+          "name": "variable.language.this.gsharp",
+          "match": "\\b(this|base)\\b"
         }
       ]
     },
     "operators": {
       "patterns": [
+        {
+          "name": "keyword.operator.range.gsharp",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.short-declaration.gsharp",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.null-coalescing.gsharp",
+          "match": "\\?\\?=|\\?\\?"
+        },
+        {
+          "name": "keyword.operator.null-conditional.gsharp",
+          "match": "\\?\\."
+        },
+        {
+          "name": "keyword.operator.null-forgiving.gsharp",
+          "match": "!!"
+        },
+        {
+          "name": "keyword.operator.ternary.gsharp",
+          "match": "\\?|:"
+        },
         {
           "name": "keyword.operator.comparison.gsharp",
           "match": "(==|!=|<=|>=|<|>)"
@@ -192,7 +269,7 @@
         },
         {
           "name": "keyword.operator.arrow.gsharp",
-          "match": "(->)"
+          "match": "(->|=>)"
         }
       ]
     },

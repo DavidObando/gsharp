@@ -1,7 +1,8 @@
 # ADR-0060: `ref`, `out`, and `in` parameters — call-site modifiers and method-definition syntax
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-05
+- **Implemented**: 2026-06-05 (PR [#489](https://github.com/DavidObando/gsharp/pull/489))
 - **Phase**: Phase 8 — language ergonomics / CLR-interop surface
 - **Related**: issue #341 (`out` parameters at call sites), issue #342 (`ref` / `in` parameters at call sites); ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0034 (imported CLR interop), ADR-0038 (generic method inference), ADR-0058 (ref-safe-to-escape), ADR-0017 (method virtuality), ADR-0018 (interface defaults), ADR-0021 (generic variance — established `in`/`out` as contextual keywords)
 

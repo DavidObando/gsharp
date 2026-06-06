@@ -56,7 +56,7 @@ counts["g"] = 1
 Console.WriteLine(counts.ContainsKey("g"))
 ```
 
-Overload resolution considers imported methods, constructors, conversion operators, optional/default parameters, and numeric better-conversion tie breaking. Named arguments are parsed generally and are accepted for imported optional/default argument scenarios.
+Overload resolution considers imported methods, constructors, conversion operators, optional/default parameters (G# and CLR-supplied), ref-kind matching, numeric better-conversion tie breaking, and overload sets on user functions (ADR-0063). Named arguments are accepted at the call site (`F(timeout: 30)`) for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`); indirect calls through a function-typed variable and variadic call sites do not accept names because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` and `GS0264`–`GS0267` cover the related failure modes.
 
 ## Extension methods
 
@@ -183,7 +183,7 @@ At the CLR metadata level, `*T` maps to `ELEMENT_TYPE_BYREF` — a managed refer
 
 ### Limitations
 
-The by-ref surface is deliberately scoped to managed references for CLR interop. Per ADR-0039 the following are out of scope today: unmanaged pointers, pointer arithmetic, and `unsafe` blocks; by-ref returns from G# functions (`func foo() *int { return &x }`); and the full Roslyn-style `ref-safe-to-escape` / `safe-to-escape` two-level escape analysis, which is deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376). V1 uses a simpler rule: by-ref values cannot escape their declaring scope.
+The by-ref surface is deliberately scoped to managed references for CLR interop. Per ADR-0039 the following are out of scope today: unmanaged pointers, pointer arithmetic, and `unsafe` blocks. By-ref returns from G# functions (`func f(...) ref T`) have since landed via ADR-0060's follow-up work (diagnostics `GS0248`–`GS0255`), and the `scoped` parameter modifier from [ADR-0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) is wired up; the full Roslyn-style `ref-safe-to-escape` / `safe-to-escape` two-level escape analysis is still deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376). V1 uses a simpler rule: by-ref values cannot escape their declaring scope, and a `scoped` parameter cannot be returned.
 
 ### Diagnostics
 
@@ -254,7 +254,7 @@ Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, n
 
 ### Limitations
 
-Per ADR-0056, the following remain out of scope: by-ref returns from G# functions and the full two-level `ref-safe-to-escape` analysis (`scoped`, `[UnscopedRef]`), deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376); open generic value-type `ref struct` fields (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
+Per ADR-0056, the following remain out of scope: the full two-level `ref-safe-to-escape` analysis (including `[UnscopedRef]`), deferred to [issue #376](https://github.com/DavidObando/gsharp/issues/376) — though the `scoped` parameter modifier from [ADR-0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) is wired up; open generic value-type `ref struct` fields (`type Buffer[T] ref struct { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
 
 ## Generics interop
 

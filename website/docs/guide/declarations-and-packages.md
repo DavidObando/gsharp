@@ -68,7 +68,42 @@ func (p Point) LengthSquared() int32 {
 }
 ```
 
-Generic functions use bracketed type parameters and bracketed type arguments. Parameters do not support default values in G# declarations today, though imported CLR optional/default arguments are supported in interop scenarios.
+Generic functions use bracketed type parameters and bracketed type arguments.
+
+Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See ADR-0060 (ref parameters), ADR-0063 (overloading and optional parameters), and the [feature matrix](/docs/ref/feature-matrix) for the full capability table.
+
+```gsharp
+func greet(name string = "world", excited bool = false) string {
+    return excited ? "hi, $name!" : "hi, $name"
+}
+
+// Overloads — differ by arity.
+func area(width int32, height int32) int32 { return width * height }
+func area(side int32) int32                { return side * side }
+
+// Ref-kind parameters.
+func swap[T](ref a T, ref b T) {
+    let t = a
+    a = b
+    b = t
+}
+
+func tryParse(s string, out value int32) bool {
+    value = 0
+    if Int32.TryParse(s, out value) { return true }
+    return false
+}
+```
+
+A function can declare a managed-pointer return with `ref` before the return type clause — `func at(arr []int32, i int32) ref int32 { return ref arr[i] }`. Diagnostics `GS0248`–`GS0255` cover the supporting rules.
+
+A named delegate type is a top-level type alias whose RHS is `delegate func(...)`:
+
+```gsharp
+type Handler = delegate func(sender Object, e EventArgs)
+```
+
+Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types (ADR-0059).
 
 ## Type declarations
 

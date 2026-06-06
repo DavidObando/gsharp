@@ -7,7 +7,7 @@ The GSharp Language Server provides rich IDE features for `.gs` files via the [L
 | Feature | LSP Method | Description |
 |---------|-----------|-------------|
 | Diagnostics | `textDocument/diagnostic` | Live syntax, semantic, and binding errors pulled as you type (with `workspace/diagnostic/refresh` for cross-file edits) |
-| Hover | `textDocument/hover` | Type signature and symbol kind for the token under the cursor |
+| Hover | `textDocument/hover` | Type signature and symbol kind for the token under the cursor; renders CLR XML documentation (from `*.xml` files alongside referenced assemblies) and G# `///` Markdown doc comments as MarkdownContent |
 | Go-to-definition | `textDocument/declaration` | Jump from a symbol usage to its declaration |
 | Find references | `textDocument/references` | Find all usages of a symbol within the document |
 | Document symbols | `textDocument/documentSymbol` | Outline view: functions, variables, structs, enums with children |
