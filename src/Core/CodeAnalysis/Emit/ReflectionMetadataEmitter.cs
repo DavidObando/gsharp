@@ -1489,13 +1489,21 @@ internal sealed class ReflectionMetadataEmitter
 
         // NestedType entries. Each SM is nested inside its declaring type:
         // capture-bearing async lambda SMs inside their closure class,
-        // all others inside the per-package <Program>.
+        // an instance-method kickoff's SM inside the receiver type (so the
+        // kickoff method retains access to the SM's `<>t__builder` field —
+        // issue #502), and all others inside the per-package <Program>.
         var hostPkg = entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
         var defaultProgramHandle = hostPkg != null && programTypeDefHandles.TryGetValue(hostPkg, out var h) ? h : default;
 
         foreach (var c in smClasses)
         {
             var nestedHandle = this.structTypeDefs[c];
+            if (TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
+            {
+                this.metadata.AddNestedType(nestedHandle, receiverEnclosing);
+                continue;
+            }
+
             var smPkg = this.GetSmPackage(c, packages, entryPointPackage);
             var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
             this.metadata.AddNestedType(nestedHandle, enclosingHandle);
@@ -1508,6 +1516,10 @@ internal sealed class ReflectionMetadataEmitter
                 && this.structTypeDefs.TryGetValue(closureSym, out var closureHandle))
             {
                 this.metadata.AddNestedType(nestedHandle, closureHandle);
+            }
+            else if (TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing))
+            {
+                this.metadata.AddNestedType(nestedHandle, receiverEnclosing);
             }
             else
             {
@@ -3848,6 +3860,48 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
+    }
+
+    /// <summary>
+    /// Issue #502: when an async kickoff method is declared as an instance or
+    /// static member of a user-defined class, its synthesized state-machine
+    /// type must be nested inside that class — not the per-package
+    /// <c>&lt;Program&gt;</c> — so the kickoff method retains CLR access to
+    /// the SM's <c>NestedPrivate</c> fields (most importantly
+    /// <c>&lt;&gt;t__builder</c>). Lambda SMs already nest inside their
+    /// closure class; this helper covers the named-method case.
+    /// </summary>
+    /// <param name="smSym">The synthesized state-machine struct or class.</param>
+    /// <param name="enclosingHandle">Set to the receiver type's TypeDef handle when applicable.</param>
+    /// <returns><see langword="true"/> when the SM should nest under a user receiver type.</returns>
+    private bool TryGetUserKickoffReceiverHandle(StructSymbol smSym, out TypeDefinitionHandle enclosingHandle)
+    {
+        enclosingHandle = default;
+        FunctionSymbol kickoff = null;
+        foreach (var plan in this.asyncStateMachinePlans)
+        {
+            if (ReferenceEquals(plan.StateMachine.MaterializeAsStructSymbol(), smSym))
+            {
+                kickoff = plan.KickoffMethod;
+                break;
+            }
+        }
+
+        if (kickoff == null)
+        {
+            return false;
+        }
+
+        // Instance methods (ReceiverType set) and shared-block static methods
+        // (StaticOwnerType set) both live on a user-defined class TypeDef.
+        var owner = (kickoff.ReceiverType as StructSymbol)
+            ?? (kickoff.StaticOwnerType as StructSymbol);
+        if (owner == null)
+        {
+            return false;
+        }
+
+        return this.structTypeDefs.TryGetValue(owner, out enclosingHandle);
     }
 
     /// <summary>Emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on an inline struct TypeDef.</summary>
