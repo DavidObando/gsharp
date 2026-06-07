@@ -6524,6 +6524,8 @@ public sealed class Binder
                 return BindBinaryExpression((BinaryExpressionSyntax)syntax);
             case SyntaxKind.CallExpression:
                 return BindCallExpression((CallExpressionSyntax)syntax);
+            case SyntaxKind.ObjectCreationExpression:
+                return BindObjectCreationExpression((ObjectCreationExpressionSyntax)syntax);
             case SyntaxKind.AccessorExpression:
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
             case SyntaxKind.ArrayCreationExpression:
@@ -7188,6 +7190,162 @@ public sealed class Binder
         var declaration = new BoundVariableDeclaration(null, tempVar, receiver);
         var literal = new BoundStructLiteralExpression(null, structType, initializers.ToImmutable());
         return new BoundBlockExpression(null, ImmutableArray.Create<BoundStatement>(declaration), literal);
+    }
+
+    // Issue #522: bind `T(args) { Prop1 = v1, Prop2 = v2, … }` object
+    // initializer. The construction is lowered to a synthetic local plus a
+    // sequence of property assignments:
+    //   { var $tmp = T(args); $tmp.Prop1 = v1; $tmp.Prop2 = v2; $tmp }
+    // Init-only setters are emitted via the regular setter call path; the
+    // emit-side modreq fix (EncodeReturnClr) makes the resulting IL valid.
+    private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)
+    {
+        var target = BindExpression(syntax.Target);
+        if (target.Type == TypeSymbol.Error || target.Type == null)
+        {
+            // Still drain the initializer values so they report their own
+            // diagnostics (e.g. unresolved names inside the RHS expressions).
+            foreach (var init in syntax.Initializers)
+            {
+                _ = BindExpression(init.Value);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = target.Type;
+
+        var tempName = "$objinit" + System.Threading.Interlocked.Increment(ref syntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(syntax, tempVar, target));
+
+        var seen = new HashSet<string>();
+        foreach (var initSyntax in syntax.Initializers)
+        {
+            var propertyName = initSyntax.PropertyIdentifier.Text;
+            if (!seen.Add(propertyName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.PropertyIdentifier.Location, propertyName);
+                continue;
+            }
+
+            var assignment = BindObjectInitializerAssignment(tempVar, resultType, initSyntax);
+            if (assignment == null)
+            {
+                continue;
+            }
+
+            statements.Add(new BoundExpressionStatement(initSyntax, assignment));
+        }
+
+        var resultExpr = new BoundVariableExpression(syntax, tempVar);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    }
+
+    // Issue #522: bind a single `Prop = value` initializer against a known
+    // receiver local. Mirrors the property/field write logic in
+    // BindFieldAssignmentExpression so init-only setters, regular setters,
+    // user-defined struct properties, and CLR-base inherited members all
+    // route through the same lowering.
+    private BoundExpression BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
+    {
+        var propertyName = initSyntax.PropertyIdentifier.Text;
+
+        // Receiver-side type discriminator mirrors the receiver dispatch in
+        // BindFieldAssignmentExpression: pure CLR types go through reflection;
+        // user-defined StructSymbols use the symbol tables; both can fall
+        // through to ImportedBaseType lookup for inherited CLR members.
+        if (receiverType is not StructSymbol && receiverType is not NullableTypeSymbol && receiverType.ClrType != null)
+        {
+            var clrReceiverType = receiverType.ClrType;
+            MemberInfo instanceMember = ClrTypeUtilities.SafeGetProperty(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
+            {
+                instanceMember = null;
+            }
+
+            instanceMember ??= ClrTypeUtilities.SafeGetField(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember == null)
+            {
+                Diagnostics.ReportUnableToFindMember(initSyntax.PropertyIdentifier.Location, propertyName);
+                _ = BindExpression(initSyntax.Value);
+                return null;
+            }
+
+            if (!TryGetWritableClrMember(instanceMember, out _, out var instTargetSymbol, out _))
+            {
+                Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
+                _ = BindExpression(initSyntax.Value);
+                return null;
+            }
+
+            var value = BindExpression(initSyntax.Value);
+            var converted = BindConversion(initSyntax.Value.Location, value, instTargetSymbol);
+            var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
+            return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, instanceMember, converted, instTargetSymbol);
+        }
+
+        if (receiverType is StructSymbol structSymbol)
+        {
+            if (structSymbol.TryGetFieldIncludingInherited(propertyName, out var field, out _))
+            {
+                var value = BindExpression(initSyntax.Value);
+                var converted = BindConversion(initSyntax.Value.Location, value, field.Type);
+                return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
+            }
+
+            if (TryGetPropertyIncludingInherited(structSymbol, propertyName, out var prop))
+            {
+                if (!prop.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
+                    _ = BindExpression(initSyntax.Value);
+                    return null;
+                }
+
+                var value = BindExpression(initSyntax.Value);
+                var converted = BindConversion(initSyntax.Value.Location, value, prop.Type);
+                var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
+                return new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, structSymbol, prop, converted);
+            }
+
+            // Issue #319 parity: fall through to imported base CLR members.
+            if (structSymbol.ImportedBaseType?.ClrType is Type inheritedBaseClr)
+            {
+                MemberInfo inhMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, propertyName, BindingFlags.Public | BindingFlags.Instance);
+                if (inhMember is PropertyInfo inhIdxProp && inhIdxProp.GetIndexParameters().Length != 0)
+                {
+                    inhMember = null;
+                }
+
+                inhMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, propertyName, BindingFlags.Public | BindingFlags.Instance);
+                if (inhMember != null)
+                {
+                    if (!TryGetWritableClrMember(inhMember, out _, out var inhTargetSymbol, out _))
+                    {
+                        Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
+                        _ = BindExpression(initSyntax.Value);
+                        return null;
+                    }
+
+                    var value = BindExpression(initSyntax.Value);
+                    var converted = BindConversion(initSyntax.Value.Location, value, inhTargetSymbol);
+                    var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
+                    return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, inhMember, converted, inhTargetSymbol);
+                }
+            }
+
+            Diagnostics.ReportUnableToFindMember(initSyntax.PropertyIdentifier.Location, propertyName);
+            _ = BindExpression(initSyntax.Value);
+            return null;
+        }
+
+        Diagnostics.ReportUnableToFindMember(initSyntax.PropertyIdentifier.Location, propertyName);
+        _ = BindExpression(initSyntax.Value);
+        return null;
     }
 
     private static bool TryGetCopyOverrides(CallExpressionSyntax call, out SeparatedSyntaxList<FieldInitializerSyntax> overrides)

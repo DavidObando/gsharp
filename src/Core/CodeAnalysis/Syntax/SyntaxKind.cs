@@ -280,6 +280,14 @@ public enum SyntaxKind
     // stind.*`. Necessary for §5's body-side lowering of `ref`/`out`
     // parameter writes and for direct `*T`-local stores.
     IndirectAssignmentExpression,
+
+    // Issue #522: a C#-style object initializer applied to a constructor
+    // call, e.g. `T(args) { Prop1 = v1, Prop2 = v2 }`. Each initializer is
+    // a `PropertyInitializer` ('Identifier = Expression'). Lowers in the
+    // binder to a `BoundBlockExpression` that constructs into a synthetic
+    // local, assigns each property, and yields the local.
+    ObjectCreationExpression,
+    PropertyInitializer,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

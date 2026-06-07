@@ -10997,6 +10997,23 @@ internal sealed class ReflectionMetadataEmitter
     {
         if (type?.FullName == "System.Void")
         {
+            // Issue #522: a void return may still carry required custom
+            // modifiers — most notably C# 9 init-only property setters emit
+            // `modreq(System.Runtime.CompilerServices.IsExternalInit)` on the
+            // setter's void return. The modreq is part of the method
+            // signature; if we omit it the MemberRef fails to resolve at
+            // runtime (System.MissingMethodException). Mirrors the byref
+            // branch below — encode modreqs first, then the void slot.
+            var voidRequiredModifiers = returnParameter?.GetRequiredCustomModifiers() ?? Type.EmptyTypes;
+            if (voidRequiredModifiers.Length > 0)
+            {
+                var modifiers = encoder.CustomModifiers();
+                foreach (var modifier in voidRequiredModifiers)
+                {
+                    modifiers.AddModifier(this.GetTypeReference(modifier), isOptional: false);
+                }
+            }
+
             encoder.Void();
         }
         else if (type != null && type.IsByRef)

@@ -924,6 +924,15 @@ public sealed class Evaluator
                 continue;
             }
 
+            // Issue #522: object initializer lowering may produce expression
+            // statements (`$tmp.Prop = value`) in addition to the synthetic
+            // local declaration.
+            if (statement is BoundExpressionStatement exprStmt)
+            {
+                EvaluateExpression(exprStmt.Expression);
+                continue;
+            }
+
             throw new EvaluatorException($"Unexpected block-expression statement {statement.Kind}", statement);
         }
 
