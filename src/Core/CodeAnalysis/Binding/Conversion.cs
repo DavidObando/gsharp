@@ -342,6 +342,34 @@ public sealed class Conversion
                 }
             }
 
+            // Issue #525: a G# class implicitly upcasts to any imported CLR
+            // interface that appears in its base-type clause (or any base
+            // class's base-type clause). The G# class has no ClrType during
+            // binding, so the general #521 rule below cannot fire — match
+            // structurally against `ImplementedClrInterfaces` and use the
+            // CLR's IsAssignableFrom to cover interface inheritance from the
+            // imported side (e.g. implementing `IList<T>` also satisfies
+            // `IEnumerable<T>`).
+            if (to?.ClrType != null && to.ClrType.IsInterface)
+            {
+                for (var c = fromClass; c != null; c = c.BaseClass)
+                {
+                    foreach (var iface in c.ImplementedClrInterfaces)
+                    {
+                        var ifaceClr = iface?.ClrType;
+                        if (ifaceClr == null)
+                        {
+                            continue;
+                        }
+
+                        if (ifaceClr == to.ClrType || to.ClrType.IsAssignableFrom(ifaceClr))
+                        {
+                            return Conversion.Implicit;
+                        }
+                    }
+                }
+            }
+
             if (to is StructSymbol toClass && toClass.IsClass)
             {
                 for (var c = fromClass.BaseClass; c != null; c = c.BaseClass)

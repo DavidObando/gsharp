@@ -1323,6 +1323,7 @@ public sealed class Binder
         StructSymbol baseClassSymbol = null;
         TypeSymbol importedBaseType = null;
         var implementedInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
+        var implementedClrInterfaces = ImmutableArray.CreateBuilder<TypeSymbol>();
         if (syntax.HasBaseType)
         {
             if (!syntax.IsClass)
@@ -1359,12 +1360,23 @@ public sealed class Binder
                         // user-declared GSharp type, so consult the same imported
                         // type resolution used for construction / static access.
                         // Only the first identifier (the base-class slot) may be
-                        // a CLR class; the rest are interfaces (CLR interface
-                        // implementation is out of scope here).
+                        // a CLR class.
                         if (i == 0 && !hasAttributeSugar
                             && TryResolveImportedBaseType(baseName, out var importedBase))
                         {
                             importedBaseType = importedBase;
+                            continue;
+                        }
+
+                        // Issue #525: any non-first identifier (and the first
+                        // when no CLR base class matched) may be an imported
+                        // CLR interface. Resolve through the same import-aware
+                        // lookup used for expression-type contexts so a `class
+                        // : IClrInterface { ... }` form works against any
+                        // reachable CLR interface (e.g. System.IDisposable).
+                        if (TryResolveImportedInterface(baseName, out var importedIface))
+                        {
+                            implementedClrInterfaces.Add(importedIface);
                             continue;
                         }
 
@@ -2491,6 +2503,19 @@ public sealed class Binder
             pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
         }
 
+        // Issue #525: record imported CLR interfaces from the base-type
+        // clause and queue the same deferred verification used for G#
+        // interfaces. The check is deferred because class methods may not
+        // have been bound yet when this declaration is processed.
+        if (implementedClrInterfaces.Count > 0)
+        {
+            structSymbol.SetImplementedClrInterfaces(implementedClrInterfaces.ToImmutable());
+            if (implementedInterfaces.Count == 0)
+            {
+                pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
+            }
+        }
+
         // Issue #306: bind standalone user-defined constructors (`init(...)`).
         BindConstructorDeclarations(syntax, structSymbol, package, baseClassSymbol, importedBaseType);
     }
@@ -2608,7 +2633,153 @@ public sealed class Binder
                     }
                 }
             }
+
+            // Issue #525: verify CLR interfaces declared in the base-type clause.
+            // Walks each public abstract member on the imported interface and
+            // confirms the G# class provides a same-name, same-CLR-signature
+            // method or property. Diagnostic uses the same GS0187 channel.
+            VerifyClrInterfaceImplementations(syntax, structSymbol);
         }
+    }
+
+    private void VerifyClrInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        if (structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var ifaceSym in structSymbol.ImplementedClrInterfaces)
+        {
+            var clrIface = ifaceSym.ClrType;
+            if (clrIface == null)
+            {
+                continue;
+            }
+
+            // Methods excluding property/event accessors (those are validated
+            // through their owning property / event below).
+            foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (clrMethod.IsSpecialName)
+                {
+                    continue;
+                }
+
+                if (HasMatchingMethodForClrSignature(structSymbol, clrMethod))
+                {
+                    continue;
+                }
+
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    clrIface.FullName ?? clrIface.Name,
+                    FormatClrMethodSignature(clrMethod));
+            }
+
+            // Properties.
+            foreach (var clrProp in clrIface.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                var implProp = FindMatchingProperty(structSymbol, clrProp);
+                if (implProp == null)
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        clrIface.FullName ?? clrIface.Name,
+                        clrProp.Name);
+                    continue;
+                }
+
+                if (clrProp.GetMethod != null && !implProp.HasGetter)
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        clrIface.FullName ?? clrIface.Name,
+                        clrProp.Name + " (getter)");
+                }
+
+                if (clrProp.SetMethod != null && !implProp.HasSetter)
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        clrIface.FullName ?? clrIface.Name,
+                        clrProp.Name + " (setter)");
+                }
+            }
+        }
+    }
+
+    private static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, System.Reflection.MethodInfo clrMethod)
+    {
+        var clrParams = clrMethod.GetParameters();
+        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
+        {
+            var callable = GetCallableParameters(candidate);
+            if (callable.Length != clrParams.Length)
+            {
+                continue;
+            }
+
+            if (!ClrTypesEquivalent(candidate.Type?.ClrType, clrMethod.ReturnType))
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < callable.Length; i++)
+            {
+                if (!ClrTypesEquivalent(callable[i].Type?.ClrType, clrParams[i].ParameterType))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static PropertySymbol FindMatchingProperty(StructSymbol structSymbol, System.Reflection.PropertyInfo clrProp)
+    {
+        foreach (var implProp in structSymbol.Properties)
+        {
+            if (implProp.Name == clrProp.Name
+                && ClrTypesEquivalent(implProp.Type?.ClrType, clrProp.PropertyType))
+            {
+                return implProp;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ClrTypesEquivalent(System.Type a, System.Type b)
+        => ClrTypeUtilities.AreSame(a, b);
+
+    private static string FormatClrMethodSignature(System.Reflection.MethodInfo method)
+    {
+        var ps = method.GetParameters();
+        if (ps.Length == 0)
+        {
+            return method.Name;
+        }
+
+        var names = new string[ps.Length];
+        for (var i = 0; i < ps.Length; i++)
+        {
+            names[i] = ps[i].ParameterType.Name;
+        }
+
+        return $"{method.Name}({string.Join(", ", names)})";
     }
 
     private static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
@@ -16292,6 +16463,48 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #525: resolves a class declaration's base-type identifier to an
+    /// imported CLR interface. Honors imports and aliases (via
+    /// <see cref="LookupType"/>) for simple names and falls back to direct
+    /// fully-qualified resolution against the reference set. Only public
+    /// CLR interface types are accepted; classes, value types, and other
+    /// references are rejected so the regular "cannot find type" diagnostic
+    /// still applies.
+    /// </summary>
+    /// <param name="name">The identifier text as written in the base clause.</param>
+    /// <param name="importedInterface">The resolved CLR interface type symbol on success.</param>
+    /// <returns><see langword="true"/> when the name resolves to an imported CLR interface; otherwise <see langword="false"/>.</returns>
+    private bool TryResolveImportedInterface(string name, out TypeSymbol importedInterface)
+    {
+        importedInterface = null;
+
+        // Simple name honoring imports/aliases. This is the same path used
+        // by expression-type contexts (e.g. `var g IClrInterface = ...`),
+        // which is why those contexts already find the interface today.
+        var candidate = LookupType(name)?.ClrType;
+
+        // Fully-qualified fallback against the reference set
+        // (e.g. `System.IDisposable`).
+        if (candidate == null && scope.References.TryResolveType(name, out var resolved))
+        {
+            candidate = resolved;
+        }
+
+        // TODO(issue-525): generic CLR interfaces (e.g. `IComparable<T>`)
+        // require a base-type clause grammar that accepts a type-argument
+        // list. The single-identifier base-type syntax can only name the
+        // open definition, which is rejected here; closing it requires
+        // additional parser work and is left for a follow-up issue.
+        if (candidate == null || !candidate.IsInterface || candidate.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        importedInterface = TypeSymbol.FromClrType(candidate);
+        return importedInterface?.ClrType != null;
     }
 
     /// <summary>
