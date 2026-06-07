@@ -244,8 +244,13 @@ public class Issue538ForInEnumerableEmitTests
     /// </summary>
     private static string BuildProbeAssembly(string dir)
     {
-        // Use a real C# compilation via Roslyn to build the probe DLL since
-        // we need generic interface return types and custom IEnumerable<T> impl.
+        // Build the probe in a subdirectory to avoid interaction between the
+        // project file, intermediate build artifacts, and the test files that
+        // are written into `dir` by CompileAndRunImpl. This matches the
+        // pattern used by Issue529 tests which reliably passes on CI (Linux).
+        var csDir = Path.Combine(dir, "csref");
+        Directory.CreateDirectory(csDir);
+
         var csSource = """
             using System;
             using System.Collections;
@@ -300,46 +305,48 @@ public class Issue538ForInEnumerableEmitTests
             }
             """;
 
-        var csPath = Path.Combine(dir, "Probe.cs");
-        File.WriteAllText(csPath, csSource);
-
-        var probeProjPath = Path.Combine(dir, "Probe.csproj");
-        File.WriteAllText(probeProjPath, """
+        File.WriteAllText(Path.Combine(csDir, "Probe.cs"), csSource);
+        File.WriteAllText(Path.Combine(csDir, "Probe.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
                 <OutputType>Library</OutputType>
-                <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
-                <AnalysisLevel>none</AnalysisLevel>
+                <TargetFramework>net10.0</TargetFramework>
+                <AssemblyName>Probe</AssemblyName>
+                <RootNamespace>Probe</RootNamespace>
               </PropertyGroup>
             </Project>
             """);
 
+        RunDotnet(csDir, "restore");
+        RunDotnet(csDir, "build", "-c", "Release", "--nologo", "--no-restore");
+
+        var probeDll = Path.Combine(csDir, "bin", "Release", "net10.0", "Probe.dll");
+        Assert.True(File.Exists(probeDll), $"Probe.dll not found at {probeDll}");
+        return probeDll;
+    }
+
+    private static void RunDotnet(string workingDir, params string[] args)
+    {
         var psi = new ProcessStartInfo("dotnet")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            WorkingDirectory = dir,
+            WorkingDirectory = workingDir,
         };
-        psi.ArgumentList.Add("build");
-        psi.ArgumentList.Add("--nologo");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("Release");
-        psi.ArgumentList.Add("-o");
-        psi.ArgumentList.Add(dir);
+        foreach (var a in args)
+        {
+            psi.ArgumentList.Add(a);
+        }
 
-        using var proc = Process.Start(psi);
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException($"failed to start dotnet {string.Join(" ", args)}");
         var stdout = proc.StandardOutput.ReadToEnd();
         var stderr = proc.StandardError.ReadToEnd();
-        Assert.True(proc.WaitForExit(60_000), "dotnet build timed out");
+        Assert.True(proc.WaitForExit(120_000), $"dotnet {args[0]} timed out");
         Assert.True(
             proc.ExitCode == 0,
-            $"Probe build failed (exit {proc.ExitCode}):\nstdout:\n{stdout}\nstderr:\n{stderr}");
-
-        var probeDll = Path.Combine(dir, "Probe.dll");
-        Assert.True(File.Exists(probeDll), $"Probe.dll not found at {probeDll}");
-        return probeDll;
+            $"dotnet {string.Join(" ", args)} failed (exit {proc.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
     }
 
     private static string CompileAndRun(string source)
@@ -409,6 +416,13 @@ public class Issue538ForInEnumerableEmitTests
 
         var extraRefs = helperPath != null ? new[] { helperPath } : null;
         IlVerifier.Verify(outPath, extraRefs);
+
+        // Copy the helper assembly next to the output so the runtime can
+        // resolve it when `dotnet exec` loads the compiled test assembly.
+        if (helperPath != null)
+        {
+            File.Copy(helperPath, Path.Combine(tempDir, Path.GetFileName(helperPath)), overwrite: true);
+        }
 
         var psi = new ProcessStartInfo("dotnet")
         {
