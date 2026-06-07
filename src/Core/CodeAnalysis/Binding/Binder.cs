@@ -11280,9 +11280,11 @@ public sealed class Binder
         {
             // A single-arg call to a primitive-typed name is a conversion
             // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
-            // type with a one-parameter primary constructor, treat it as a
-            // ctor call instead.
-            if (!(type is StructSymbol singleArgStruct && (singleArgStruct.IsClass || singleArgStruct.IsInline) && (singleArgStruct.HasPrimaryConstructor || singleArgStruct.ExplicitConstructor != null)))
+            // or inline-struct type, treat it as a ctor call instead — even
+            // when no explicit/primary constructor is declared, so the user
+            // sees an actionable "wrong argument count" diagnostic rather
+            // than a misleading conversion error (issue #524).
+            if (!(type is StructSymbol singleArgStruct && (singleArgStruct.IsClass || singleArgStruct.IsInline)))
             {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
@@ -11293,8 +11295,13 @@ public sealed class Binder
 
         // Phase 3.B.3 sub-step 2: `ClassName(arg1, arg2, ...)` invokes the
         // class's primary constructor when the call target resolves to a
-        // class type with a declared primary ctor.
-        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && (classType.IsClass || classType.IsInline) && (classType.HasPrimaryConstructor || classType.ExplicitConstructor != null))
+        // class type with a declared primary ctor. Issue #524: a class
+        // declaring no explicit `init(...)` and no primary constructor is
+        // still constructible via `ClassName()` against the synthesized
+        // parameterless default constructor — the emitter already produces
+        // a `.ctor()` for such classes (see EmitClassDefaultConstructor),
+        // so we just need the binder to route `ClassName()` through here.
+        if (LookupType(syntax.Identifier.Text) is StructSymbol classType && (classType.IsClass || classType.IsInline))
         {
             return BindConstructorCallExpression(syntax, classType);
         }
@@ -12514,6 +12521,27 @@ public sealed class Binder
 
         if (bestCtor == null)
         {
+            // Issue #524: CLR value types always have an implicit zero-init
+            // default "constructor" — at the IL level that's `initobj T`, not
+            // a `newobj` against any `.ctor`. Reflection's
+            // `Type.GetConstructors` does NOT surface this synthetic ctor, so
+            // overload resolution fails for `T()` on a struct that declares
+            // no explicit ctors. Lower the zero-argument case to
+            // `BoundDefaultExpression(T)` so the emitter materializes
+            // `ldloca/initobj/ldloc`. Reference types (and anything with no
+            // declared parameterless ctor) still fall through to the generic
+            // "no overload" diagnostic.
+            if (syntax.Arguments.Count == 0
+                && argumentNames.IsDefault
+                && clrType.IsValueType
+                && !clrType.IsEnum
+                && !clrType.IsPrimitive
+                && !clrType.ContainsGenericParameters)
+            {
+                result = new BoundDefaultExpression(syntax, TypeSymbol.FromClrType(clrType));
+                return true;
+            }
+
             // Issue #343: a CLR constructor call that mismatched on a name we
             // can show as "no such parameter" is more actionable than the
             // generic fallback diagnostic.
