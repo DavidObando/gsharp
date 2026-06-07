@@ -2911,12 +2911,14 @@ public sealed class Evaluator
         }
         else if (node.Type == TypeSymbol.Object
             || node.Type is InterfaceSymbol
-            || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass))
+            || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass)
+            || (node.Type?.ClrType != null && !node.Type.ClrType.IsValueType))
         {
             // Reference upcast (class → implemented interface, derived class
-            // → base class, or any → object). The interpreter stores
-            // instances as boxed objects, so the upcast is a no-op at
-            // runtime — only the bind-time static type changes.
+            // → base class, or any → object). Also covers issue #521: a CLR
+            // class or interface widening. The interpreter stores instances
+            // as boxed objects, so the upcast is a no-op at runtime — only
+            // the bind-time static type changes.
             return value;
         }
         else if (node.Type?.ClrType != null && IsSupportedNumericClrType(node.Type.ClrType))
