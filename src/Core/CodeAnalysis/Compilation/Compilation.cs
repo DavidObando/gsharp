@@ -313,6 +313,13 @@ public class Compilation
         // participate in hoist-set computation.
         program = Lowering.SideEffectSpiller.Lower(program);
 
+        // Issue #523: hoist captured locals/parameters into per-variable
+        // box classes so function literals see writes to the variable cell
+        // (Go/C# closure semantics). Must run after side-effect spilling
+        // and before the async / iterator state-machine lowerers so they
+        // see the boxed captures rather than the snapshot-by-value pattern.
+        program = Lowering.CaptureBoxingRewriter.Lower(program);
+
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
@@ -415,6 +422,13 @@ public class Compilation
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
         program = Lowering.SideEffectSpiller.Lower(program);
+
+        // Issue #523: hoist captured locals/parameters into per-variable
+        // box classes so function literals see writes to the variable cell
+        // (Go/C# closure semantics). Must run after side-effect spilling
+        // and before the async / iterator state-machine lowerers so they
+        // see the boxed captures rather than the snapshot-by-value pattern.
+        program = Lowering.CaptureBoxingRewriter.Lower(program);
 
         var (lowered, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))

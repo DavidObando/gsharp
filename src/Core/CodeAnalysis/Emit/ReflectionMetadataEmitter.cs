@@ -1185,16 +1185,27 @@ internal sealed class ReflectionMetadataEmitter
         // (same trick used for SM classes above). The actual ctor body is
         // still emitted in the planned row order during the main nonSmClasses
         // loop below.
+        //
+        // Issue #523: the same hazard applies to capture-box classes. A box
+        // class has no explicit ctor and no primary ctor, so its
+        // EmitClassDefaultConstructor row is the one reserved at classCtorRows
+        // — pre-register that handle so any earlier-emitted method body
+        // can `newobj` the box before its body is materialized.
         foreach (var c in nonSmClasses)
         {
-            if (!this.synthesizedClosureClasses.Contains(c))
+            var isSynthesizedClosure = this.synthesizedClosureClasses.Contains(c);
+            var hasDefaultOnlyCtor = c.ExplicitConstructor == null
+                && c.BaseConstructorInitializer == null
+                && !c.HasPrimaryConstructor;
+
+            if (!isSynthesizedClosure && !hasDefaultOnlyCtor)
             {
                 continue;
             }
 
-            if (classCtorRows.TryGetValue(c, out var closureCtorRow))
+            if (classCtorRows.TryGetValue(c, out var classCtorRow))
             {
-                this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(closureCtorRow);
+                this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRow);
             }
         }
 
@@ -14857,8 +14868,20 @@ internal sealed class ReflectionMetadataEmitter
             }
             else if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out ctorHandle))
             {
-                throw new InvalidOperationException(
-                    $"Type '{call.StructType.Name}' has no emitted primary ctor.");
+                // Issue #523: synthesized classes (e.g. capture boxes) declare
+                // no primary constructor; for a zero-argument newobj we fall
+                // back to the parameterless default ctor that PHASE B emitted
+                // into classCtorHandles.
+                if (call.Arguments.IsDefaultOrEmpty
+                    && this.outer.classCtorHandles.TryGetValue(call.StructType, out var defaultCtorHandle))
+                {
+                    ctorHandle = defaultCtorHandle;
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        $"Type '{call.StructType.Name}' has no emitted primary ctor.");
+                }
             }
 
             // Phase 4 emit parity (F2, type-erased generic user types): the

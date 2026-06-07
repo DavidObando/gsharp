@@ -17464,15 +17464,26 @@ public sealed class Binder
             return base.RewriteVariableDeclaration(node);
         }
 
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            // Issue #523: an assignment LHS is a USE of the variable that
+            // must contribute to the capture set, exactly like a
+            // BoundVariableExpression. The base rewriter intentionally
+            // doesn't visit `node.Variable`, so the binder otherwise
+            // silently treats write-only captures (e.g. `func(x) { n = x }`)
+            // as having no captures — which crashes the emitter when the
+            // body still references the (boxed) target.
+            this.RecordReference(node.Variable);
+            return base.RewriteAssignmentExpression(node);
+        }
+
         protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
         {
-            if (!this.parameters.Contains(node.Variable)
-                && !this.declared.Contains(node.Variable)
-                && this.seen.Add(node.Variable))
-            {
-                this.captured.Add(node.Variable);
-            }
-
+            // Issue #523 (side fix): globals already live in a static field and
+            // are addressable from any lambda body via ldsfld/stsfld — capturing
+            // them into a closure-class field would re-introduce the snapshot
+            // bug. Skip globals so the lambda reads them directly at every use.
+            this.RecordReference(node.Variable);
             return node;
         }
 
@@ -17489,6 +17500,12 @@ public sealed class Binder
             // #503 closures inside nested lambdas).
             foreach (var nestedCapture in node.CapturedVariables)
             {
+                // Issue #523 (side fix): see RewriteVariableExpression above.
+                if (nestedCapture is GlobalVariableSymbol)
+                {
+                    continue;
+                }
+
                 if (!this.parameters.Contains(nestedCapture)
                     && !this.declared.Contains(nestedCapture)
                     && this.seen.Add(nestedCapture))
@@ -17498,6 +17515,22 @@ public sealed class Binder
             }
 
             return node;
+        }
+
+        private void RecordReference(VariableSymbol variable)
+        {
+            // Globals are read live (see RewriteVariableExpression).
+            if (variable is GlobalVariableSymbol)
+            {
+                return;
+            }
+
+            if (!this.parameters.Contains(variable)
+                && !this.declared.Contains(variable)
+                && this.seen.Add(variable))
+            {
+                this.captured.Add(variable);
+            }
         }
     }
 }
