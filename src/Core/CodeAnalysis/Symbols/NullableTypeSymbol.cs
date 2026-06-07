@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Concurrent;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -39,5 +40,27 @@ public sealed class NullableTypeSymbol : TypeSymbol
         }
 
         return Cache.GetOrAdd(underlyingType, t => new NullableTypeSymbol(t));
+    }
+
+    /// <summary>
+    /// Issue #530: returns the effective CLR <see cref="Type"/> to use when
+    /// matching <paramref name="typeSymbol"/> as a method argument in overload
+    /// resolution. For a <see cref="NullableTypeSymbol"/> wrapping a value
+    /// type, this returns <c>Nullable&lt;T&gt;</c> rather than the underlying
+    /// <c>T</c>, because the emitter encodes the local as <c>Nullable&lt;T&gt;</c>
+    /// and the selected overload must accept that type on the evaluation stack.
+    /// For all other types the result equals <c>typeSymbol?.ClrType</c>.
+    /// </summary>
+    /// <param name="typeSymbol">The type symbol to resolve.</param>
+    /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
+    public static Type GetEffectiveClrType(TypeSymbol typeSymbol)
+    {
+        if (typeSymbol is NullableTypeSymbol nullable
+            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
+        {
+            return typeof(Nullable<>).MakeGenericType(innerVt);
+        }
+
+        return typeSymbol?.ClrType;
     }
 }

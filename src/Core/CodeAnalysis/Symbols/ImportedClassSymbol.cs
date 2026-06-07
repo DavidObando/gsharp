@@ -165,7 +165,9 @@ public sealed class ImportedClassSymbol : Symbol
         var argTypes = new Type[arguments.Length];
         for (var i = 0; i < arguments.Length; i++)
         {
-            var t = arguments[i].Type?.ClrType;
+            // Issue #530: use effective CLR type so nullable value types
+            // (e.g. int32?) are matched as Nullable<T> in overload resolution.
+            var t = NullableTypeSymbol.GetEffectiveClrType(arguments[i].Type);
             if (t == null)
             {
                 return false;

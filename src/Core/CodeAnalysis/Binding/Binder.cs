@@ -4533,7 +4533,9 @@ public sealed class Binder
                 // set so they share clrOpenType's load context (its
                 // MetadataLoadContext when references are supplied via /r:),
                 // which MakeGenericType requires.
-                clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+                // Issue #530: use ResolveClrTypeForGenericArg so that
+                // `int32?` resolves to `Nullable<int>` (not bare `int`).
+                clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
             }
 
             try
@@ -4917,7 +4919,7 @@ public sealed class Binder
                 return null;
             }
 
-            clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
         }
 
         try
@@ -12465,7 +12467,10 @@ public sealed class Binder
             // MetadataLoadContext, and MakeGenericType requires the type
             // argument to originate from that same context (issues #290 and
             // #291: value-returning async funcs and imported-Task<T> awaits).
-            var elementClr = scope.References.MapClrTypeToReferences(clr);
+            // Issue #530: use ResolveClrTypeForGenericArg so that a nullable
+            // value type (e.g. `int32?`) correctly wraps as
+            // `Task<Nullable<int>>` rather than `Task<int>`.
+            var elementClr = ResolveClrTypeForGenericArg(element) ?? scope.References.MapClrTypeToReferences(clr);
             var closed = taskOpen.MakeGenericType(elementClr);
             return ImportedTypeSymbol.Get(closed);
         }
@@ -12953,7 +12958,8 @@ public sealed class Binder
         var argsAllTyped = true;
         for (var i = 0; i < boundArguments.Count; i++)
         {
-            var t = boundArguments[i].Type?.ClrType;
+            // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            var t = GetEffectiveArgumentClrType(boundArguments[i].Type);
             if (t == null)
             {
                 argsAllTyped = false;
@@ -13998,7 +14004,9 @@ public sealed class Binder
                 // reference set so it shares the open generic method's load
                 // context, exactly as the generic-construction path does before
                 // MakeGenericType / MakeGenericMethod.
-                resolved[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+                // Issue #530: use ResolveClrTypeForGenericArg so that
+                // `int32?` resolves to `Nullable<int>` (not bare `int`).
+                resolved[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
             }
             else
             {
@@ -14295,7 +14303,10 @@ public sealed class Binder
             var argsAllTyped = true;
             for (var i = 0; i < arguments.Length; i++)
             {
-                var t = arguments[i].Type?.ClrType;
+                // Issue #530: use GetEffectiveArgumentClrType so that a
+                // nullable value type argument (e.g. `int32?`) is matched
+                // as `Nullable<T>` in overload resolution.
+                var t = GetEffectiveArgumentClrType(arguments[i].Type);
                 if (t == null)
                 {
                     argsAllTyped = false;
@@ -14588,7 +14599,8 @@ public sealed class Binder
         var argTypes = new System.Type[arguments.Length];
         for (var i = 0; i < arguments.Length; i++)
         {
-            var t = arguments[i].Type?.ClrType;
+            // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            var t = GetEffectiveArgumentClrType(arguments[i].Type);
             if (t == null)
             {
                 return false;
@@ -14847,7 +14859,8 @@ public sealed class Binder
         argTypes[0] = receiverClrType;
         for (var i = 0; i < arguments.Length; i++)
         {
-            var t = arguments[i].Type?.ClrType;
+            // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            var t = GetEffectiveArgumentClrType(arguments[i].Type);
             if (t == null)
             {
                 return false;
@@ -16666,6 +16679,42 @@ public sealed class Binder
         }
     }
 
+    /// <summary>
+    /// Issue #530: returns the CLR type to use when <paramref name="typeSymbol"/>
+    /// appears as a generic type argument (e.g. <c>Task[int32?]</c> or
+    /// <c>FromResult[string?]</c>). For a <see cref="NullableTypeSymbol"/>
+    /// wrapping a value type the result is <c>Nullable&lt;T&gt;</c>; for a
+    /// nullable reference type the result is the underlying reference type
+    /// (since CLR has no separate <c>string?</c> type).
+    /// </summary>
+    /// <param name="typeSymbol">The type symbol to resolve.</param>
+    /// <returns>
+    /// The CLR type projected onto the reference load context, or <c>null</c>
+    /// when the symbol has no CLR type.
+    /// </returns>
+    private Type ResolveClrTypeForGenericArg(TypeSymbol typeSymbol)
+    {
+        if (typeSymbol is NullableTypeSymbol nullable
+            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt
+            && TryGetNullableConstructedType(innerVt, out var nullableClr))
+        {
+            return nullableClr;
+        }
+
+        var clr = typeSymbol?.ClrType;
+        return clr != null ? scope.References.MapClrTypeToReferences(clr) : null;
+    }
+
+    /// <summary>
+    /// Issue #530: returns the effective CLR <see cref="Type"/> to use when
+    /// matching an argument in overload resolution. Delegates to
+    /// <see cref="NullableTypeSymbol.GetEffectiveClrType"/>.
+    /// </summary>
+    private Type GetEffectiveArgumentClrType(TypeSymbol typeSymbol)
+    {
+        return NullableTypeSymbol.GetEffectiveClrType(typeSymbol);
+    }
+
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
     {
         methodGroup = null;
@@ -17230,7 +17279,8 @@ public sealed class Binder
         var argsAllTyped = true;
         for (var i = 0; i < boundArguments.Count; i++)
         {
-            var t = boundArguments[i].Type?.ClrType;
+            // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            var t = GetEffectiveArgumentClrType(boundArguments[i].Type);
             if (t == null)
             {
                 argsAllTyped = false;
