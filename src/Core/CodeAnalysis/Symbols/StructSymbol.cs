@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -747,7 +748,32 @@ public sealed class StructSymbol : TypeSymbol
 
         constructed.Definition = definition;
         constructed.TypeArguments = typeArguments;
-        constructed.SetInterfaces(definition.Interfaces);
+        if (!definition.Interfaces.IsDefaultOrEmpty)
+        {
+            var substitutedIfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>(definition.Interfaces.Length);
+            foreach (var iface in definition.Interfaces)
+            {
+                substitutedIfaces.Add((InterfaceSymbol)SubstituteTypeForConstruction(iface, subst));
+            }
+
+            constructed.SetInterfaces(substitutedIfaces.MoveToImmutable());
+        }
+        else
+        {
+            constructed.SetInterfaces(definition.Interfaces);
+        }
+
+        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
+        {
+            var substitutedClrIfaces = ImmutableArray.CreateBuilder<TypeSymbol>(definition.ImplementedClrInterfaces.Length);
+            foreach (var iface in definition.ImplementedClrInterfaces)
+            {
+                substitutedClrIfaces.Add(SubstituteTypeForConstruction(iface, subst));
+            }
+
+            constructed.SetImplementedClrInterfaces(substitutedClrIfaces.MoveToImmutable());
+        }
+
         constructed.SetMethods(definition.Methods);
         if (definition.ImportedBaseType != null)
         {
@@ -762,6 +788,60 @@ public sealed class StructSymbol : TypeSymbol
         if (type is TypeParameterSymbol tp)
         {
             return subst.TryGetValue(tp, out var concrete) ? concrete : type;
+        }
+
+        if (type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(iface.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < iface.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteTypeForConstruction(iface.TypeArguments[i], subst);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, iface.TypeArguments[i]);
+            }
+
+            if (!changed)
+            {
+                return iface;
+            }
+
+            return InterfaceSymbol.Construct(iface.Definition, substitutedArgs.MoveToImmutable());
+        }
+
+        if (type is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(imported.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < imported.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteTypeForConstruction(imported.TypeArguments[i], subst);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, imported.TypeArguments[i]);
+            }
+
+            if (!changed)
+            {
+                return imported;
+            }
+
+            var resolvedClrArgs = new System.Type[substitutedArgs.Count];
+            for (var i = 0; i < substitutedArgs.Count; i++)
+            {
+                resolvedClrArgs[i] = substitutedArgs[i].ClrType ?? typeof(object);
+            }
+
+            try
+            {
+                var closed = imported.OpenDefinition.MakeGenericType(resolvedClrArgs);
+                return ImportedTypeSymbol.GetConstructed(closed, imported.OpenDefinition, substitutedArgs.MoveToImmutable());
+            }
+            catch (ArgumentException)
+            {
+                return imported;
+            }
         }
 
         if (type is NullableTypeSymbol n)

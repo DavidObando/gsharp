@@ -201,6 +201,25 @@ type Point class(X int32, Y int32) {
     }
 
     [Fact]
+    public void GenericClass_Inherits_GenericBaseClass_UsingTypeParameter_Binds()
+    {
+        var source = @"
+type Base[T any] open class {
+    func Echo(x T) T { return x }
+}
+
+type Derived[T any] class : Base[T] {
+}
+
+var d = Derived[string]{}
+d.Echo(""ok"")
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
     public void Method_CallReturnsValue_UsingImplicitThis()
     {
         // Phase 3.B.3 sub-step 2b: bare `X` / `Y` inside `Sum` resolve to

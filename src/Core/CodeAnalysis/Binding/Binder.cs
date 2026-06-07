@@ -1332,69 +1332,77 @@ public sealed class Binder
             }
             else
             {
-                var allBaseTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
-                allBaseTokens.Add(syntax.BaseTypeIdentifier);
-                if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
+                var allBaseTypes = ImmutableArray.CreateBuilder<TypeClauseSyntax>();
+                if (syntax.BaseTypeClauses.Count > 0)
                 {
-                    allBaseTokens.AddRange(syntax.AdditionalBaseTypeIdentifiers);
+                    for (var bi = 0; bi < syntax.BaseTypeClauses.Count; bi++)
+                    {
+                        allBaseTypes.Add(syntax.BaseTypeClauses[bi]);
+                    }
                 }
 
-                for (var i = 0; i < allBaseTokens.Count; i++)
+                // Back-compat for older syntax trees that only populated
+                // identifier tokens in the base/interface clause.
+                if (allBaseTypes.Count == 0 && syntax.BaseTypeIdentifier != null)
                 {
-                    var token = allBaseTokens[i];
-                    var baseName = token.Text;
+                    allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, syntax.BaseTypeIdentifier));
+                    if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
+                    {
+                        foreach (var token in syntax.AdditionalBaseTypeIdentifiers)
+                        {
+                            if (token != null)
+                            {
+                                allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, token));
+                            }
+                        }
+                    }
+                }
+
+                for (var i = 0; i < allBaseTypes.Count; i++)
+                {
+                    var baseTypeSyntax = allBaseTypes[i];
+                    var baseName = GetBaseClauseTypeDisplayName(baseTypeSyntax);
+                    var baseLocation = baseTypeSyntax.Identifier?.Location ?? syntax.Identifier.Location;
 
                     // Phase 4 of #141: tolerate an explicit `: Attribute` on an
                     // @Attribute-marked class (redundant restatement). The
                     // System.Attribute base is supplied by the emitter.
                     if (hasAttributeSugar && i == 0
+                        && !baseTypeSyntax.HasTypeArguments
                         && (baseName == "Attribute" || baseName == "System.Attribute"))
                     {
                         continue;
                     }
 
-                    if (!scope.TryLookupTypeAlias(baseName, out var resolved))
+                    var resolved = BindTypeClause(baseTypeSyntax);
+                    if (resolved == null || resolved == TypeSymbol.Error)
                     {
-                        // Issue #296: a GSharp class may inherit from an imported
-                        // (CLR) base class. The base-type name did not match any
-                        // user-declared GSharp type, so consult the same imported
-                        // type resolution used for construction / static access.
-                        // Only the first identifier (the base-class slot) may be
-                        // a CLR class.
-                        if (i == 0 && !hasAttributeSugar
-                            && TryResolveImportedBaseType(baseName, out var importedBase))
-                        {
-                            importedBaseType = importedBase;
-                            continue;
-                        }
-
-                        // Issue #525: any non-first identifier (and the first
-                        // when no CLR base class matched) may be an imported
-                        // CLR interface. Resolve through the same import-aware
-                        // lookup used for expression-type contexts so a `class
-                        // : IClrInterface { ... }` form works against any
-                        // reachable CLR interface (e.g. System.IDisposable).
-                        if (TryResolveImportedInterface(baseName, out var importedIface))
-                        {
-                            implementedClrInterfaces.Add(importedIface);
-                            continue;
-                        }
-
-                        Diagnostics.ReportUnableToFindType(token.Location, baseName);
                         continue;
                     }
 
                     if (resolved is InterfaceSymbol iface)
                     {
+                        if (iface.IsGenericDefinition)
+                        {
+                            Diagnostics.ReportWrongTypeArgumentCount(baseLocation, baseName, iface.TypeParameters.Length, 0);
+                            continue;
+                        }
+
                         implementedInterfaces.Add(iface);
                         continue;
                     }
 
                     if (resolved is StructSymbol baseStruct && baseStruct.IsClass)
                     {
+                        if (baseStruct.IsGenericDefinition)
+                        {
+                            Diagnostics.ReportWrongTypeArgumentCount(baseLocation, baseName, baseStruct.TypeParameters.Length, 0);
+                            continue;
+                        }
+
                         if (i != 0)
                         {
-                            Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                            Diagnostics.ReportUnableToFindType(baseLocation, baseName);
                             continue;
                         }
 
@@ -1402,13 +1410,13 @@ public sealed class Binder
                         {
                             // Phase 4 of #141 / ADR-0047 §5: @Attribute sugar
                             // forces System.Attribute as the base; conflict.
-                            Diagnostics.ReportAttributeClassExplicitBase(token.Location, baseName);
+                            Diagnostics.ReportAttributeClassExplicitBase(baseLocation, baseName);
                             continue;
                         }
 
                         if (!baseStruct.IsOpen)
                         {
-                            Diagnostics.ReportBaseClassNotOpen(token.Location, baseName);
+                            Diagnostics.ReportBaseClassNotOpen(baseLocation, baseName);
                             continue;
                         }
 
@@ -1416,7 +1424,45 @@ public sealed class Binder
                         continue;
                     }
 
-                    Diagnostics.ReportUnableToFindType(token.Location, baseName);
+                    if (resolved.ClrType != null)
+                    {
+                        var clrType = resolved.ClrType;
+                        if (clrType.IsGenericTypeDefinition)
+                        {
+                            Diagnostics.ReportWrongTypeArgumentCount(
+                                baseLocation,
+                                baseName,
+                                clrType.GetGenericArguments().Length,
+                                0);
+                            continue;
+                        }
+
+                        if (clrType.IsInterface)
+                        {
+                            implementedClrInterfaces.Add(resolved);
+                            continue;
+                        }
+
+                        if (clrType.IsClass && !clrType.IsSealed)
+                        {
+                            if (i != 0)
+                            {
+                                Diagnostics.ReportUnableToFindType(baseLocation, baseName);
+                                continue;
+                            }
+
+                            if (hasAttributeSugar)
+                            {
+                                Diagnostics.ReportAttributeClassExplicitBase(baseLocation, baseName);
+                                continue;
+                            }
+
+                            importedBaseType = resolved;
+                            continue;
+                        }
+                    }
+
+                    Diagnostics.ReportUnableToFindType(baseLocation, baseName);
                 }
             }
         }
@@ -2780,6 +2826,28 @@ public sealed class Binder
         }
 
         return $"{method.Name}({string.Join(", ", names)})";
+    }
+
+    private static string GetBaseClauseTypeDisplayName(TypeClauseSyntax typeClause)
+    {
+        if (typeClause == null)
+        {
+            return string.Empty;
+        }
+
+        var dotted = typeClause.DottedName;
+        if (!typeClause.HasTypeArguments)
+        {
+            return dotted;
+        }
+
+        var args = new string[typeClause.TypeArguments.Count];
+        for (var i = 0; i < typeClause.TypeArguments.Count; i++)
+        {
+            args[i] = GetBaseClauseTypeDisplayName(typeClause.TypeArguments[i]);
+        }
+
+        return $"{dotted}[{string.Join(", ", args)}]";
     }
 
     private static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
@@ -4637,6 +4705,22 @@ public sealed class Binder
                     }
 
                     element = InterfaceSymbol.Construct(iface, typeArgs);
+                }
+                else if (element is StructSymbol genericStruct)
+                {
+                    if (!genericStruct.IsGenericDefinition)
+                    {
+                        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                        return null;
+                    }
+
+                    if (genericStruct.TypeParameters.Length != typeArgs.Length)
+                    {
+                        Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, genericStruct.TypeParameters.Length, typeArgs.Length);
+                        return null;
+                    }
+
+                    element = StructSymbol.Construct(genericStruct, typeArgs);
                 }
                 else
                 {

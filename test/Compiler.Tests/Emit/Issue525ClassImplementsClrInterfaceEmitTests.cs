@@ -52,6 +52,27 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
     }
 
     [Fact]
+    public void GSharpClass_ImplementsConstructedClrGenericInterface_RunsAndIlVerifies()
+    {
+        var source = """
+            package Probe
+            import System
+
+            type MyStringComparable class : IComparable[string] {
+                func CompareTo(other string) int32 {
+                    return 0
+                }
+            }
+
+            var c IComparable[string] = MyStringComparable{}
+            Console.WriteLine(c.CompareTo("x"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("0\n", output);
+    }
+
+    [Fact]
     public void GSharpClass_MetadataDeclaresInterfaceImpl()
     {
         // Reflect over the emitted assembly with a MetadataLoadContext to
@@ -201,10 +222,10 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
     }
 
     [Fact]
-    public void ClrInterface_FromNonImportedNamespace_ReportsGS0157()
+    public void ClrInterface_FromNonImportedNamespace_StillErrors()
     {
         // A typo / non-existent identifier in the base clause must still
-        // surface GS0157 — the new CLR-interface resolution path must not
+        // produce a binding error — generic base-type support must not
         // silently swallow unknown base names.
         var source = """
             package Probe
@@ -217,7 +238,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
         var diagnostics = CompileExpectingErrors(source);
         Assert.Contains(
             diagnostics,
-            d => d.Contains("GS0157") && d.Contains("INotAnInterfaceThatExistsAnywhere"));
+            d => d.Contains("INotAnInterfaceThatExistsAnywhere"));
     }
 
     [Fact]

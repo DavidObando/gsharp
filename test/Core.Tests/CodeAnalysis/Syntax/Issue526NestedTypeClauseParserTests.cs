@@ -72,10 +72,9 @@ func Use() {
     [Fact]
     public void BaseClause_With_DottedQualifier_Parses()
     {
-        // `type Impl class : Outer.INested { … }` used to also fail in the
-        // shared base-type parsing path. The base-type identifier is a
-        // synthesized single token whose text carries the full dotted name;
-        // the binder is responsible for resolving it to a nested CLR type.
+        // `type Impl class : Outer.INested { … }` used to fail in the shared
+        // base-type parsing path. Base entries are now full TypeClauseSyntax
+        // nodes so dotted (and generic) forms are preserved structurally.
         const string source = @"
 package P
 type Impl class : Outer.INested {
@@ -88,7 +87,57 @@ type Impl class : Outer.INested {
         var typeDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
         Assert.Equal("Impl", typeDecl.Identifier.Text);
         Assert.True(typeDecl.HasBaseType);
-        Assert.Equal("Outer.INested", typeDecl.BaseTypeIdentifier.Text);
+        Assert.Single(typeDecl.BaseTypeClauses);
+        Assert.Equal("Outer.INested", typeDecl.BaseTypeClauses[0].DottedName);
+    }
+
+    [Fact]
+    public void BaseClause_With_GenericInterface_Parses()
+    {
+        const string source = @"
+package P
+import System
+
+type Impl class : IComparable[string] {
+    func CompareTo(value object) int32 { return 0 }
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var typeDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        Assert.True(typeDecl.HasBaseType);
+        Assert.Single(typeDecl.BaseTypeClauses);
+        var baseType = typeDecl.BaseTypeClauses[0];
+        Assert.Equal("IComparable", baseType.DottedName);
+        Assert.True(baseType.HasTypeArguments);
+        Assert.Single(baseType.TypeArguments);
+        Assert.Equal("string", baseType.TypeArguments[0].DottedName);
+    }
+
+    [Fact]
+    public void GenericDeclaration_BaseClause_UsesTypeParameter_Parses()
+    {
+        const string source = @"
+package P
+import System.Collections.Generic
+
+type MyGeneric[T any] class : IEnumerable[T] {
+    func GetEnumerator() IEnumerator[T] { return nil }
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var typeDecl = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        Assert.NotNull(typeDecl.TypeParameterList);
+        Assert.True(typeDecl.HasBaseType);
+        Assert.Single(typeDecl.BaseTypeClauses);
+        var baseType = typeDecl.BaseTypeClauses[0];
+        Assert.Equal("IEnumerable", baseType.DottedName);
+        Assert.True(baseType.HasTypeArguments);
+        Assert.Single(baseType.TypeArguments);
+        Assert.Equal("T", baseType.TypeArguments[0].DottedName);
     }
 
     [Fact]
