@@ -13678,23 +13678,7 @@ internal sealed class ReflectionMetadataEmitter
             if (u.Op.Kind == BoundUnaryOperatorKind.OnesComplement
                 || u.Op.Kind == BoundUnaryOperatorKind.Negation)
             {
-                var t = u.Op.Type;
-                if (t == TypeSymbol.Int8)
-                {
-                    this.il.OpCode(ILOpCode.Conv_i1);
-                }
-                else if (t == TypeSymbol.UInt8)
-                {
-                    this.il.OpCode(ILOpCode.Conv_u1);
-                }
-                else if (t == TypeSymbol.Int16)
-                {
-                    this.il.OpCode(ILOpCode.Conv_i2);
-                }
-                else if (t == TypeSymbol.UInt16 || t == TypeSymbol.Char)
-                {
-                    this.il.OpCode(ILOpCode.Conv_u2);
-                }
+                EmitSubI4Truncation(u.Op.Type);
             }
         }
 
@@ -14001,6 +13985,9 @@ internal sealed class ReflectionMetadataEmitter
             // opcodes on sub-i4 operands produce an i4 result that is not
             // truncated to the operand's natural width. For correctness of
             // sbyte/byte/short/ushort/char result types, narrow back.
+            //
+            // Issue #534: enum types whose underlying CLR type is sub-i4
+            // (e.g., a byte-backed [Flags] enum) need the same truncation.
             switch (kind)
             {
                 case BoundBinaryOperatorKind.Sum:
@@ -14014,23 +14001,7 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundBinaryOperatorKind.BitwiseOr:
                 case BoundBinaryOperatorKind.BitwiseXor:
                 case BoundBinaryOperatorKind.BitClear:
-                    if (resultType == TypeSymbol.Int8)
-                    {
-                        this.il.OpCode(ILOpCode.Conv_i1);
-                    }
-                    else if (resultType == TypeSymbol.UInt8)
-                    {
-                        this.il.OpCode(ILOpCode.Conv_u1);
-                    }
-                    else if (resultType == TypeSymbol.Int16)
-                    {
-                        this.il.OpCode(ILOpCode.Conv_i2);
-                    }
-                    else if (resultType == TypeSymbol.UInt16 || resultType == TypeSymbol.Char)
-                    {
-                        this.il.OpCode(ILOpCode.Conv_u2);
-                    }
-
+                    EmitSubI4Truncation(resultType);
                     break;
             }
         }
@@ -14043,6 +14014,58 @@ internal sealed class ReflectionMetadataEmitter
                 || t == TypeSymbol.UInt64
                 || t == TypeSymbol.NUInt
                 || t == TypeSymbol.Char;
+        }
+
+        /// <summary>
+        /// Issue #534: emits a conv.i1 / conv.u1 / conv.i2 / conv.u2
+        /// truncation instruction when <paramref name="resultType"/> is a
+        /// sub-i4 primitive <em>or</em> a CLR enum whose underlying type is
+        /// sub-i4. This keeps the evaluation-stack value in the correct range
+        /// after arithmetic, bitwise, or shift opcodes that always produce
+        /// an i4 result.
+        /// </summary>
+        private void EmitSubI4Truncation(TypeSymbol resultType)
+        {
+            // Fast path: check built-in primitive types first.
+            if (resultType == TypeSymbol.Int8)
+            {
+                this.il.OpCode(ILOpCode.Conv_i1);
+            }
+            else if (resultType == TypeSymbol.UInt8)
+            {
+                this.il.OpCode(ILOpCode.Conv_u1);
+            }
+            else if (resultType == TypeSymbol.Int16)
+            {
+                this.il.OpCode(ILOpCode.Conv_i2);
+            }
+            else if (resultType == TypeSymbol.UInt16 || resultType == TypeSymbol.Char)
+            {
+                this.il.OpCode(ILOpCode.Conv_u2);
+            }
+            else if (resultType?.ClrType != null && resultType.ClrType.IsEnum)
+            {
+                // Resolve the enum's underlying integral type and truncate
+                // if it is narrower than i4.
+                var underlying = System.Enum.GetUnderlyingType(resultType.ClrType);
+                var underlyingFull = underlying.FullName;
+                if (underlyingFull == "System.SByte")
+                {
+                    this.il.OpCode(ILOpCode.Conv_i1);
+                }
+                else if (underlyingFull == "System.Byte")
+                {
+                    this.il.OpCode(ILOpCode.Conv_u1);
+                }
+                else if (underlyingFull == "System.Int16")
+                {
+                    this.il.OpCode(ILOpCode.Conv_i2);
+                }
+                else if (underlyingFull == "System.UInt16")
+                {
+                    this.il.OpCode(ILOpCode.Conv_u2);
+                }
+            }
         }
 
         // Issue #421 (P2-2): IL `shl`/`shr`/`shr_un` mask the shift count to
