@@ -391,8 +391,17 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the additional comma-separated identifiers in the base/interface clause (Phase 3.B.4). Empty when only the first identifier was provided.</summary>
     public ImmutableArray<SyntaxToken> AdditionalBaseTypeIdentifiers { get; }
 
-    /// <summary>Gets a value indicating whether this declaration carries an explicit base-class clause.</summary>
-    public bool HasBaseType => BaseTypeIdentifier != null;
+    /// <summary>
+    /// Gets a value indicating whether this declaration carries an explicit base/interface clause.
+    /// </summary>
+    public bool HasBaseType => BaseColonToken != null;
+
+    /// <summary>
+    /// Gets or sets the parsed base/interface type clauses in source order.
+    /// Empty/default when no base clause was declared. Assigned by the parser.
+    /// </summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; set; }
+        = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
 
     /// <summary>Gets a value indicating whether this declaration carries a Kotlin-style primary constructor parameter list.</summary>
     public bool HasPrimaryConstructor => PrimaryConstructorOpenParenthesisToken != null;

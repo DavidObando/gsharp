@@ -183,6 +183,45 @@ type Success class : IResult {
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed interface"));
     }
 
+    [Fact]
+    public void GenericClass_Implements_UserGenericInterface_UsingTypeParameter_Binds()
+    {
+        var source = @"
+type IBox[T any] interface {
+    func Get() T
+}
+
+type Box[T any] class(value T) : IBox[T] {
+    func Get() T { return value }
+}
+
+var b = Box[string](""hi"")
+b.Get()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("hi", result.Value);
+    }
+
+    [Fact]
+    public void GenericClass_Implements_ClrGenericInterface_ResolvesTypeParameterBaseClause()
+    {
+        // This exercises base-clause generic resolution with an in-scope type
+        // parameter (`IEnumerable[T]`). The class body is intentionally partial:
+        // IEnumerable<T> slot-completeness is validated separately.
+        var source = @"
+import System.Collections
+import System.Collections.Generic
+
+type MyGeneric[T any] class : IEnumerable[T] {
+    func GetEnumerator() IEnumerator[T] { return nil }
+}
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Message.Contains("Cannot find type IEnumerable"));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Message.Contains("Cannot find type T"));
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

@@ -808,6 +808,8 @@ public class Parser
         SeparatedSyntaxList<ExpressionSyntax> baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
         SyntaxToken baseCtorCloseParen = null;
         var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var baseTypeClauseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.ColonToken)
         {
             if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
@@ -816,7 +818,11 @@ public class Parser
             }
 
             baseColon = MatchToken(SyntaxKind.ColonToken);
-            baseTypeIdentifier = MatchQualifiedTypeName();
+            var firstBaseType = ParseTypeClause();
+            baseTypeClauseNodesAndSeparators.Add(firstBaseType);
+            baseTypeIdentifier = firstBaseType.DottedName == null
+                ? null
+                : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, firstBaseType.Identifier.Position, firstBaseType.DottedName, null);
 
             // Issue #306: optional base-constructor argument list immediately
             // after the base-class name, e.g. `: Exception(message)`. Only the
@@ -832,10 +838,17 @@ public class Parser
 
             while (Current.Kind == SyntaxKind.CommaToken)
             {
-                NextToken();
-                var next = MatchQualifiedTypeName();
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                baseTypeClauseNodesAndSeparators.Add(comma);
+                var nextType = ParseTypeClause();
+                baseTypeClauseNodesAndSeparators.Add(nextType);
+                var next = nextType.DottedName == null
+                    ? null
+                    : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, nextType.Identifier.Position, nextType.DottedName, null);
                 additionalBaseIdentifiers.Add(next);
             }
+
+            baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(baseTypeClauseNodesAndSeparators.ToImmutable());
         }
 
         SyntaxToken openBrace;
@@ -849,7 +862,7 @@ public class Parser
         {
             openBrace = new SyntaxToken(syntaxTree, SyntaxKind.OpenBraceToken, Current.Position, "{", null);
             var syntheticCloseBrace = new SyntaxToken(syntaxTree, SyntaxKind.CloseBraceToken, Current.Position, "}", null);
-            return new StructDeclarationSyntax(
+            var inlineDecl = new StructDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
                 typeKeyword,
@@ -870,6 +883,8 @@ public class Parser
                 events.ToImmutable(),
                 methods.ToImmutable(),
                 syntheticCloseBrace);
+            inlineDecl.BaseTypeClauses = baseTypeClauses;
+            return inlineDecl;
         }
 
         openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -1076,6 +1091,7 @@ public class Parser
             events.ToImmutable(),
             methods.ToImmutable(),
             closeBrace);
+        structDecl.BaseTypeClauses = baseTypeClauses;
         structDecl.SharedBlock = structDecl_sharedBlock;
         structDecl.BaseConstructorOpenParenthesisToken = baseCtorOpenParen;
         structDecl.BaseConstructorArguments = baseCtorArguments;
