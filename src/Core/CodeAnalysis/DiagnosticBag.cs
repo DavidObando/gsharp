@@ -1278,6 +1278,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports an unrecognized backslash escape sequence inside a double-quoted
+    /// string literal. Issue #531: interpreted strings now process C#/Go style
+    /// escape sequences; any <c>\X</c> that is not in the recognized set is an
+    /// error.
+    /// </summary>
+    /// <param name="location">The source location of the escape sequence.</param>
+    /// <param name="escapeChar">The character following the backslash.</param>
+    public void ReportInvalidStringEscape(TextLocation location, char escapeChar)
+    {
+        Report(location, "GS0269", $"Unrecognised escape sequence '\\{escapeChar}' in string literal.");
+    }
+
+    /// <summary>
     /// Reports an annotation lead-in (<c>@</c>) that is not followed by an
     /// identifier or a use-site target qualifier (ADR-0047 §1).
     /// </summary>

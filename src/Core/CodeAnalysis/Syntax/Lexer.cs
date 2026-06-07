@@ -659,15 +659,61 @@ public sealed class Lexer
                     done = true;
                     break;
                 case '"':
-                    if (Lookahead == '"')
+                    position++;
+                    done = true;
+                    break;
+                case '\\':
+                    // Backslash escape sequences (C#/Go style).
+                    position++; // consume '\'
+                    switch (Current)
                     {
-                        sb.Append(Current);
-                        position += 2;
-                    }
-                    else
-                    {
-                        position++;
-                        done = true;
+                        case '\'': sb.Append('\''); position++; break;
+                        case '"': sb.Append('"'); position++; break;
+                        case '\\': sb.Append('\\'); position++; break;
+                        case '0': sb.Append('\0'); position++; break;
+                        case 'a': sb.Append('\a'); position++; break;
+                        case 'b': sb.Append('\b'); position++; break;
+                        case 'f': sb.Append('\f'); position++; break;
+                        case 'n': sb.Append('\n'); position++; break;
+                        case 'r': sb.Append('\r'); position++; break;
+                        case 't': sb.Append('\t'); position++; break;
+                        case 'v': sb.Append('\v'); position++; break;
+                        case 'x':
+                        {
+                            position++;
+                            bool hexErr = false;
+                            sb.Append(ReadHexEscape(start, minDigits: 1, maxDigits: 4, ref hexErr));
+                            break;
+                        }
+
+                        case 'u':
+                        {
+                            position++;
+                            bool hexErr = false;
+                            sb.Append(ReadHexEscape(start, minDigits: 4, maxDigits: 4, ref hexErr));
+                            break;
+                        }
+
+                        case 'U':
+                        {
+                            position++;
+                            bool hexErr = false;
+                            sb.Append(ReadLongUnicodeEscape(start, ref hexErr));
+                            break;
+                        }
+
+                        default:
+                        {
+                            var escLoc = new TextLocation(this.text, new TextSpan(position - 1, 2));
+                            Diagnostics.ReportInvalidStringEscape(escLoc, Current);
+                            if (Current != '\0' && Current != '\r' && Current != '\n' && Current != '"')
+                            {
+                                sb.Append(Current);
+                                position++;
+                            }
+
+                            break;
+                        }
                     }
 
                     break;
@@ -842,8 +888,8 @@ public sealed class Lexer
 
     /// <summary>
     /// Skips a nested string or character literal inside an interpolation hole.
-    /// Mirrors the real literal lexers: a double-quoted string escapes a quote
-    /// via <c>""</c> (no backslash escapes) and may itself contain a nested
+    /// Mirrors the real literal lexers: a double-quoted string uses backslash
+    /// escapes (<c>\"</c>) and may itself contain a nested
     /// <c>${ … }</c> interpolation; a single-quoted char literal uses backslash
     /// escapes. <see cref="position"/> starts on the opening delimiter.
     /// </summary>
@@ -855,14 +901,14 @@ public sealed class Lexer
         {
             while (Current != '\0' && Current != '\r' && Current != '\n')
             {
+                if (Current == '\\' && Lookahead != '\0')
+                {
+                    position += 2; // skip escaped character
+                    continue;
+                }
+
                 if (Current == '"')
                 {
-                    if (Lookahead == '"')
-                    {
-                        position += 2; // escaped quote ""
-                        continue;
-                    }
-
                     position++; // closing quote
                     return;
                 }
