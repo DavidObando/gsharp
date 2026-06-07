@@ -18,14 +18,19 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// Issue #420 / P3-5: the null-coalesce (<c>??</c> / <c>?:</c>) emit path uses
 /// <c>dup; brtrue</c> which is only legal for object references and primitive
 /// integers — it is invalid IL for struct stack values (including
-/// <c>Nullable&lt;T&gt;</c> over a value type). This file pins down two
-/// behaviours:
+/// <c>Nullable&lt;T&gt;</c> over a value type).
+///
+/// Issue #519 retired the historical fail-fast guard for value-type
+/// <c>Nullable&lt;T&gt;</c> operands by lowering them to a HasValue/get_Value
+/// sequence over a pre-allocated scratch slot. This file now pins down both
+/// behaviours that survived the change:
 /// <list type="bullet">
 ///   <item>Reference-type operands continue to short-circuit correctly via the
 ///   existing <c>dup; brtrue</c> pattern.</item>
-///   <item>Value-type left operands are rejected loudly at emit time
-///   (<see cref="NotSupportedException"/>) so the emitter never produces
-///   PEVerify-rejected IL even if the binder/encoder accept the expression.</item>
+///   <item>Value-type <c>Nullable&lt;T&gt;</c> operands now compile and run
+///   correctly through the HasValue path (and produce verifiable IL — see
+///   <c>Issue519CoalesceNullableEmitTests</c> in the Compiler.Tests project for
+///   the ilverify-gated end-to-end shape).</item>
 /// </list>
 /// </summary>
 public class NullCoalesceValueTypeGuardTests
@@ -57,59 +62,38 @@ Console.WriteLine(r)
     }
 
     [Fact]
-    public void NullCoalesce_ValueType_LeftNullableInt_RejectedByEmitter()
+    public void NullCoalesce_ValueType_LeftNullableInt_LeftNil_ReturnsRight()
     {
-        // `int? ?: 0` would compile the left to a `Nullable<int>` stack value
-        // (P2-7's wrapping). `dup; brtrue` on a struct is invalid IL, so the
-        // P3-5 guard must reject this at emit time rather than silently
-        // producing bad metadata.
-        const string Source = @"package NullCoalesceValueTypeGuard
+        // Issue #519: `int? ?: 0` previously aborted emit because `dup;
+        // brtrue` is invalid IL for the `Nullable<int>` struct on the
+        // stack. The emitter now spills the LHS into a pre-allocated
+        // `Nullable<int>` slot and branches on `Nullable<T>::get_HasValue`,
+        // producing verifiable IL that returns the right operand when the
+        // left is absent.
+        const string Source = @"package NullCoalesceValueTypeNil
 import System
 var n int32? = nil
-var r int32 = n ?: 0
+var r int32 = n ?: 99
 Console.WriteLine(r)
 ";
-        var tree = SyntaxTree.Parse(SourceText.From(Source));
-        var compilation = new Compilation(tree);
-        using var peStream = new MemoryStream();
+        var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ValueType_LeftNullableInt_LeftNil_ReturnsRight));
+        Assert.Equal("99", stdout.Trim());
+    }
 
-        // The guard fires twice. In Debug builds `Debug.Assert(false, ...)`
-        // raises a DebugAssertException, which escapes `Compilation.Emit`
-        // because the `catch when (ex is NotSupportedException || ...)` filter
-        // does not match it. In Release builds the assert is a no-op, so the
-        // subsequent `throw new NotSupportedException(...)` is caught by that
-        // filter and surfaced as a GS9998 emit diagnostic on the returned
-        // EmitResult. Accept either shape, and in both cases verify the
-        // diagnostic explains the value-type / dup-brtrue issue.
-        string message;
-        var ex = Record.Exception(() =>
-        {
-            var result = compilation.Emit(peStream);
-            if (!result.Success)
-            {
-                // Re-throw the emit-time NotSupportedException surfaced as a
-                // diagnostic so the test below can assert on its message.
-                var diag = result.Diagnostics.FirstOrDefault(d => d.IsError);
-                throw new NotSupportedException(diag?.Message ?? "<no diagnostic message>");
-            }
-        });
-        Assert.NotNull(ex);
-
-        var actual = ex!;
-        while (actual.InnerException is not null
-               && actual is not NotSupportedException
-               && actual.GetType().Name != "DebugAssertException")
-        {
-            actual = actual.InnerException;
-        }
-
-        var typeName = actual.GetType().Name;
-        Assert.True(
-            actual is NotSupportedException || typeName == "DebugAssertException",
-            $"expected NotSupportedException or DebugAssertException, got {actual.GetType().FullName}: {actual.Message}");
-        message = actual.Message;
-        Assert.Contains("Null-coalesce", message, StringComparison.Ordinal);
-        Assert.Contains("value-type", message, StringComparison.Ordinal);
+    [Fact]
+    public void NullCoalesce_ValueType_LeftNullableInt_LeftPresent_ReturnsUnderlying()
+    {
+        // Symmetric case: when the LHS carries a value, the result is the
+        // underlying primitive — fetched via `Nullable<T>::get_Value()` off
+        // the spilled slot's address (the same path PR #541 added for `!!`).
+        const string Source = @"package NullCoalesceValueTypePresent
+import System
+var n int32? = 7
+var r int32 = n ?: 99
+Console.WriteLine(r)
+";
+        var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(NullCoalesce_ValueType_LeftNullableInt_LeftPresent_ReturnsUnderlying));
+        Assert.Equal("7", stdout.Trim());
     }
 
     private static string CompileLoadInvokeCaptureStdout(string source, string contextName)

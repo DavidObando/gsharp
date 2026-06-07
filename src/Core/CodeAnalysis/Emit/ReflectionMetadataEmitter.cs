@@ -7714,6 +7714,24 @@ internal sealed class ReflectionMetadataEmitter
             localTypes.Add(unwrap.Operand.Type);
             receiverSpillSlots[unwrap] = slot;
         }
+
+        // Issue #519: `?:` whose LHS is a value-type `Nullable<T>` lowers at
+        // emit time to a HasValue/Value sequence that needs a `Nullable<T>`-
+        // typed temp slot (it cannot use `dup; brtrue`, which is invalid IL
+        // for value-type stack shapes). The slot is keyed by the binary
+        // expression node and typed as the LHS's NullableTypeSymbol so
+        // EncodeTypeSymbol emits the proper `System.Nullable<T>` token.
+        foreach (var coalesce in CollectNullableValueTypeCoalesces(body))
+        {
+            if (receiverSpillSlots.ContainsKey(coalesce))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(coalesce.Left.Type);
+            receiverSpillSlots[coalesce] = slot;
+        }
     }
 
     // Phase B: walks the bound body to find every BoundPatternSwitchStatement
@@ -9448,6 +9466,18 @@ internal sealed class ReflectionMetadataEmitter
         return sink;
     }
 
+    // Issue #519: each `?:` whose LHS is a value-type `Nullable<T>` lowers at
+    // emit time to a HasValue branch that needs a `Nullable<T>`-typed temp
+    // slot. The slot is keyed by the binary expression node and typed as the
+    // LHS's NullableTypeSymbol so `EncodeTypeSymbol` emits the proper
+    // `System.Nullable<T>` token in the local-sig blob.
+    private static IEnumerable<BoundBinaryExpression> CollectNullableValueTypeCoalesces(BoundNode root)
+    {
+        var sink = new List<BoundBinaryExpression>();
+        new NullableValueTypeCoalesceCollector(sink).Visit((BoundStatement)root);
+        return sink;
+    }
+
     private bool NeedsRvalueReceiverSpill(
         BoundExpression receiver,
         FunctionSymbol function,
@@ -9699,6 +9729,25 @@ internal sealed class ReflectionMetadataEmitter
             ?? throw new InvalidOperationException(
                 $"System.Nullable<{underlyingValueType.FullName}>::get_Value() is not resolvable.");
         return this.GetMethodReference(getValue);
+    }
+
+    // Issue #519: returns a callable MemberRef for `System.Nullable<T>::get_HasValue`
+    // closed over the supplied value-type underlying CLR type. Used by `?:` emit
+    // on a value-type `Nullable<T>` operand to branch on the presence flag without
+    // box/dup tricks (which are illegal on a struct stack value).
+    private MemberReferenceHandle GetNullableGetHasValueReference(Type underlyingValueType)
+    {
+        if (underlyingValueType == null || !underlyingValueType.IsValueType)
+        {
+            throw new InvalidOperationException(
+                $"GetNullableGetHasValueReference: '{underlyingValueType?.FullName}' is not a value type.");
+        }
+
+        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
+        var getHasValue = nullableClr.GetMethod("get_HasValue", Type.EmptyTypes)
+            ?? throw new InvalidOperationException(
+                $"System.Nullable<{underlyingValueType.FullName}>::get_HasValue() is not resolvable.");
+        return this.GetMethodReference(getHasValue);
     }
 
     private MemberReferenceHandle GetStringLengthReference()
@@ -11799,6 +11848,37 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #519: walks the bound tree collecting every `BoundBinaryExpression`
+    // whose operator is `NullCoalesce` (`?:`) and whose LHS is a value-type
+    // `Nullable<T>`. Each such site needs a `Nullable<T>`-typed temp slot so
+    // the emitter can spill the LHS once, call `Nullable<T>::get_HasValue`
+    // off the slot's address, and either reload the slot (when the result
+    // type is `Nullable<T>`) or call `Nullable<T>::get_Value` off the slot's
+    // address (when the result type is the underlying `T`). The reference-
+    // type `?:` path uses the existing `dup; brtrue; pop; rhs` pattern and
+    // needs no slot.
+    private sealed class NullableValueTypeCoalesceCollector : BoundTreeWalker
+    {
+        private readonly List<BoundBinaryExpression> sink;
+
+        public NullableValueTypeCoalesceCollector(List<BoundBinaryExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override void VisitBinaryExpression(BoundBinaryExpression node)
+        {
+            if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
+                && node.Left.Type is NullableTypeSymbol n
+                && n.UnderlyingType?.ClrType is { IsValueType: true })
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitBinaryExpression(node);
+        }
+    }
+
     private sealed class SelectSlots
     {
         public SelectSlots(
@@ -13473,31 +13553,77 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // P3-5 / Issue #420: `dup; brtrue` is only legal for object
                 // references and primitive integers — it is invalid IL for
-                // struct stack values. If the left operand's stack type is a
-                // value type (raw struct/enum, or `Nullable<T>` over a value
-                // type), this short-circuit pattern emits invalid IL the
-                // moment the binder/encoder lets such expressions through.
-                //
-                // Today the encoder rejects nullable user-defined structs/
-                // enums (see EncodeTypeSymbol), so the only reachable risky
-                // case is `Nullable<primitive>` (e.g. `int? ?? 5`). When
-                // nullable value types are wired up end-to-end the correct
-                // strategy is to spill the left to a local and emit a
-                // `call Nullable<T>::get_HasValue` / `call get_ValueOrDefault`
-                // pair, or to box before the brtrue. Until that is in place,
-                // fail fast with a clear diagnostic instead of producing
-                // PEVerify-rejected IL.
+                // struct stack values. When the LHS is a value-type
+                // `Nullable<T>` (issue #519), spill it to a `Nullable<T>`-
+                // typed temp slot and branch on `Nullable<T>::get_HasValue`
+                // instead. The non-null branch either reloads the slot
+                // (when the result type is `Nullable<T>`) or unwraps via
+                // `Nullable<T>::get_Value()` (when the result type is the
+                // underlying `T`); both shapes leave a verifiable stack
+                // matching the operator's declared result type.
+                if (b.Left.Type is NullableTypeSymbol leftNullable
+                    && leftNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
+                {
+                    if (!this.receiverSpillSlots.TryGetValue(b, out var slot))
+                    {
+                        throw new InvalidOperationException(
+                            "No scratch slot pre-allocated for value-type Nullable<T> '?:' LHS — "
+                            + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                    }
+
+                    this.EmitExpression(b.Left);
+                    this.il.StoreLocal(slot);
+                    this.il.LoadLocalAddress(slot);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.GetNullableGetHasValueReference(innerClr));
+                    var fallback = this.il.DefineLabel();
+                    var end = this.il.DefineLabel();
+                    this.il.Branch(ILOpCode.Brfalse, fallback);
+
+                    // Non-null branch: reproduce the operator's result type.
+                    if (b.Type is NullableTypeSymbol)
+                    {
+                        // Result is `Nullable<T>` — push the spilled wrapper as
+                        // a value. Reloading the slot preserves the present
+                        // wrapper (`HasValue == true`) so the consumer sees
+                        // the same boxed/wrapped shape it would have observed
+                        // had the coalesce been absent.
+                        this.il.LoadLocal(slot);
+                    }
+                    else
+                    {
+                        // Result is the underlying `T` — call `get_Value()`
+                        // off the slot's address. `HasValue == true` was just
+                        // observed, so the call cannot throw; routing through
+                        // get_Value (rather than a field-style unwrap) keeps
+                        // the IL shape consistent with the `!!` emit path
+                        // introduced in PR #541 and uses no extra slots.
+                        this.il.LoadLocalAddress(slot);
+                        this.il.OpCode(ILOpCode.Call);
+                        this.il.Token(this.outer.GetNullableGetValueReference(innerClr));
+                    }
+
+                    this.il.Branch(ILOpCode.Br, end);
+
+                    // Null branch: evaluate RHS, which the binder typed to
+                    // match the operator's result (either `T` or `Nullable<T>`).
+                    this.il.MarkLabel(fallback);
+                    this.EmitExpression(b.Right);
+                    this.il.MarkLabel(end);
+                    return;
+                }
+
+                // Defensive: any other value-typed LHS (raw struct or enum)
+                // remains unsupported by `?:`. Today the encoder rejects
+                // nullable user-defined structs/enums, so this branch is
+                // unreachable from valid source, but fail loudly rather
+                // than silently producing PEVerify-rejected IL.
                 var leftType = b.Left.Type;
                 if (IsValueTypeSymbol(leftType))
                 {
-                    var assertMsg = "Null-coalesce `??` emit uses `dup; brtrue` which is illegal IL for value-type stack values "
-                        + "(struct, enum, or Nullable<valueType>). This path needs a HasValue/ValueOrDefault "
-                        + "(or box-before-brtrue) strategy when nullable value types are wired up end-to-end. "
-                        + $"Left operand type was '{leftType?.Name}'.";
-                    System.Diagnostics.Debug.Assert(false, assertMsg);
                     throw new NotSupportedException(
-                        $"Null-coalesce '??' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
-                        + "The current `dup; brtrue` short-circuit is invalid IL for struct stack values; a HasValue/ValueOrDefault "
+                        $"Null-coalesce '?:' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
+                        + "The current `dup; brtrue` short-circuit is invalid IL for struct stack values; a HasValue/Value "
                         + "(or box-before-brtrue) emit path is required when nullable value types are supported.");
                 }
 
