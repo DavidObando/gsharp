@@ -569,23 +569,69 @@ public static class SemanticLookup
                 continue;
             }
 
-            var syntaxDeclarations = FindNodes<VariableDeclarationSyntax>(new[] { declaration.Body }).ToList();
-            var boundDeclarations = FindBoundNodes<BoundVariableDeclaration>(pair.Value).Where(d => !d.Variable.Name.StartsWith("<", StringComparison.Ordinal)).ToList();
-            var used = new HashSet<int>();
-            foreach (var syntax in syntaxDeclarations)
-            {
-                for (var i = 0; i < boundDeclarations.Count; i++)
-                {
-                    if (used.Contains(i) || boundDeclarations[i].Variable.Name != syntax.Identifier.Text)
-                    {
-                        continue;
-                    }
+            var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { declaration.Body })
+                .Select(v => v.Identifier)
+                .Concat(FindNodes<ForRangeStatementSyntax>(new[] { declaration.Body }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
+                .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { declaration.Body }).Select(f => f.Identifier));
 
-                    used.Add(i);
-                    declarations[syntax.Identifier] = boundDeclarations[i].Variable;
-                    GetLocals(localDeclarations, declaration)[boundDeclarations[i].Variable.Name] = boundDeclarations[i].Variable;
-                    break;
+            MapSyntaxLocals(pair.Value, syntaxLocalIdentifiers, declarations, localDeclarations, declaration);
+        }
+
+        if (program.Statement != null)
+        {
+            // Top-level statements have no containing function entry in localDeclarations.
+            // We still need loop-variable declaration mappings for for-range hover/reference
+            // support in scripts.
+            var topLevelLoopIdentifiers =
+                FindNodes<ForRangeStatementSyntax>(compilation.SyntaxTrees.Select(t => t.Root)).SelectMany(f => EnumerateForRangeIdentifiers(f))
+                .Concat(FindNodes<AwaitForRangeStatementSyntax>(compilation.SyntaxTrees.Select(t => t.Root)).Select(f => f.Identifier));
+            MapSyntaxLocals(program.Statement, topLevelLoopIdentifiers, declarations, localDeclarations, declaration: null);
+        }
+    }
+
+    private static IEnumerable<SyntaxToken> EnumerateForRangeIdentifiers(ForRangeStatementSyntax syntax)
+    {
+        if (syntax.FirstIdentifier != null)
+        {
+            yield return syntax.FirstIdentifier;
+        }
+
+        if (syntax.SecondIdentifier != null)
+        {
+            yield return syntax.SecondIdentifier;
+        }
+    }
+
+    private static void MapSyntaxLocals(
+        BoundNode boundRoot,
+        IEnumerable<SyntaxToken> syntaxLocalIdentifiers,
+        Dictionary<SyntaxToken, Symbol> declarations,
+        Dictionary<FunctionDeclarationSyntax, Dictionary<string, Symbol>> localDeclarations,
+        FunctionDeclarationSyntax declaration)
+    {
+        var boundDeclarations = FindBoundNodes<BoundVariableDeclaration>(boundRoot)
+            .Where(d => !d.Variable.Name.StartsWith("<", StringComparison.Ordinal))
+            .ToList();
+        var used = new HashSet<int>();
+        foreach (var syntaxIdentifier in syntaxLocalIdentifiers
+                     .Where(id => id != null)
+                     .OrderBy(id => id.Span.Start))
+        {
+            for (var i = 0; i < boundDeclarations.Count; i++)
+            {
+                if (used.Contains(i) || boundDeclarations[i].Variable.Name != syntaxIdentifier.Text)
+                {
+                    continue;
                 }
+
+                used.Add(i);
+                declarations[syntaxIdentifier] = boundDeclarations[i].Variable;
+                if (declaration != null)
+                {
+                    GetLocals(localDeclarations, declaration)[boundDeclarations[i].Variable.Name] = boundDeclarations[i].Variable;
+                }
+
+                break;
             }
         }
     }
@@ -731,6 +777,8 @@ public static class SemanticLookup
         private StructDeclarationSyntax[] cachedStructDeclarations;
         private Dictionary<SyntaxTree, AccessorExpressionSyntax[]> cachedAccessorsByTree;
         private Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]> cachedFieldAssignmentsByTree;
+        private Dictionary<SyntaxTree, ForRangeStatementSyntax[]> cachedForRangesByTree;
+        private Dictionary<SyntaxTree, AwaitForRangeStatementSyntax[]> cachedAwaitForRangesByTree;
 
         public SemanticModel(
             Compilation compilation,
@@ -767,6 +815,8 @@ public static class SemanticLookup
             this.cachedStructDeclarations = FindNodes<StructDeclarationSyntax>(trees.Select(t => t.Root)).ToArray();
             this.cachedAccessorsByTree = trees.ToDictionary(t => t, t => FindNodes<AccessorExpressionSyntax>(t.Root).ToArray());
             this.cachedFieldAssignmentsByTree = trees.ToDictionary(t => t, t => FindNodes<FieldAssignmentExpressionSyntax>(t.Root).ToArray());
+            this.cachedForRangesByTree = trees.ToDictionary(t => t, t => FindNodes<ForRangeStatementSyntax>(t.Root).ToArray());
+            this.cachedAwaitForRangesByTree = trees.ToDictionary(t => t, t => FindNodes<AwaitForRangeStatementSyntax>(t.Root).ToArray());
         }
 
         public Symbol Resolve(SyntaxToken token)
@@ -809,6 +859,12 @@ public static class SemanticLookup
             if (function != null && this.localDeclarations.TryGetValue(function, out var locals) && locals.TryGetValue(token.Text, out var local))
             {
                 return local;
+            }
+
+            var loopLocal = this.ResolveForRangeLoopLocal(token);
+            if (loopLocal != null)
+            {
+                return loopLocal;
             }
 
             // Implicit-this member access: inside a class/struct method body, a bare identifier
@@ -1246,6 +1302,84 @@ public static class SemanticLookup
             }
 
             return best;
+        }
+
+        private Symbol ResolveForRangeLoopLocal(SyntaxToken token)
+        {
+            if (token?.SyntaxTree == null)
+            {
+                return null;
+            }
+
+            Symbol best = null;
+            var bestSpanLength = int.MaxValue;
+
+            foreach (var statement in this.GetForRangesForTree(token.SyntaxTree))
+            {
+                if (statement.Body == null
+                    || token.Span.Start < statement.Body.Span.Start
+                    || statement.Body.Span.End < token.Span.End)
+                {
+                    continue;
+                }
+
+                if (statement.SecondIdentifier != null && string.Equals(statement.FirstIdentifier?.Text, token.Text, StringComparison.Ordinal))
+                {
+                    var keySymbol = this.Resolve(statement.FirstIdentifier);
+                    if (keySymbol != null && statement.Body.Span.Length < bestSpanLength)
+                    {
+                        best = keySymbol;
+                        bestSpanLength = statement.Body.Span.Length;
+                    }
+                }
+
+                var valueIdentifier = statement.SecondIdentifier ?? statement.FirstIdentifier;
+                if (!string.Equals(valueIdentifier?.Text, token.Text, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var valueSymbol = this.Resolve(valueIdentifier);
+                if (valueSymbol != null && statement.Body.Span.Length < bestSpanLength)
+                {
+                    best = valueSymbol;
+                    bestSpanLength = statement.Body.Span.Length;
+                }
+            }
+
+            foreach (var statement in this.GetAwaitForRangesForTree(token.SyntaxTree))
+            {
+                if (statement.Body == null
+                    || token.Span.Start < statement.Body.Span.Start
+                    || statement.Body.Span.End < token.Span.End
+                    || !string.Equals(statement.Identifier?.Text, token.Text, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var valueSymbol = this.Resolve(statement.Identifier);
+                if (valueSymbol != null && statement.Body.Span.Length < bestSpanLength)
+                {
+                    best = valueSymbol;
+                    bestSpanLength = statement.Body.Span.Length;
+                }
+            }
+
+            return best;
+        }
+
+        private ForRangeStatementSyntax[] GetForRangesForTree(SyntaxTree tree)
+        {
+            return this.cachedForRangesByTree.TryGetValue(tree, out var cached)
+                ? cached
+                : FindNodes<ForRangeStatementSyntax>(tree.Root).ToArray();
+        }
+
+        private AwaitForRangeStatementSyntax[] GetAwaitForRangesForTree(SyntaxTree tree)
+        {
+            return this.cachedAwaitForRangesByTree.TryGetValue(tree, out var cached)
+                ? cached
+                : FindNodes<AwaitForRangeStatementSyntax>(tree.Root).ToArray();
         }
 
         private Symbol ResolvePrimitiveOrImportedType(string text)
