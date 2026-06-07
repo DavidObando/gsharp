@@ -174,6 +174,15 @@ internal sealed class ReflectionMetadataEmitter
     // with an InvokeAction instance method that Task.Run can bind to an Action.
     private readonly Dictionary<BoundGoStatement, ClosureInfo> goClosureInfos = new Dictionary<BoundGoStatement, ClosureInfo>();
     private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
+
+    // Issue #503 follow-up (nested-closure transitive capture): reverse map
+    // from a closure's Invoke method symbol to its ClosureInfo, so that when
+    // the BodyEmitter for that Invoke method emits a NESTED function-literal
+    // construction, it can route a captured-variable load through the
+    // enclosing closure's display-class field. Without this, the nested
+    // load fell through EmitLoadVariable's slot/parameter/global lookup and
+    // surfaced as GS9998 "no local slot or parameter index" at compile time.
+    private readonly Dictionary<FunctionSymbol, ClosureInfo> closureInvokeToInfo = new Dictionary<FunctionSymbol, ClosureInfo>();
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> iteratorKickoffBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
     private readonly Dictionary<StructSymbol, IteratorStateMachineInfo> iteratorStateMachineInfos = new Dictionary<StructSymbol, IteratorStateMachineInfo>();
     private int closureCounter;
@@ -7248,6 +7257,7 @@ internal sealed class ReflectionMetadataEmitter
                 structThis = function.ThisParameter;
             }
 
+            var enclosingClosureInfo = this.closureInvokeToInfo.TryGetValue(function, out var ec) ? ec : null;
             var emitter = new BodyEmitter(
                 this,
                 il,
@@ -7269,7 +7279,8 @@ internal sealed class ReflectionMetadataEmitter
                 goEnclosingScopes,
                 constValues: constValues,
                 structThisParameter: structThis,
-                asyncIteratorEmitCtx: aiEmitCtx);
+                asyncIteratorEmitCtx: aiEmitCtx,
+                enclosingClosure: enclosingClosureInfo);
             emitter.EmitBlock(body);
 
             // Always cap with a trailing ret. Lowering does not guarantee one for void.
@@ -9161,7 +9172,9 @@ internal sealed class ReflectionMetadataEmitter
 
         this.lambdaBodies[invokeMethod] = rewrittenBody;
         this.synthesizedClosureClasses.Add(closureClass);
-        return new ClosureInfo(closureClass, invokeMethod, captureFields);
+        var info = new ClosureInfo(closureClass, invokeMethod, captureFields);
+        this.closureInvokeToInfo[invokeMethod] = info;
+        return info;
     }
 
     private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundExpression expression)
@@ -11773,6 +11786,13 @@ internal sealed class ReflectionMetadataEmitter
         private readonly AsyncIteratorEmitContext asyncIteratorEmitCtx;
         private readonly Dictionary<VariableSymbol, object> constValues;
 
+        // Issue #503 follow-up: when this BodyEmitter is emitting the Invoke
+        // method of a synthesized closure class, captures of the *enclosing*
+        // closure are loaded/stored through `this`'s display-class fields
+        // instead of looking for a local slot or parameter index. Null when
+        // the current method isn't a closure Invoke.
+        private readonly ClosureInfo enclosingClosure;
+
         // Stack of currently-active protected regions; each entry holds the set of
         // bound labels defined lexically within that region (including nested
         // protected sub-regions). Used to translate goto/conditional-goto whose
@@ -11810,7 +11830,8 @@ internal sealed class ReflectionMetadataEmitter
             Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
             Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
             AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
-            Dictionary<VariableSymbol, object> constValues = null)
+            Dictionary<VariableSymbol, object> constValues = null,
+            ClosureInfo enclosingClosure = null)
         {
             this.outer = outer;
             this.il = il;
@@ -11835,6 +11856,7 @@ internal sealed class ReflectionMetadataEmitter
             this.asyncPlan = asyncPlan;
             this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
             this.constValues = constValues;
+            this.enclosingClosure = enclosingClosure;
         }
 
         public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
@@ -13801,8 +13823,74 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
+            // Issue #503 follow-up (nested-closure transitive capture): the
+            // current method is a closure's Invoke and `variable` is one of
+            // the enclosing closure's captured outer locals. Load it via
+            // `ldarg.0; ldfld <displayClass>::<capField>`.
+            if (this.TryLoadFromEnclosingClosure(variable))
+            {
+                return;
+            }
+
             throw new InvalidOperationException(
                 $"Variable '{variable.Name}' has no local slot or parameter index in the current method.");
+        }
+
+        private bool TryLoadFromEnclosingClosure(VariableSymbol variable)
+        {
+            if (this.enclosingClosure == null
+                || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField)
+                || !this.outer.structFieldDefs.TryGetValue(capField, out var capFieldHandle))
+            {
+                return false;
+            }
+
+            this.il.OpCode(ILOpCode.Ldarg_0);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(capFieldHandle);
+            return true;
+        }
+
+        private bool TryStoreToEnclosingClosure(VariableSymbol variable)
+        {
+            // The store value is already on the stack; we need to push the
+            // closure receiver UNDER it. Use a temp local of the value type
+            // to swap stack order without spawning a scratch local field.
+            if (this.enclosingClosure == null
+                || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField)
+                || !this.outer.structFieldDefs.TryGetValue(capField, out var capFieldHandle))
+            {
+                return false;
+            }
+
+            // Stack on entry: [..., value]
+            // Need:            [..., this, value] before stfld.
+            // Use a synthesized temp slot: stloc temp; ldarg.0; ldloc temp; stfld.
+            // The locals dictionary doesn't support adding synthetic slots
+            // after pre-scan, but for the closure-capture case the value is
+            // typed identically to the captured variable, so use the
+            // dedicated receiverSpillSlots mechanism — fallback: use IL
+            // dup/swap via a transient ValueType pattern. Cleanest:
+            //   stloc <temp>  // not feasible without pre-allocation
+            // Instead emit: dup; ldarg.0; swap-by-stloc/ldloc pair.
+            //
+            // We don't have a guaranteed scratch slot, so use the simpler
+            // pattern: emit a delegate-style store via box-then-cast — no.
+            //
+            // The pragmatic fix: synthesize a scratch local on first use by
+            // appending it to the IL locals signature. The metadata locals
+            // signature is sealed before EmitBlock starts, so this path is
+            // not viable for stores. As a result, captured-by-enclosing-
+            // closure stores are restricted to the rewritten field path
+            // (handled in CaptureRewriter for the inner literal body) and
+            // never reach EmitStoreVariable from inside the inner Invoke.
+            //
+            // For the rare case where an outer-closure body assigns to a
+            // captured variable that's NOT one of its own locals, we fall
+            // through and let EmitStoreVariable's error surface — that
+            // shape is currently unreachable from the binder.
+            _ = capFieldHandle;
+            return false;
         }
 
         private bool HasStorageSlot(VariableSymbol variable)
@@ -13819,6 +13907,15 @@ internal sealed class ReflectionMetadataEmitter
 
             if (variable is GlobalVariableSymbol gv
                 && this.outer.globalFieldDefs.ContainsKey(gv))
+            {
+                return true;
+            }
+
+            // Issue #503 follow-up: an enclosing closure's display-class
+            // field counts as storage for the captured variable when this
+            // method is the closure's Invoke.
+            if (this.enclosingClosure != null
+                && this.enclosingClosure.CaptureFields.ContainsKey(variable))
             {
                 return true;
             }
