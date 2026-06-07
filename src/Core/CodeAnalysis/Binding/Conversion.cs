@@ -354,6 +354,22 @@ public sealed class Conversion
             }
         }
 
+        // Issue #521: standard CLR identity / reference upcast — a
+        // reference-typed expression of CLR type `from` widens implicitly
+        // to any base class or implemented interface `to`. The CLR
+        // satisfies the contract at the reference level (no IL op
+        // required), so the emitter treats this as a no-op. Restricted to
+        // genuine reference types on both sides to avoid colliding with
+        // the boxing / unboxing / value-type-to-interface rules above.
+        if (from?.ClrType != null && to?.ClrType != null
+            && !from.ClrType.IsValueType && !to.ClrType.IsValueType
+            && !from.ClrType.IsPointer && !to.ClrType.IsPointer
+            && !from.ClrType.IsByRef && !to.ClrType.IsByRef
+            && ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType))
+        {
+            return Conversion.Implicit;
+        }
+
         return Conversion.None;
     }
 

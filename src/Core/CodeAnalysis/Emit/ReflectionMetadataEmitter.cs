@@ -13433,6 +13433,17 @@ internal sealed class ReflectionMetadataEmitter
                 return true;
             }
 
+            // Issue #521: standard CLR reference upcast. A reference-typed
+            // value of CLR type `a` widens to any base class or implemented
+            // CLR interface `b` as a no-op at the IL level (the reference
+            // already satisfies the wider static type).
+            if (a?.ClrType != null && b?.ClrType != null
+                && !a.ClrType.IsValueType && !b.ClrType.IsValueType
+                && ClrTypeUtilities.IsAssignableByName(b.ClrType, a.ClrType))
+            {
+                return true;
+            }
+
             return false;
         }
 
