@@ -333,8 +333,7 @@ public class Compilation
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
-            var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
-            var diagnostic = new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
+            var diagnostic = BuildEmitFailureDiagnostic(ex);
             return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
         }
 
@@ -452,8 +451,7 @@ public class Compilation
         }
         catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
         {
-            var location = new TextLocation(SourceText.From(string.Empty), new TextSpan(0, 0));
-            var diagnostic = new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
+            var diagnostic = BuildEmitFailureDiagnostic(ex);
             return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
         }
 
@@ -471,6 +469,24 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream, Stream refStream) =>
         Emit(peStream, pdbStream: null, refStream, docStream: null, assemblyName: null);
+
+    // Issue #519: the SDK BuildTask's diagnostic regex requires a non-empty
+    // file prefix to recognise a `gsc` stdout line as a diagnostic. A GS9998
+    // anchored at an empty-source location ("(1,1,1,1): error GS9998: ...")
+    // failed that regex and was logged only as a low-importance message, so
+    // BuildTask returned false without `Log.HasLoggedErrors` and surfaced as
+    // a silent MSB4181 instead of the intended GS diagnostic. Anchor the
+    // synthetic location at the first syntax tree (or a file-named empty
+    // SourceText when none is available) so the regex always matches and
+    // the failure surfaces.
+    private Diagnostic BuildEmitFailureDiagnostic(Exception ex)
+    {
+        var firstTree = SyntaxTrees.FirstOrDefault();
+        var sourceText = firstTree?.Text
+            ?? SourceText.From(string.Empty, fileName: "gsc");
+        var location = new TextLocation(sourceText, new TextSpan(0, 0));
+        return new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
+    }
 
     /// <summary>
     /// The canonical async/iterator lowering pipeline. Runs all rewriter
