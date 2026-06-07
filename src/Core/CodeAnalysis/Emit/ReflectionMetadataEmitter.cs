@@ -14381,20 +14381,62 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitLoadElement(TypeSymbol elementType)
         {
+            // Issue #520: prefer the typed short-form ldelem opcodes for
+            // every CIL primitive. `ldelem <token>` for small ints leaves a
+            // sub-int32 value on the eval stack and ilverify rejects it
+            // ([StackUnexpected]: found Short/Byte). The short forms widen
+            // to int32 as ECMA-335 requires for arithmetic continuation.
             if (elementType == TypeSymbol.Int32)
             {
                 this.il.OpCode(ILOpCode.Ldelem_i4);
             }
-            else if (elementType == TypeSymbol.Bool)
+            else if (elementType == TypeSymbol.UInt32)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_u4);
+            }
+            else if (elementType == TypeSymbol.Int64 || elementType == TypeSymbol.UInt64)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_i8);
+            }
+            else if (elementType == TypeSymbol.Int16)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_i2);
+            }
+            else if (elementType == TypeSymbol.UInt16 || elementType == TypeSymbol.Char)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_u2);
+            }
+            else if (elementType == TypeSymbol.Int8)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_i1);
+            }
+            else if (elementType == TypeSymbol.UInt8 || elementType == TypeSymbol.Bool)
             {
                 this.il.OpCode(ILOpCode.Ldelem_u1);
             }
-            else if (elementType == TypeSymbol.String)
+            else if (elementType == TypeSymbol.Float32)
             {
+                this.il.OpCode(ILOpCode.Ldelem_r4);
+            }
+            else if (elementType == TypeSymbol.Float64)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_r8);
+            }
+            else if (elementType == TypeSymbol.NInt || elementType == TypeSymbol.NUInt)
+            {
+                this.il.OpCode(ILOpCode.Ldelem_i);
+            }
+            else if (elementType == TypeSymbol.String || IsReferenceTypeElement(elementType))
+            {
+                // Reference-type element (string or any other class/interface):
+                // ldelem.ref is the only correct form.
                 this.il.OpCode(ILOpCode.Ldelem_ref);
             }
             else
             {
+                // Arbitrary value type — enums (whose underlying type the JIT
+                // honors), structs, etc. `ldelem <token>` works for these
+                // because the verifier matches the static element type.
                 this.il.OpCode(ILOpCode.Ldelem);
                 this.il.Token(this.outer.GetElementTypeToken(elementType));
             }
@@ -14402,15 +14444,42 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitStoreElement(TypeSymbol elementType)
         {
-            if (elementType == TypeSymbol.Int32)
+            // Issue #520: mirror EmitLoadElement — use the typed short-form
+            // stelem opcodes for every CIL primitive so the stack truncation
+            // rules match what the verifier expects.
+            if (elementType == TypeSymbol.Int32 || elementType == TypeSymbol.UInt32)
             {
                 this.il.OpCode(ILOpCode.Stelem_i4);
             }
-            else if (elementType == TypeSymbol.Bool)
+            else if (elementType == TypeSymbol.Int64 || elementType == TypeSymbol.UInt64)
+            {
+                this.il.OpCode(ILOpCode.Stelem_i8);
+            }
+            else if (elementType == TypeSymbol.Int16 ||
+                     elementType == TypeSymbol.UInt16 ||
+                     elementType == TypeSymbol.Char)
+            {
+                this.il.OpCode(ILOpCode.Stelem_i2);
+            }
+            else if (elementType == TypeSymbol.Int8 ||
+                     elementType == TypeSymbol.UInt8 ||
+                     elementType == TypeSymbol.Bool)
             {
                 this.il.OpCode(ILOpCode.Stelem_i1);
             }
-            else if (elementType == TypeSymbol.String)
+            else if (elementType == TypeSymbol.Float32)
+            {
+                this.il.OpCode(ILOpCode.Stelem_r4);
+            }
+            else if (elementType == TypeSymbol.Float64)
+            {
+                this.il.OpCode(ILOpCode.Stelem_r8);
+            }
+            else if (elementType == TypeSymbol.NInt || elementType == TypeSymbol.NUInt)
+            {
+                this.il.OpCode(ILOpCode.Stelem_i);
+            }
+            else if (elementType == TypeSymbol.String || IsReferenceTypeElement(elementType))
             {
                 this.il.OpCode(ILOpCode.Stelem_ref);
             }
@@ -14419,6 +14488,23 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Stelem);
                 this.il.Token(this.outer.GetElementTypeToken(elementType));
             }
+        }
+
+        // Issue #520: the EmitLoad/StoreElement helpers need to distinguish
+        // class/interface element types (require stelem.ref / ldelem.ref) from
+        // value-type element types (require the typed `stelem/ldelem <token>`
+        // forms when no short-form opcode matches). All G#-native non-string
+        // primitives have a TypeSymbol fast-path above; anything left over is
+        // user-defined or imported and we can ask the underlying CLR type.
+        private static bool IsReferenceTypeElement(TypeSymbol elementType)
+        {
+            if (elementType == TypeSymbol.Object)
+            {
+                return true;
+            }
+
+            var clr = elementType?.ClrType;
+            return clr != null && !clr.IsValueType && !clr.IsGenericParameter;
         }
 
         private void EmitTryStatement(BoundTryStatement node)

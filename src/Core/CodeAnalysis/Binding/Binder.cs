@@ -5932,7 +5932,21 @@ public sealed class Binder
             // flags; extract element/key/value types using those flags so that
             // `for k, v := range dict` sees the proper nullable types.
             case NullabilityAnnotatedTypeSymbol annotated when annotated.ClrType != null:
-                if (TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
+                // Issue #520: CLR SZ arrays (`T[]`) implement IEnumerable<T> via
+                // runtime magic but `Array.GetEnumerator()` returns the non-generic
+                // IEnumerator whose Current is System.Object. Routing them through
+                // the Enumerable path would assign a boxed reference into the
+                // value-typed loop variable (the pointer's low 32 bits surface as
+                // garbage). Use the Indexed path instead so we emit `ldelem <T>`
+                // with the array's actual element type — same lowering C#'s
+                // `foreach (T x in arr)` produces.
+                if (annotated.ClrType.IsArray && annotated.ClrType.GetArrayRank() == 1)
+                {
+                    iterationKind = ForRangeKind.Indexed;
+                    keyType = TypeSymbol.Int32;
+                    valueType = annotated.GetTypeArgumentSymbolForClrType(annotated.ClrType.GetElementType());
+                }
+                else if (TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
                     keyType = annotated.GetTypeArgumentSymbolForClrType(aDKey);
@@ -5958,7 +5972,17 @@ public sealed class Binder
 
                 break;
             case ImportedTypeSymbol imp when imp.ClrType != null:
-                if (TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
+                // Issue #520: CLR SZ arrays (`T[]`) — see the matching note in the
+                // NullabilityAnnotatedTypeSymbol branch above. Detect first and
+                // route to the Indexed path so iteration emits `ldelem <T>`
+                // (type-aware) rather than walking a boxing IEnumerator.
+                if (imp.ClrType.IsArray && imp.ClrType.GetArrayRank() == 1)
+                {
+                    iterationKind = ForRangeKind.Indexed;
+                    keyType = TypeSymbol.Int32;
+                    valueType = TypeSymbol.FromClrType(imp.ClrType.GetElementType());
+                }
+                else if (TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
                     keyType = TypeSymbol.FromClrType(dKey);
