@@ -7693,6 +7693,27 @@ internal sealed class ReflectionMetadataEmitter
             localTypes.Add(assn.Type);
             receiverSpillSlots[assn] = slot;
         }
+
+        // Issue #504: `!!` on a value-type `Nullable<T>` lowers to a
+        // `stloc tmp; ldloca tmp; call Nullable<T>::get_Value` sequence; the
+        // temp must be typed as `Nullable<T>` (not the unwrapped T). Reuse
+        // receiverSpillSlots — the dictionary already aggregates several
+        // distinct-by-node-identity scratch-slot kinds (receiver spills and
+        // assignment-value spills) and BoundUnaryExpression keys cannot
+        // collide with either. The slot is typed as the operand's
+        // NullableTypeSymbol, which `EncodeTypeSymbol` lowers to
+        // `System.Nullable<T>` in the local-sig blob.
+        foreach (var unwrap in CollectNullableValueTypeUnwraps(body))
+        {
+            if (receiverSpillSlots.ContainsKey(unwrap))
+            {
+                continue;
+            }
+
+            var slot = localTypes.Count;
+            localTypes.Add(unwrap.Operand.Type);
+            receiverSpillSlots[unwrap] = slot;
+        }
     }
 
     // Phase B: walks the bound body to find every BoundPatternSwitchStatement
@@ -9415,6 +9436,18 @@ internal sealed class ReflectionMetadataEmitter
         return sink;
     }
 
+    // Issue #504: each `!!` applied to a value-type `Nullable<T>` lowers at
+    // emit time to `stloc tmp; ldloca tmp; call Nullable<T>::get_Value`. The
+    // temp slot must be typed as `Nullable<T>` (so the local-sig blob encodes
+    // the struct) and pre-allocated alongside the other body-emit scratch
+    // locals so it appears in the locals signature.
+    private static IEnumerable<BoundUnaryExpression> CollectNullableValueTypeUnwraps(BoundNode root)
+    {
+        var sink = new List<BoundUnaryExpression>();
+        new NullableValueTypeUnwrapCollector(sink).Visit((BoundStatement)root);
+        return sink;
+    }
+
     private bool NeedsRvalueReceiverSpill(
         BoundExpression receiver,
         FunctionSymbol function,
@@ -9647,6 +9680,25 @@ internal sealed class ReflectionMetadataEmitter
             name: this.metadata.GetOrAddString(".ctor"),
             signature: this.metadata.GetOrAddBlob(sigBlob));
         return this.nullRefExceptionCtorRef;
+    }
+
+    // Issue #504: returns a callable MemberRef for `System.Nullable<T>::get_Value`
+    // closed over the supplied value-type underlying CLR type. Used by `!!` emit
+    // to unwrap a `Nullable<T>` operand (throws `InvalidOperationException` at
+    // runtime when `HasValue` is false, matching the BCL property).
+    private MemberReferenceHandle GetNullableGetValueReference(Type underlyingValueType)
+    {
+        if (underlyingValueType == null || !underlyingValueType.IsValueType)
+        {
+            throw new InvalidOperationException(
+                $"GetNullableGetValueReference: '{underlyingValueType?.FullName}' is not a value type.");
+        }
+
+        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
+        var getValue = nullableClr.GetMethod("get_Value", Type.EmptyTypes)
+            ?? throw new InvalidOperationException(
+                $"System.Nullable<{underlyingValueType.FullName}>::get_Value() is not resolvable.");
+        return this.GetMethodReference(getValue);
     }
 
     private MemberReferenceHandle GetStringLengthReference()
@@ -11718,6 +11770,35 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #504: walks the bound tree collecting every `BoundUnaryExpression`
+    // whose operator is `NullAssertion` (`!!`) and whose operand is a
+    // value-type `Nullable<T>`. Each such site needs a `Nullable<T>`-typed
+    // temp slot so the emitter can spill the operand and call
+    // `Nullable<T>::get_Value` (which yields the underlying `T` or throws
+    // `InvalidOperationException`). The reference-type `!!` path uses the
+    // existing `dup; brtrue; throw NRE` pattern and needs no slot.
+    private sealed class NullableValueTypeUnwrapCollector : BoundTreeWalker
+    {
+        private readonly List<BoundUnaryExpression> sink;
+
+        public NullableValueTypeUnwrapCollector(List<BoundUnaryExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override void VisitUnaryExpression(BoundUnaryExpression node)
+        {
+            if (node.Op.Kind == BoundUnaryOperatorKind.NullAssertion
+                && node.Operand.Type is NullableTypeSymbol n
+                && n.UnderlyingType?.ClrType is { IsValueType: true })
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitUnaryExpression(node);
+        }
+    }
+
     private sealed class SelectSlots
     {
         public SelectSlots(
@@ -13294,6 +13375,32 @@ internal sealed class ReflectionMetadataEmitter
             // dependency on stack tracking inside the operand.
             if (u.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
             {
+                // Issue #504: a value-type `Nullable<T>` operand cannot use
+                // `dup; brtrue` (the `Nullable<T>` struct on the stack has no
+                // valid `brtrue` interpretation — it produces invalid IL).
+                // Instead, spill the struct to a pre-allocated `Nullable<T>`
+                // slot, take its address, and call `Nullable<T>::get_Value()`,
+                // which returns the underlying T or throws
+                // `InvalidOperationException` when `HasValue == false`. This
+                // matches the BCL `Nullable<T>.Value` property's semantics.
+                if (u.Operand.Type is NullableTypeSymbol operandNullable
+                    && operandNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
+                {
+                    if (!this.receiverSpillSlots.TryGetValue(u, out var unwrapSlot))
+                    {
+                        throw new InvalidOperationException(
+                            "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — "
+                            + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                    }
+
+                    this.EmitExpression(u.Operand);
+                    this.il.StoreLocal(unwrapSlot);
+                    this.il.LoadLocalAddress(unwrapSlot);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.GetNullableGetValueReference(innerClr));
+                    return;
+                }
+
                 this.EmitExpression(u.Operand);
                 this.il.OpCode(ILOpCode.Dup);
                 var nonNull = this.il.DefineLabel();
