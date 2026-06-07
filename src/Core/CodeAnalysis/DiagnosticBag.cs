@@ -244,6 +244,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #526: reports that the outer type exists but does not contain a nested
+    /// type of the requested name.
+    /// </summary>
+    /// <param name="location">The text location of the nested-type segment.</param>
+    /// <param name="outerTypeName">The outer (containing) type's source-visible name.</param>
+    /// <param name="nestedName">The nested-type segment that could not be resolved.</param>
+    public void ReportUndefinedNestedType(TextLocation location, string outerTypeName, string nestedName)
+    {
+        var message = $"Type '{outerTypeName}' does not contain a nested type named '{nestedName}'.";
+        Report(location, "GS0268", message);
+    }
+
+    /// <summary>
     /// Reports that the array length is not a valid non-negative integer literal.
     /// </summary>
     /// <param name="location">The text location.</param>
