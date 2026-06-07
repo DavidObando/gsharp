@@ -17224,5 +17224,29 @@ public sealed class Binder
 
             return node;
         }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            // Issue #503 follow-up: a nested function literal's captures
+            // must transitively contribute to the *outer* literal's capture
+            // set whenever they're satisfied by neither outer parameters
+            // nor outer-body local declarations. Without this, the outer
+            // closure's display class has no field for the inner's free
+            // variable, so the inner-literal construction inside the outer
+            // Invoke body cannot locate the variable to pass to the inner
+            // closure's ctor (the silent-GS9998 failure surfaced by issue
+            // #503 closures inside nested lambdas).
+            foreach (var nestedCapture in node.CapturedVariables)
+            {
+                if (!this.parameters.Contains(nestedCapture)
+                    && !this.declared.Contains(nestedCapture)
+                    && this.seen.Add(nestedCapture))
+                {
+                    this.captured.Add(nestedCapture);
+                }
+            }
+
+            return node;
+        }
     }
 }
