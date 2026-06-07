@@ -5272,6 +5272,23 @@ public sealed class Binder
         if (exceptionType != null && expression.Type != TypeSymbol.Error)
         {
             var argClr = expression.Type?.ClrType;
+
+            // Issue #319: a GSharp class that inherits an imported CLR Exception
+            // type has no concrete ClrType until emit time, but its
+            // ImportedBaseType (walked transitively) is what determines
+            // assignability to System.Exception.
+            if (argClr == null && expression.Type is StructSymbol throwStruct)
+            {
+                for (var t = throwStruct; t != null; t = t.BaseClass)
+                {
+                    if (t.ImportedBaseType?.ClrType is System.Type clrBase)
+                    {
+                        argClr = clrBase;
+                        break;
+                    }
+                }
+            }
+
             if (argClr == null || !ClrTypeUtilities.IsAssignableByName(exceptionType.ClrType, argClr))
             {
                 Diagnostics.ReportCannotConvert(syntax.Expression.Location, expression.Type ?? TypeSymbol.Error, exceptionType);
@@ -7555,6 +7572,36 @@ public sealed class Binder
 
                 var propConverted = BindConversion(syntax.Value.Location, value, prop.Type);
                 return new BoundPropertyAssignmentExpression(null, new BoundVariableExpression(null, variable), structSymbol, prop, propConverted);
+            }
+
+            // Issue #319: a GSharp class inheriting an imported CLR base exposes
+            // the base's settable instance properties/fields. Fall back to CLR
+            // member lookup on the imported base type so `e.HResult = 42` style
+            // writes work the same as the read fallback further down.
+            if (structSymbol.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+            {
+                var memberName = syntax.FieldIdentifier.Text;
+                MemberInfo clrMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
+                if (clrMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
+                {
+                    clrMember = null;
+                }
+
+                clrMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, memberName, BindingFlags.Public | BindingFlags.Instance);
+                if (clrMember != null)
+                {
+                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    _ = inhWritable;
+                    _ = inhTargetType;
+                    var inhReceiver = new BoundVariableExpression(null, variable);
+                    var inhConverted = BindConversion(syntax.Value.Location, value, inhTargetSymbol);
+                    return new BoundClrPropertyAssignmentExpression(null, inhReceiver, clrMember, inhConverted, inhTargetSymbol);
+                }
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
