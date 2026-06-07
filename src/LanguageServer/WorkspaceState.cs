@@ -168,4 +168,59 @@ public class WorkspaceState
 
         return result;
     }
+
+    /// <summary>
+    /// Maps an imported assembly's file path back to the sibling G# project
+    /// that produced it, if any. Cross-project Go-to-Definition uses this to
+    /// jump from an <c>Imported*Symbol</c> loaded out of <c>obj/.../Lib.dll</c>
+    /// (or <c>obj/.../refint/Lib.dll</c>) into the originating <c>.gsproj</c>
+    /// project's syntax trees without having to read the PDB.
+    /// </summary>
+    /// <remarks>
+    /// Matching is by basename (case-insensitive on Windows): the SDK names the
+    /// emitted DLL after <c>$(AssemblyName)</c>, which defaults to
+    /// <c>$(TargetName)</c>, which in turn defaults to the project file's base
+    /// name. Each <see cref="ProjectState.AssemblyName"/> is populated by
+    /// <see cref="WorkspaceInitializer.Initialize"/> from
+    /// <see cref="ProjectDiscovery.DiscoverProject(string)"/>; projects added
+    /// outside of discovery (test scaffolding, the implicit project for loose
+    /// files) fall through and return <c>false</c>.
+    /// </remarks>
+    /// <param name="assemblyFilePath">Absolute path to the imported assembly,
+    /// as it appears in a
+    /// <see cref="GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver"/>
+    /// reference list.</param>
+    /// <param name="project">The matching sibling project on success.</param>
+    /// <returns><see langword="true"/> when a sibling G# project matched.</returns>
+    public bool TryGetProjectByOutputAssembly(string assemblyFilePath, out ProjectState project)
+    {
+        project = null;
+        if (string.IsNullOrEmpty(assemblyFilePath))
+        {
+            return false;
+        }
+
+        var assemblyName = Path.GetFileNameWithoutExtension(assemblyFilePath);
+        if (string.IsNullOrEmpty(assemblyName))
+        {
+            return false;
+        }
+
+        foreach (var candidate in projects.Values)
+        {
+            var candidateName = candidate.AssemblyName;
+            if (string.IsNullOrEmpty(candidateName))
+            {
+                continue;
+            }
+
+            if (string.Equals(candidateName, assemblyName, StringComparison.OrdinalIgnoreCase))
+            {
+                project = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

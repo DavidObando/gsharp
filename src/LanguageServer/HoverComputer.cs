@@ -933,19 +933,80 @@ public static class DefinitionComputer
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var symbol = SemanticLookup.ResolveSymbol(compilation, token);
-        if (symbol == null)
+        var workspace = content.Workspace;
+
+        // Imported symbols (cross-assembly): try sibling-G#-project source walk
+        // first, then portable-PDB navigation. See CrossAssemblyDefinitionResolver.
+        if (TryResolveImportedSymbol(symbol, workspace, out var crossLocation))
         {
-            return null;
+            return crossLocation;
         }
 
-        var declarationToken = FindDeclarationToken(compilation, symbol);
-        if (declarationToken == null)
+        if (symbol != null)
         {
-            return null;
+            var declarationToken = FindDeclarationToken(compilation, symbol);
+            if (declarationToken != null)
+            {
+                var targetUri = GetDocumentUri(declarationToken, uri);
+                return new Location { Uri = targetUri, Range = SemanticLookup.ToRange(declarationToken) };
+            }
         }
 
-        var targetUri = GetDocumentUri(declarationToken, uri);
-        return new Location { Uri = targetUri, Range = SemanticLookup.ToRange(declarationToken) };
+        // Fallback: the token is on a CLR type name (e.g. `Console`) or a
+        // member access RHS (e.g. `WriteLine` in `Console.WriteLine`) that did
+        // not resolve to a G# symbol. Walk the import / member-access context
+        // the same way HoverComputer does and map the result to a Location via
+        // CrossAssemblyDefinitionResolver.
+        if (token != null && token.Kind == SyntaxKind.IdentifierToken)
+        {
+            if (ImportedClrMemberResolver.TryResolveClrType(content.SyntaxTree, compilation, token, out var clrType)
+                && CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out var typeLocation))
+            {
+                return typeLocation;
+            }
+
+            if (ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var clrMember)
+                && TryResolveClrMember(workspace, clrMember, out var memberLocation))
+            {
+                return memberLocation;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryResolveImportedSymbol(Symbol symbol, WorkspaceState workspace, out Location location)
+    {
+        location = null;
+        switch (symbol)
+        {
+            case ImportedClassSymbol importedClass:
+                return CrossAssemblyDefinitionResolver.TryResolveType(workspace, importedClass.ClassType, out location);
+            case ImportedTypeSymbol importedType:
+                return CrossAssemblyDefinitionResolver.TryResolveType(workspace, importedType.Type, out location);
+            case ImportedFunctionSymbol importedFunction:
+                return CrossAssemblyDefinitionResolver.TryResolveMethod(workspace, importedFunction.Method, out location);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryResolveClrMember(WorkspaceState workspace, MemberInfo member, out Location location)
+    {
+        location = null;
+        switch (member)
+        {
+            case MethodInfo method:
+                return CrossAssemblyDefinitionResolver.TryResolveMethod(workspace, method, out location);
+            case PropertyInfo property:
+                return CrossAssemblyDefinitionResolver.TryResolveProperty(workspace, property, out location);
+            case FieldInfo field:
+                return CrossAssemblyDefinitionResolver.TryResolveField(workspace, field, out location);
+            case EventInfo @event:
+                return CrossAssemblyDefinitionResolver.TryResolveEvent(workspace, @event, out location);
+            default:
+                return false;
+        }
     }
 
     private static DocumentUri GetDocumentUri(SyntaxToken token, DocumentUri fallback)

@@ -8,7 +8,7 @@ The GSharp Language Server provides rich IDE features for `.gs` files via the [L
 |---------|-----------|-------------|
 | Diagnostics | `textDocument/diagnostic` | Live syntax, semantic, and binding errors pulled as you type (with `workspace/diagnostic/refresh` for cross-file edits) |
 | Hover | `textDocument/hover` | Type signature and symbol kind for the token under the cursor; renders CLR XML documentation (from `*.xml` files alongside referenced assemblies) and G# `///` Markdown doc comments as MarkdownContent |
-| Go-to-definition | `textDocument/declaration` | Jump from a symbol usage to its declaration |
+| Go-to-definition | `textDocument/declaration` | Jump from a symbol usage to its declaration. Cross-project: navigates into sibling G# projects in the workspace (via in-memory syntax-tree lookup) and into C# / G# project references and NuGet packages (via portable PDB navigation when sequence points are available; `refint/`-prefixed paths transparently swap to the runtime DLL alongside its PDB). |
 | Find references | `textDocument/references` | Find all usages of a symbol within the document |
 | Document symbols | `textDocument/documentSymbol` | Outline view: functions, variables, structs, enums with children |
 | Document highlights | `textDocument/documentHighlight` | Highlight all occurrences of the symbol under cursor |
@@ -74,6 +74,8 @@ Logging is **opt-in**: when `--log` is not supplied, no log file is created. Fro
 - **`DocumentContentService`** — thread-safe in-memory store mapping document URIs to their latest `DocumentContent`.
 - **`SemanticLookup`** — builds a `SemanticModel` from a `Compilation`, resolves identifier tokens to symbols, finds references, and converts between offsets/ranges.
 - **`HoverComputer`**, **`DefinitionComputer`**, **`DocumentSymbolComputer`**, etc. — stateless computers, one per LSP feature.
+- **`CrossAssemblyDefinitionResolver`** — dispatches Go-to-Definition for `Imported*Symbol`s and CLR `MemberInfo`s. Tier 1 walks the matching sibling `.gsproj`'s syntax trees; Tier 2 falls back to portable-PDB lookup via **`PdbSourceLocator`**.
+- **`PdbSourceLocator`** — opens portable PDBs (sidecar or embedded) with `System.Reflection.Metadata`, caches `MetadataReader`s per assembly file keyed on last-write time, and maps a method's `MetadataToken` to its first sequence point. Transparently swaps `obj/.../refint/{Name}.dll` paths to the sibling runtime DLL so MSBuild's reference-assembly outputs still navigate to source.
 
 ## Diagnostics
 

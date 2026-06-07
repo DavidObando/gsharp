@@ -22,15 +22,20 @@ public static class DocumentSyncHandler
 {
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
-        return ComputeDiagnostics(text, skipBinding, project: null, filePath: null);
+        return ComputeDiagnostics(text, skipBinding, project: null, filePath: null, workspace: null);
     }
 
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project)
     {
-        return ComputeDiagnostics(text, skipBinding, project, filePath: null);
+        return ComputeDiagnostics(text, skipBinding, project, filePath: null, workspace: null);
     }
 
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath)
+    {
+        return ComputeDiagnostics(text, skipBinding, project, filePath, workspace: null);
+    }
+
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath, WorkspaceState workspace)
     {
         var newLines = new List<int>();
         int nextNewLine = text.IndexOf('\n');
@@ -110,7 +115,7 @@ public static class DocumentSyncHandler
             }
         }
 
-        return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project), diagnostics);
+        return new DiagnosticComputationResult(new DocumentContent(syntaxTree, newLines, project, workspace), diagnostics);
     }
 
     private static Diagnostic BuildDiagnostic(string code, string message, int start, int end, GSharp.Core.CodeAnalysis.Text.SourceText sourceText)

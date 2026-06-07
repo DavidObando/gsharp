@@ -206,7 +206,7 @@ public sealed class LspServer
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false, project, filePath, this.workspaceState);
         cancellationToken.ThrowIfCancellationRequested();
 
         var resultId = ComputeResultId(result.Diagnostics);
@@ -445,7 +445,7 @@ public sealed class LspServer
 
         // Parse-only content (no binding) feeds the content service used by other features;
         // diagnostics are produced on demand by the textDocument/diagnostic pull handler.
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project, filePath);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: true, project, filePath, this.workspaceState);
         this.documentContentService.AddOrUpdate(uri.ToString(), result.Content);
     }
 
@@ -460,7 +460,7 @@ public sealed class LspServer
 
         var filePath = uri.GetFileSystemPath();
         var project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
-        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project, filePath);
+        var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding, project, filePath, this.workspaceState);
 
         this.rpc?.NotifyWithParameterObjectAsync(
             "textDocument/publishDiagnostics",
