@@ -215,6 +215,19 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_ResolvesAnnotationName_WithAttributeSuffixFallback()
+    {
+        const string source = "@Obsolete(\"Use NewApi\")\nfunc OldApi() { }\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Obsolete"));
+
+        Assert.NotNull(hover);
+        var value = hover.Contents.ToString();
+        Assert.Contains("ObsoleteAttribute", value, System.StringComparison.Ordinal);
+        Assert.Contains("System", value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AssemblyDocumentationProvider_ResolvesClrMemberDocsFromReferencePack()
     {
         var resolver = CreateReferencePackResolver();
