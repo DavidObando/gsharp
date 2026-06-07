@@ -150,8 +150,16 @@ public static class SemanticLookup
     /// <param name="tree">The syntax tree providing import context.</param>
     /// <param name="compilation">The compilation supplying the reference resolver.</param>
     /// <param name="name">The simple or aliased type name to resolve.</param>
+    /// <param name="includeAttributeSuffixFallback">
+    /// When <see langword="true"/>, also tries the C#-style
+    /// <c>&lt;name&gt;Attribute</c> fallback (used for annotation hover, e.g. <c>@Obsolete</c>).
+    /// </param>
     /// <returns>The resolved CLR type, or <c>null</c> when no match is found.</returns>
-    public static Type ResolveImportedClrType(SyntaxTree tree, Compilation compilation, string name)
+    public static Type ResolveImportedClrType(
+        SyntaxTree tree,
+        Compilation compilation,
+        string name,
+        bool includeAttributeSuffixFallback = false)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -164,6 +172,17 @@ public static class SemanticLookup
             if (resolver.TryResolveType(candidate, out var type))
             {
                 return type;
+            }
+        }
+
+        if (includeAttributeSuffixFallback && !name.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            foreach (var candidate in GetCandidateTypeNames(tree, name + "Attribute"))
+            {
+                if (resolver.TryResolveType(candidate, out var type))
+                {
+                    return type;
+                }
             }
         }
 

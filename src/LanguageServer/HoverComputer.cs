@@ -100,7 +100,11 @@ public static class HoverComputer
             return null;
         }
 
-        var clrType = SemanticLookup.ResolveImportedClrType(tree, compilation, token.Text);
+        var clrType = SemanticLookup.ResolveImportedClrType(
+            tree,
+            compilation,
+            token.Text,
+            includeAttributeSuffixFallback: IsAnnotationNameToken(tree.Root, token));
         if (clrType != null)
         {
             var signature = SymbolDisplay.ToDisplayString(clrType, SymbolDisplayFormat.Hover);
@@ -134,6 +138,27 @@ public static class HoverComputer
                 overloadCount),
             _ => null,
         };
+    }
+
+    private static bool IsAnnotationNameToken(SyntaxNode root, SyntaxToken token)
+    {
+        if (token == null || token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        foreach (var annotation in FindNodes<AnnotationSyntax>(root))
+        {
+            foreach (var segment in annotation.NameSegments)
+            {
+                if (MatchesToken(segment, token))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static HoverModel BuildLiteralModel(SyntaxToken token)
