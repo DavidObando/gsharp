@@ -629,7 +629,7 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args.ToImmutable());
+            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args.ToImmutable(), call.Type);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),

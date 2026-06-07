@@ -268,6 +268,235 @@ public class AsyncInstanceMethodEmitTests
         Assert.Contains(nested, t => t.Name.Contains("Inc") && t.Name.Contains("d__"));
     }
 
+    // Issue #502 follow-up (sub-bug 502-a): an `async func ... T { ... }`
+    // declared as an instance member must lift the call-site type to Task[T]
+    // not just at the top-level call site, but also when the call is awaited
+    // from inside another async member of the same class. The previous fix
+    // wrapped the call's static type in `BindUserInstanceCall`; this test
+    // exercises the lowering path that re-builds the call node when the
+    // implicit `this` receiver is replaced (e.g. by the state-machine
+    // rewriter's hoisted-`<>4__this`). If the call-type override is dropped
+    // there, the receiver of the subsequent `GetAwaiter()` is mis-typed and
+    // the program either crashes or hangs.
+    [Fact]
+    public void Async_Instance_Method_Returning_Int_Is_Awaitable_From_Sibling_Member()
+    {
+        var source = """
+            package P
+
+            import System.Threading.Tasks
+
+            type Probe class {
+                init() {}
+
+                async func ReturnInt() int32 {
+                    await Task.Delay(1)
+                    return 42
+                }
+
+                async func CallIt() int32 {
+                    var r = await ReturnInt()
+                    return r
+                }
+            }
+
+            public var result = 0
+            let p = Probe()
+            result = p.CallIt().Result
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probe = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var returnInt = probe.GetMethod("ReturnInt", BindingFlags.Public | BindingFlags.Instance);
+        var callIt = probe.GetMethod("CallIt", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(returnInt);
+        Assert.NotNull(callIt);
+
+        // Both members must be lifted to Task[int].
+        Assert.Equal(typeof(Task<int>), returnInt!.ReturnType);
+        Assert.Equal(typeof(Task<int>), callIt!.ReturnType);
+
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        // Bound a hard timeout around the entry-point so a regression of
+        // bug 502-b (the awaited inner async member never resolving) fails
+        // the test loudly rather than hanging the test host.
+        InvokeWithHangGuard(entry!);
+        Assert.Equal(42, (int)resultField!.GetValue(null)!);
+    }
+
+    // Issue #502 follow-up (sub-bug 502-b): a void-returning `async func`
+    // class member must lift to `Task` and the returned Task must actually
+    // complete when the body awaits another async member. Without the fix,
+    // the call from one async member to another mis-typed the awaited
+    // receiver, the inner Task never visibly completed from the caller's
+    // perspective, and `Task.Wait()` deadlocked. We assert end-to-end
+    // execution under a short timeout to detect any future hang regression.
+    [Fact]
+    public void Void_Async_Instance_Method_Awaiting_Sibling_Returns_Completed_Task()
+    {
+        var source = """
+            package P
+
+            import System.Threading.Tasks
+
+            type Probe class {
+                init() {}
+
+                async func Inner() int32 {
+                    await Task.Delay(1)
+                    return 7
+                }
+
+                async func Outer() {
+                    var v = await Inner()
+                    captured = v
+                }
+            }
+
+            public var captured = 0
+            let p = Probe()
+            let t = p.Outer()
+            t.Wait()
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probe = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var outerMethod = probe.GetMethod("Outer", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(outerMethod);
+
+        // Void-returning async member should lift to non-generic Task.
+        Assert.Equal(typeof(Task), outerMethod!.ReturnType);
+
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var capturedField = program.GetField("captured", BindingFlags.Public | BindingFlags.Static);
+
+        InvokeWithHangGuard(entry!);
+        Assert.Equal(7, (int)capturedField!.GetValue(null)!);
+    }
+
+    // The originally-reported parse repro from issue #502: an annotated
+    // `async func` class member should parse and bind clean, with the
+    // emitted kickoff method returning a `Task` (no value channel).
+    [Fact]
+    public void Annotated_Async_Instance_Member_With_No_Return_Lifts_To_Task()
+    {
+        var source = """
+            package P
+
+            import System.Threading.Tasks
+
+            type SmokeTests class {
+                init() {}
+
+                @Obsolete
+                async func DoIt() {
+                    await Task.Delay(1)
+                }
+            }
+
+            public var ok = false
+            let t = SmokeTests()
+            t.DoIt().Wait()
+            ok = true
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var smoke = assembly.GetTypes().Single(t => t.Name == "SmokeTests");
+        var doIt = smoke.GetMethod("DoIt", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(doIt);
+        Assert.Equal(typeof(Task), doIt!.ReturnType);
+
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var okField = program.GetField("ok", BindingFlags.Public | BindingFlags.Static);
+
+        InvokeWithHangGuard(entry!);
+        Assert.True((bool)okField!.GetValue(null)!);
+    }
+
+    // Combined coverage: an async member chains through an explicit
+    // `this.Other()` receiver, exercising the same lowering path as the
+    // implicit-`this` form but with the call's receiver materialized
+    // up-front in binding.
+    [Fact]
+    public void Async_Instance_Method_Awaits_Sibling_Through_Explicit_This_Receiver()
+    {
+        var source = """
+            package P
+
+            import System.Threading.Tasks
+
+            type Chain class {
+                init() {}
+
+                async func Add1(n int32) int32 {
+                    await Task.Delay(1)
+                    return n + 1
+                }
+
+                async func Add3(n int32) int32 {
+                    var a = await this.Add1(n)
+                    var b = await this.Add1(a)
+                    var c = await this.Add1(b)
+                    return c
+                }
+            }
+
+            public var result = 0
+            let c = Chain()
+            result = c.Add3(10).Result
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var chain = assembly.GetTypes().Single(t => t.Name == "Chain");
+        var add3 = chain.GetMethod("Add3", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(add3);
+        Assert.Equal(typeof(Task<int>), add3!.ReturnType);
+
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        InvokeWithHangGuard(entry!);
+        Assert.Equal(13, (int)resultField!.GetValue(null)!);
+    }
+
+    // Issue #502 hang-guard: invoke the compiled entry on a worker thread
+    // with a hard timeout. A hang in async lowering would otherwise deadlock
+    // the test host until xunit's per-collection timeout (or worse, never).
+    private static void InvokeWithHangGuard(MethodInfo entry, int timeoutMs = 5_000)
+    {
+        Exception captured = null;
+        var thread = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                entry.Invoke(null, null);
+            }
+            catch (Exception ex)
+            {
+                captured = ex;
+            }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        var finished = thread.Join(timeoutMs);
+        Assert.True(
+            finished,
+            "Compiled entry-point did not complete within "
+                + timeoutMs
+                + " ms — async lowering hang (bug #502 sub-bug 502-b regression).");
+
+        if (captured != null)
+        {
+            throw new InvalidOperationException("Compiled entry-point threw.", captured);
+        }
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_async_instance_emit_").FullName;

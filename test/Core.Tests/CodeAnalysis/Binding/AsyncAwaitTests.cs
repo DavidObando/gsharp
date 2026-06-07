@@ -93,6 +93,52 @@ tick()
         Assert.Empty(result.Diagnostics);
     }
 
+    // Issue #502 (original parse repro from the issue body): an `async func`
+    // class instance member must parse and bind without `GS0005`. The
+    // member-level parse fix shipped previously; this guard prevents a
+    // future regression that would block #502's worked example.
+    [Fact]
+    public void AsyncClassMember_ParsesAndBinds()
+    {
+        var source = @"
+type SmokeTests class {
+    init() {}
+    async func DoIt() {
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    // Issue #502 sub-bug 502-a: an `async func ... T` declared as a class
+    // instance member must be awaitable from a sibling instance member.
+    // Before the fix, the rewriter dropped the call-site Task[T] wrap on the
+    // user-instance call when its receiver was rewritten (e.g. by the async
+    // state-machine rewriter hoisting `this`), producing GS0133-style
+    // mismatch downstream. We assert clean binding here as the binder-level
+    // regression guard.
+    [Fact]
+    public void AsyncClassMember_AwaitsSiblingAsyncMember_NoDiagnostics()
+    {
+        var source = @"
+type Probe class {
+    init() {}
+
+    async func ReturnInt() int32 {
+        return 42
+    }
+
+    async func CallIt() int32 {
+        let r = await ReturnInt()
+        return r
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
