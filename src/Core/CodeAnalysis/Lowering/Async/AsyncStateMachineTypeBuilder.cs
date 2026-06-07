@@ -198,17 +198,35 @@ public static class AsyncStateMachineTypeBuilder
             return references.TryResolveType("System.Threading.Tasks.Task", out var taskType) ? taskType : null;
         }
 
-        var inner = kickoff.Type?.ClrType;
-        if (inner == null)
+        // Issue #530: for a nullable value type (e.g. `int32?`), the CLR type
+        // argument must be `Nullable<T>` (not bare `T`) so the async state
+        // machine's builder type (`Task<Nullable<int>>`) matches the kickoff's
+        // return type produced by WrapAsTask.
+        Type inner;
+        if (kickoff.Type is NullableTypeSymbol nullable
+            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
         {
-            return null;
-        }
+            if (!references.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
+            {
+                return null;
+            }
 
-        // Project the element CLR type onto the resolver's reference set before
-        // constructing Task`1. Under the SDK build path Task`1 is loaded via a
-        // MetadataLoadContext, and MakeGenericType requires the type argument to
-        // come from that same context (issues #290 and #291).
-        inner = references.MapClrTypeToReferences(inner);
+            inner = nullableOpen.MakeGenericType(references.MapClrTypeToReferences(innerVt));
+        }
+        else
+        {
+            inner = kickoff.Type?.ClrType;
+            if (inner == null)
+            {
+                return null;
+            }
+
+            // Project the element CLR type onto the resolver's reference set before
+            // constructing Task`1. Under the SDK build path Task`1 is loaded via a
+            // MetadataLoadContext, and MakeGenericType requires the type argument to
+            // come from that same context (issues #290 and #291).
+            inner = references.MapClrTypeToReferences(inner);
+        }
 
         return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
             ? open.MakeGenericType(inner)

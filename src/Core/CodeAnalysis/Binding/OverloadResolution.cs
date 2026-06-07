@@ -1481,6 +1481,25 @@ internal static class OverloadResolution
             }
         }
 
+        // Phase 2d — issue #530: when multiple candidates survive with identical
+        // parameter types but different declaring types (e.g. Task<T>.GetAwaiter()
+        // vs. inherited Task.GetAwaiter()), prefer the most-derived declaring type.
+        // This mirrors C#'s "method hiding" rule: a derived-class method hides any
+        // base-class method with the same signature.
+        if (pool.Count > 1)
+        {
+            var mostDerived = FilterToMostDerivedDeclaringType(pool);
+            if (mostDerived.Count >= 1 && mostDerived.Count < pool.Count)
+            {
+                pool = mostDerived;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
+            }
+        }
+
         // If nothing dominated above, report the surviving pool as ambiguous.
         var ambiguous = pool
             .Select(c => c.Method)
@@ -1490,6 +1509,77 @@ internal static class OverloadResolution
 
     private static bool IsGenericMethod(MethodBase method)
         => method is MethodInfo mi && mi.IsGenericMethod;
+
+    /// <summary>
+    /// Issue #530: when multiple surviving candidates have the same parameter
+    /// types but different declaring types (e.g. <c>Task&lt;T&gt;.GetAwaiter()</c>
+    /// hiding <c>Task.GetAwaiter()</c>), keep only those declared on the
+    /// most-derived type. This mirrors C#'s method-hiding semantics: a derived
+    /// class method with the same signature as a base class method hides it.
+    /// </summary>
+    private static List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> FilterToMostDerivedDeclaringType<T>(
+        List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> pool)
+    {
+        var result = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>(pool.Count);
+        foreach (var candidate in pool)
+        {
+            var declaringType = (candidate.Method as MethodBase)?.DeclaringType;
+            if (declaringType == null)
+            {
+                result.Add(candidate);
+                continue;
+            }
+
+            // Check if any other candidate in the pool is declared on a
+            // more-derived type (i.e., a type that inherits from this one).
+            bool isHidden = false;
+            foreach (var other in pool)
+            {
+                if (ReferenceEquals(candidate.Method as MethodBase, other.Method as MethodBase))
+                {
+                    continue;
+                }
+
+                var otherDeclaring = (other.Method as MethodBase)?.DeclaringType;
+                if (otherDeclaring != null && otherDeclaring != declaringType && IsSubclassOf(otherDeclaring, declaringType))
+                {
+                    isHidden = true;
+                    break;
+                }
+            }
+
+            if (!isHidden)
+            {
+                result.Add(candidate);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Checks whether <paramref name="derived"/> is a subclass of
+    /// <paramref name="baseType"/>, using FullName comparison for cross-context
+    /// type compatibility (MetadataLoadContext vs. runtime types).
+    /// </summary>
+    private static bool IsSubclassOf(Type derived, Type baseType)
+    {
+        if (derived == null || baseType == null)
+        {
+            return false;
+        }
+
+        var baseFullName = baseType.FullName;
+        for (var current = derived.BaseType; current != null; current = current.BaseType)
+        {
+            if (current == baseType || current.FullName == baseFullName)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsAtLeastAsGoodAs(
         ImplicitConversionKind[] a,
