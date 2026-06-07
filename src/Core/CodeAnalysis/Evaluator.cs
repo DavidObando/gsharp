@@ -438,6 +438,16 @@ public sealed class Evaluator
     private void EvaluateThrowStatement(BoundThrowStatement node)
     {
         var value = EvaluateExpression(node.Expression);
+
+        // Issue #319: a GSharp class that inherits a CLR Exception type carries a
+        // real CLR backing instance (allocated via AllocateClrBacking). Throw that
+        // backing so the runtime catch path observes the correct type and inherited
+        // members (e.g. Exception.Message). Otherwise fall back to legacy behavior.
+        if (value is StructValue sv && sv.ClrBacking is Exception backingEx)
+        {
+            throw backingEx;
+        }
+
         if (value is Exception ex)
         {
             throw ex;
@@ -1102,9 +1112,9 @@ public sealed class Evaluator
             locals.Push(frame);
             try
             {
-                // Forward the GSharp base initializer. CLR base initializers are a
-                // no-op when interpreted because the interpreter models classes as
-                // field dictionaries rather than real CLR objects (see issue #319).
+                // Forward the GSharp base initializer. CLR base initializers are
+                // routed through reflection by AllocateClrBacking (issue #319) so
+                // inherited CLR instance state is observable under interpretation.
                 if (explicitCtor.BaseInitializer is BaseConstructorInitializer ctorBaseInit
                     && ctorBaseInit.GSharpBaseType is StructSymbol ctorGsharpBase)
                 {
@@ -1114,6 +1124,8 @@ public sealed class Evaluator
                         sv.Fields[baseParams[i].Name] = EvaluateExpression(ctorBaseInit.Arguments[i]);
                     }
                 }
+
+                AllocateClrBacking(sv, node.StructType, explicitCtor.BaseInitializer);
 
                 var body = program.Functions[ctorFunction];
                 EvaluateStatement(body);
@@ -1137,7 +1149,8 @@ public sealed class Evaluator
         // this class's primary-constructor parameters, so evaluate them in a frame
         // where those parameters are bound to the just-assigned values.
         var baseInit = node.StructType.BaseConstructorInitializer;
-        if (baseInit != null && baseInit.GSharpBaseType is StructSymbol gsharpBase)
+        if (baseInit != null || node.StructType.ImportedBaseType != null
+            || HasClrAncestor(node.StructType))
         {
             var frame = new Dictionary<VariableSymbol, object>();
             for (var i = 0; i < parameters.Length; i++)
@@ -1148,11 +1161,19 @@ public sealed class Evaluator
             locals.Push(frame);
             try
             {
-                var baseParams = gsharpBase.PrimaryConstructorParameters;
-                for (var i = 0; i < baseParams.Length && i < baseInit.Arguments.Length; i++)
+                if (baseInit != null && baseInit.GSharpBaseType is StructSymbol gsharpBase)
                 {
-                    sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInit.Arguments[i]);
+                    var baseParams = gsharpBase.PrimaryConstructorParameters;
+                    for (var i = 0; i < baseParams.Length && i < baseInit.Arguments.Length; i++)
+                    {
+                        sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInit.Arguments[i]);
+                    }
                 }
+
+                // Issue #319: instantiate the CLR base instance (when the class
+                // ultimately derives from a CLR type) so inherited CLR instance
+                // state — such as Exception.Message — is set per the emit path.
+                AllocateClrBacking(sv, node.StructType, baseInit);
             }
             finally
             {
@@ -1161,6 +1182,107 @@ public sealed class Evaluator
         }
 
         return sv;
+    }
+
+    /// <summary>
+    /// Issue #319: instantiate the imported CLR base for a GSharp class instance
+    /// when the class ultimately derives from a CLR type, so inherited CLR
+    /// instance state (e.g. <see cref="System.Exception.Message"/>) is observable
+    /// under the interpreter. The chosen base constructor mirrors the emit path:
+    /// the resolved <see cref="BaseConstructorInitializer.ClrConstructor"/> when
+    /// the class declared <c>: Base(args)</c>, otherwise the imported base's
+    /// accessible parameterless constructor. The base-ctor argument expressions
+    /// must be evaluated within whatever frame the caller has just pushed.
+    /// </summary>
+    private void AllocateClrBacking(StructValue sv, StructSymbol structType, BaseConstructorInitializer activeInit)
+    {
+        // If an explicit `: base(args)` targets a CLR constructor, prefer that.
+        if (activeInit is { IsClrBase: true } clrInit && clrInit.ClrConstructor != null)
+        {
+            sv.ClrBacking = InvokeClrCtor(clrInit.ClrConstructor, clrInit.Arguments, clrInit.ArgumentRefKinds);
+            return;
+        }
+
+        // Otherwise walk the (G#) inheritance chain looking for an ancestor whose
+        // immediate base is an imported CLR type, and chain to that type's
+        // accessible parameterless constructor. Ancestor base-init args cannot be
+        // re-evaluated here (we are not running the ancestor's ctor body), so we
+        // intentionally restrict the parameterless path. If a deeper ancestor's
+        // : base(args) is required, the explicit/primary-ctor branches above
+        // handle it via activeInit.
+        for (var t = structType; t != null; t = t.BaseClass)
+        {
+            if (t.BaseConstructorInitializer is { IsClrBase: true } ancestorInit
+                && ancestorInit.ClrConstructor != null
+                && t != structType)
+            {
+                // Deeper ancestor : Base(args) where args reference *its* primary
+                // parameters. We cannot evaluate them here without spinning up the
+                // ancestor's primary-ctor frame, so leave the CLR backing null.
+                return;
+            }
+
+            if (t.ImportedBaseType?.ClrType is Type clrBase)
+            {
+                var parameterless = ResolveParameterlessCtor(clrBase);
+                if (parameterless != null)
+                {
+                    sv.ClrBacking = parameterless.Invoke(Array.Empty<object>());
+                }
+
+                return;
+            }
+        }
+    }
+
+    /// <summary>Issue #319: invoke a CLR base constructor with the bound G# argument expressions.</summary>
+    private object InvokeClrCtor(ConstructorInfo ctor, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds)
+    {
+        var args = new object[arguments.Length];
+        var refSlots = BuildRefSlots(arguments, argumentRefKinds, args);
+        var instance = ctor.Invoke(args);
+        WriteBackRefSlots(refSlots, args);
+        return instance;
+    }
+
+    /// <summary>Issue #319: resolves the imported CLR base's accessible parameterless constructor (matches the emit path's <c>GetImportedBaseDefaultCtorReference</c>).</summary>
+    private static ConstructorInfo ResolveParameterlessCtor(Type clrBase)
+    {
+        foreach (var ctor in clrBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (ctor.GetParameters().Length == 0
+                && (ctor.IsPublic || ctor.IsFamily || ctor.IsFamilyOrAssembly))
+            {
+                return ctor;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Issue #319: returns true when any ancestor of <paramref name="structType"/> directly inherits an imported CLR type.</summary>
+    private static bool HasClrAncestor(StructSymbol structType)
+    {
+        for (var t = structType; t != null; t = t.BaseClass)
+        {
+            if (t.ImportedBaseType?.ClrType != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #319: unwraps a GSharp class value to its CLR backing instance when
+    /// the value carries one. Reflection-based reads/writes/calls against members
+    /// declared on an imported CLR base must target the real CLR object, not the
+    /// interpreter's <see cref="StructValue"/> field dictionary.
+    /// </summary>
+    private static object UnwrapClrReceiver(object value)
+    {
+        return value is StructValue sv && sv.ClrBacking != null ? sv.ClrBacking : value;
     }
 
     private object EvaluateClrConstructorCallExpression(BoundClrConstructorCallExpression node)
@@ -1176,6 +1298,7 @@ public sealed class Evaluator
     private object EvaluateClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
     {
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+        receiver = UnwrapClrReceiver(receiver);
         return node.Member switch
         {
             System.Reflection.PropertyInfo p => p.GetValue(receiver),
@@ -1187,6 +1310,7 @@ public sealed class Evaluator
     private object EvaluateClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
     {
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+        receiver = UnwrapClrReceiver(receiver);
         var value = EvaluateExpression(node.Value);
         switch (node.Member)
         {
@@ -1206,6 +1330,7 @@ public sealed class Evaluator
     private object EvaluateClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
     {
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+        receiver = UnwrapClrReceiver(receiver);
         var handlerValue = EvaluateExpression(node.Handler);
         var handler = handlerValue as Delegate;
         if (handler != null
@@ -2310,6 +2435,16 @@ public sealed class Evaluator
                 }
             }
 
+            // Issue #319: when a GSharp class carries a CLR backing (because it
+            // inherits an imported CLR base), the value's effective runtime type
+            // also includes the CLR base hierarchy — `is`/type patterns against
+            // those CLR types must succeed.
+            if (sv.ClrBacking != null && targetType.ClrType != null
+                && targetType.ClrType.IsInstanceOfType(sv.ClrBacking))
+            {
+                return true;
+            }
+
             return false;
         }
 
@@ -2852,6 +2987,7 @@ public sealed class Evaluator
     private object EvaluateImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         var receiver = EvaluateExpression(node.Receiver);
+        receiver = UnwrapClrReceiver(receiver);
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
 
