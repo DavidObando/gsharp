@@ -58,13 +58,15 @@ public static class ProjectDiscovery
         var sourceFiles = DiscoverSourceFiles(projectFilePath, projectDir);
         var projectReferences = DiscoverProjectReferences(projectFilePath, projectDir);
         var (references, referenceSourcePath) = DiscoverReferences(projectFilePath, projectDir);
+        var assemblyName = ResolveAssemblyName(projectFilePath);
 
         return new DiscoveredProject(
             Path.GetFullPath(projectFilePath),
             sourceFiles,
             projectReferences,
             references,
-            referenceSourcePath);
+            referenceSourcePath,
+            assemblyName);
     }
 
     /// <summary>
@@ -135,6 +137,34 @@ public static class ProjectDiscovery
         }
 
         return refs;
+    }
+
+    /// <summary>
+    /// Resolves the project's effective <c>AssemblyName</c>, which the SDK uses
+    /// as the base of the response-file name. Defaults to the project file's
+    /// base name (matching MSBuild's <c>$(TargetName)</c> default).
+    /// </summary>
+    /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c>.</param>
+    /// <returns>The effective <c>AssemblyName</c>; never <c>null</c>.</returns>
+    internal static string ResolveAssemblyName(string projectFilePath)
+    {
+        var defaultName = Path.GetFileNameWithoutExtension(projectFilePath);
+        try
+        {
+            var doc = XDocument.Load(projectFilePath);
+            var explicitName = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
+            if (!string.IsNullOrWhiteSpace(explicitName))
+            {
+                return explicitName.Trim();
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the default below.
+        }
+
+        return defaultName;
     }
 
     /// <summary>
@@ -252,32 +282,6 @@ public static class ProjectDiscovery
 
         var references = ParseReferencesFromResponseFile(rspPath);
         return (references, Path.GetFullPath(rspPath));
-    }
-
-    /// <summary>
-    /// Resolves the project's effective <c>AssemblyName</c>, which the SDK uses
-    /// as the base of the response-file name. Defaults to the project file's
-    /// base name (matching MSBuild's <c>$(TargetName)</c> default).
-    /// </summary>
-    private static string ResolveAssemblyName(string projectFilePath)
-    {
-        var defaultName = Path.GetFileNameWithoutExtension(projectFilePath);
-        try
-        {
-            var doc = XDocument.Load(projectFilePath);
-            var explicitName = doc.Descendants()
-                .FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
-            if (!string.IsNullOrWhiteSpace(explicitName))
-            {
-                return explicitName.Trim();
-            }
-        }
-        catch (Exception)
-        {
-            // Fall through to the default below.
-        }
-
-        return defaultName;
     }
 
     private static bool IsDefaultCompileItemsDisabled(string projectFilePath)

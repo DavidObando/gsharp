@@ -50,6 +50,17 @@ public class ProjectState
     public string ProjectDirectory { get; }
 
     /// <summary>
+    /// Gets or sets the project's effective <c>AssemblyName</c> — the basename
+    /// (without extension) of the output DLL the SDK emits for this project.
+    /// Defaults to <c>null</c> for projects constructed without discovery (e.g.
+    /// the implicit project for loose files and most unit-test scaffolding);
+    /// <see cref="WorkspaceInitializer"/> populates it for every project parsed
+    /// out of a <c>.gsproj</c>. Cross-project Go-to-Definition consults this
+    /// via <see cref="WorkspaceState.TryGetProjectByOutputAssembly"/>.
+    /// </summary>
+    public string AssemblyName { get; set; }
+
+    /// <summary>
     /// Gets the set of source file paths currently in this project.
     /// </summary>
     public IReadOnlyCollection<string> SourceFiles => syntaxTrees.Keys.ToList();

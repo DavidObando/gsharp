@@ -29,6 +29,7 @@ public static class WorkspaceInitializer
         foreach (var disc in discovered)
         {
             var project = workspaceState.AddProject(disc.ProjectFilePath);
+            project.AssemblyName = disc.AssemblyName;
             project.ProjectReferences = disc.ProjectReferences;
             project.ReferenceSourcePath = disc.ReferenceSourcePath;
             project.References = disc.References;

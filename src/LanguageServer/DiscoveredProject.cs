@@ -19,18 +19,21 @@ public sealed class DiscoveredProject
     /// <param name="projectReferences">Absolute paths to referenced <c>.gsproj</c> files.</param>
     /// <param name="references">Absolute paths to assembly references (from the MSBuild-emitted response file).</param>
     /// <param name="referenceSourcePath">Absolute path to the <c>.rsp</c> the references were parsed from, or <c>null</c> when none was found.</param>
+    /// <param name="assemblyName">The project's effective <c>AssemblyName</c> (i.e. the basename of the output DLL). Used by cross-project navigation to map an imported symbol's declaring assembly back to the owning project.</param>
     public DiscoveredProject(
         string projectFilePath,
         IReadOnlyList<string> sourceFiles,
         IReadOnlyList<string> projectReferences,
         IReadOnlyList<string> references = null,
-        string referenceSourcePath = null)
+        string referenceSourcePath = null,
+        string assemblyName = null)
     {
         ProjectFilePath = projectFilePath;
         SourceFiles = sourceFiles;
         ProjectReferences = projectReferences;
         References = references ?? System.Array.Empty<string>();
         ReferenceSourcePath = referenceSourcePath;
+        AssemblyName = assemblyName;
     }
 
     /// <summary>
@@ -63,4 +66,15 @@ public sealed class DiscoveredProject
     /// rewritten by a subsequent build.
     /// </summary>
     public string ReferenceSourcePath { get; }
+
+    /// <summary>
+    /// Gets the project's effective <c>AssemblyName</c> — the basename of the
+    /// output DLL (without extension) the SDK will emit for this project. Used
+    /// by cross-project Go-to-Definition (<c>WorkspaceState.TryGetProjectByOutputAssembly</c>)
+    /// to map an imported symbol's declaring assembly back to the owning
+    /// sibling project. May be <c>null</c> when the project file could not be
+    /// parsed; in that case the consumer typically falls back to the project
+    /// file's basename.
+    /// </summary>
+    public string AssemblyName { get; }
 }
