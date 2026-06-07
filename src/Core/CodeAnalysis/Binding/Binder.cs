@@ -14193,6 +14193,16 @@ public sealed class Binder
 
                     return BindUserInstanceCall(receiver, userMethod, arguments, ce, argumentNames);
                 }
+
+                // Issue #527: fall back to a delegate/function-typed field on
+                // the user struct/class. This is the same delegate-as-callable
+                // dispatch used for the imported-CLR path below; here the
+                // receiver's ClrType is null (the user type has not yet been
+                // emitted) so we have to handle the symbol-only shape too.
+                if (TryBindUserStructDelegateFieldInvocation(receiver, userClass, methodName, arguments, ce, out var userDelegateFieldCall))
+                {
+                    return userDelegateFieldCall;
+                }
             }
 
             // Phase 3.B.6 / ADR-0019: extension function fallback for
@@ -14242,6 +14252,17 @@ public sealed class Binder
                 }
 
                 return BindUserInstanceCall(receiver, userMethodPriority, arguments, ce, argumentNames);
+            }
+
+            // Issue #527: a G#-defined struct/class field whose type is a
+            // function (or named delegate) is invokable through the same
+            // call syntax as a bare function-typed variable. Lower to a load
+            // of the field value followed by an indirect call. Field lookup
+            // walks the inheritance chain (a class can inherit a delegate
+            // field from a base class).
+            if (TryBindUserStructDelegateFieldInvocation(receiver, userClassPriority, methodName, arguments, ce, out var userDelegateCall))
+            {
+                return userDelegateCall;
             }
         }
 
@@ -14305,6 +14326,21 @@ public sealed class Binder
             }
         }
 
+        // Issue #527: a public field or property whose type is a CLR delegate
+        // (e.g. `public Func<string> OnAsk;`) is invokable through the same
+        // call syntax used on the variable itself — `bag.OnAsk()`. Method
+        // lookup above only consulted methods named `OnAsk`, so the delegate
+        // member would otherwise miss. Lower to a load of the delegate value
+        // followed by an `Invoke(args)` dispatch (mirrors the bare-delegate
+        // call path in BindCallExpression at #325). This must come before the
+        // extension-function fallbacks so an in-scope extension method does
+        // not shadow a real delegate-typed member on the type.
+        if (receiver != null
+            && TryBindClrDelegateMemberInvocation(receiver, clrType, methodName, arguments, ce, argumentNames, out var delegateMemberCall))
+        {
+            return delegateMemberCall;
+        }
+
         // Phase 3.B.6 / ADR-0019: extension function fallback. After all
         // instance/static lookups fail, try matching by (receiverType, name).
         if (receiver != null && scope.TryLookupExtensionFunction(receiver.Type, methodName, out var extFn))
@@ -14332,6 +14368,183 @@ public sealed class Binder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #527 (G#-defined struct/class arm): when a member-style call
+    /// <c>receiver.Member(args)</c> does not match a method on the user
+    /// struct/class, fall back to a field whose type is a function value or
+    /// named delegate. Lowers to a load of the field followed by a
+    /// <see cref="BoundIndirectCallExpression"/> through the function shape.
+    /// Returns <see langword="true"/> when a callable field matched (the
+    /// resulting expression may be a <see cref="BoundErrorExpression"/> if
+    /// arity is wrong).
+    /// </summary>
+    private bool TryBindUserStructDelegateFieldInvocation(
+        BoundExpression receiver,
+        StructSymbol receiverStruct,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        out BoundExpression result)
+    {
+        result = null;
+
+        // Walk the base chain so an inherited delegate field on a base class
+        // is invokable on a derived instance.
+        FieldSymbol matchedField = null;
+        StructSymbol declaringType = null;
+        for (var c = receiverStruct; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetField(methodName, out var f))
+            {
+                matchedField = f;
+                declaringType = c;
+                break;
+            }
+        }
+
+        if (matchedField == null)
+        {
+            return false;
+        }
+
+        FunctionTypeSymbol functionType;
+        if (matchedField.Type is FunctionTypeSymbol fts)
+        {
+            functionType = fts;
+        }
+        else if (matchedField.Type is DelegateTypeSymbol nds)
+        {
+            functionType = nds.EquivalentFunctionType;
+        }
+        else if (matchedField.Type?.ClrType is System.Type fieldClrType
+            && ClrTypeUtilities.IsDelegateType(fieldClrType)
+            && TryGetDelegateFunctionType(fieldClrType, out var clrFn))
+        {
+            functionType = clrFn;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (arguments.Length != functionType.ParameterTypes.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, functionType.ParameterTypes.Length, arguments.Length);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], functionType.ParameterTypes[i]));
+        }
+
+        var fieldLoad = new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
+        result = new BoundIndirectCallExpression(null, fieldLoad, functionType, convertedArgs.MoveToImmutable());
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #527: when an accessor-style call <c>receiver.Member(args)</c>
+    /// matches no method on the CLR receiver type, fall back to a public
+    /// field or property of the same name whose type is a CLR delegate.
+    /// Lowers to a load of the delegate value (<c>ldfld</c> / property getter)
+    /// followed by an <c>Invoke(args)</c> call. Returns <see langword="true"/>
+    /// when a delegate-typed member matched and the call was bound (the
+    /// resulting expression may be a <see cref="BoundErrorExpression"/> if
+    /// argument resolution failed).
+    /// </summary>
+    private bool TryBindClrDelegateMemberInvocation(
+        BoundExpression receiver,
+        System.Type clrType,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+        if (clrType == null)
+        {
+            return false;
+        }
+
+        // Prefer a property of the right name over a field — the same
+        // precedence used by the read path in BindAccessorStep (properties
+        // first, fields fallback). Indexer properties (those with parameters)
+        // are not member-style invocable, so skip them.
+        System.Reflection.MemberInfo member = ClrTypeUtilities.SafeGetProperty(clrType, methodName, BindingFlags.Public | BindingFlags.Instance);
+        if (member is System.Reflection.PropertyInfo prop && (prop.GetIndexParameters().Length != 0 || !prop.CanRead))
+        {
+            member = null;
+        }
+
+        member ??= ClrTypeUtilities.SafeGetField(clrType, methodName, BindingFlags.Public | BindingFlags.Instance);
+        if (member == null)
+        {
+            return false;
+        }
+
+        System.Type memberClrType = member switch
+        {
+            System.Reflection.PropertyInfo p => p.PropertyType,
+            System.Reflection.FieldInfo f => f.FieldType,
+            _ => null,
+        };
+        if (memberClrType == null || !ClrTypeUtilities.IsDelegateType(memberClrType))
+        {
+            return false;
+        }
+
+        TypeSymbol memberTypeSymbol = member switch
+        {
+            System.Reflection.PropertyInfo p2 => ClrNullability.GetPropertyTypeSymbol(p2),
+            System.Reflection.FieldInfo f2 => ClrNullability.GetFieldTypeSymbol(f2),
+            _ => TypeSymbol.FromClrType(memberClrType),
+        };
+
+        // The delegate value load — `ldfld` for a field, `call get_X` for a
+        // property. The shared BoundClrPropertyAccessExpression node carries
+        // either MemberInfo shape, and EmitClrPropertyAccess already handles
+        // both (including the value-type-receiver `ldloca` step we need for
+        // a CLR struct field).
+        var delegateLoad = new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol);
+
+        // Strip nullable annotation when dispatching through Invoke — the
+        // delegate value is loaded as-is from the field; the call would
+        // dereference null at runtime if the member is unassigned. This
+        // matches CLR semantics for `del()` on a null `Func<T>`.
+        var underlyingDelegateClr = memberClrType;
+
+        // Reuse the same Invoke-overload-resolution path that the bare
+        // delegate-variable call uses at #325 (BindCallExpression), so
+        // generic delegate arguments, named arguments, and ref/in/out are
+        // all handled uniformly.
+        if (TryBindInheritedClrInstanceCall(delegateLoad, underlyingDelegateClr, "Invoke", arguments, ce, out var invokeCall, argumentNames: argumentNames))
+        {
+            result = invokeCall;
+            return true;
+        }
+
+        // No applicable Invoke overload — most likely an argument-count or
+        // type mismatch. Report against the member name (not "Invoke") so the
+        // diagnostic points to what the user wrote.
+        var invoke = memberClrType.GetMethod("Invoke");
+        var expectedArity = invoke?.GetParameters().Length ?? 0;
+        if (arguments.Length != expectedArity)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, expectedArity, arguments.Length);
+        }
+        else
+        {
+            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+        }
+
+        result = new BoundErrorExpression(null);
+        return true;
     }
 
     /// <summary>
