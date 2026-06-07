@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
@@ -318,5 +319,81 @@ public class LexerTests
         var tokens = SyntaxTree.ParseTokens("// this is a comment\nx");
         Assert.Contains(tokens, t => t.Kind == SyntaxKind.CommentToken);
         Assert.Contains(tokens, t => t.Kind == SyntaxKind.IdentifierToken && t.Text == "x");
+    }
+
+    [Theory]
+    [InlineData("\"a\\nb\"", "a\nb")]
+    [InlineData("\"a\\rb\"", "a\rb")]
+    [InlineData("\"a\\tb\"", "a\tb")]
+    [InlineData("\"a\\\\b\"", "a\\b")]
+    [InlineData("\"a\\\"b\"", "a\"b")]
+    [InlineData("\"a\\'b\"", "a'b")]
+    [InlineData("\"a\\0b\"", "a\0b")]
+    [InlineData("\"a\\ab\"", "a\ab")]
+    [InlineData("\"a\\bb\"", "a\bb")]
+    [InlineData("\"a\\fb\"", "a\fb")]
+    [InlineData("\"a\\vb\"", "a\vb")]
+    [InlineData("\"\\x41\"", "A")]
+    [InlineData("\"\\x041\"", "A")]
+    [InlineData("\"\\x0041\"", "A")]
+    [InlineData("\"\\x4\"", "\x4")]
+    [InlineData("\"\\u0041\"", "A")]
+    [InlineData("\"\\u00e9\"", "\u00e9")]
+    [InlineData("\"\\U00000041\"", "A")]
+    public void Lexes_StringEscapeSequence(string text, string expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.StringToken, token.Kind);
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    [Fact]
+    public void String_Escape_Newline_HasCorrectLength()
+    {
+        // Issue #531: "a\nb".Length == 3, not 4.
+        var tokens = SyntaxTree.ParseTokens("\"a\\nb\"", out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(3, ((string)token.Value).Length);
+    }
+
+    [Theory]
+    [InlineData("\"\\q\"", "Unrecognised escape")]
+    [InlineData("\"\\z\"", "Unrecognised escape")]
+    [InlineData("\"\\u41\"", "Malformed Unicode escape")]
+    [InlineData("\"\\U00110000\"", "Malformed Unicode escape")]
+    public void Invalid_StringEscape_ReportsDiagnostic(string text, string expectedFragment)
+    {
+        SyntaxTree.ParseTokens(text, out var diagnostics);
+        Assert.Contains(diagnostics, d => d.Message.Contains(expectedFragment, System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("`no \\n escapes here`", "no \\n escapes here")]
+    [InlineData("`a\\tb`", "a\\tb")]
+    [InlineData("`\\\\`", "\\\\")]
+    public void RawString_DoesNotProcessEscapes(string text, string expectedValue)
+    {
+        var tokens = SyntaxTree.ParseTokens(text, out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.StringToken, token.Kind);
+        Assert.Equal(expectedValue, token.Value);
+    }
+
+    [Fact]
+    public void InterpolatedString_ProcessesEscapesInLiteralSegments()
+    {
+        // "hello\\n$name" should have the literal segment "hello\n" with an actual newline.
+        var tokens = SyntaxTree.ParseTokens("\"hello\\n$name\"", out var diagnostics);
+        var token = Assert.Single(tokens);
+        Assert.Empty(diagnostics);
+        Assert.Equal(SyntaxKind.InterpolatedStringToken, token.Kind);
+        var fragments = (ImmutableArray<InterpolationFragment>)token.Value;
+        Assert.Equal(2, fragments.Length);
+        Assert.False(fragments[0].IsExpression);
+        Assert.Equal("hello\n", fragments[0].Text);
     }
 }

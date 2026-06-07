@@ -96,7 +96,27 @@ A character literal is a single Unicode code unit enclosed in single quotes (`'`
 
 GSharp has two string forms:
 
-1. **Interpreted strings** delimited by `"…"`. Escape sequences are processed.
+1. **Interpreted strings** delimited by `"…"`. Backslash escape sequences are processed — the same set as character literals:
+
+   | Escape | Value |
+   | ------ | ----- |
+   | `\\` | backslash (U+005C) |
+   | `\"` | double quote (U+0022) |
+   | `\'` | single quote (U+0027) |
+   | `\0` | NUL (U+0000) |
+   | `\a` | BEL (U+0007) |
+   | `\b` | BS (U+0008) |
+   | `\f` | FF (U+000C) |
+   | `\n` | LF (U+000A) |
+   | `\r` | CR (U+000D) |
+   | `\t` | HT (U+0009) |
+   | `\v` | VT (U+000B) |
+   | `\xH…HHHH` | 1–4 hex digit Unicode code point (C# semantics) |
+   | `\uHHHH` | exactly 4 hex digits |
+   | `\UHHHHHHHH` | exactly 8 hex digits (must be ≤ U+FFFF) |
+
+   Any other `\<char>` is a diagnostic (**GS0269**). To embed a literal backslash, write `\\`.
+
 2. **Raw strings** delimited by backticks (`` `…` ``). Contents are taken verbatim with no escape processing. Multi-line raw strings are allowed; CR and CRLF in the source are normalized to LF in the literal value. Embedded backticks are not representable; concatenate with `+` if needed.
 
 ### String interpolation
