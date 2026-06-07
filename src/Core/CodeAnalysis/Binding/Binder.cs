@@ -6486,6 +6486,17 @@ public sealed class Binder
                 valueType = seq.ElementType;
                 break;
             default:
+                // Issue #537: `string` is iterable over `char` via its indexer
+                // and Length property — same fast-path C# uses for
+                // `foreach (char c in str)`.
+                if (collection.Type == TypeSymbol.String)
+                {
+                    iterationKind = ForRangeKind.Indexed;
+                    keyType = TypeSymbol.Int32;
+                    valueType = TypeSymbol.Char;
+                    break;
+                }
+
                 if (collection.Type != TypeSymbol.Error)
                 {
                     Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
