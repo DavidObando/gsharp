@@ -73,6 +73,13 @@ public sealed class BoundUnaryOperator
             }
         }
 
+        // Issue #534: ^ (ones complement) on enum values (CLR or user-defined).
+        // The result type is the enum type itself (matching C# §11.10.5).
+        if (syntaxKind == SyntaxKind.HatToken && IsEnumType(operandType))
+        {
+            return new BoundUnaryOperator(syntaxKind, BoundUnaryOperatorKind.OnesComplement, operandType);
+        }
+
         return null;
     }
 
@@ -113,5 +120,20 @@ public sealed class BoundUnaryOperator
         }
 
         return list.ToArray();
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="type"/> represents an enum
+    /// type — either a user-defined <see cref="EnumSymbol"/> or an imported
+    /// CLR enum.
+    /// </summary>
+    private static bool IsEnumType(TypeSymbol type)
+    {
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType != null && type.ClrType.IsEnum;
     }
 }

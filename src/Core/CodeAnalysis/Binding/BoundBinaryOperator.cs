@@ -114,6 +114,24 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, TypeSymbol.Bool);
         }
 
+        // Issue #534: bitwise |, &, ^ on same-type enum values.
+        // Both user-defined (EnumSymbol) and imported CLR enum types are
+        // supported. The result type is the enum type itself (matching C#
+        // §11.10.5). The IL is the same as for the underlying integer —
+        // enums are represented as their underlying int on the eval stack.
+        if ((syntaxKind == SyntaxKind.PipeToken || syntaxKind == SyntaxKind.AmpersandToken || syntaxKind == SyntaxKind.HatToken)
+            && leftType != null && leftType == rightType
+            && IsEnumType(leftType))
+        {
+            var bitwiseKind = syntaxKind switch
+            {
+                SyntaxKind.PipeToken => BoundBinaryOperatorKind.BitwiseOr,
+                SyntaxKind.AmpersandToken => BoundBinaryOperatorKind.BitwiseAnd,
+                _ => BoundBinaryOperatorKind.BitwiseXor,
+            };
+            return new BoundBinaryOperator(syntaxKind, bitwiseKind, leftType, rightType, leftType);
+        }
+
         // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
         if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && (ls.IsData || ls.IsInline))
         {
@@ -248,5 +266,21 @@ public sealed class BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.LessOrEqualsToken, BoundBinaryOperatorKind.LessOrEquals, t, t, TypeSymbol.Bool));
         list.Add(new BoundBinaryOperator(SyntaxKind.GreaterToken, BoundBinaryOperatorKind.Greater, t, t, TypeSymbol.Bool));
         list.Add(new BoundBinaryOperator(SyntaxKind.GreaterOrEqualsToken, BoundBinaryOperatorKind.GreaterOrEquals, t, t, TypeSymbol.Bool));
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="type"/> represents an enum
+    /// type — either a user-defined <see cref="EnumSymbol"/> or an imported
+    /// CLR enum (<see cref="ImportedTypeSymbol"/> whose <see cref="TypeSymbol.ClrType"/>
+    /// is an enum).
+    /// </summary>
+    private static bool IsEnumType(TypeSymbol type)
+    {
+        if (type is EnumSymbol)
+        {
+            return true;
+        }
+
+        return type?.ClrType != null && type.ClrType.IsEnum;
     }
 }
