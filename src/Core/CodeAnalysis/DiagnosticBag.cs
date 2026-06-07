@@ -2115,6 +2115,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0267", $"No overload of '{name}' is applicable to the given argument list.");
     }
 
+    /// <summary>
+    /// Reports that a <c>for x in expr</c> loop cannot be lowered because the
+    /// collection type does not expose a usable <c>GetEnumerator()</c> method.
+    /// </summary>
+    /// <param name="location">The collection expression location.</param>
+    /// <param name="type">The collection type.</param>
+    public void ReportTypeNotIterable(TextLocation location, TypeSymbol type)
+    {
+        var message = $"Type '{type.Name}' does not implement a usable 'GetEnumerator()' method and cannot be iterated with 'for ... in'.";
+        Report(location, "GS0268", message);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

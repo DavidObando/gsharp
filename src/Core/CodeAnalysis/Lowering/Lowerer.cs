@@ -859,12 +859,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var clrType = collection.Type.ClrType;
         if (clrType != null)
         {
-            var getEnumerator = clrType.GetMethod(
-                "GetEnumerator",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-                binder: null,
-                types: System.Type.EmptyTypes,
-                modifiers: null);
+            var getEnumerator = ResolveGetEnumerator(clrType);
             if (getEnumerator != null)
             {
                 enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
@@ -894,6 +889,84 @@ public sealed class Lowerer : BoundTreeRewriter
         getEnumeratorCall = null;
         enumeratorType = null;
         return false;
+    }
+
+    /// <summary>
+    /// Resolves the best <c>GetEnumerator()</c> method on a CLR type,
+    /// searching implemented interfaces when the type itself (e.g. an
+    /// interface like <c>IReadOnlyList&lt;T&gt;</c>) does not directly
+    /// declare the method. Prefers the generic
+    /// <c>IEnumerable&lt;T&gt;.GetEnumerator()</c> over the non-generic one.
+    /// </summary>
+    private static System.Reflection.MethodInfo ResolveGetEnumerator(System.Type clrType)
+    {
+        // First: direct lookup on the type itself (works for concrete types).
+        var direct = clrType.GetMethod(
+            "GetEnumerator",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: System.Type.EmptyTypes,
+            modifiers: null);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        // For interfaces (e.g. IReadOnlyList<T>, ICollection<T>), the method
+        // lives on a parent interface. Search for the generic IEnumerable<T>
+        // first (so we get the strongly-typed IEnumerator<T>), then fall back
+        // to non-generic IEnumerable.
+        // NOTE: We compare by name rather than by Type identity because the
+        // referenced BCL types may come from a different assembly load context
+        // than the compiler's own runtime.
+        System.Reflection.MethodInfo nonGenericFallback = null;
+        foreach (var iface in clrType.GetInterfaces())
+        {
+            if (iface.IsGenericType &&
+                iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+            {
+                return iface.GetMethod(
+                    "GetEnumerator",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    binder: null,
+                    types: System.Type.EmptyTypes,
+                    modifiers: null);
+            }
+
+            if (iface.FullName == "System.Collections.IEnumerable")
+            {
+                nonGenericFallback = iface.GetMethod(
+                    "GetEnumerator",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                    binder: null,
+                    types: System.Type.EmptyTypes,
+                    modifiers: null);
+            }
+        }
+
+        // Also check if the type itself is the generic IEnumerable<T>.
+        if (clrType.IsGenericType &&
+            clrType.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+        {
+            return clrType.GetMethod(
+                "GetEnumerator",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+        }
+
+        if (clrType.FullName == "System.Collections.IEnumerable")
+        {
+            return clrType.GetMethod(
+                "GetEnumerator",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+        }
+
+        return nonGenericFallback;
     }
 
     private static bool TryBuildMoveNextAndCurrent(

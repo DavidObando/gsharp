@@ -12698,6 +12698,15 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundDefaultExpression defaultExpr:
                     this.EmitDefault(defaultExpr);
                     break;
+                case BoundErrorExpression:
+                    // GS0268: a BoundErrorExpression leaked from lowering into emit.
+                    // This typically means the lowerer could not resolve a required
+                    // method (e.g. GetEnumerator) for a for-in loop. Throw a
+                    // descriptive exception so BuildEmitFailureDiagnostic surfaces
+                    // a clear GS9998 message instead of an opaque MSB4181.
+                    throw new InvalidOperationException(
+                        "Internal compiler error (GS0268): a for-in loop over an enumerable type could not be lowered. " +
+                        "The collection type may not expose a resolvable GetEnumerator()/MoveNext()/Current pattern.");
                 default:
                     throw new NotSupportedException(
                         $"Bound expression kind '{expression.Kind}' is not yet supported by the emitter.");
