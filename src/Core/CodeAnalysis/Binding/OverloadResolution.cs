@@ -138,8 +138,33 @@ internal static class OverloadResolution
     /// <returns>The conversion classification.</returns>
     public static ImplicitConversionKind ClassifyImplicit(Type target, Type source)
     {
-        if (target is null || source is null)
+        if (target is null)
         {
+            return ImplicitConversionKind.None;
+        }
+
+        // Issue #533: a null source represents the `nil` literal in G#.
+        // `nil` is implicitly assignable to any reference type and to
+        // `Nullable<T>` (value-type nullable), mirroring C#'s null literal
+        // compatibility rules.
+        if (source is null)
+        {
+            // Peel by-ref for the target (ref/out/in parameter).
+            var t = target.IsByRef ? target.GetElementType()! : target;
+
+            // Nullable<T> (value-type nullable)
+            if (t.IsGenericType
+                && string.Equals(t.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal))
+            {
+                return ImplicitConversionKind.NullableWrap;
+            }
+
+            // Any reference type (class, interface, array, delegate, string)
+            if (!t.IsValueType)
+            {
+                return ImplicitConversionKind.Reference;
+            }
+
             return ImplicitConversionKind.None;
         }
 
