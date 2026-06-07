@@ -1930,11 +1930,31 @@ public class Parser
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+
+            // Issue #526: an array/slice of a nested CLR type — `[]Outer.Inner`.
+            var (arrayDots, arrayQualifiers) = ParseQualifierSegments();
             var arrayQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
-            return new TypeClauseSyntax(syntaxTree, openBracket, length, closeBracket, elementIdentifier, arrayQuestion);
+            return new TypeClauseSyntax(
+                syntaxTree,
+                openBracket,
+                length,
+                closeBracket,
+                elementIdentifier,
+                arrayDots,
+                arrayQualifiers,
+                typeArgumentOpenBracketToken: null,
+                typeArguments: default,
+                typeArgumentCloseBracketToken: null,
+                arrayQuestion);
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #526: a dotted-qualifier chain `Outer.Inner` (or `A.B.C`) names a
+        // nested CLR type. Consume the `.IDENT` segments greedily — the trailing
+        // type-argument list `[T1, ...]` (Phase 4.3c) attaches to the LAST segment,
+        // matching how nested generic types are written in source.
+        var (qualifierDots, qualifierIdents) = ParseQualifierSegments();
 
         // Phase 4.3c: optional type-argument list `Foo[T1, T2]` in type position.
         SyntaxToken typeArgOpen = null;
@@ -1969,10 +1989,37 @@ public class Parser
             lengthToken: null,
             closeBracketToken: null,
             identifier,
+            qualifierDots,
+            qualifierIdents,
             typeArgOpen,
             typeArgs,
             typeArgClose,
             question);
+    }
+
+    /// <summary>
+    /// Issue #526: consumes a dotted-qualifier chain (zero or more <c>.IDENT</c> pairs)
+    /// in a type-clause position. Lookahead-only: stops when the next token is not a
+    /// <c>.</c> followed by an identifier so we never miscount a member-access on a
+    /// value-typed identifier as a qualifier.
+    /// </summary>
+    /// <returns>The collected dot tokens and qualifier identifier tokens, both empty when no chain is present.</returns>
+    private (ImmutableArray<SyntaxToken> Dots, ImmutableArray<SyntaxToken> Identifiers) ParseQualifierSegments()
+    {
+        ImmutableArray<SyntaxToken>.Builder dotBuilder = null;
+        ImmutableArray<SyntaxToken>.Builder identifierBuilder = null;
+
+        while (Current.Kind == SyntaxKind.DotToken && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            dotBuilder ??= ImmutableArray.CreateBuilder<SyntaxToken>();
+            identifierBuilder ??= ImmutableArray.CreateBuilder<SyntaxToken>();
+            dotBuilder.Add(NextToken());
+            identifierBuilder.Add(NextToken());
+        }
+
+        var dots = dotBuilder == null ? ImmutableArray<SyntaxToken>.Empty : dotBuilder.ToImmutable();
+        var identifiers = identifierBuilder == null ? ImmutableArray<SyntaxToken>.Empty : identifierBuilder.ToImmutable();
+        return (dots, identifiers);
     }
 
     private TypeClauseSyntax ParseTupleTypeClause()

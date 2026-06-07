@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
@@ -82,6 +84,46 @@ public sealed class TypeClauseSyntax : SyntaxNode
         LengthToken = lengthToken;
         CloseBracketToken = closeBracketToken;
         Identifier = identifier;
+        TypeArgumentOpenBracketToken = typeArgumentOpenBracketToken;
+        TypeArguments = typeArguments;
+        TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
+        QuestionToken = questionToken;
+        QualifierDotTokens = ImmutableArray<SyntaxToken>.Empty;
+        QualifierIdentifierTokens = ImmutableArray<SyntaxToken>.Empty;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class supporting a dotted-qualifier chain for nested CLR types (<see cref="QualifierIdentifierTokens"/>), an optional type-argument list, and an optional nullable suffix (issue #526).</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="openBracketToken">The opening bracket token of the array/slice prefix, or <c>null</c>.</param>
+    /// <param name="lengthToken">The numeric length token, or <c>null</c>.</param>
+    /// <param name="closeBracketToken">The closing bracket token of the array/slice prefix, or <c>null</c>.</param>
+    /// <param name="identifier">The first (outermost) identifier of the dotted name.</param>
+    /// <param name="qualifierDotTokens">The <c>.</c> tokens separating each qualifier segment (same count as <paramref name="qualifierIdentifierTokens"/>), or empty when the name is not dotted.</param>
+    /// <param name="qualifierIdentifierTokens">The identifier tokens that follow each <c>.</c>, in source order, or empty when the name is not dotted.</param>
+    /// <param name="typeArgumentOpenBracketToken">The opening bracket of the type-argument list, or <c>null</c>.</param>
+    /// <param name="typeArguments">The type-argument list, or the default value.</param>
+    /// <param name="typeArgumentCloseBracketToken">The closing bracket of the type-argument list, or <c>null</c>.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SyntaxToken lengthToken,
+        SyntaxToken closeBracketToken,
+        SyntaxToken identifier,
+        ImmutableArray<SyntaxToken> qualifierDotTokens,
+        ImmutableArray<SyntaxToken> qualifierIdentifierTokens,
+        SyntaxToken typeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
+        SyntaxToken typeArgumentCloseBracketToken,
+        SyntaxToken questionToken)
+        : base(syntaxTree)
+    {
+        OpenBracketToken = openBracketToken;
+        LengthToken = lengthToken;
+        CloseBracketToken = closeBracketToken;
+        Identifier = identifier;
+        QualifierDotTokens = qualifierDotTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : qualifierDotTokens;
+        QualifierIdentifierTokens = qualifierIdentifierTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : qualifierIdentifierTokens;
         TypeArgumentOpenBracketToken = typeArgumentOpenBracketToken;
         TypeArguments = typeArguments;
         TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
@@ -245,8 +287,47 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the closing bracket token, or <c>null</c> for non-array types.</summary>
     public SyntaxToken CloseBracketToken { get; }
 
-    /// <summary>Gets the (element) type identifier.</summary>
+    /// <summary>Gets the (element) type identifier. For a dotted-qualifier name (issue #526) this is the outermost segment (e.g. <c>Outer</c> in <c>Outer.Inner</c>).</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>Gets the <c>.</c> tokens separating each dotted-qualifier segment (issue #526). Empty when the name is a single identifier.</summary>
+    public ImmutableArray<SyntaxToken> QualifierDotTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
+
+    /// <summary>Gets the qualifier identifier tokens that follow each <c>.</c> in source order (issue #526). Empty when the name is a single identifier.</summary>
+    public ImmutableArray<SyntaxToken> QualifierIdentifierTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
+
+    /// <summary>Gets a value indicating whether this clause uses a dotted-qualifier name <c>Outer.Inner</c> (issue #526).</summary>
+    public bool HasQualifier => !QualifierIdentifierTokens.IsDefaultOrEmpty;
+
+    /// <summary>
+    /// Gets the dotted source representation of the named portion of this type clause
+    /// (without any array/slice prefix, pointer star, type arguments, or trailing <c>?</c>).
+    /// For a simple identifier this is just the identifier's text; for a dotted-qualifier
+    /// name (issue #526) the qualifier segments are joined with <c>.</c>.
+    /// </summary>
+    public string DottedName
+    {
+        get
+        {
+            if (Identifier == null)
+            {
+                return string.Empty;
+            }
+
+            if (QualifierIdentifierTokens.IsDefaultOrEmpty)
+            {
+                return Identifier.Text;
+            }
+
+            var builder = new System.Text.StringBuilder(Identifier.Text);
+            foreach (var segment in QualifierIdentifierTokens)
+            {
+                builder.Append('.').Append(segment.Text);
+            }
+
+            return builder.ToString();
+        }
+    }
 
     /// <summary>Gets a value indicating whether this clause denotes an array-shaped type (fixed-length array or slice).</summary>
     public bool IsArray => OpenBracketToken != null;

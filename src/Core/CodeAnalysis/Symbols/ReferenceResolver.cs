@@ -306,6 +306,45 @@ public sealed class ReferenceResolver
     }
 
     /// <summary>
+    /// Issue #526: resolves a nested CLR type by name on a containing
+    /// <paramref name="containingType"/>. Used by the binder to walk a
+    /// dotted-qualifier type clause (e.g. <c>Outer.Inner.DeepInner</c>) one
+    /// segment at a time after the outermost type has been resolved.
+    /// Honors the resolver's <see cref="MetadataLoadContext"/> by going
+    /// through <see cref="Type.GetNestedType(string, BindingFlags)"/>, which
+    /// stays inside the same load context as <paramref name="containingType"/>.
+    /// </summary>
+    /// <param name="containingType">The previously resolved outer/containing type.</param>
+    /// <param name="nestedName">The simple name of the nested type to look up.</param>
+    /// <param name="nestedType">The resolved nested type on success.</param>
+    /// <returns><see langword="true"/> when a public or non-public nested type with the requested name exists; otherwise <see langword="false"/>.</returns>
+    public bool TryResolveNestedType(Type containingType, string nestedName, out Type nestedType)
+    {
+        nestedType = null;
+        if (containingType == null || string.IsNullOrEmpty(nestedName))
+        {
+            return false;
+        }
+
+        try
+        {
+            nestedType = containingType.GetNestedType(
+                nestedName,
+                BindingFlags.Public | BindingFlags.NonPublic);
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+
+        return nestedType != null;
+    }
+
+    /// <summary>
     /// Projects a CLR <see cref="Type"/> that may originate from the gsc host
     /// runtime onto the equivalent <see cref="Type"/> from this resolver's
     /// reference set (its <see cref="MetadataLoadContext"/> when one is in
