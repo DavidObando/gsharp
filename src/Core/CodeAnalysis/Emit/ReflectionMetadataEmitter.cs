@@ -9857,6 +9857,14 @@ internal sealed class ReflectionMetadataEmitter
         return this.GetMethodReference(method);
     }
 
+    private MemberReferenceHandle GetStringCharsReference()
+    {
+        // System.String::get_Chars(Int32) — used for string indexing (issue #537).
+        var method = this.coreStringType.GetMethod("get_Chars", new[] { typeof(int) })
+            ?? throw new InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.");
+        return this.GetMethodReference(method);
+    }
+
     private MemberReferenceHandle GetTypeFromHandleReference()
     {
         // System.Type::GetTypeFromHandle(RuntimeTypeHandle) — backs `typeof(T)`.
@@ -12541,6 +12549,13 @@ internal sealed class ReflectionMetadataEmitter
                     if (idx.Target.Type is MapTypeSymbol)
                     {
                         this.EmitMapIndexRead(idx);
+                    }
+                    else if (idx.Target.Type == TypeSymbol.String)
+                    {
+                        // Issue #537: string indexing via get_Chars(int32).
+                        this.EmitExpression(idx.Target);
+                        this.EmitExpression(idx.Index);
+                        this.il.Call(this.outer.GetStringCharsReference());
                     }
                     else
                     {
