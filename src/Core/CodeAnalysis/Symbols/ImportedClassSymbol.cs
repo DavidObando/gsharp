@@ -167,8 +167,11 @@ public sealed class ImportedClassSymbol : Symbol
         {
             // Issue #530: use effective CLR type so nullable value types
             // (e.g. int32?) are matched as Nullable<T> in overload resolution.
+            // Issue #533: allow null (nil literal) through; overload resolution
+            // now classifies null source as compatible with reference types and
+            // Nullable<T>.
             var t = NullableTypeSymbol.GetEffectiveClrType(arguments[i].Type);
-            if (t == null)
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
                 return false;
             }

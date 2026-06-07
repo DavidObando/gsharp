@@ -12265,6 +12265,17 @@ public sealed class Binder
 
                 hasErrors = true;
             }
+            else if (argument.Type != expectedType
+                && expectedType is NullableTypeSymbol ntConv
+                && ntConv.UnderlyingType?.ClrType is { IsValueType: true })
+            {
+                // Issue #533: conversions to a value-type Nullable<T> parameter
+                // need explicit lowering:
+                // - nil → Nullable<T> becomes BoundDefaultExpression (initobj)
+                // - T → Nullable<T> becomes BoundConversionExpression (newobj ctor)
+                var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = BindConversion(argLoc, argument, expectedType);
+            }
         }
 
         // Phase 4.8: type-check trailing variadic arguments against the slice
@@ -12959,8 +12970,11 @@ public sealed class Binder
         for (var i = 0; i < boundArguments.Count; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            // Issue #533: allow null (nil literal) to flow through; overload
+            // resolution now handles null source as compatible with reference
+            // types and Nullable<T>.
             var t = GetEffectiveArgumentClrType(boundArguments[i].Type);
-            if (t == null)
+            if (t == null && boundArguments[i].Type != TypeSymbol.Null)
             {
                 argsAllTyped = false;
                 break;
@@ -14306,8 +14320,9 @@ public sealed class Binder
                 // Issue #530: use GetEffectiveArgumentClrType so that a
                 // nullable value type argument (e.g. `int32?`) is matched
                 // as `Nullable<T>` in overload resolution.
+                // Issue #533: allow null (nil literal) through.
                 var t = GetEffectiveArgumentClrType(arguments[i].Type);
-                if (t == null)
+                if (t == null && arguments[i].Type != TypeSymbol.Null)
                 {
                     argsAllTyped = false;
                     break;
@@ -14600,8 +14615,9 @@ public sealed class Binder
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            // Issue #533: allow null (nil literal) through.
             var t = GetEffectiveArgumentClrType(arguments[i].Type);
-            if (t == null)
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
                 return false;
             }
@@ -14860,8 +14876,9 @@ public sealed class Binder
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            // Issue #533: allow null (nil literal) through.
             var t = GetEffectiveArgumentClrType(arguments[i].Type);
-            if (t == null)
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
                 return false;
             }
@@ -17280,8 +17297,9 @@ public sealed class Binder
         for (var i = 0; i < boundArguments.Count; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
+            // Issue #533: allow null (nil literal) through.
             var t = GetEffectiveArgumentClrType(boundArguments[i].Type);
-            if (t == null)
+            if (t == null && boundArguments[i].Type != TypeSymbol.Null)
             {
                 argsAllTyped = false;
                 break;
