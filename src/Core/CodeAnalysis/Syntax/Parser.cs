@@ -18,6 +18,19 @@ public class Parser
     private readonly ImmutableArray<SyntaxToken> tokens;
     private int position;
 
+    // Issue #522: depth counter that suppresses trailing object-initializer
+    // wrapping (`Call(args) { Prop = value }`). The default of zero allows
+    // wrapping in regular expression contexts (variable declarations, return
+    // statements, etc.). Body-header parsers (`if Cond { … }`, `for x := range
+    // Coll { … }`, `switch Expr { … }`, etc.) push the counter via
+    // <see cref="WithSuppressedObjectInitializer"/> so the following `{` is
+    // recognised as the body, not as an initializer.
+    //
+    // Nested expression contexts (parens, brackets, argument lists) call
+    // <see cref="WithAllowedObjectInitializer"/> to save+clear the counter so
+    // an inner `T() { … }` still works inside `if Foo(T() { X = 1 }) { … }`.
+    private int suppressTrailingObjectInitializer;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
     /// </summary>
@@ -2568,7 +2581,7 @@ public class Parser
             semicolon = MatchToken(SyntaxKind.SemicolonToken);
         }
 
-        var condition = ParseExpression();
+        var condition = ParseExpressionInBodyHeader();
         var statement = ParseStatement();
         var elseClause = ParseElseClause();
         return new IfStatementSyntax(syntaxTree, keyword, initializer, semicolon, condition, statement, elseClause);
@@ -2770,7 +2783,7 @@ public class Parser
     private StatementSyntax ParseForConditionStatement()
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
-        var condition = ParseExpression();
+        var condition = ParseExpressionInBodyHeader();
         var body = ParseStatement();
         return new ForConditionStatementSyntax(syntaxTree, keyword, condition, body);
     }
@@ -2790,7 +2803,7 @@ public class Parser
         ExpressionSyntax condition = null;
         if (Current.Kind != SyntaxKind.SemicolonToken)
         {
-            condition = ParseExpression();
+            condition = ParseExpressionInBodyHeader();
         }
 
         var secondSemicolon = MatchToken(SyntaxKind.SemicolonToken);
@@ -2859,7 +2872,7 @@ public class Parser
             rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
         }
 
-        var collection = ParseExpression();
+        var collection = ParseExpressionInBodyHeader();
         var body = ParseStatement();
         return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, inToken, collection, body);
     }
@@ -2869,9 +2882,9 @@ public class Parser
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var colonEqualsToken = MatchToken(SyntaxKind.ColonEqualsToken);
-        var lowerBound = ParseExpression();
+        var lowerBound = ParseExpressionInBodyHeader();
         var toKeyword = MatchToken(SyntaxKind.EllipsisToken);
-        var upperBound = ParseExpression();
+        var upperBound = ParseExpressionInBodyHeader();
         var body = ParseStatement();
         return new ForEllipsisStatementSyntax(syntaxTree, keyword, identifier, colonEqualsToken, lowerBound, toKeyword, upperBound, body);
     }
@@ -2950,7 +2963,7 @@ public class Parser
     private StatementSyntax ParseSwitchStatement()
     {
         var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
-        var expression = ParseExpression();
+        var expression = ParseExpressionInBodyHeader();
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var cases = ImmutableArray.CreateBuilder<SwitchCaseSyntax>();
@@ -3180,7 +3193,7 @@ public class Parser
             rangeKeyword = MatchToken(SyntaxKind.RangeKeyword);
         }
 
-        var stream = ParseExpression();
+        var stream = ParseExpressionInBodyHeader();
         var body = ParseBlockStatement();
         return new AwaitForRangeStatementSyntax(
             syntaxTree, awaitKeyword, forKeyword, identifier, colonEquals, rangeKeyword, inToken, stream, body);
@@ -3603,7 +3616,20 @@ public class Parser
             else if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
             {
                 var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-                var index = ParseExpression();
+
+                // Issue #522: an indexer is a fresh inner expression context.
+                var savedSuppress = suppressTrailingObjectInitializer;
+                suppressTrailingObjectInitializer = 0;
+                ExpressionSyntax index;
+                try
+                {
+                    index = ParseExpression();
+                }
+                finally
+                {
+                    suppressTrailingObjectInitializer = savedSuppress;
+                }
+
                 var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
                 current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
             }
@@ -3682,7 +3708,7 @@ public class Parser
     private ExpressionSyntax ParseSwitchExpression()
     {
         var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
-        var expression = ParseExpression();
+        var expression = ParseExpressionInBodyHeader();
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
 
         var arms = ImmutableArray.CreateBuilder<SwitchExpressionArmSyntax>();
@@ -3863,12 +3889,14 @@ public class Parser
         else if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             current = ParseCallExpression();
+            current = MaybeWrapWithObjectInitializer(current);
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
             && LooksLikeGenericCallSite(1))
         {
             current = ParseGenericCallExpression();
+            current = MaybeWrapWithObjectInitializer(current);
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
@@ -4052,6 +4080,111 @@ public class Parser
         return new CallExpressionSyntax(syntaxTree, identifier, openParenthesisToken, arguments, closeParenthesisToken);
     }
 
+    // Issue #522: when the token following a constructor call's `)` is `{`
+    // and the brace contents look like an object initializer (`Identifier =`
+    // or empty `}`), wrap the call in an ObjectCreationExpressionSyntax. We
+    // peek with the same surgical lookahead used by IsStructLiteralFollowingBrace
+    // so unrelated trailing braces (e.g. an `if Cond() { body }` statement
+    // body) are not mis-eaten.
+    private ExpressionSyntax MaybeWrapWithObjectInitializer(ExpressionSyntax target)
+    {
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            return target;
+        }
+
+        // Body-header contexts (if/for/while/switch condition) suppress the
+        // wrap so the following `{` is recognised as the statement body.
+        if (suppressTrailingObjectInitializer > 0)
+        {
+            return target;
+        }
+
+        if (!LooksLikeObjectInitializerBrace())
+        {
+            return target;
+        }
+
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var initializers = ParseObjectInitializerList();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new ObjectCreationExpressionSyntax(syntaxTree, target, openBrace, initializers, closeBrace);
+    }
+
+    // Recognises an object-initializer `{` after a constructor call. To avoid
+    // colliding with statement-bodied constructs of the form `if Cond() { ... }`
+    // we require either `{}` (empty) or `{ Identifier =` so a `{ Identifier .`
+    // (member access in a body) is not absorbed.
+    private bool LooksLikeObjectInitializerBrace()
+    {
+        var k1 = Peek(1).Kind;
+        if (k1 == SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        return k1 == SyntaxKind.IdentifierToken && Peek(2).Kind == SyntaxKind.EqualsToken;
+    }
+
+    private SeparatedSyntaxList<PropertyInitializerSyntax> ParseObjectInitializerList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext
+               && Current.Kind != SyntaxKind.CloseBraceToken
+               && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var propertyId = MatchToken(SyntaxKind.IdentifierToken);
+            var equals = MatchToken(SyntaxKind.EqualsToken);
+
+            // Initializer values live inside the braces — a fresh expression
+            // context where trailing object initializers are again allowed
+            // (so a nested `Inner = U() { X = 1 }` works even when the outer
+            // object initializer was parsed inside a body-header context).
+            ExpressionSyntax value;
+            var savedSuppress = suppressTrailingObjectInitializer;
+            suppressTrailingObjectInitializer = 0;
+            try
+            {
+                value = ParseExpression();
+            }
+            finally
+            {
+                suppressTrailingObjectInitializer = savedSuppress;
+            }
+
+            nodesAndSeparators.Add(new PropertyInitializerSyntax(syntaxTree, propertyId, equals, value));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<PropertyInitializerSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    // Parses an expression in a body-header context (the condition of an `if`,
+    // the collection of a `for-range`, etc.) — trailing `Call() { ... }`
+    // object initializers are suppressed so the following `{` is recognised
+    // as the body of the surrounding statement.
+    private ExpressionSyntax ParseExpressionInBodyHeader()
+    {
+        suppressTrailingObjectInitializer++;
+        try
+        {
+            return ParseExpression();
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer--;
+        }
+    }
+
     private ExpressionSyntax ParseMakeChannelExpression()
     {
         // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
@@ -4137,6 +4270,24 @@ public class Parser
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()
+    {
+        // Issue #522: arguments are fresh expression contexts — even when the
+        // surrounding statement is a body-header (`if`/`for`/`switch`), a
+        // call argument such as `Foo(T() { X = 1 })` should still admit a
+        // trailing object initializer.
+        var savedSuppress = suppressTrailingObjectInitializer;
+        suppressTrailingObjectInitializer = 0;
+        try
+        {
+            return ParseArgumentsCore();
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer = savedSuppress;
+        }
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArgumentsCore()
     {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
 
@@ -4512,7 +4663,21 @@ public class Parser
     private ExpressionSyntax ParseParenthesizedExpression()
     {
         var left = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var expression = ParseExpression();
+
+        // Issue #522: a parenthesised expression is a fresh inner context —
+        // even inside an `if (T() { X = 1 }) { body }` style header, the
+        // inner call should still admit a trailing object initializer.
+        ExpressionSyntax expression;
+        var savedSuppress = suppressTrailingObjectInitializer;
+        suppressTrailingObjectInitializer = 0;
+        try
+        {
+            expression = ParseExpression();
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer = savedSuppress;
+        }
 
         // ADR-0061: `(cond ? lvalue : lvalue)` parses as a conditional ref-arg
         // expression when a `?` immediately follows the inner expression. The

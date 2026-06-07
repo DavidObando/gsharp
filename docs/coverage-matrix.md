@@ -132,6 +132,7 @@ NamedDeconstructionField
 NamedDeconstructionStatement
 NilKeyword
 NumberToken
+ObjectCreationExpression
 OpenBraceToken
 OpenKeyword
 OpenParenthesisToken
@@ -153,6 +154,7 @@ PlusToken
 PrivateKeyword
 PropertyAccessor
 PropertyDeclaration
+PropertyInitializer
 PropertyPattern
 PropertyPatternField
 PublicKeyword
