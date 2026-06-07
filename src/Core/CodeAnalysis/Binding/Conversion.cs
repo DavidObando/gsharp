@@ -382,6 +382,27 @@ public sealed class Conversion
             }
         }
 
+        // Issue #528: a G# slice `[]T` is backed by a CLR `T[]` at runtime
+        // (`SliceTypeSymbol.ClrType` is built via `MakeArrayType()` on the
+        // element's `ClrType`). The reverse direction (`T[] → []T`) is
+        // already classified above; this branch documents and enforces the
+        // forward direction (`[]T → T[]`) explicitly so it survives any
+        // future refactor of the generic #521 reference upcast below.
+        // Element-type identity is required (matched by CLR full name to
+        // bridge live ↔ MetadataLoadContext types), preserving slice
+        // invariance: `[]string` does NOT convert to `object[]` even though
+        // the CLR allows array reference covariance, because G# slices are
+        // invariant in their element type. The IL is a no-op since the
+        // runtime representation is identical.
+        if (from is SliceTypeSymbol sliceSrc
+            && to?.ClrType != null && to.ClrType.IsArray && to.ClrType.GetArrayRank() == 1
+            && sliceSrc.ElementType?.ClrType != null
+            && to.ClrType.GetElementType() is Type targetElement
+            && string.Equals(targetElement.FullName, sliceSrc.ElementType.ClrType.FullName, StringComparison.Ordinal))
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #521: standard CLR identity / reference upcast — a
         // reference-typed expression of CLR type `from` widens implicitly
         // to any base class or implemented interface `to`. The CLR
