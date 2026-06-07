@@ -1298,6 +1298,19 @@ public sealed class Evaluator
     private object EvaluateClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
     {
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
+
+        // Issue #517: the interpreter represents `T?` as the underlying boxed
+        // `T` (or `null`) — boxing a `Nullable<T>` is CLR-special-cased to the
+        // same shape, so a reflection `PropertyInfo.GetValue` on
+        // `Nullable<T>::Value` cannot recover the slot. Synthesize the
+        // semantics directly: `Value` requires `HasValue` and throws the
+        // BCL's `InvalidOperationException` otherwise; `HasValue` is a null
+        // check on the boxed payload.
+        if (TryEvaluateNullableInstanceProperty(node, receiver, out var nullableResult))
+        {
+            return nullableResult;
+        }
+
         receiver = UnwrapClrReceiver(receiver);
         return node.Member switch
         {
@@ -1305,6 +1318,46 @@ public sealed class Evaluator
             System.Reflection.FieldInfo f => f.GetValue(receiver),
             _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
         };
+    }
+
+    // Issue #517: matches `Nullable<T>::get_Value` / `get_HasValue` against
+    // the interpreter's underlying-or-null representation of a nullable.
+    // Returns `false` for any non-Nullable receiver (including fields, which
+    // the binder never routes through Nullable<T>'s member surface).
+    private static bool TryEvaluateNullableInstanceProperty(
+        BoundClrPropertyAccessExpression node,
+        object receiver,
+        out object result)
+    {
+        result = null;
+        if (node.Member is not System.Reflection.PropertyInfo prop)
+        {
+            return false;
+        }
+
+        var declaring = prop.DeclaringType;
+        if (declaring == null || !declaring.IsGenericType
+            || declaring.GetGenericTypeDefinition().FullName != "System.Nullable`1")
+        {
+            return false;
+        }
+
+        switch (prop.Name)
+        {
+            case "Value":
+                if (receiver == null)
+                {
+                    throw new System.InvalidOperationException("Nullable object must have a value.");
+                }
+
+                result = receiver;
+                return true;
+            case "HasValue":
+                result = receiver != null;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private object EvaluateClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
@@ -2987,6 +3040,20 @@ public sealed class Evaluator
     private object EvaluateImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         var receiver = EvaluateExpression(node.Receiver);
+
+        // Issue #517: Nullable<T> instance methods (e.g. `GetValueOrDefault`,
+        // `Equals`, `ToString`) cannot dispatch through `MethodInfo.Invoke`
+        // because the interpreter stores nullables as the underlying boxed T
+        // (or `null`), not as `Nullable<T>` instances — the CLR special-cases
+        // boxing of `Nullable<T>` to the same payload. Synthesize the
+        // observable semantics for the mandated members; everything else
+        // falls back to a synthesized `Nullable<T>` re-dispatch where the
+        // BCL provides natural answers.
+        if (TryEvaluateNullableInstanceCall(node, receiver, out var nullableResult))
+        {
+            return nullableResult;
+        }
+
         receiver = UnwrapClrReceiver(receiver);
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
@@ -2994,6 +3061,44 @@ public sealed class Evaluator
         var result = node.Method.Invoke(receiver, args);
         WriteBackRefSlots(refSlots, args);
         return result;
+    }
+
+    // Issue #517: `GetValueOrDefault()` and `GetValueOrDefault(T)` against the
+    // interpreter's underlying-or-null nullable representation.
+    private bool TryEvaluateNullableInstanceCall(
+        BoundImportedInstanceCallExpression node,
+        object receiver,
+        out object result)
+    {
+        result = null;
+        var declaring = node.Method.DeclaringType;
+        if (declaring == null || !declaring.IsGenericType
+            || declaring.GetGenericTypeDefinition().FullName != "System.Nullable`1")
+        {
+            return false;
+        }
+
+        switch (node.Method.Name)
+        {
+            case "GetValueOrDefault":
+                if (node.Arguments.Length == 0)
+                {
+                    var underlying = declaring.GetGenericArguments()[0];
+                    result = receiver ?? (underlying.IsValueType ? System.Activator.CreateInstance(underlying) : null);
+                    return true;
+                }
+
+                if (node.Arguments.Length == 1)
+                {
+                    var fallback = EvaluateExpression(node.Arguments[0]);
+                    result = receiver ?? fallback;
+                    return true;
+                }
+
+                return false;
+            default:
+                return false;
+        }
     }
 
     /// <summary>ADR-0039: Evaluates &amp;expr — in the interpreter, returns the current value (the write-back is handled at call sites).</summary>
