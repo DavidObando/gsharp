@@ -1570,7 +1570,15 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundUserInstanceCallExpression(null, receiver, node.Method, builder?.ToImmutable() ?? node.Arguments);
+        // Issue #502 (sub-bug 502-a/b): preserve the call's return-type override
+        // (e.g. the Task / Task[T] lift applied by BindUserInstanceCall for async
+        // members). Dropping it here caused the rewritten call's static type to
+        // collapse to the bare method-declared type (e.g. int32 instead of
+        // Task[int32]), which then mis-typed the receiver of `GetAwaiter()` and
+        // produced an invalid box at the call boundary — leading to a hang
+        // because the inner async member's task never visibly completed from
+        // the caller's perspective.
+        return new BoundUserInstanceCallExpression(null, receiver, node.Method, builder?.ToImmutable() ?? node.Arguments, node.Type);
     }
 
     /// <summary>Rewrites a field read.</summary>
