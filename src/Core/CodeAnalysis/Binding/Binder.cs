@@ -13187,6 +13187,33 @@ public sealed class Binder
                     Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
                     return new BoundErrorExpression(null);
                 }
+                else if (receiver != null && receiver.Type is NullableTypeSymbol nullableSym
+                    && nullableSym.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr
+                    && TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
+                {
+                    // Issue #517: a value-type `T?` lowers to `System.Nullable<T>`
+                    // at the CLR layer (see `EncodeTypeSymbol`). Resolve `.Value`,
+                    // `.HasValue`, etc. against that constructed generic so the
+                    // BCL instance API surfaces the same way it does for any
+                    // other CLR struct. NRT receivers (reference-type underlying)
+                    // have no `Nullable<T>` projection and continue to fall
+                    // through to the existing GS0158 path below.
+                    var nullableMemberName = ne.IdentifierToken.Text;
+                    var nullableProp = ClrTypeUtilities.SafeGetProperty(nullableClr, nullableMemberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (nullableProp != null && nullableProp.GetIndexParameters().Length == 0 && nullableProp.CanRead)
+                    {
+                        var nullablePropType = ClrNullability.GetPropertyTypeSymbol(nullableProp);
+                        return new BoundClrPropertyAccessExpression(null, receiver, nullableProp, nullablePropType);
+                    }
+
+                    if (TryBindClrMethodGroup(receiver, nullableClr, wantStatic: false, nullableMemberName, out var nullableGroup))
+                    {
+                        return nullableGroup;
+                    }
+
+                    Diagnostics.ReportUnableToFindMember(ne.Location, nullableMemberName);
+                    return new BoundErrorExpression(null);
+                }
                 else if (receiver != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
                     // Phase 4 exit: read a public instance property or field on
@@ -13543,7 +13570,17 @@ public sealed class Binder
             }
         }
 
-        var clrType = receiver.Type.ClrType;
+        // Issue #517: a value-type `T?` lowers to `System.Nullable<T>` at the
+        // CLR layer; `receiver.Type.ClrType` returns the underlying T's CLR
+        // type (so the binder can share lifting/conversion logic), but
+        // instance-method lookup (e.g. `GetValueOrDefault`, `Equals`,
+        // `ToString`) must go through the constructed `Nullable<T>` type that
+        // actually carries those members.
+        var clrType = receiver.Type is NullableTypeSymbol nullableRecv
+            && nullableRecv.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerVt
+            && TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
+            ? nullableConstructed
+            : receiver.Type.ClrType;
         var candidates = clrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
             .Where(m => m.Name == methodName)
             .ToList();
@@ -15700,6 +15737,38 @@ public sealed class Binder
     // once the target delegate signature is known. Returns false when the type
     // exposes no method of that name (so the caller surfaces the member
     // diagnostic).
+    // Issue #517: build the constructed `System.Nullable<T>` type that lives
+    // in the SAME assembly context (live runtime vs MetadataLoadContext) as
+    // <paramref name="underlying"/>. Mixing contexts — e.g. live `Nullable<>`
+    // with an MLC `DateTime` — yields a `TypeBuilderInstantiation` that
+    // throws on `GetMethods` / `GetProperty`. Returns false when the open
+    // `Nullable<>` cannot be resolved against the references in scope.
+    private bool TryGetNullableConstructedType(Type underlying, out Type constructed)
+    {
+        constructed = null;
+        if (underlying == null)
+        {
+            return false;
+        }
+
+        if (!scope.References.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var mappedUnderlying = scope.References.MapClrTypeToReferences(underlying) ?? underlying;
+            constructed = nullableOpen.MakeGenericType(mappedUnderlying);
+            return constructed != null;
+        }
+        catch
+        {
+            constructed = null;
+            return false;
+        }
+    }
+
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
     {
         methodGroup = null;
