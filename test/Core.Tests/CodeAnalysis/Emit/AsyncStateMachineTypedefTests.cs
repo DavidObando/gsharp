@@ -228,16 +228,22 @@ Console.WriteLine(t.Result)
     [Fact]
     public void AsyncLambdaWithCapture_StateMachine_NestsInsideClosureClass()
     {
+        // Issue #523: globals are read live via static fields and are not
+        // captured into a closure class. Use a function-scoped local so this
+        // test exercises the closure-class nesting it's designed to check.
         const string Source = @"package SmClosureNestTest
 import System
 import System.Threading.Tasks
 
-var x = 42
-var f = async func() int32 {
-    await Task.CompletedTask
-    return x
+func make() func() Task[int32] {
+    var x = 42
+    return async func() int32 {
+        await Task.CompletedTask
+        return x
+    }
 }
 
+var f = make()
 var t = f()
 t.Wait()
 Console.WriteLine(t.Result)

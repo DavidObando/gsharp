@@ -20,9 +20,11 @@ namespace GSharp.Compiler.Tests.Emit;
 /// newobj Func|Action::.ctor(object, IntPtr)</c>.
 /// </para>
 /// <para>
-/// Capture semantics are snapshot-by-value at literal evaluation time —
-/// the same behavior the interpreter implements. Writes inside the lambda
-/// mutate the closure's field only; the outer variable is unaffected.
+/// Capture semantics (issue #523) are by reference over the variable cell —
+/// matching Go and C#. Captured locals/parameters are hoisted into a
+/// per-variable box class by the <c>CaptureBoxingRewriter</c> lowering pass;
+/// the closure class holds a reference to the box, so writes inside the
+/// lambda and writes in the outer scope are mutually visible.
 /// </para>
 /// </summary>
 public class ClosureEmitTests
@@ -85,11 +87,12 @@ public class ClosureEmitTests
     }
 
     [Fact]
-    public void SnapshotByValue_MutationInLambdaDoesNotAffectOuter()
+    public void StatefulCounter_LambdaMutationPersistsAcrossCalls()
     {
-        // Inside the lambda, `c = c + 1` updates the closure field, not the
-        // outer variable. The outer `c` is unchanged after the calls; the
-        // closure carries its own copy.
+        // Issue #523: `c` is captured by reference. Each call to the returned
+        // lambda updates the shared cell, so consecutive invocations see the
+        // accumulated state. Two separate `makeCounter` calls still get
+        // independent cells (covered by `CaptureAcrossSeparateCalls_AreIndependent`).
         var source = """
             package P
             import System
@@ -108,8 +111,8 @@ public class ClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        // First call: closure-local c becomes 11, returns 11.
-        // Second call: closure-local c becomes 12, returns 12.
+        // First call: shared c becomes 11, returns 11.
+        // Second call: shared c becomes 12, returns 12.
         Assert.Equal("11\n12\n", output);
     }
 

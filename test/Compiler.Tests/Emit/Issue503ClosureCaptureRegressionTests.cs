@@ -350,11 +350,13 @@ public class Issue503ClosureCaptureRegressionTests
     }
 
     // -----------------------------------------------------------------------
-    // Snapshot capture semantics — pinned for future intentional change.
+    // Reference-capture semantics — issue #523. A lambda captures the
+    // *cell*, not the value at construction time; reassigning the local
+    // after subscription is observed by the lambda body.
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void CapturedLocalReassignedAfterSubscription_SnapshotsAtSubscriptionTime()
+    public void CapturedLocalReassignedAfterSubscription_LambdaObservesNewBinding()
     {
         var source = """
             package MyLib
@@ -374,6 +376,7 @@ public class Issue503ClosureCaptureRegressionTests
             type Probe class {
                 Src Source
                 Original Counter
+                Replacement Counter
                 init() {
                     Src = Source()
                     var c = Counter()
@@ -381,10 +384,12 @@ public class Issue503ClosureCaptureRegressionTests
                     Src.Changed += func(sender object, e EventArgs) {
                         c.Increment()
                     }
-                    // Reassign after subscription. Whatever the capture
-                    // semantics, the build must not silently abort and the
-                    // closure must fire on raise.
+                    // Reassign after subscription. Reference-capture
+                    // semantics (issue #523): the lambda holds the variable
+                    // cell, so it observes the new binding and `c.Increment()`
+                    // hits the replacement instance, not the original.
                     c = Counter()
+                    Replacement = c
                 }
             }
             """;
@@ -397,13 +402,15 @@ public class Issue503ClosureCaptureRegressionTests
         var probe = Activator.CreateInstance(probeType)!;
         var src = probeType.GetField("Src")!.GetValue(probe)!;
         var original = probeType.GetField("Original")!.GetValue(probe)!;
+        var replacement = probeType.GetField("Replacement")!.GetValue(probe)!;
 
         InvokeBackingDelegate(sourceType, src, "Changed");
 
-        // Snapshot-capture semantics: the original counter (captured at
-        // subscription time) was incremented. This pins current behavior
-        // so a future change to reference-capture semantics is intentional.
-        Assert.Equal(1, (int)counterType.GetField("Value")!.GetValue(original)!);
+        // Reference-capture (issue #523): the lambda follows the cell, so the
+        // post-subscription assignment is the one observed. The original
+        // counter is untouched; the replacement is the one that fires.
+        Assert.Equal(0, (int)counterType.GetField("Value")!.GetValue(original)!);
+        Assert.Equal(1, (int)counterType.GetField("Value")!.GetValue(replacement)!);
     }
 
     // -----------------------------------------------------------------------

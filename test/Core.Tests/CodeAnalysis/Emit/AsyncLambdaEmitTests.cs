@@ -64,9 +64,10 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         var output = CompileAndRun(Source, "AsyncLambdaTest2");
-        // Capture semantics are snapshot-at-creation (per GSharp design).
-        // The lambda captures x=100 at the point the literal is evaluated.
-        Assert.Contains("100", output);
+        // Issue #523: closures capture the variable cell (Go/C# semantics),
+        // not its value at literal-evaluation time. Top-level `var x` is a
+        // static field, so the async lambda reads the latest value (200).
+        Assert.Contains("200", output);
     }
 
     [Fact]
