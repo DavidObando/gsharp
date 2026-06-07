@@ -7726,13 +7726,13 @@ public sealed class Binder
         if (receiverType is not StructSymbol && receiverType is not NullableTypeSymbol && receiverType.ClrType != null)
         {
             var clrReceiverType = receiverType.ClrType;
-            MemberInfo instanceMember = ClrTypeUtilities.SafeGetProperty(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetField(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.PropertyIdentifier.Location, propertyName);
@@ -8174,13 +8174,13 @@ public sealed class Binder
         {
             var clrReceiverType = variable.Type.ClrType;
             var fieldName = syntax.FieldIdentifier.Text;
-            MemberInfo instanceMember = ClrTypeUtilities.SafeGetProperty(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetField(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -13898,7 +13898,11 @@ public sealed class Binder
                     // receivers must be narrowed or use `?.` before this path.
                     var clrReceiverType = receiver.Type.ClrType;
                     var memberName = ne.IdentifierToken.Text;
-                    var prop = ClrTypeUtilities.SafeGetProperty(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+
+                    // Issue #529: use interface-aware lookup so that members
+                    // declared on a base interface (e.g. IReadOnlyCollection<T>.Count
+                    // surfaced through IReadOnlyList<T>) are found.
+                    var prop = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
                         // Issue #504 follow-up: properties with NRT
@@ -13915,7 +13919,7 @@ public sealed class Binder
                         return AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
                     }
 
-                    var fld = ClrTypeUtilities.SafeGetField(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+                    var fld = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (fld != null)
                     {
                         return new BoundClrPropertyAccessExpression(null, receiver, fld, ClrNullability.GetFieldTypeSymbol(fld));
@@ -14277,7 +14281,12 @@ public sealed class Binder
             && TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
             ? nullableConstructed
             : receiver.Type.ClrType;
-        var candidates = clrType.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+
+        // Issue #529: use interface-aware method enumeration so that
+        // methods declared on a base interface (e.g.
+        // IEnumerable<T>.GetEnumerator() surfaced through
+        // IReadOnlyList<T>) are found.
+        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
             .Where(m => m.Name == methodName)
             .ToList();
         if (candidates.Count > 0)
@@ -16668,7 +16677,11 @@ public sealed class Binder
 
         var flags = BindingFlags.Public | (wantStatic ? BindingFlags.Static : BindingFlags.Instance);
         var candidates = ImmutableArray.CreateBuilder<MethodInfo>();
-        foreach (var method in declaringType.GetMethods(flags))
+
+        // Issue #529: use interface-aware method enumeration so that
+        // methods declared on a base interface are included in the
+        // method group for delegate conversions / member access.
+        foreach (var method in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(declaringType, flags))
         {
             if (!string.Equals(method.Name, name, StringComparison.Ordinal))
             {

@@ -310,6 +310,109 @@ internal static class ClrTypeUtilities
     public static EventInfo SafeGetEvent(Type type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetEvent(name, f), SafeGetEvents);
 
+    /// <summary>
+    /// Issue #529: looks up a property by name, walking the transitive
+    /// interface hierarchy when <paramref name="type"/> is an interface.
+    /// CLR reflection does not include inherited interface members in
+    /// <see cref="Type.GetProperties(BindingFlags)"/> for interface types,
+    /// so this helper explicitly walks <see cref="Type.GetInterfaces()"/>.
+    /// </summary>
+    /// <param name="type">The type to search.</param>
+    /// <param name="name">The property name.</param>
+    /// <param name="flags">The binding flags controlling visibility.</param>
+    /// <returns>The matching property, or <c>null</c> when none is found.</returns>
+    public static PropertyInfo SafeGetPropertyIncludingInterfaces(Type type, string name, BindingFlags flags)
+    {
+        var direct = SafeGetProperty(type, name, flags);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        if (type is null || !type.IsInterface)
+        {
+            return null;
+        }
+
+        foreach (var iface in SafeGetInterfaces(type))
+        {
+            var inherited = SafeGetProperty(iface, name, flags);
+            if (inherited != null)
+            {
+                return inherited;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #529: looks up a field by name, walking the transitive
+    /// interface hierarchy when <paramref name="type"/> is an interface.
+    /// </summary>
+    /// <param name="type">The type to search.</param>
+    /// <param name="name">The field name.</param>
+    /// <param name="flags">The binding flags controlling visibility.</param>
+    /// <returns>The matching field, or <c>null</c> when none is found.</returns>
+    public static FieldInfo SafeGetFieldIncludingInterfaces(Type type, string name, BindingFlags flags)
+    {
+        var direct = SafeGetField(type, name, flags);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        if (type is null || !type.IsInterface)
+        {
+            return null;
+        }
+
+        foreach (var iface in SafeGetInterfaces(type))
+        {
+            var inherited = SafeGetField(iface, name, flags);
+            if (inherited != null)
+            {
+                return inherited;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #529: enumerates methods including those declared on
+    /// transitive base interfaces when <paramref name="type"/> is an
+    /// interface. For non-interface types, this is equivalent to
+    /// <see cref="SafeGetMethods"/>. Methods from base interfaces that
+    /// are hidden by a same-name-and-parameter-types method on a
+    /// more-derived interface are excluded (mirrors C# hiding rules).
+    /// </summary>
+    /// <param name="type">The type to enumerate.</param>
+    /// <param name="flags">The binding flags controlling visibility.</param>
+    /// <returns>The methods whose signatures load cleanly.</returns>
+    public static MethodInfo[] SafeGetMethodsIncludingInterfaces(Type type, BindingFlags flags)
+    {
+        var direct = SafeGetMethods(type, flags);
+        if (type is null || !type.IsInterface)
+        {
+            return direct;
+        }
+
+        var all = new List<MethodInfo>(direct);
+        foreach (var iface in SafeGetInterfaces(type))
+        {
+            foreach (var m in SafeGetMethods(iface, flags))
+            {
+                if (!IsHiddenByExisting(all, m))
+                {
+                    all.Add(m);
+                }
+            }
+        }
+
+        return all.ToArray();
+    }
+
     private static TMember[] SafeEnumerate<TMember>(Type type, Func<Type, TMember[]> getAll)
         where TMember : MemberInfo
     {
@@ -373,5 +476,72 @@ internal static class ClrTypeUtilities
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// Issue #529: tolerantly retrieves the transitive interface set
+    /// for a type, guarding against metadata-load failures.
+    /// </summary>
+    /// <param name="type">The type whose interfaces to retrieve.</param>
+    /// <returns>The transitive interface set, or empty on failure.</returns>
+    private static Type[] SafeGetInterfaces(Type type)
+    {
+        if (type is null)
+        {
+            return Array.Empty<Type>();
+        }
+
+        try
+        {
+            return type.GetInterfaces();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return Array.Empty<Type>();
+        }
+    }
+
+    /// <summary>
+    /// Issue #529: returns whether <paramref name="candidate"/> is hidden
+    /// by any method already in <paramref name="existing"/>. A method is
+    /// hidden when another method with the same name and same parameter
+    /// types is already present (C# interface hiding semantics).
+    /// </summary>
+    /// <param name="existing">The methods found so far.</param>
+    /// <param name="candidate">The candidate from a base interface.</param>
+    /// <returns><c>true</c> when the candidate is hidden.</returns>
+    private static bool IsHiddenByExisting(List<MethodInfo> existing, MethodInfo candidate)
+    {
+        foreach (var m in existing)
+        {
+            if (!string.Equals(m.Name, candidate.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var existingParams = m.GetParameters();
+            var candidateParams = candidate.GetParameters();
+            if (existingParams.Length != candidateParams.Length)
+            {
+                continue;
+            }
+
+            var match = true;
+            for (var i = 0; i < existingParams.Length; i++)
+            {
+                if (!AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType))
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
