@@ -190,6 +190,17 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<InterfaceSymbol> Interfaces { get; private set; }
 
+    /// <summary>
+    /// Gets the imported (CLR) interfaces this class implements (issue #525).
+    /// Each entry's <see cref="TypeSymbol.ClrType"/> is guaranteed to be an
+    /// interface type. Populated by the binder when the base-type clause
+    /// names a reachable imported CLR interface; defaults to empty.
+    /// When set, the emitter writes an <c>InterfaceImpl</c> row per entry so
+    /// the resulting class is a real CLR implementer (<c>Type.GetInterfaces()</c>
+    /// surfaces the interface and dispatch through interface receivers works).
+    /// </summary>
+    public ImmutableArray<TypeSymbol> ImplementedClrInterfaces { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<FunctionSymbol> Methods { get; private set; } = ImmutableArray<FunctionSymbol>.Empty;
 
@@ -320,6 +331,18 @@ public sealed class StructSymbol : TypeSymbol
     public void SetInterfaces(ImmutableArray<InterfaceSymbol> interfaces)
     {
         Interfaces = interfaces;
+    }
+
+    /// <summary>
+    /// Issue #525: sets <see cref="ImplementedClrInterfaces"/> after binding
+    /// the base-type clause. Intended to be called exactly once by the binder
+    /// for a class whose base-type clause names one or more imported CLR
+    /// interfaces.
+    /// </summary>
+    /// <param name="interfaces">The imported CLR interface types this class implements directly.</param>
+    public void SetImplementedClrInterfaces(ImmutableArray<TypeSymbol> interfaces)
+    {
+        ImplementedClrInterfaces = interfaces.IsDefault ? ImmutableArray<TypeSymbol>.Empty : interfaces;
     }
 
     /// <summary>Sets <see cref="Methods"/> after binding class-body methods.</summary>

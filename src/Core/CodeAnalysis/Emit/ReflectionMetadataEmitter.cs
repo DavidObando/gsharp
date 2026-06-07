@@ -978,6 +978,23 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
             }
+
+            // Issue #525: emit InterfaceImpl rows for imported CLR interfaces
+            // declared in the base-type clause so the resulting class is a
+            // real CLR implementer (`Type.GetInterfaces()` surfaces them and
+            // dispatch through an interface receiver hits the G# method).
+            if (!c.ImplementedClrInterfaces.IsDefaultOrEmpty)
+            {
+                foreach (var ifaceSym in c.ImplementedClrInterfaces)
+                {
+                    if (ifaceSym?.ClrType is System.Type clrIface)
+                    {
+                        this.metadata.AddInterfaceImplementation(
+                            this.structTypeDefs[c],
+                            this.GetTypeHandleForMember(clrIface));
+                    }
+                }
+            }
         }
 
         foreach (var s in nonSmStructs)
@@ -2934,23 +2951,44 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private bool PropertyImplicitlyImplementsInterface(StructSymbol structSym, PropertySymbol prop)
     {
-        if (structSym.Interfaces.IsDefaultOrEmpty)
+        if (!structSym.Interfaces.IsDefaultOrEmpty)
         {
-            return false;
+            foreach (var iface in structSym.Interfaces)
+            {
+                if (iface.Properties.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var ifaceProp in iface.Properties)
+                {
+                    if (ifaceProp.Name == prop.Name)
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
-        foreach (var iface in structSym.Interfaces)
+        // Issue #525: imported CLR interfaces from the base-type clause also
+        // trigger the implicit-implementation virtual-slot promotion.
+        if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            if (iface.Properties.IsDefaultOrEmpty)
+            var propClr = prop.Type?.ClrType;
+            foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
-                continue;
-            }
-
-            foreach (var ifaceProp in iface.Properties)
-            {
-                if (ifaceProp.Name == prop.Name)
+                var clrIface = ifaceSym?.ClrType;
+                if (clrIface == null)
                 {
-                    return true;
+                    continue;
+                }
+
+                foreach (var clrProp in clrIface.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    if (clrProp.Name == prop.Name && (propClr == null || ClrTypeUtilities.AreSame(propClr, clrProp.PropertyType)))
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -2974,27 +3012,77 @@ internal sealed class ReflectionMetadataEmitter
 
     /// <summary>
     /// Determines whether a method on a class/struct implicitly implements an
-    /// interface method (same name, parameters, and return type).
+    /// interface method (same name, parameters, and return type). Considers
+    /// both G# interfaces (<see cref="StructSymbol.Interfaces"/>) and imported
+    /// CLR interfaces (<see cref="StructSymbol.ImplementedClrInterfaces"/>,
+    /// issue #525).
     /// </summary>
     private static bool MethodImplicitlyImplementsInterface(StructSymbol structSym, FunctionSymbol method)
     {
-        if (structSym.Interfaces.IsDefaultOrEmpty)
+        if (!structSym.Interfaces.IsDefaultOrEmpty)
         {
-            return false;
+            foreach (var iface in structSym.Interfaces)
+            {
+                if (iface.Methods.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var ifaceMethod in iface.Methods)
+                {
+                    if (MethodSignaturesMatch(ifaceMethod, method))
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
-        foreach (var iface in structSym.Interfaces)
+        if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            if (iface.Methods.IsDefaultOrEmpty)
+            var callable = CallableParameters(method);
+            var returnClr = method.Type?.ClrType;
+            foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
-                continue;
-            }
-
-            foreach (var ifaceMethod in iface.Methods)
-            {
-                if (MethodSignaturesMatch(ifaceMethod, method))
+                var clrIface = ifaceSym?.ClrType;
+                if (clrIface == null)
                 {
-                    return true;
+                    continue;
+                }
+
+                foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    if (clrMethod.IsSpecialName || clrMethod.Name != method.Name)
+                    {
+                        continue;
+                    }
+
+                    var clrParams = clrMethod.GetParameters();
+                    if (clrParams.Length != callable.Length)
+                    {
+                        continue;
+                    }
+
+                    if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, clrMethod.ReturnType))
+                    {
+                        continue;
+                    }
+
+                    var allMatch = true;
+                    for (var i = 0; i < clrParams.Length; i++)
+                    {
+                        var paramClr = callable[i].Type?.ClrType;
+                        if (paramClr == null || !ClrTypeUtilities.AreSame(paramClr, clrParams[i].ParameterType))
+                        {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (allMatch)
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -13445,6 +13533,31 @@ internal sealed class ReflectionMetadataEmitter
                     foreach (var iface in c.Interfaces)
                     {
                         if (iface == targetIface)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Issue #525: class → imported CLR interface upcast. The G#
+            // class has no ClrType during emit, so the general #521 rule
+            // below cannot match; recognise the implementation structurally
+            // through `ImplementedClrInterfaces`.
+            if (a is StructSymbol srcClass2 && srcClass2.IsClass
+                && b?.ClrType != null && b.ClrType.IsInterface)
+            {
+                for (var c = srcClass2; c != null; c = c.BaseClass)
+                {
+                    foreach (var iface in c.ImplementedClrInterfaces)
+                    {
+                        var ifaceClr = iface?.ClrType;
+                        if (ifaceClr == null)
+                        {
+                            continue;
+                        }
+
+                        if (ifaceClr == b.ClrType || b.ClrType.IsAssignableFrom(ifaceClr))
                         {
                             return true;
                         }
