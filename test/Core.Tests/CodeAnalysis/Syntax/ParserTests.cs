@@ -201,6 +201,133 @@ let x = switch v { case 1 -> ""a"" default -> ""b"" }
         Assert.IsType<ConditionalRefArgumentExpressionSyntax>(expr);
     }
 
+    [Fact]
+    public void NonNullAssert_Standalone_WrapsOperandAsUnary()
+    {
+        // Issue #518 baseline: bare `a!!` (no chained continuation) keeps
+        // producing a UnaryExpression so the existing emit/bind paths for
+        // the simple form are unchanged.
+        var expr = ParseExpressionStatement("a!!\n");
+        var unary = Assert.IsType<UnaryExpressionSyntax>(expr);
+        Assert.Equal(SyntaxKind.BangBangToken, unary.OperatorToken.Kind);
+        Assert.IsType<NameExpressionSyntax>(unary.Operand);
+    }
+
+    [Fact]
+    public void NonNullAssert_ChainedMemberAccess_ParsesAsAccessorOnUnary()
+    {
+        // Issue #518 core repro: `a!!.b` must parse as `(a!!).b`, i.e. the
+        // accessor's LeftPart is the `!!` UnaryExpression and the
+        // RightPart is the member name.
+        var expr = ParseExpressionStatement("a!!.b\n");
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expr);
+        Assert.False(accessor.IsNullConditional);
+        var unary = Assert.IsType<UnaryExpressionSyntax>(accessor.LeftPart);
+        Assert.Equal(SyntaxKind.BangBangToken, unary.OperatorToken.Kind);
+        Assert.IsType<NameExpressionSyntax>(unary.Operand);
+        var rhs = Assert.IsType<NameExpressionSyntax>(accessor.RightPart);
+        Assert.Equal("b", rhs.IdentifierToken.Text);
+    }
+
+    [Fact]
+    public void NonNullAssert_ChainedNullConditional_ParsesAsNullConditionalAccessOnUnary()
+    {
+        // `a!!?.b` is admittedly redundant but the parser must still accept
+        // it so the binder can reason about the resulting (non-nullable)
+        // receiver. The accessor is null-conditional and its LeftPart is
+        // the `!!` UnaryExpression.
+        var expr = ParseExpressionStatement("a!!?.b\n");
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expr);
+        Assert.True(accessor.IsNullConditional);
+        var unary = Assert.IsType<UnaryExpressionSyntax>(accessor.LeftPart);
+        Assert.Equal(SyntaxKind.BangBangToken, unary.OperatorToken.Kind);
+    }
+
+    [Fact]
+    public void NonNullAssert_ChainedMethodCall_ParsesAsAccessorWithCallRightPart()
+    {
+        // `a!!.b()` follows the same accessor shape — LeftPart is the `!!`
+        // UnaryExpression, RightPart is a CallExpression. This is the
+        // shape ParsePostfixChain re-enters after consuming `!!`.
+        var expr = ParseExpressionStatement("a!!.b()\n");
+        var accessor = Assert.IsType<AccessorExpressionSyntax>(expr);
+        Assert.IsType<UnaryExpressionSyntax>(accessor.LeftPart);
+        Assert.IsType<CallExpressionSyntax>(accessor.RightPart);
+    }
+
+    [Fact]
+    public void NonNullAssert_ChainedIndexer_ParsesAsIndexOnUnary()
+    {
+        // `a!![0]` — postfix indexer applied to the `!!`-wrapped value.
+        // The IndexExpression's Target is the UnaryExpression.
+        var expr = ParseExpressionStatement("a!![0]\n");
+        var index = Assert.IsType<IndexExpressionSyntax>(expr);
+        var unary = Assert.IsType<UnaryExpressionSyntax>(index.Target);
+        Assert.Equal(SyntaxKind.BangBangToken, unary.OperatorToken.Kind);
+    }
+
+    [Fact]
+    public void NonNullAssert_FollowedByBinaryOperator_BindsAsLeftOperand()
+    {
+        // `a!! + b` — `!!` is the tightest postfix so the BinaryExpression's
+        // Left is the UnaryExpression, not the bare name. This is the
+        // existing behavior; the test guards against accidental regression.
+        var expr = ParseExpressionStatement("a!! + b\n");
+        var binary = Assert.IsType<BinaryExpressionSyntax>(expr);
+        Assert.Equal(SyntaxKind.PlusToken, binary.OperatorToken.Kind);
+        var leftUnary = Assert.IsType<UnaryExpressionSyntax>(binary.Left);
+        Assert.Equal(SyntaxKind.BangBangToken, leftUnary.OperatorToken.Kind);
+    }
+
+    [Fact]
+    public void NonNullAssert_FollowedByEquality_ParsesAsBinaryOfUnary()
+    {
+        // Same shape as `+` but with `==`. Confirms the comparison
+        // operators see the `!!`-wrapped value on the left.
+        var expr = ParseExpressionStatement("a!! == b\n");
+        var binary = Assert.IsType<BinaryExpressionSyntax>(expr);
+        Assert.Equal(SyntaxKind.EqualsEqualsToken, binary.OperatorToken.Kind);
+        Assert.IsType<UnaryExpressionSyntax>(binary.Left);
+    }
+
+    [Fact]
+    public void NonNullAssert_Chained_DoubleAssert_WithIntermediateMember()
+    {
+        // `a!!.b!!.c` — the tightest grouping is `((a!!).b)!!).c`. After
+        // the first `!!` we re-enter the postfix chain and consume `.b`,
+        // then the second `!!` wraps that accessor, then `.c` is consumed
+        // by the postfix re-entry. The result is an accessor whose
+        // LeftPart is a UnaryExpression whose operand is another accessor
+        // whose LeftPart is itself a UnaryExpression on `a`.
+        var expr = ParseExpressionStatement("a!!.b!!.c\n");
+        var outerAccessor = Assert.IsType<AccessorExpressionSyntax>(expr);
+        Assert.Equal("c", Assert.IsType<NameExpressionSyntax>(outerAccessor.RightPart).IdentifierToken.Text);
+        var outerUnary = Assert.IsType<UnaryExpressionSyntax>(outerAccessor.LeftPart);
+        Assert.Equal(SyntaxKind.BangBangToken, outerUnary.OperatorToken.Kind);
+        var innerAccessor = Assert.IsType<AccessorExpressionSyntax>(outerUnary.Operand);
+        Assert.Equal("b", Assert.IsType<NameExpressionSyntax>(innerAccessor.RightPart).IdentifierToken.Text);
+        var innerUnary = Assert.IsType<UnaryExpressionSyntax>(innerAccessor.LeftPart);
+        Assert.Equal(SyntaxKind.BangBangToken, innerUnary.OperatorToken.Kind);
+        Assert.Equal("a", Assert.IsType<NameExpressionSyntax>(innerUnary.Operand).IdentifierToken.Text);
+    }
+
+    [Fact]
+    public void NonNullAssert_OnMemberAccessReceiver_ChainsContinuingMember()
+    {
+        // The issue's reduced repro: `dir.Parent!!.Name`. The parser must
+        // produce `((dir.Parent)!!).Name` — an outer accessor whose
+        // LeftPart is a UnaryExpression wrapping the inner `dir.Parent`
+        // accessor, and whose RightPart is the `Name` member.
+        var expr = ParseExpressionStatement("dir.Parent!!.Name\n");
+        var outerAccessor = Assert.IsType<AccessorExpressionSyntax>(expr);
+        Assert.Equal("Name", Assert.IsType<NameExpressionSyntax>(outerAccessor.RightPart).IdentifierToken.Text);
+        var unary = Assert.IsType<UnaryExpressionSyntax>(outerAccessor.LeftPart);
+        Assert.Equal(SyntaxKind.BangBangToken, unary.OperatorToken.Kind);
+        var innerAccessor = Assert.IsType<AccessorExpressionSyntax>(unary.Operand);
+        Assert.Equal("dir", Assert.IsType<NameExpressionSyntax>(innerAccessor.LeftPart).IdentifierToken.Text);
+        Assert.Equal("Parent", Assert.IsType<NameExpressionSyntax>(innerAccessor.RightPart).IdentifierToken.Text);
+    }
+
     private static ExpressionSyntax ParseExpressionStatement(string source)
     {
         var tree = SyntaxTree.Parse(source);

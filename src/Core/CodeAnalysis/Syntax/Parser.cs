@@ -3490,14 +3490,22 @@ public class Parser
             left = ParsePrimaryExpression();
         }
 
-        // Phase 3.C.3 / ADR-0001: postfix null-assertion `!!`. We greedily
-        // consume any chain of `!!` tokens immediately following the primary
-        // and wrap them as unary expressions. The binder enforces that the
-        // operand type is nullable (or carries it through harmlessly).
+        // Phase 3.C.3 / ADR-0001 + Issue #518: postfix null-assertion `!!`.
+        // `!!` is a true postfix operator that composes with the other primary
+        // continuations (`.`, `?.`, `[`). After consuming `!!` we re-enter the
+        // postfix chain so subsequent member access / null-conditional access /
+        // indexing all hang off the `!!`-wrapped expression — i.e.
+        // `dir.Parent!!.Name` parses as `((dir.Parent)!!).Name` (the binder
+        // sees an AccessorExpression whose LeftPart is the `!!` UnaryExpression
+        // and falls through to the generic `BindExpression(leftPart)` path).
+        // Mixing `!!` with `+`, `==`, ternary etc. just falls out of the
+        // outer binary loop because `!!` itself has no precedence — it binds
+        // tighter than every binary operator, same as before this fix.
         while (Current.Kind == SyntaxKind.BangBangToken)
         {
             var bangBangToken = NextToken();
             left = new UnaryExpressionSyntax(syntaxTree, bangBangToken, left);
+            left = ParsePostfixChain(left);
         }
 
         while (true)
