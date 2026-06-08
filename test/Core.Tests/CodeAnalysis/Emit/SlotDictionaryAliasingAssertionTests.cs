@@ -68,42 +68,55 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
     [Fact]
     public void EmitterSource_ContainsAliasingAssertions_ForAllFourSlotDictionaries()
     {
-        // Documentation test: scan the emitter source for the four
+        // Documentation test: scan the emitter sources for the four
         // assertion sites added for issue #420 (P3-3). If a future refactor
         // removes one, this test fails loudly so the defensive guarantee
         // cannot be silently dropped.
-        var emitterSourcePath = LocateEmitterSource();
-        var text = File.ReadAllText(emitterSourcePath);
+        //
+        // PR-0 generalization: as the Binder/Emitter decomposition plan
+        // moves these allocation sites out of ReflectionMetadataEmitter.cs
+        // into sibling files (SlotPlanner, MetadataTokenCache, …), this
+        // test now reads every C# file under src/Core/CodeAnalysis/Emit/
+        // and asserts each expected substring is present in *any* of them.
+        var emitterSources = LocateEmitterSources();
+        Assert.NotEmpty(emitterSources);
 
-        Assert.Contains("!structLiteralSlots.ContainsKey(literal)", text);
-        Assert.Contains("!mapIndexSlots.ContainsKey(idx)", text);
-        Assert.Contains("!defaultExpressionSlots.ContainsKey(def)", text);
+        var combinedText = string.Join(
+            "\n// ---- next file ----\n",
+            emitterSources.Select(File.ReadAllText));
+
+        Assert.Contains("!structLiteralSlots.ContainsKey(literal)", combinedText);
+        Assert.Contains("!mapIndexSlots.ContainsKey(idx)", combinedText);
+        Assert.Contains("!defaultExpressionSlots.ContainsKey(def)", combinedText);
 
         // receiverSpillSlots intentionally deduplicates via a `ContainsKey`
         // guard at the allocation site — aliased receivers across spill
         // positions share a slot by design. Make sure that explicit guard
         // is still present so that aliasing remains safe.
-        Assert.Contains("if (receiverSpillSlots.ContainsKey(receiver))", text);
-        Assert.Contains("if (receiverSpillSlots.ContainsKey(assn))", text);
+        Assert.Contains("if (receiverSpillSlots.ContainsKey(receiver))", combinedText);
+        Assert.Contains("if (receiverSpillSlots.ContainsKey(assn))", combinedText);
     }
 
-    private static string LocateEmitterSource()
+    private static string[] LocateEmitterSources()
     {
         // Tests run with CWD = <bin>/<tfm>/. Walk up to repo root and
-        // resolve the well-known path.
+        // glob the entire Emit directory so that the Binder/Emitter
+        // decomposition can split ReflectionMetadataEmitter.cs without
+        // tripping this test on the first move.
         var dir = AppContext.BaseDirectory;
         for (int i = 0; i < 10 && dir is not null; i++)
         {
-            var candidate = Path.Combine(dir, "src", "Core", "CodeAnalysis", "Emit", "ReflectionMetadataEmitter.cs");
-            if (File.Exists(candidate))
+            var candidateDir = Path.Combine(dir, "src", "Core", "CodeAnalysis", "Emit");
+            if (Directory.Exists(candidateDir))
             {
-                return candidate;
+                return Directory.GetFiles(candidateDir, "*.cs", SearchOption.TopDirectoryOnly);
             }
 
             dir = Path.GetDirectoryName(dir);
         }
 
-        throw new FileNotFoundException("Could not locate ReflectionMetadataEmitter.cs by walking up from " + AppContext.BaseDirectory);
+        throw new DirectoryNotFoundException(
+            "Could not locate src/Core/CodeAnalysis/Emit by walking up from " + AppContext.BaseDirectory);
     }
 
     private static EmitResult Compile(string source, Stream peStream)
