@@ -2197,6 +2197,7 @@ internal sealed class ReflectionMetadataEmitter
             var receiverSpillSlots = new Dictionary<BoundExpression, int>();
             var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
             var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+            var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
 
             // Issue #216: collect compile-time const bindings before slot allocation.
             var constValues = new Dictionary<VariableSymbol, object>();
@@ -2221,6 +2222,7 @@ internal sealed class ReflectionMetadataEmitter
                 receiverSpillSlots,
                 indexAssignmentValueSlots,
                 goEnclosingScopes,
+                liftedBinarySlots,
                 il);
 
             // MoveNext is instance on the SM struct: arg0 = this.
@@ -2261,6 +2263,7 @@ internal sealed class ReflectionMetadataEmitter
                 receiverSpillSlots,
                 indexAssignmentValueSlots,
                 goEnclosingScopes,
+                liftedBinarySlots: liftedBinarySlots,
                 constValues: constValues,
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
@@ -2360,6 +2363,7 @@ internal sealed class ReflectionMetadataEmitter
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
         var constValues = new Dictionary<VariableSymbol, object>();
 
         this.methodBodyPlanner.CollectLocalsAndLabels(
@@ -2381,6 +2385,7 @@ internal sealed class ReflectionMetadataEmitter
             receiverSpillSlots,
             indexAssignmentValueSlots,
             goEnclosingScopes,
+            liftedBinarySlots,
             il);
 
         var parameters = new Dictionary<ParameterSymbol, int>();
@@ -2417,6 +2422,7 @@ internal sealed class ReflectionMetadataEmitter
             receiverSpillSlots,
             indexAssignmentValueSlots,
             goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
             constValues: constValues);
         emitter.EmitBlock(body);
         il.OpCode(ILOpCode.Ret);
@@ -2454,6 +2460,7 @@ internal sealed class ReflectionMetadataEmitter
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
         var constValues = new Dictionary<VariableSymbol, object>();
 
         // Pre-scan the base arguments so any scratch slots they require are
@@ -2485,6 +2492,7 @@ internal sealed class ReflectionMetadataEmitter
                 receiverSpillSlots,
                 indexAssignmentValueSlots,
                 goEnclosingScopes,
+                liftedBinarySlots,
                 il);
         }
 
@@ -2526,6 +2534,7 @@ internal sealed class ReflectionMetadataEmitter
             receiverSpillSlots,
             indexAssignmentValueSlots,
             goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
             constValues: constValues);
 
         // base(args)
@@ -2600,6 +2609,7 @@ internal sealed class ReflectionMetadataEmitter
         var receiverSpillSlots = new Dictionary<BoundExpression, int>();
         var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
         var constValues = new Dictionary<VariableSymbol, object>();
 
         // Pre-scan the base arguments so any scratch slots they require are
@@ -2631,6 +2641,7 @@ internal sealed class ReflectionMetadataEmitter
                 receiverSpillSlots,
                 indexAssignmentValueSlots,
                 goEnclosingScopes,
+                liftedBinarySlots,
                 il);
         }
 
@@ -2654,6 +2665,7 @@ internal sealed class ReflectionMetadataEmitter
             receiverSpillSlots,
             indexAssignmentValueSlots,
             goEnclosingScopes,
+            liftedBinarySlots,
             il);
 
         // Slot 0 is the implicit `this`; user parameters shift up by one.
@@ -2698,6 +2710,7 @@ internal sealed class ReflectionMetadataEmitter
             receiverSpillSlots,
             indexAssignmentValueSlots,
             goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
             constValues: constValues);
 
         // base(args) — `this` followed by the (ref-kind aware) base arguments.
@@ -2779,6 +2792,7 @@ internal sealed class ReflectionMetadataEmitter
                 var receiverSpillSlots = new Dictionary<BoundExpression, int>();
                 var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
                 var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+                var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
 
                 // Issue #216: collect compile-time const bindings before slot allocation.
                 var constValues = new Dictionary<VariableSymbol, object>();
@@ -2803,6 +2817,7 @@ internal sealed class ReflectionMetadataEmitter
                     receiverSpillSlots,
                     indexAssignmentValueSlots,
                     goEnclosingScopes,
+                    liftedBinarySlots,
                     il);
 
                 // For instance methods, IL slot 0 is the implicit `this`, so user
@@ -2879,6 +2894,7 @@ internal sealed class ReflectionMetadataEmitter
                     receiverSpillSlots,
                     indexAssignmentValueSlots,
                     goEnclosingScopes,
+                    liftedBinarySlots: liftedBinarySlots,
                     constValues: constValues,
                     structThisParameter: structThis,
                     asyncIteratorEmitCtx: aiEmitCtx,

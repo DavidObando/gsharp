@@ -310,6 +310,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots,
         InstructionEncoder il)
     {
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
@@ -502,6 +503,48 @@ internal sealed class MethodBodyPlanner
             var slot = localTypes.Count;
             localTypes.Add(coalesce.Left.Type);
             receiverSpillSlots[coalesce] = slot;
+        }
+
+        // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a value-
+        // type Nullable<T>. Each call site needs two Nullable<T>-typed
+        // operand slots (LHS, RHS) so the emitter can take their addresses
+        // for `call get_HasValue` / `call get_Value`. Arithmetic / bitwise
+        // operators additionally need a Nullable<R>-typed result slot for
+        // the null-branch `ldloca; initobj Nullable<R>; ldloc` shape;
+        // equality / ordering operators return bool and need no result
+        // slot. The slot bundle is keyed by the BoundBinaryExpression
+        // node and stored in liftedBinarySlots so the emitter can look it
+        // up at lowering time. Skip nodes already owned by other
+        // collectors (NullCoalesce uses receiverSpillSlots) to avoid
+        // double allocation.
+        foreach (var lifted in this.CollectLiftedBinaryOperators(body))
+        {
+            if (liftedBinarySlots.ContainsKey(lifted))
+            {
+                continue;
+            }
+
+            var lhsSlot = localTypes.Count;
+            localTypes.Add(lifted.Left.Type);
+
+            // `value-type Nullable<T> == nil` / `!= nil` only needs an
+            // LHS spill slot; the RHS is the `nil` literal (no temp
+            // required) and the result is bool (no result slot).
+            int rhsSlot = -1;
+            int resultSlot = -1;
+            if (lifted.Right.Type != TypeSymbol.Null)
+            {
+                rhsSlot = localTypes.Count;
+                localTypes.Add(lifted.Right.Type);
+
+                if (lifted.Type is NullableTypeSymbol)
+                {
+                    resultSlot = localTypes.Count;
+                    localTypes.Add(lifted.Type);
+                }
+            }
+
+            liftedBinarySlots[lifted] = new LiftedBinarySlots(lhsSlot, rhsSlot, resultSlot);
         }
     }
 
@@ -942,6 +985,19 @@ internal sealed class MethodBodyPlanner
     {
         var sink = new List<BoundBinaryExpression>();
         this.slotPlanner.CollectNullableValueTypeCoalesces((BoundStatement)root, sink);
+        return sink;
+    }
+
+    // PR N-4 / §6.1 / C# §7.3.7: each lifted binary operator over a
+    // value-type Nullable<T> lowers at emit time to a HasValue / get_Value
+    // sequence that needs two Nullable<T>-typed temp slots (one per
+    // operand). Arithmetic / bitwise forms additionally need a
+    // Nullable<R>-typed result slot so the null branch can initobj a
+    // default Nullable<R> and load it as a value.
+    internal IEnumerable<BoundBinaryExpression> CollectLiftedBinaryOperators(BoundNode root)
+    {
+        var sink = new List<BoundBinaryExpression>();
+        this.slotPlanner.CollectLiftedBinaryOperators((BoundStatement)root, sink);
         return sink;
     }
 

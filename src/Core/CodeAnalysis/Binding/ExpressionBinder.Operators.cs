@@ -409,6 +409,39 @@ internal sealed partial class ExpressionBinder
 
         var boundOperator = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundLeft.Type, boundRight.Type);
 
+        // PR N-4 / §6.1 / C# §7.3.7: mixed-mode lift. When one operand is
+        // a value-type Nullable<T> and the other is its underlying T, lift
+        // T to T? via the existing implicit conversion and re-bind. The
+        // re-bound operator hits the lifted arm in BoundBinaryOperator.Bind
+        // which returns a (T?, T?) operator; the converted operands then
+        // match its declared operand types so emit can rely on both sides
+        // being Nullable<T> at the operator site.
+        if (boundOperator == null)
+        {
+            if (boundLeft.Type is NullableTypeSymbol leftNullable
+                && leftNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                && boundRight.Type == leftNullable.UnderlyingType)
+            {
+                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftNullable, leftNullable);
+                if (lifted != null)
+                {
+                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, leftNullable);
+                    boundOperator = lifted;
+                }
+            }
+            else if (boundRight.Type is NullableTypeSymbol rightNullable
+                && rightNullable.UnderlyingType?.ClrType is { IsValueType: true }
+                && boundLeft.Type == rightNullable.UnderlyingType)
+            {
+                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, rightNullable, rightNullable);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, rightNullable);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
         if (boundOperator == null)
         {
             // Stream D: try user-defined `func (a T) operator <op>(b U) R` on
