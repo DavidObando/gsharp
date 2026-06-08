@@ -24,9 +24,26 @@ internal static class ClrTypeUtilities
     /// type, regardless of which reflection context produced them. Two types
     /// are considered the same when their <see cref="Type.FullName"/>s match.
     /// </summary>
+    /// <remarks>
+    /// Issue #504-reopen: constructed generics, arrays, by-ref, and pointer
+    /// types are compared <em>structurally</em> (definition + element / type
+    /// arguments) rather than by raw <see cref="Type.FullName"/>. The
+    /// FullName of a constructed generic (e.g. <c>Nullable&lt;bool&gt;</c>)
+    /// embeds the assembly-qualified name of every type argument
+    /// (<c>System.Boolean, System.Private.CoreLib, …</c>), and those
+    /// assembly identities differ across reflection contexts — the host
+    /// runtime's <c>System.Boolean</c> lives in <c>System.Private.CoreLib</c>
+    /// while the MetadataLoadContext-loaded reference-assembly
+    /// <c>System.Boolean</c> lives in the <c>System.Runtime</c> facade — so
+    /// the embedded strings diverge even when the two types denote the same
+    /// logical CLR shape. Recursing on the type definition plus each leaf
+    /// type argument keeps the cross-context identity check correct, since
+    /// leaf non-generic types have an assembly-independent
+    /// <see cref="Type.FullName"/>.
+    /// </remarks>
     /// <param name="a">First type.</param>
     /// <param name="b">Second type.</param>
-    /// <returns><c>true</c> when both types are non-null and share a FullName.</returns>
+    /// <returns><c>true</c> when both types are non-null and denote the same logical CLR type.</returns>
     public static bool AreSame(Type a, Type b)
     {
         if (a is null || b is null)
@@ -36,6 +53,61 @@ internal static class ClrTypeUtilities
 
         if (ReferenceEquals(a, b))
         {
+            return true;
+        }
+
+        // Arrays: element + rank must match. The constructed-array FullName
+        // embeds the element's assembly-qualified name when the element is
+        // itself a constructed generic, so arrays of cross-context generics
+        // require structural comparison.
+        if (a.IsArray && b.IsArray)
+        {
+            return a.GetArrayRank() == b.GetArrayRank()
+                && AreSame(a.GetElementType(), b.GetElementType());
+        }
+
+        if (a.IsByRef && b.IsByRef)
+        {
+            return AreSame(a.GetElementType(), b.GetElementType());
+        }
+
+        if (a.IsPointer && b.IsPointer)
+        {
+            return AreSame(a.GetElementType(), b.GetElementType());
+        }
+
+        // Constructed (closed) generics: compare the open definition's
+        // FullName (which is assembly-qualifier-free, e.g.
+        // `System.Nullable\u00601`) and recurse on each type argument. This
+        // is the cross-reflection-context fix that closes issue #504-reopen
+        // for `Nullable<T>` and applies equally to any other constructed
+        // generic with a leaf-FullName-matchable type argument.
+        if (a.IsGenericType && b.IsGenericType
+            && !a.IsGenericTypeDefinition && !b.IsGenericTypeDefinition)
+        {
+            if (!string.Equals(
+                    a.GetGenericTypeDefinition().FullName,
+                    b.GetGenericTypeDefinition().FullName,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var aArgs = a.GetGenericArguments();
+            var bArgs = b.GetGenericArguments();
+            if (aArgs.Length != bArgs.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < aArgs.Length; i++)
+            {
+                if (!AreSame(aArgs[i], bArgs[i]))
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
 
