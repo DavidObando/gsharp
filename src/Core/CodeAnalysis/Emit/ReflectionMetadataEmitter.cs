@@ -92,35 +92,19 @@ internal sealed class ReflectionMetadataEmitter
     // body is emitted via the same EmitFunction path.
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> lambdaBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
-    // Phase 4 emit parity (E2): synthesized closure classes for lambdas
-    // that capture outer variables. Each captured-variable lambda gets:
-    //   * A sealed class with one public field per capture (the closure).
-    //   * An instance method holding the rewritten body where captured-
-    //     variable reads/writes become this.field reads/writes.
-    //   * A default ctor (chains to object::.ctor()) — emitted by the
-    //     existing EmitClassDefaultConstructor path.
-    // Capture semantics match the interpreter: snapshot-by-value at the
-    // literal site. The synthesized class is appended to the user struct
-    // list so it threads through the existing class TypeDef/method/field
-    // row planning naturally.
-    private readonly Dictionary<BoundFunctionLiteralExpression, ClosureInfo> closureInfos = new Dictionary<BoundFunctionLiteralExpression, ClosureInfo>();
-
-    // Phase F: each `go` site is lowered through a synthesized display class
-    // with an InvokeAction instance method that Task.Run can bind to an Action.
-    private readonly Dictionary<BoundGoStatement, ClosureInfo> goClosureInfos = new Dictionary<BoundGoStatement, ClosureInfo>();
-    private readonly List<StructSymbol> synthesizedClosureClasses = new List<StructSymbol>();
-
-    // Issue #503 follow-up (nested-closure transitive capture): reverse map
-    // from a closure's Invoke method symbol to its ClosureInfo, so that when
-    // the BodyEmitter for that Invoke method emits a NESTED function-literal
-    // construction, it can route a captured-variable load through the
-    // enclosing closure's display-class field. Without this, the nested
-    // load fell through EmitLoadVariable's slot/parameter/global lookup and
-    // surfaced as GS9998 "no local slot or parameter index" at compile time.
-    private readonly Dictionary<FunctionSymbol, ClosureInfo> closureInvokeToInfo = new Dictionary<FunctionSymbol, ClosureInfo>();
+    // PR-E-9: closure-environment metadata and synthesized display classes
+    // moved onto ClosureEmitter. Where this file used to declare:
+    //   closureInfos                  -> closures.ClosureInfos
+    //   goClosureInfos                -> closures.GoClosureInfos
+    //   synthesizedClosureClasses     -> closures.SynthesizedClosureClasses
+    //   closureInvokeToInfo           -> closures.ClosureInvokeToInfo
+    //   closureCounter                -> closures.Counter
+    // The state-machine synthesizers below (still on this class until PR-E-10)
+    // mutate closures.SynthesizedClosureClasses and closures.Counter directly;
+    // BodyEmitter reads closures.ClosureInfos / closures.GoClosureInfos for
+    // the EmitFunctionLiteral / EmitGoStatement paths.
     private readonly Dictionary<FunctionSymbol, BoundBlockStatement> iteratorKickoffBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
     private readonly Dictionary<StructSymbol, IteratorStateMachineInfo> iteratorStateMachineInfos = new Dictionary<StructSymbol, IteratorStateMachineInfo>();
-    private int closureCounter;
 
     // Async state-machine plans produced by AsyncStateMachineRewriter.
     private ImmutableArray<AsyncStateMachinePlan> asyncStateMachinePlans = ImmutableArray<AsyncStateMachinePlan>.Empty;
@@ -239,6 +223,24 @@ internal sealed class ReflectionMetadataEmitter
     // Not readonly for the same EmitCore-ordering reason as
     // memberDefEmitter / dataStructSynth / wellKnown.
     private TypeDefEmitter typeDefEmitter;
+
+    // PR-E-9: ClosureEmitter — owns the closure-environment metadata,
+    // display-class synthesis (SynthesizeClosures / SynthesizeGoClosures /
+    // SynthesizeDisplayClass), and the nested ClosureInfo / CaptureRewriter /
+    // ConstructedTypeCollector helpers. Constructor-injected with a shared
+    // reference to this.lambdaBodies so the synthesis path can register the
+    // rewritten lambda body for every closure-Invoke method without a hard
+    // back-reference to this root emitter. Wired in EmitCore after wellKnown
+    // is materialised (SlotPlanner already exists from the ctor; lambdaBodies
+    // is a field initializer). Not readonly because EmitCore is the
+    // construction site, mirroring the conversionEmitter / dataStructSynth /
+    // memberDefEmitter / typeDefEmitter pattern. The BodyEmitter-internal
+    // closure-emit methods (EmitFunctionLiteral, EmitMethodGroup,
+    // EmitFunctionToDelegateConversion, EmitCapturedVariableLoad,
+    // EmitClrEventSubscription, EmitUserEventSubscription, etc.) stay on
+    // BodyEmitter and move with it in PR-E-11; this is the same Option B
+    // playbook PR-E-5 ConversionEmitter used.
+    private ClosureEmitter closures;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -470,6 +472,21 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitClassConstructorWithBaseInitializerBodyBytes,
             this.EmitClassConstructorWithBodyBodyBytes);
 
+        // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
+        // on the same EmitContext/MetadataTokenCache/WellKnownReferences
+        // trio plus the SlotPlanner (for go-statement capture discovery)
+        // and a shared reference to this.lambdaBodies so the synthesis
+        // path can register the rewritten lambda-body for every
+        // closure-Invoke method without taking a hard back-reference to
+        // this root emitter — same composition pattern as the other
+        // PR-E-* components.
+        this.closures = new ClosureEmitter(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.slotPlanner,
+            this.lambdaBodies);
+
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
         // types so the field/method-row ranges fall out correctly:
@@ -491,8 +508,8 @@ internal sealed class ReflectionMetadataEmitter
         var hostPackageGuess = this.emitCtx.Program.EntryPoint?.Package
             ?? this.emitCtx.Program.EntryPointPackage
             ?? (this.emitCtx.Program.Packages.IsDefaultOrEmpty ? null : this.emitCtx.Program.Packages[0]);
-        this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
-        this.SynthesizeGoClosures(goStatements, hostPackageGuess);
+        this.closures.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+        this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.SynthesizeIteratorStateMachines(hostPackageGuess);
         this.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
         this.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
@@ -502,9 +519,9 @@ internal sealed class ReflectionMetadataEmitter
         // their TypeDefs come last among the class block; field-row planning
         // walks the combined list so closure fields get well-defined rows.
         var allAggregates = this.emitCtx.Program.Structs;
-        if (this.synthesizedClosureClasses.Count > 0)
+        if (this.closures.SynthesizedClosureClasses.Count > 0)
         {
-            allAggregates = allAggregates.AddRange(this.synthesizedClosureClasses);
+            allAggregates = allAggregates.AddRange(this.closures.SynthesizedClosureClasses);
         }
 
         // Async state-machine types: materialized structs with their hoisted
@@ -1255,7 +1272,7 @@ internal sealed class ReflectionMetadataEmitter
         // can `newobj` the box before its body is materialized.
         foreach (var c in nonSmClasses)
         {
-            var isSynthesizedClosure = this.synthesizedClosureClasses.Contains(c);
+            var isSynthesizedClosure = this.closures.SynthesizedClosureClasses.Contains(c);
             var hasDefaultOnlyCtor = c.ExplicitConstructor == null
                 && c.BaseConstructorInitializer == null
                 && !c.HasPrimaryConstructor;
@@ -4056,7 +4073,7 @@ internal sealed class ReflectionMetadataEmitter
                 structThis = function.ThisParameter;
             }
 
-            var enclosingClosureInfo = this.closureInvokeToInfo.TryGetValue(function, out var ec) ? ec : null;
+            var enclosingClosureInfo = this.closures.ClosureInvokeToInfo.TryGetValue(function, out var ec) ? ec : null;
             var emitter = new BodyEmitter(
                 this,
                 il,
@@ -4716,7 +4733,7 @@ internal sealed class ReflectionMetadataEmitter
     // symbol.
     private void RegisterConstructedTypeAliases()
     {
-        var collector = new ConstructedTypeCollector();
+        var collector = new ClosureEmitter.ConstructedTypeCollector();
         foreach (var kvp in this.emitCtx.Program.Functions)
         {
             collector.RewriteStatement(kvp.Value);
@@ -4770,105 +4787,6 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    // Phase 4 emit parity (E2): for each lambda that captures outer variables,
-    // synthesize a sealed closure class on the entry-point package with:
-    //   - one public field per captured VariableSymbol (typed identically),
-    //   - one instance method (the lambda body, with captured reads/writes
-    //     rewritten to this.field reads/writes),
-    //   - a default ctor (chains to object::.ctor() via the existing
-    //     EmitClassDefaultConstructor path).
-    // Capture semantics are snapshot-by-value at literal creation time — the
-    // same semantics the interpreter implements (see
-    // <c>EvaluateFunctionLiteralExpression</c>): writes inside the lambda
-    // update the closure copy only, not the outer variable.
-    //
-    // Nested-lambda captures (a lambda that captures a variable already
-    // captured by an enclosing closure) are not yet supported: detecting them
-    // requires another rewrite layer. The synthesis throws a clear
-    // NotSupportedException for that case.
-    private void SynthesizeClosures(List<BoundFunctionLiteralExpression> literals, PackageSymbol hostPackage)
-    {
-        foreach (var literal in literals)
-        {
-            if (literal.CapturedVariables.Length == 0)
-            {
-                continue;
-            }
-
-            var closureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
-            var info = this.SynthesizeDisplayClass(
-                closureName,
-                literal.CapturedVariables,
-                literal.Function.Parameters,
-                literal.Function.Type,
-                literal.Body,
-                hostPackage,
-                invokeName: "Invoke");
-
-            this.closureInfos[literal] = info;
-        }
-    }
-
-    private void SynthesizeGoClosures(List<BoundGoStatement> goStatements, PackageSymbol hostPackage)
-    {
-        foreach (var go in goStatements)
-        {
-            var captured = this.slotPlanner.CollectCapturedVariables(go.Expression);
-
-            // When the go target is async (returns Task/Task<T>), the closure must
-            // return Task so that Task.Run(Func<Task>) properly awaits completion.
-            // Detection must be robust across assembly-load contexts: when the
-            // compilation is cross-targeting (explicit /reference paths loaded
-            // through a MetadataLoadContext), go.Expression.Type.ClrType is a
-            // reference-pack Type whose identity differs from the gsc host's
-            // System.Threading.Tasks.Task, so typeof(Task).IsAssignableFrom(...)
-            // returns false. That mis-detection emits an Action thunk that
-            // discards the spawned Task — breaking structured scope-join and
-            // producing invalid IL when the async target captures arguments.
-            // Compare by metadata name across the base-type chain instead.
-            var isAsync = IsTaskClrType(go.Expression.Type?.ClrType);
-            var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
-            BoundStatement bodyStatement = isAsync
-                ? new BoundReturnStatement(null, go.Expression)
-                : new BoundExpressionStatement(null, go.Expression);
-            var body = new BoundBlockStatement(null, ImmutableArray.Create(bodyStatement));
-
-            var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
-            var info = this.SynthesizeDisplayClass(
-                closureName,
-                captured,
-                ImmutableArray<ParameterSymbol>.Empty,
-                returnType,
-                body,
-                hostPackage,
-                invokeName: "InvokeAction");
-
-            this.goClosureInfos[go] = info;
-        }
-    }
-
-    /// <summary>
-    /// Determines whether a CLR type is <see cref="System.Threading.Tasks.Task"/>
-    /// or <c>Task&lt;T&gt;</c>, comparing by metadata name across the base-type
-    /// chain so the result is independent of the assembly-load context the type
-    /// originates from. <c>typeof(Task).IsAssignableFrom(t)</c> is unreliable
-    /// here because cross-targeting compilations surface types through a
-    /// <see cref="System.Reflection.MetadataLoadContext"/>, giving them a
-    /// distinct <see cref="Type"/> identity from the gsc host's BCL.
-    /// </summary>
-    private static bool IsTaskClrType(Type clrType)
-    {
-        for (var t = clrType; t != null; t = t.BaseType)
-        {
-            if (string.Equals(t.FullName, "System.Threading.Tasks.Task", StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private void SynthesizeIteratorStateMachines(PackageSymbol hostPackage)
     {
         if (this.iteratorPlans.IsDefaultOrEmpty)
@@ -4912,7 +4830,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var smClass = new StructSymbol(
-                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closures.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 fields: fields.ToImmutable(),
                 accessibility: Accessibility.Internal,
                 declaration: null,
@@ -4959,7 +4877,7 @@ internal sealed class ReflectionMetadataEmitter
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p))))));
             this.iteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass);
-            this.synthesizedClosureClasses.Add(smClass);
+            this.closures.SynthesizedClosureClasses.Add(smClass);
         }
     }
 
@@ -5052,7 +4970,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var smClass = new StructSymbol(
-                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                name: "<" + plan.Function.Name + ">d__" + System.Threading.Interlocked.Increment(ref this.closures.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 fields: fields.ToImmutable(),
                 accessibility: Accessibility.Internal,
                 declaration: null,
@@ -5174,7 +5092,7 @@ internal sealed class ReflectionMetadataEmitter
                 new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters)))));
 
             this.asyncIteratorInfos[smClass] = plan;
-            this.synthesizedClosureClasses.Add(smClass);
+            this.closures.SynthesizedClosureClasses.Add(smClass);
 
             // Resolve builder info for async iterator emit context.
             var returnClrType = plan.Function.Type?.ClrType;
@@ -5540,7 +5458,7 @@ internal sealed class ReflectionMetadataEmitter
             FunctionSymbol kickoffFunction;
             BoundBlockStatement body;
 
-            if (this.closureInfos.TryGetValue(literal, out var closure))
+            if (this.closures.ClosureInfos.TryGetValue(literal, out var closure))
             {
                 // Capture-bearing async lambda: the closure's Invoke method is the kickoff.
                 kickoffFunction = closure.InvokeMethod;
@@ -5573,7 +5491,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // Record nesting: capture-bearing async lambda SMs nest inside
             // their closure class (Subset A of the Roslyn nesting convention).
-            if (this.closureInfos.TryGetValue(literal, out var closureForNesting))
+            if (this.closures.ClosureInfos.TryGetValue(literal, out var closureForNesting))
             {
                 var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
                 this.asyncSmEnclosingClosures[smStruct] = closureForNesting.ClassSym;
@@ -5583,61 +5501,6 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         this.asyncStateMachinePlans = plans.ToImmutable();
-    }
-
-    private ClosureInfo SynthesizeDisplayClass(
-        string closureName,
-        ImmutableArray<VariableSymbol> capturedVariables,
-        ImmutableArray<ParameterSymbol> parameters,
-        TypeSymbol returnType,
-        BoundBlockStatement body,
-        PackageSymbol hostPackage,
-        string invokeName)
-    {
-        var packageName = hostPackage?.Name ?? string.Empty;
-        var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(capturedVariables.Length);
-        var captureFields = new Dictionary<VariableSymbol, FieldSymbol>();
-        foreach (var captured in capturedVariables)
-        {
-            var field = new FieldSymbol(captured.Name, captured.Type, Accessibility.Public);
-            fieldBuilder.Add(field);
-            captureFields[captured] = field;
-        }
-
-        var closureClass = new StructSymbol(
-            name: closureName,
-            fields: fieldBuilder.MoveToImmutable(),
-            accessibility: Accessibility.Internal,
-            declaration: null,
-            packageName: packageName,
-            isData: false,
-            isInline: false,
-            isClass: true);
-
-        var invokeMethod = new FunctionSymbol(
-            name: invokeName,
-            parameters: parameters,
-            type: returnType,
-            declaration: null,
-            package: hostPackage,
-            accessibility: Accessibility.Public,
-            receiverType: (TypeSymbol)closureClass);
-
-        closureClass.SetMethods(ImmutableArray.Create(invokeMethod));
-
-        var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
-        var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
-        if (rewriter.UnsupportedCapture != null)
-        {
-            throw new NotSupportedException(
-                $"Synthesized closure '{closureName}' captures '{rewriter.UnsupportedCapture.Name}' from a kind ('{rewriter.UnsupportedCaptureKind}') the emitter cannot currently rewrite. Run under the interpreter for now.");
-        }
-
-        this.lambdaBodies[invokeMethod] = rewrittenBody;
-        this.synthesizedClosureClasses.Add(closureClass);
-        var info = new ClosureInfo(closureClass, invokeMethod, captureFields);
-        this.closureInvokeToInfo[invokeMethod] = info;
-        return info;
     }
 
     private void CollectStatements(
@@ -7122,136 +6985,6 @@ internal sealed class ReflectionMetadataEmitter
         public Lowering.Async.AsyncMethodBuilderInfo BuilderInfo { get; }
     }
 
-    private sealed class ClosureInfo
-    {
-        public ClosureInfo(StructSymbol classSym, FunctionSymbol invokeMethod, Dictionary<VariableSymbol, FieldSymbol> captureFields)
-        {
-            this.ClassSym = classSym;
-            this.InvokeMethod = invokeMethod;
-            this.CaptureFields = captureFields;
-        }
-
-        public StructSymbol ClassSym { get; }
-
-        public FunctionSymbol InvokeMethod { get; }
-
-        public Dictionary<VariableSymbol, FieldSymbol> CaptureFields { get; }
-    }
-
-    private sealed class CaptureRewriter : BoundTreeRewriter
-    {
-        private readonly StructSymbol closureClass;
-        private readonly Dictionary<VariableSymbol, FieldSymbol> captureFields;
-        private readonly ParameterSymbol thisParam;
-
-        public CaptureRewriter(StructSymbol closureClass, Dictionary<VariableSymbol, FieldSymbol> captureFields, ParameterSymbol thisParam)
-        {
-            this.closureClass = closureClass;
-            this.captureFields = captureFields;
-            this.thisParam = thisParam;
-        }
-
-        // Set when the rewriter encounters a captured variable in a context
-        // it cannot lower (e.g., as the target of a BoundIndexAssignmentExpression
-        // or other shape that the BoundFieldAssignment node does not model).
-        // Reported by SynthesizeClosures as a NotSupportedException.
-        public VariableSymbol UnsupportedCapture { get; private set; }
-
-        public string UnsupportedCaptureKind { get; private set; }
-
-        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
-        {
-            if (this.captureFields.TryGetValue(node.Variable, out var field))
-            {
-                return new BoundFieldAccessExpression(
-                    null,
-                    new BoundVariableExpression(null, this.thisParam),
-                    this.closureClass,
-                    field);
-            }
-
-            return node;
-        }
-
-        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
-        {
-            if (this.captureFields.TryGetValue(node.Variable, out var field))
-            {
-                var value = this.RewriteExpression(node.Expression);
-                return new BoundFieldAssignmentExpression(null, this.thisParam, this.closureClass, field, value);
-            }
-
-            return base.RewriteAssignmentExpression(node);
-        }
-
-        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
-        {
-            // Lambda body declares its own locals — never the captured ones.
-            // Still record an "unsupported capture" check in case a captured
-            // VariableSymbol re-appears as a declaration shadow (binder bug).
-            if (this.captureFields.ContainsKey(node.Variable))
-            {
-                this.UnsupportedCapture = node.Variable;
-                this.UnsupportedCaptureKind = nameof(BoundVariableDeclaration);
-            }
-
-            return base.RewriteVariableDeclaration(node);
-        }
-    }
-
-    private sealed class ConstructedTypeCollector : BoundTreeRewriter
-    {
-        public HashSet<StructSymbol> Constructed { get; } = new HashSet<StructSymbol>();
-
-        protected override BoundExpression RewriteExpression(BoundExpression node)
-        {
-            this.TryAdd(node.Type);
-            switch (node)
-            {
-                case BoundStructLiteralExpression sl:
-                    this.TryAdd(sl.StructType);
-                    foreach (var init in sl.Initializers)
-                    {
-                        this.TryAdd(init.Field.Type);
-                    }
-
-                    break;
-                case BoundFieldAccessExpression fa:
-                    this.TryAdd(fa.StructType);
-                    this.TryAdd(fa.Field.Type);
-                    break;
-                case BoundFieldAssignmentExpression fas:
-                    this.TryAdd(fas.StructType);
-                    this.TryAdd(fas.Field.Type);
-                    break;
-                case BoundPropertyAccessExpression pa:
-                    this.TryAdd(pa.StructType);
-                    this.TryAdd(pa.Property.Type);
-                    break;
-                case BoundPropertyAssignmentExpression pas:
-                    this.TryAdd(pas.StructType);
-                    this.TryAdd(pas.Property.Type);
-                    break;
-                case BoundConstructorCallExpression cc:
-                    this.TryAdd(cc.StructType);
-                    break;
-                case BoundVariableExpression ve:
-                    this.TryAdd(ve.Variable.Type);
-                    break;
-            }
-
-            return base.RewriteExpression(node);
-        }
-
-        private void TryAdd(TypeSymbol type)
-        {
-            if (type is StructSymbol s && !s.TypeArguments.IsDefaultOrEmpty)
-            {
-                this.Constructed.Add(s);
-            }
-        }
-    }
-
     /// <summary>
     /// Issue #456: deterministic ordering for FunctionSymbols emitted into
     /// the MethodDef table. Sort first by the function's source declaration
@@ -7361,7 +7094,7 @@ internal sealed class ReflectionMetadataEmitter
         // closure are loaded/stored through `this`'s display-class fields
         // instead of looking for a local slot or parameter index. Null when
         // the current method isn't a closure Invoke.
-        private readonly ClosureInfo enclosingClosure;
+        private readonly ClosureEmitter.ClosureInfo enclosingClosure;
 
         // Stack of currently-active protected regions; each entry holds the set of
         // bound labels defined lexically within that region (including nested
@@ -7401,7 +7134,7 @@ internal sealed class ReflectionMetadataEmitter
             Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
             AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
             Dictionary<VariableSymbol, object> constValues = null,
-            ClosureInfo enclosingClosure = null)
+            ClosureEmitter.ClosureInfo enclosingClosure = null)
         {
             this.outer = outer;
             this.il = il;
@@ -8328,7 +8061,7 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         private void EmitFunctionLiteralToNamedDelegate(BoundFunctionLiteralExpression literal, MethodDefinitionHandle delegateCtorHandle)
         {
-            if (this.outer.closureInfos.TryGetValue(literal, out var closure))
+            if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))
             {
                 if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var closureCtor))
                 {
@@ -11773,7 +11506,7 @@ internal sealed class ReflectionMetadataEmitter
                 // For no-capture lambdas, the plan's kickoff is literal.Function.
                 // For capture-bearing lambdas, the plan's kickoff is closure.InvokeMethod.
                 FunctionSymbol planKey = literal.Function;
-                if (this.outer.closureInfos.TryGetValue(literal, out var closureForAsync))
+                if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closureForAsync))
                 {
                     planKey = closureForAsync.InvokeMethod;
                 }
@@ -11789,7 +11522,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType)
         {
-            if (this.outer.closureInfos.TryGetValue(literal, out var closure))
+            if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))
             {
                 // Capture-bearing literal: instantiate the closure class,
                 // snapshot each captured variable into its field, then bind
@@ -12624,8 +12357,8 @@ internal sealed class ReflectionMetadataEmitter
 
             this.EmitGoAction(node);
 
-            var closure = this.outer.goClosureInfos[node];
-            var isAsync = ReflectionMetadataEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
+            var closure = this.outer.closures.GoClosureInfos[node];
+            var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
 
             MethodInfo run;
             if (isAsync)
@@ -12658,7 +12391,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitGoAction(BoundGoStatement node)
         {
-            if (!this.outer.goClosureInfos.TryGetValue(node, out var closure))
+            if (!this.outer.closures.GoClosureInfos.TryGetValue(node, out var closure))
             {
                 throw new InvalidOperationException("Go statement has no synthesized display class.");
             }
@@ -12693,7 +12426,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.Token(fieldHandle);
             }
 
-            var isAsync = ReflectionMetadataEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
+            var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
 
             if (isAsync)
             {
