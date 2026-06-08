@@ -218,6 +218,28 @@ internal sealed class ReflectionMetadataEmitter
     // ConversionEmitter / dataStructSynth / wellKnown.
     private MemberDefEmitter memberDefEmitter;
 
+    // PR-E-8: TypeDefEmitter — owns IL/metadata emission for the TypeDef and
+    // constructor surface of every user-defined aggregate (struct, class,
+    // interface, enum, delegate) plus the assembly-level synthesized default
+    // constructor used by closure / state-machine classes. Like its peers it
+    // depends on EmitContext / MetadataTokenCache / WellKnownReferences and
+    // consumes the remaining root-emitter helpers it needs (EncodeTypeSymbol,
+    // EncodeReturnSymbol, GetTypeReference, NextParameterHandle,
+    // EmitUserAttributes, EmitIsReadOnlyAttributeOnParameter,
+    // GetCtorReference) as delegate callbacks. For the three constructor
+    // methods that drive the still-private BodyEmitter nested class
+    // (EmitStaticConstructor, EmitClassConstructorWithBaseInitializer,
+    // EmitClassConstructorWithBody), the body-emission step is reached via
+    // injected Func callbacks bound to the *BodyBytes helpers below; those
+    // helpers stay adjacent to BodyEmitter until PR-E-11 promotes the whole
+    // nested class to its own file. The MapTypeAccessibility /
+    // MapFieldAccessibility accessibility-map helpers are duplicated as
+    // private statics inside TypeDefEmitter rather than widened to internal
+    // on this emitter, per the PR-0 visibility-widening risk note.
+    // Not readonly for the same EmitCore-ordering reason as
+    // memberDefEmitter / dataStructSynth / wellKnown.
+    private TypeDefEmitter typeDefEmitter;
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -423,6 +445,30 @@ internal sealed class ReflectionMetadataEmitter
             this.NextParameterHandle,
             this.GetTypeReference,
             this.GetTypeHandleForMember);
+
+        // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
+        // on the same EmitContext/MetadataTokenCache/WellKnownReferences
+        // trio. The body-emission step inside the three constructor methods
+        // that drive BodyEmitter (EmitStaticConstructor,
+        // EmitClassConstructorWithBaseInitializer, EmitClassConstructorWithBody)
+        // is routed through three injected Func callbacks bound to the
+        // *BodyBytes helper methods on this emitter so TypeDefEmitter never
+        // holds a hard reference to this root or to BodyEmitter — same
+        // composition pattern as MemberDefEmitter / DataStructSynthesizer.
+        this.typeDefEmitter = new TypeDefEmitter(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.EncodeTypeSymbol,
+            this.EncodeReturnSymbol,
+            this.GetTypeReference,
+            this.NextParameterHandle,
+            this.EmitUserAttributes,
+            this.EmitIsReadOnlyAttributeOnParameter,
+            this.GetCtorReference,
+            this.EmitStaticConstructorBodyBytes,
+            this.EmitClassConstructorWithBaseInitializerBodyBytes,
+            this.EmitClassConstructorWithBodyBodyBytes);
 
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
@@ -948,7 +994,7 @@ internal sealed class ReflectionMetadataEmitter
         // the first of their reserved abstract method rows.
         foreach (var i in interfaces)
         {
-            this.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
+            this.typeDefEmitter.EmitInterfaceTypeDef(i, interfaceFirstMethodRow[i], 1);
         }
 
         // ADR-0059 / issue #255: emit named delegate TypeDefs immediately
@@ -958,14 +1004,14 @@ internal sealed class ReflectionMetadataEmitter
         // EmitDelegateTypeDef.
         foreach (var d in delegates)
         {
-            this.EmitDelegateTypeDef(d, delegateCtorRows[d]);
+            this.typeDefEmitter.EmitDelegateTypeDef(d, delegateCtorRows[d]);
         }
 
         // 2b. Emit non-SM class TypeDefs (so methodLists stay non-decreasing),
         // then non-SM struct TypeDefs. SM types are emitted AFTER <Program>.
         foreach (var c in nonSmClasses)
         {
-            this.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+            this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
             if (!c.Interfaces.IsDefaultOrEmpty)
             {
@@ -1029,7 +1075,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
-            this.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
+            this.typeDefEmitter.EmitStructTypeDef(s, structFirstFieldRow[s], methodListRow);
         }
 
         // Issue #193: emit enum TypeDefs between non-SM structs and <Program>.
@@ -1037,7 +1083,7 @@ internal sealed class ReflectionMetadataEmitter
         // <Program>'s package ctor will live (firstPackageCtorRow).
         foreach (var e in enums)
         {
-            this.EmitEnumTypeDef(e, enumFirstFieldRow[e], firstPackageCtorRow);
+            this.typeDefEmitter.EmitEnumTypeDef(e, enumFirstFieldRow[e], firstPackageCtorRow);
         }
 
         // 3. Group functions by their declaring package. One <Program> type
@@ -1281,7 +1327,7 @@ internal sealed class ReflectionMetadataEmitter
         // SM class TypeDefs (sync iterators + async iterators).
         foreach (var c in smClasses)
         {
-            this.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+            this.typeDefEmitter.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
             if (this.iteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
             {
@@ -1298,7 +1344,7 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var s in smStructsOrdered)
         {
             var smMethodListRow = structFirstMethodRows[s];
-            this.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
+            this.typeDefEmitter.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
 
             var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
             var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
@@ -1311,7 +1357,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             foreach (var m in i.Methods)
             {
-                this.EmitAbstractMethod(m);
+                this.typeDefEmitter.EmitAbstractMethod(m);
             }
 
             // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
@@ -1333,7 +1379,7 @@ internal sealed class ReflectionMetadataEmitter
                 var firstAssigned = false;
                 foreach (var explicitCtor in c.ExplicitConstructors)
                 {
-                    var ctorHandle = this.EmitClassConstructorWithBody(c, explicitCtor);
+                    var ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(c, explicitCtor);
                     this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle;
                     if (!firstAssigned)
                     {
@@ -1356,18 +1402,18 @@ internal sealed class ReflectionMetadataEmitter
                 var ctorParams = c.HasPrimaryConstructor
                     ? c.PrimaryConstructorParameters
                     : ImmutableArray<ParameterSymbol>.Empty;
-                var forwardingHandle = this.EmitClassConstructorWithBaseInitializer(c, ctorParams);
+                var forwardingHandle = this.typeDefEmitter.EmitClassConstructorWithBaseInitializer(c, ctorParams);
                 this.cache.ClassCtorHandles[c] = forwardingHandle;
                 this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle;
             }
             else
             {
-                var ctorHandle = this.EmitClassDefaultConstructor(c);
+                var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
                 this.cache.ClassCtorHandles[c] = ctorHandle;
 
                 if (c.HasPrimaryConstructor)
                 {
-                    var primaryHandle = this.EmitClassPrimaryConstructor(c);
+                    var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
                     this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
                 }
             }
@@ -1414,7 +1460,7 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #262: emit .cctor for classes with static field initializers.
             if (this.cache.CctorHandles.ContainsKey(c))
             {
-                this.EmitStaticConstructor(c);
+                this.typeDefEmitter.EmitStaticConstructor(c);
             }
         }
 
@@ -1477,7 +1523,7 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #262: emit .cctor for structs with static field initializers.
             if (this.cache.CctorHandles.ContainsKey(s))
             {
-                this.EmitStaticConstructor(s);
+                this.typeDefEmitter.EmitStaticConstructor(s);
             }
         }
 
@@ -1491,7 +1537,7 @@ internal sealed class ReflectionMetadataEmitter
         // B4. Per-package methods (ctor + user functions + entry).
         foreach (var pkg in packages)
         {
-            this.EmitDefaultConstructor();
+            this.typeDefEmitter.EmitDefaultConstructor();
 
             foreach (var fn in functionsByPackage[pkg])
             {
@@ -1513,12 +1559,12 @@ internal sealed class ReflectionMetadataEmitter
         // B5. SM class method bodies (ctors + instance methods).
         foreach (var c in smClasses)
         {
-            var ctorHandle = this.EmitClassDefaultConstructor(c);
+            var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
             this.cache.ClassCtorHandles[c] = ctorHandle;
 
             if (c.HasPrimaryConstructor)
             {
-                var primaryHandle = this.EmitClassPrimaryConstructor(c);
+                var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
                 this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
             }
 
@@ -2017,245 +2063,6 @@ internal sealed class ReflectionMetadataEmitter
         return result;
     }
 
-    private void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
-    {
-        // Phase 4 emit parity (F2, type-erased): generic type definitions
-        // are emitted as ordinary non-generic CLR classes/structs. Each
-        // T-typed field is encoded as System.Object via EncodeTypeSymbol;
-        // constructed instances (Box[int], Box[string]) share the same CLR
-        // TypeDef as the definition and round-trip values through box /
-        // unbox.any at field-access and primary-ctor boundaries. Constructed
-        // StructSymbols are aliased into the lookup dictionaries by
-        // RegisterConstructedTypeAliases after the definition's TypeDef and
-        // members are emitted.
-        if (!structSym.TypeArguments.IsDefaultOrEmpty)
-        {
-            throw new System.NotSupportedException(
-                $"Internal error: a constructed StructSymbol ('{structSym.Name}') reached EmitStructTypeDef. Only definitions should be in program.Structs.");
-        }
-
-        // Emit field definitions in source order. Each field's signature is a
-        // FieldSig encoding the GSharp type symbol.
-        FieldDefinitionHandle firstField = default;
-        foreach (var field in structSym.Fields)
-        {
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
-            var attrs = MapFieldAccessibility(field.Accessibility);
-            if (field.IsReadOnly)
-            {
-                attrs |= FieldAttributes.InitOnly;
-            }
-
-            var handle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: attrs,
-                name: this.emitCtx.Metadata.GetOrAddString(field.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = handle;
-            }
-
-            this.cache.StructFieldDefs[field] = handle;
-
-            // Issue #186 / ADR-0047 §3: route any @-annotations bound onto
-            // the field symbol onto the FieldDef row so attributes like
-            // @Obsolete round-trip into CustomAttribute rows.
-            this.EmitUserAttributes(handle, field, AttributeTargetKind.Field);
-        }
-
-        // ADR-0051 Phase 6: emit backing FieldDefs for auto-properties.
-        foreach (var prop in structSym.Properties)
-        {
-            if (!prop.IsAutoProperty || prop.BackingField == null)
-            {
-                continue;
-            }
-
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
-            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Private,
-                name: this.emitCtx.Metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = backingHandle;
-            }
-
-            this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
-        }
-
-        // ADR-0052: emit backing FieldDefs for field-like events.
-        foreach (var ev in structSym.Events)
-        {
-            if (!ev.IsFieldLike || ev.BackingField == null)
-            {
-                continue;
-            }
-
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
-            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Private,
-                name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = backingHandle;
-            }
-
-            this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
-        }
-
-        // ADR-0053: emit static field definitions from shared block.
-        if (!structSym.StaticFields.IsDefaultOrEmpty)
-        {
-            foreach (var staticField in structSym.StaticFields)
-            {
-                var sigBlob = new BlobBuilder();
-                this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), staticField.Type);
-                var attrs = MapFieldAccessibility(staticField.Accessibility) | FieldAttributes.Static;
-                if (staticField.IsReadOnly)
-                {
-                    attrs |= FieldAttributes.InitOnly;
-                }
-
-                var handle = this.emitCtx.Metadata.AddFieldDefinition(
-                    attributes: attrs,
-                    name: this.emitCtx.Metadata.GetOrAddString(staticField.Name),
-                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-                if (firstField.IsNil)
-                {
-                    firstField = handle;
-                }
-
-                this.cache.StructFieldDefs[staticField] = handle;
-            }
-        }
-
-        // Issue #263: emit backing FieldDefs for static auto-properties.
-        foreach (var prop in structSym.StaticProperties)
-        {
-            if (!prop.IsAutoProperty || prop.BackingField == null)
-            {
-                continue;
-            }
-
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
-            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Assembly | FieldAttributes.Static,
-                name: this.emitCtx.Metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = backingHandle;
-            }
-
-            this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
-        }
-
-        // Issue #263: emit backing FieldDefs for static field-like events.
-        foreach (var ev in structSym.StaticEvents)
-        {
-            if (!ev.IsFieldLike || ev.BackingField == null)
-            {
-                continue;
-            }
-
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
-            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Private | FieldAttributes.Static,
-                name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = backingHandle;
-            }
-
-            this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
-        }
-
-        if (firstField.IsNil)
-        {
-            // Empty struct: no field rows added; point at next row, which is
-            // (firstFieldRow) — same as the next TypeDef's first field row.
-            firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
-        }
-
-        TypeAttributes typeAttrs;
-        EntityHandle baseType;
-        if (structSym.IsClass)
-        {
-            // Phase 3.B.3 sub-step 3: classes are CLR reference types.
-            // Sealed by default per ADR-0017 (Kotlin-style `open` opt-in).
-            // Base is either the user-declared base class (if any) or
-            // System.Object.
-            var classAttrs = TypeAttributes.Class
-                | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
-                | TypeAttributes.BeforeFieldInit
-                | MapTypeAccessibility(structSym.Accessibility);
-            if (!structSym.IsOpen)
-            {
-                classAttrs |= TypeAttributes.Sealed;
-            }
-
-            typeAttrs = classAttrs;
-            if (structSym.IsAttributeClass)
-            {
-                // Phase 4 of #141 / ADR-0047 §5: @Attribute sugar — base is
-                // System.Attribute, regardless of any other resolution.
-                baseType = this.wellKnown.GetSystemAttributeTypeRef();
-            }
-            else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
-            {
-                baseType = baseHandle;
-            }
-            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
-            {
-                // Issue #296: the class inherits from an imported CLR base
-                // class; reference it as the TypeDef's base type so the emitted
-                // metadata extends the imported base.
-                baseType = this.GetTypeReference(importedBaseClr);
-            }
-            else
-            {
-                baseType = this.wellKnown.ObjectTypeRef;
-            }
-        }
-        else
-        {
-            typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
-                | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
-                | MapTypeAccessibility(structSym.Accessibility);
-            baseType = this.wellKnown.ValueTypeRef;
-        }
-
-        var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
-            baseType: baseType,
-            fieldList: firstField,
-            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.cache.StructTypeDefs[structSym] = handle2;
-        if (structSym.IsInline)
-        {
-            this.EmitIsReadOnlyAttribute(handle2);
-        }
-
-        if (structSym.IsRefStruct)
-        {
-            // Issue #367: mark user-declared `ref struct` types as by-ref-like.
-            this.EmitIsByRefLikeAttribute(handle2);
-        }
-
-        // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
-        this.EmitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
-    }
-
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep
     /// virtual method attributes because it participates in CLR vtable dispatch.
@@ -2379,11 +2186,6 @@ internal sealed class ReflectionMetadataEmitter
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
     /// <summary>
-    /// Emits a nested-private TypeDef for a state-machine type.  Same as
-    /// <see cref="EmitStructTypeDef"/> but uses <c>NestedPrivate</c> visibility
-    /// and an empty namespace (nested types have no namespace in metadata).
-    /// </summary>
-    /// <summary>
     /// Converts the per-method <c>constValues</c> dictionary into a list of
     /// <see cref="LocalConstantInfo"/> descriptors for the Portable PDB
     /// <c>LocalConstant</c> table. Each entry corresponds to one compile-time
@@ -2476,186 +2278,6 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 break;
-        }
-    }
-
-    private void EmitNestedStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
-    {
-        if (!structSym.TypeArguments.IsDefaultOrEmpty)
-        {
-            throw new System.NotSupportedException(
-                $"Internal error: a constructed StructSymbol ('{structSym.Name}') reached EmitNestedStructTypeDef.");
-        }
-
-        FieldDefinitionHandle firstField = default;
-        foreach (var field in structSym.Fields)
-        {
-            var sigBlob = new BlobBuilder();
-            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
-            var attrs = MapFieldAccessibility(field.Accessibility);
-            if (field.IsReadOnly)
-            {
-                attrs |= FieldAttributes.InitOnly;
-            }
-
-            var handle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: attrs,
-                name: this.emitCtx.Metadata.GetOrAddString(field.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            if (firstField.IsNil)
-            {
-                firstField = handle;
-            }
-
-            this.cache.StructFieldDefs[field] = handle;
-
-            // Issue #186: mirror the EmitStructTypeDef path for nested types
-            // so user @-annotations on fields round-trip into CustomAttribute
-            // rows on the nested FieldDef as well.
-            this.EmitUserAttributes(handle, field, AttributeTargetKind.Field);
-        }
-
-        if (firstField.IsNil)
-        {
-            firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
-        }
-
-        TypeAttributes typeAttrs;
-        EntityHandle baseType;
-        if (structSym.IsClass)
-        {
-            var classAttrs = TypeAttributes.Class
-                | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
-                | TypeAttributes.BeforeFieldInit
-                | TypeAttributes.NestedPrivate;
-            if (!structSym.IsOpen)
-            {
-                classAttrs |= TypeAttributes.Sealed;
-            }
-
-            typeAttrs = classAttrs;
-            if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
-            {
-                baseType = baseHandle;
-            }
-            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
-            {
-                // Issue #296: nested class inheriting an imported CLR base.
-                baseType = this.GetTypeReference(importedBaseClr);
-            }
-            else
-            {
-                baseType = this.wellKnown.ObjectTypeRef;
-            }
-        }
-        else
-        {
-            typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
-                | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
-                | TypeAttributes.NestedPrivate;
-            baseType = this.wellKnown.ValueTypeRef;
-        }
-
-        // Nested types have no namespace in ECMA-335 metadata.
-        var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: default(StringHandle),
-            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
-            baseType: baseType,
-            fieldList: firstField,
-            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.cache.StructTypeDefs[structSym] = handle2;
-        if (structSym.IsRefStruct)
-        {
-            // Issue #367: nested user-declared `ref struct` types are by-ref-like too.
-            this.EmitIsByRefLikeAttribute(handle2);
-        }
-    }
-
-    /// <summary>
-    /// Issue #193: emits a CLR <c>enum</c> TypeDef for a user-defined GSharp
-    /// <c>type Name enum { ... }</c>. The TypeDef is a sealed value type
-    /// deriving from <c>System.Enum</c> with:
-    ///   * an instance field <c>value__</c> of <c>int32</c> (the underlying
-    ///     type per ADR-0047 §3; widen later if we add explicit underlying
-    ///     -type syntax),
-    ///   * one <c>public static literal</c> field per <see cref="EnumMemberSymbol"/>
-    ///     carrying its integer constant via a <c>HasDefault</c> / Constant row.
-    /// Custom attributes bound onto <c>EnumSymbol.Attributes</c> route
-    /// to the type-def row; per-member attributes route to each literal field.
-    /// </summary>
-    private void EmitEnumTypeDef(EnumSymbol enumSym, int firstFieldRow, int methodListRow)
-    {
-        var enumTypeRef = this.GetTypeReference(this.emitCtx.CoreEnumType);
-
-        // P3-8 (#420): emit the TypeDef row *before* its FieldDef rows so the
-        // literal-field signatures can refer to the enum's actual TypeDef
-        // handle returned by AddTypeDefinition, rather than a speculative
-        // row-count+1 value that breaks silently if the emit order ever
-        // changes. The TypeDef's fieldList must still point at the first
-        // FieldDef row that will belong to this enum, which is the next row
-        // about to be added — we capture it via GetRowCount + 1 here and
-        // assert below that the first AddFieldDefinition call matches.
-        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Field) + 1);
-
-        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
-            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | MapTypeAccessibility(enumSym.Accessibility);
-
-        var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(enumSym.Name),
-            baseType: enumTypeRef,
-            fieldList: firstFieldHandle,
-            methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.cache.EnumTypeDefs[enumSym] = enumTypeDef;
-
-        // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
-        var valueFieldSigBlob = new BlobBuilder();
-        new BlobEncoder(valueFieldSigBlob).FieldSignature().Int32();
-        var valueFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
-            attributes: FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName,
-            name: this.emitCtx.Metadata.GetOrAddString("value__"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(valueFieldSigBlob));
-        if (valueFieldHandle != firstFieldHandle)
-        {
-            throw new InvalidOperationException(
-                $"Enum '{enumSym.Name}' value__ FieldDef row {MetadataTokens.GetRowNumber(valueFieldHandle)} did not match the fieldList row {MetadataTokens.GetRowNumber(firstFieldHandle)} stamped on its TypeDef. This indicates another emitter inserted FieldDef rows between TypeDef creation and field emission.");
-        }
-
-        // Fields 2..N: one public static literal field per member, signature
-        // is the enum's own typedef (the standard CLR convention for enum
-        // literals). The Constant row is added below after all field rows
-        // have been emitted so they remain in increasing parent-token order.
-        var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
-        foreach (var member in enumSym.Members)
-        {
-            var memberSigBlob = new BlobBuilder();
-            new BlobEncoder(memberSigBlob).FieldSignature().Type(enumTypeDef, isValueType: true);
-            var memberFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
-                name: this.emitCtx.Metadata.GetOrAddString(member.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(memberSigBlob));
-            memberFieldHandles.Add(memberFieldHandle);
-            this.cache.EnumMemberFieldDefs[member] = memberFieldHandle;
-        }
-
-        // Constant rows must be added in increasing parent FieldDefinition
-        // order; iterating the literal fields in declaration order naturally
-        // satisfies this since AddFieldDefinition is monotone.
-        for (int i = 0; i < enumSym.Members.Length; i++)
-        {
-            this.emitCtx.Metadata.AddConstant(parent: memberFieldHandles[i], value: enumSym.Members[i].Value);
-        }
-
-        // Issue #188 (step 3): route any user annotations attached to the
-        // enum type onto the TypeDef row, and per-member annotations onto
-        // each literal-field row.
-        this.EmitUserAttributes(enumTypeDef, enumSym, AttributeTargetKind.Type);
-        for (int i = 0; i < enumSym.Members.Length; i++)
-        {
-            this.EmitUserAttributes(memberFieldHandles[i], enumSym.Members[i], AttributeTargetKind.Field);
         }
     }
 
@@ -2758,22 +2380,6 @@ internal sealed class ReflectionMetadataEmitter
         return this.cache.StructTypeDefs.TryGetValue(owner, out enclosingHandle);
     }
 
-    /// <summary>Emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on an inline struct TypeDef.</summary>
-    /// <param name="typeHandle">The inline struct TypeDef handle.</param>
-    private void EmitIsReadOnlyAttribute(TypeDefinitionHandle typeHandle)
-    {
-        var ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef();
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteUInt16(0);
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: typeHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
     /// <summary>
     /// ADR-0060 §6: emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on
     /// an emitted Parameter row so consumers (e.g. the C# compiler) treat the
@@ -2792,47 +2398,6 @@ internal sealed class ReflectionMetadataEmitter
             parent: paramHandle,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// Issue #367: emits the metadata that marks a user-declared <c>ref struct</c>
-    /// TypeDef as by-ref-like, matching what the C# compiler produces:
-    /// <list type="bullet">
-    ///   <item><description><c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>
-    ///   so the CLR and any modern compiler treat the type as stack-only.</description></item>
-    ///   <item><description><c>System.ObsoleteAttribute</c> carrying the well-known
-    ///   guard message <c>"Types with embedded references are not supported in this
-    ///   version of your compiler."</c> with <c>error: true</c>. Compilers that do
-    ///   not understand by-ref-like types surface this as an error; compilers that
-    ///   do recognise <c>IsByRefLikeAttribute</c> suppress the obsoletion.</description></item>
-    /// </list>
-    /// </summary>
-    /// <param name="typeHandle">The ref-struct TypeDef handle.</param>
-    private void EmitIsByRefLikeAttribute(TypeDefinitionHandle typeHandle)
-    {
-        var ctorRef = this.wellKnown.GetIsByRefLikeAttributeCtorRef();
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteUInt16(0);
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: typeHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-
-        var obsoleteCtorRef = this.wellKnown.GetObsoleteAttributeStringBoolCtorRef();
-
-        var obsoleteBlob = new BlobBuilder();
-        obsoleteBlob.WriteUInt16(0x0001);
-        obsoleteBlob.WriteSerializedString("Types with embedded references are not supported in this version of your compiler.");
-        obsoleteBlob.WriteByte(1);
-        obsoleteBlob.WriteUInt16(0);
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: typeHandle,
-            constructor: obsoleteCtorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
     }
 
     /// <summary>
@@ -3492,930 +3057,6 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    /// <summary>
-    /// Phase 3.B.4: emits a TypeDef row for a user-defined interface. Carries
-    /// <c>TypeAttributes.Interface | Abstract | Public</c>, no fields, and a
-    /// methodList pointing at its preassigned first abstract-method row.
-    /// </summary>
-    /// <param name="ifaceSym">The interface symbol.</param>
-    /// <param name="firstMethodRow">The preassigned first method row.</param>
-    /// <param name="firstFieldRow">The first field row for the next aggregate (interfaces own no fields, so this is forwarded as their fieldList).</param>
-    private void EmitInterfaceTypeDef(InterfaceSymbol ifaceSym, int firstMethodRow, int firstFieldRow)
-    {
-        var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
-            | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
-            | MapTypeAccessibility(ifaceSym.Accessibility);
-        var handle = this.emitCtx.Metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(ifaceSym.Name),
-            baseType: default(EntityHandle),
-            fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
-            methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
-        this.cache.InterfaceTypeDefs[ifaceSym] = handle;
-
-        // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
-        this.EmitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
-    }
-
-    /// <summary>
-    /// ADR-0059 / issue #255: emits a user-declared named delegate as a sealed
-    /// reference type deriving from <c>System.MulticastDelegate</c> with two
-    /// runtime-implemented methods:
-    /// <list type="bullet">
-    ///   <item><c>.ctor(object, native int)</c> — the standard delegate
-    ///     constructor recognised by the CLR for delegate creation
-    ///     (<c>newobj</c>) and binding.</item>
-    ///   <item><c>Invoke(params...) ret</c> — the delegate's call signature
-    ///     used by both managed callers and the CLR's delegate dispatch.</item>
-    /// </list>
-    /// Both methods carry <c>MethodImplAttributes.Runtime | Managed</c> and
-    /// have no IL body — the runtime supplies the implementation. We
-    /// intentionally do NOT emit <c>BeginInvoke</c>/<c>EndInvoke</c>, matching
-    /// Roslyn's portable-assembly convention.
-    /// </summary>
-    /// <param name="delegateSym">The named delegate symbol.</param>
-    /// <param name="firstMethodRow">The pre-reserved method row of the
-    /// delegate's <c>.ctor</c> (the second reserved row is its
-    /// <c>Invoke</c>).</param>
-    private void EmitDelegateTypeDef(DelegateTypeSymbol delegateSym, int firstMethodRow)
-    {
-        var multicastTypeRef = this.GetTypeReference(this.emitCtx.CoreMulticastDelegateType);
-
-        // Delegates own no fields; their fieldList points at the next
-        // FieldDef row, which is the first field of whatever TypeDef follows
-        // in row order. We mirror the EmitEnumTypeDef pattern of capturing
-        // the *next* row from the current FieldDef table count.
-        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Field) + 1);
-
-        var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
-            | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | MapTypeAccessibility(delegateSym.Accessibility);
-
-        var delegateTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
-            attributes: typeAttrs,
-            @namespace: this.emitCtx.Metadata.GetOrAddString(delegateSym.PackageName ?? string.Empty),
-            name: this.emitCtx.Metadata.GetOrAddString(delegateSym.Name),
-            baseType: multicastTypeRef,
-            fieldList: firstFieldHandle,
-            methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
-        this.cache.DelegateTypeDefs[delegateSym] = delegateTypeDef;
-
-        // ---- .ctor(object, native int) ----
-        var ctorSigBlob = new BlobBuilder();
-        new BlobEncoder(ctorSigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(2, r => r.Void(), ps =>
-            {
-                ps.AddParameter().Type().Object();
-                ps.AddParameter().Type().IntPtr();
-            });
-
-        var ctorFirstParamHandle = this.NextParameterHandle();
-        this.emitCtx.Metadata.AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("object"),
-            sequenceNumber: 1);
-        this.emitCtx.Metadata.AddParameter(
-            attributes: ParameterAttributes.None,
-            name: this.emitCtx.Metadata.GetOrAddString("method"),
-            sequenceNumber: 2);
-
-        var ctorAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
-            | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName;
-
-        var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: ctorAttrs,
-            implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSigBlob),
-            bodyOffset: -1,
-            parameterList: ctorFirstParamHandle);
-        this.cache.DelegateCtorHandles[delegateSym] = ctorHandle;
-
-        // Sanity check: the actual .ctor row must match the row reserved by
-        // the scheduler so the TypeDef's methodList pointer is valid.
-        if (MetadataTokens.GetRowNumber(ctorHandle) != firstMethodRow)
-        {
-            throw new InvalidOperationException(
-                $"Delegate '{delegateSym.Name}' .ctor MethodDef row {MetadataTokens.GetRowNumber(ctorHandle)} did not match the reserved row {firstMethodRow}. This indicates another emitter inserted method rows between scheduling and delegate emission.");
-        }
-
-        // ---- Invoke(params...) ret ----
-        var invokeSigBlob = new BlobBuilder();
-        new BlobEncoder(invokeSigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                delegateSym.Parameters.Length,
-                r => this.EncodeReturnSymbol(r, delegateSym.ReturnType ?? TypeSymbol.Void),
-                ps =>
-                {
-                    foreach (var p in delegateSym.Parameters)
-                    {
-                        // ADR-0060 §12: a named-delegate parameter declared `ref`/`out`/`in`
-                        // emits `T&` on the Invoke signature, plus the IsReadOnlyAttribute
-                        // modreq for `in` (matching the C# convention so consumers see a
-                        // normal `ref`/`out`/`in` parameter). ParameterAttributes.Out / In
-                        // are stamped on the per-parameter row below.
-                        var paramEncoder = ps.AddParameter();
-                        if (p.RefKind == RefKind.In)
-                        {
-                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
-                            if (!isReadOnlyAttrType.IsNil)
-                            {
-                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
-                            }
-                        }
-
-                        this.EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
-
-        var invokeFirstParamHandle = this.NextParameterHandle();
-        for (var i = 0; i < delegateSym.Parameters.Length; i++)
-        {
-            var p = delegateSym.Parameters[i];
-
-            // ADR-0060 §12: stamp the Parameter row with .Out / .In for ref-kind delegate
-            // parameters, and attach IsReadOnlyAttribute for `in`.
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
-                sequenceNumber: (ushort)(i + 1));
-
-            if (p.RefKind == RefKind.In)
-            {
-                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
-            }
-        }
-
-        var invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
-            | MethodAttributes.Virtual | MethodAttributes.NewSlot;
-
-        var invokeParamList = delegateSym.Parameters.Length > 0
-            ? invokeFirstParamHandle
-            : this.NextParameterHandle();
-
-        var invokeHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: invokeAttrs,
-            implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(invokeSigBlob),
-            bodyOffset: -1,
-            parameterList: invokeParamList);
-        this.cache.DelegateInvokeHandles[delegateSym] = invokeHandle;
-
-        // ADR-0047 §3: user annotations targeting the delegate type land on
-        // the TypeDef row (same as struct/interface/enum).
-        this.EmitUserAttributes(delegateTypeDef, delegateSym, AttributeTargetKind.Type);
-    }
-
-    /// <summary>
-    /// Phase 3.B.4: emits an abstract method definition for an interface
-    /// member. Carries <c>Public | Virtual | Abstract | NewSlot | HideBySig</c>
-    /// and no body (bodyOffset = -1).
-    /// </summary>
-    /// <param name="method">The interface method symbol.</param>
-    private void EmitAbstractMethod(FunctionSymbol method)
-    {
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                method.Parameters.Length,
-                r => EncodeReturnSymbol(r, method.Type, method.ReturnRefKind),
-                ps =>
-                {
-                    foreach (var p in method.Parameters)
-                    {
-                        EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
-                    }
-                });
-
-        var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
-            | MethodAttributes.Virtual | MethodAttributes.Abstract
-            | MethodAttributes.NewSlot;
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: attrs,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
-            bodyOffset: -1,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Emits a parameter-less <c>.ctor</c> for a user-defined <c>class</c>
-    /// (Phase 3.B.3). The body chains to the base class's <c>.ctor()</c>
-    /// (either an inherited user class or <c>System.Object</c>) and returns.
-    /// </summary>
-    /// <param name="classSym">The class whose default constructor is being emitted.</param>
-    private MethodDefinitionHandle EmitClassDefaultConstructor(StructSymbol classSym)
-    {
-        var baseCtorToken = this.GetBaseCtorToken(classSym);
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
-        }
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Emits a <c>.cctor</c> (type initializer) for a type with static field
-    /// initializers (Issue #262). The body evaluates each initializer expression
-    /// and stores the result into the corresponding static field via <c>stsfld</c>.
-    /// </summary>
-    private void EmitStaticConstructor(StructSymbol typeSym)
-    {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            // Build a synthetic body: for each field with an initializer,
-            // emit the expression + stsfld.
-            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            foreach (var field in typeSym.StaticFields)
-            {
-                if (typeSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
-                {
-                    // Synthesize: field = initExpr (as an expression statement).
-                    var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, field, initExpr);
-                    statements.Add(new BoundExpressionStatement(null, assignment));
-                }
-            }
-
-            var body = new BoundBlockStatement(null, statements.ToImmutable());
-
-            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-            var locals = new Dictionary<VariableSymbol, int>();
-            var labels = new Dictionary<BoundLabel, LabelHandle>();
-            var localTypes = new List<TypeSymbol>();
-            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-            var constValues = new Dictionary<VariableSymbol, object>();
-
-            CollectLocalsAndLabels(
-                body,
-                null,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                il);
-
-            var parameters = new Dictionary<ParameterSymbol, int>();
-
-            StandaloneSignatureHandle localsSignature = default;
-            if (localTypes.Count > 0)
-            {
-                var localsSigBlob = new BlobBuilder();
-                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-                foreach (var t in localTypes)
-                {
-                    EncodeLocalVariableType(encoder.AddVariable(), t);
-                }
-
-                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-            }
-
-            var emitter = new BodyEmitter(
-                this,
-                il,
-                locals,
-                parameters,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                constValues: constValues);
-            emitter.EmitBlock(body);
-            il.OpCode(ILOpCode.Ret);
-
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
-        }
-
-        var cctorSig = new BlobBuilder();
-        new BlobEncoder(cctorSig).MethodSignature(isInstanceMethod: false)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName | MethodAttributes.Static,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".cctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(cctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="WellKnownReferences.ObjectCtorRef"/>.</summary>
-    private EntityHandle GetBaseCtorToken(StructSymbol classSym)
-    {
-        if (classSym.BaseClass != null && this.cache.ClassCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
-        {
-            return baseCtor;
-        }
-
-        if (classSym.IsAttributeClass)
-        {
-            // Phase 4 of #141 / ADR-0047 §5: chain to System.Attribute..ctor()
-            // since the base type was overridden away from System.Object.
-            return this.wellKnown.GetSystemAttributeCtorRef();
-        }
-
-        if (classSym.ImportedBaseType?.ClrType is Type importedBaseClr)
-        {
-            // Issue #296: chain the generated ctor to the imported CLR base's
-            // accessible parameterless constructor.
-            return this.GetImportedBaseDefaultCtorReference(importedBaseClr);
-        }
-
-        return this.wellKnown.ObjectCtorRef;
-    }
-
-    /// <summary>
-    /// Issue #296: resolves a MemberRef to the imported CLR base class's
-    /// accessible parameterless <c>.ctor()</c> for base-constructor chaining.
-    /// Uses metadata-safe reflection (the declaring type is loaded under a
-    /// MetadataLoadContext). Falls back to a synthesized parameterless ctor
-    /// reference when no explicit parameterless ctor is discoverable.
-    /// </summary>
-    private EntityHandle GetImportedBaseDefaultCtorReference(Type importedBaseClr)
-    {
-        ConstructorInfo parameterless = null;
-        foreach (var ctor in importedBaseClr.GetConstructors(
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-        {
-            if (ctor.GetParameters().Length != 0)
-            {
-                continue;
-            }
-
-            if (ctor.IsPublic || ctor.IsFamily || ctor.IsFamilyOrAssembly)
-            {
-                parameterless = ctor;
-                break;
-            }
-        }
-
-        if (parameterless != null)
-        {
-            return this.GetCtorReference(parameterless);
-        }
-
-        // No explicit accessible parameterless ctor was found; reference a
-        // synthesized parameterless ctor signature on the base type ref. This
-        // matches the implicit default ctor a base class would otherwise expose.
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-        return this.emitCtx.Metadata.AddMemberReference(
-            parent: this.GetTypeReference(importedBaseClr),
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    /// <summary>
-    /// Emits the Kotlin-style primary constructor for a class
-    /// (Phase 3.B.3 sub-step 2): an instance ctor taking one parameter per
-    /// declared primary-ctor param, chaining to <c>object::.ctor()</c> and
-    /// assigning each argument to the same-named field.
-    /// </summary>
-    /// <param name="classSym">The class with a declared primary constructor.</param>
-    private MethodDefinitionHandle EmitClassPrimaryConstructor(StructSymbol classSym)
-    {
-        var parameters = classSym.PrimaryConstructorParameters;
-        var baseCtorToken = this.GetBaseCtorToken(classSym);
-
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-
-            // For each ctor param: this.<field> = arg; positional 1:1 with
-            // fields of the same name.
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                var param = parameters[i];
-                if (!classSym.TryGetField(param.Name, out var field))
-                {
-                    throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
-                }
-
-                if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
-                {
-                    throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
-                }
-
-                il.LoadArgument(0);
-                il.LoadArgument(i + 1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(fieldHandle);
-            }
-
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
-        }
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in parameters)
-                    {
-                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
-                    }
-                });
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #306: emits a constructor that forwards arguments to an explicit
-    /// base constructor (<c>: Base(args)</c>) before initializing the class's
-    /// own fields from the primary-constructor parameters. The base arguments
-    /// are evaluated via a <see cref="BodyEmitter"/> so they may reference the
-    /// primary-constructor parameters; the resolved base ctor token comes from
-    /// the bound <see cref="BaseConstructorInitializer"/>.
-    /// </summary>
-    /// <param name="classSym">The class whose forwarding constructor is being emitted.</param>
-    /// <param name="parameters">The constructor parameters (the primary-constructor parameters, or empty when the base arguments are constant).</param>
-    private MethodDefinitionHandle EmitClassConstructorWithBaseInitializer(StructSymbol classSym, ImmutableArray<ParameterSymbol> parameters)
-    {
-        var init = classSym.BaseConstructorInitializer;
-        var baseCtorToken = this.GetBaseInitializerCtorToken(classSym, init);
-
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-            var locals = new Dictionary<VariableSymbol, int>();
-            var labels = new Dictionary<BoundLabel, LabelHandle>();
-            var localTypes = new List<TypeSymbol>();
-            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-            var constValues = new Dictionary<VariableSymbol, object>();
-
-            // Pre-scan the base arguments so any scratch slots they require are
-            // allocated and registered in the locals signature.
-            if (!init.Arguments.IsDefaultOrEmpty)
-            {
-                var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
-                foreach (var arg in init.Arguments)
-                {
-                    synth.Add(new BoundExpressionStatement(null, arg));
-                }
-
-                CollectLocalsAndLabels(
-                    new BoundBlockStatement(null, synth.ToImmutable()),
-                    null,
-                    locals,
-                    localTypes,
-                    labels,
-                    appendSlots,
-                    structLiteralSlots,
-                    defaultExpressionSlots,
-                    mapIndexSlots,
-                    patternSwitchSlots,
-                    typePatternScratchSlots,
-                    switchExpressionSlots,
-                    channelOpSlots,
-                    scopeFrameSlots,
-                    selectStatementSlots,
-                    receiverSpillSlots,
-                    indexAssignmentValueSlots,
-                    goEnclosingScopes,
-                    il);
-            }
-
-            var paramSlots = new Dictionary<ParameterSymbol, int>();
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                paramSlots[parameters[i]] = i + 1;
-            }
-
-            StandaloneSignatureHandle localsSignature = default;
-            if (localTypes.Count > 0)
-            {
-                var localsSigBlob = new BlobBuilder();
-                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-                foreach (var t in localTypes)
-                {
-                    EncodeLocalVariableType(encoder.AddVariable(), t);
-                }
-
-                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-            }
-
-            var emitter = new BodyEmitter(
-                this,
-                il,
-                locals,
-                paramSlots,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                constValues: constValues);
-
-            // base(args)
-            il.LoadArgument(0);
-            if (!init.Arguments.IsDefaultOrEmpty)
-            {
-                foreach (var arg in init.Arguments)
-                {
-                    emitter.EmitValue(arg);
-                }
-            }
-
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-
-            // this.<field> = arg; positional 1:1 with same-named fields.
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                var param = parameters[i];
-                if (!classSym.TryGetField(param.Name, out var field))
-                {
-                    throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
-                }
-
-                if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
-                {
-                    throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
-                }
-
-                il.LoadArgument(0);
-                il.LoadArgument(i + 1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(fieldHandle);
-            }
-
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
-        }
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in parameters)
-                    {
-                        this.EncodeTypeSymbol(ps.AddParameter().Type(), p.Type);
-                    }
-                });
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #306: emits a class constructor materialized from an explicit
-    /// <c>init(...)</c> declaration. The body first chains to the resolved base
-    /// constructor (either the explicit <c>: base(args)</c> initializer or the
-    /// conventional parameterless chain) and then runs the bound constructor
-    /// body, which sees <c>this</c>, the constructor parameters, and the class's
-    /// fields (as bare names).
-    /// </summary>
-    /// <param name="classSym">The class whose explicit constructor is being emitted.</param>
-    /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the class is used.</param>
-    private MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol ctor = null)
-    {
-        ctor ??= classSym.ExplicitConstructor;
-        var function = ctor.Function;
-        var body = this.emitCtx.Program.Functions[function];
-        var init = ctor.BaseInitializer;
-        var baseCtorToken = init != null
-            ? this.GetBaseInitializerCtorToken(classSym, init)
-            : this.GetBaseCtorToken(classSym);
-
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-
-            var locals = new Dictionary<VariableSymbol, int>();
-            var labels = new Dictionary<BoundLabel, LabelHandle>();
-            var localTypes = new List<TypeSymbol>();
-            var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
-            var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
-            var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
-            var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
-            var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
-            var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
-            var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
-            var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
-            var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
-            var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
-            var receiverSpillSlots = new Dictionary<BoundExpression, int>();
-            var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
-            var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
-            var constValues = new Dictionary<VariableSymbol, object>();
-
-            // Pre-scan the base arguments so any scratch slots they require are
-            // allocated and registered in the locals signature.
-            if (init != null && !init.Arguments.IsDefaultOrEmpty)
-            {
-                var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
-                foreach (var arg in init.Arguments)
-                {
-                    synth.Add(new BoundExpressionStatement(null, arg));
-                }
-
-                CollectLocalsAndLabels(
-                    new BoundBlockStatement(null, synth.ToImmutable()),
-                    null,
-                    locals,
-                    localTypes,
-                    labels,
-                    appendSlots,
-                    structLiteralSlots,
-                    defaultExpressionSlots,
-                    mapIndexSlots,
-                    patternSwitchSlots,
-                    typePatternScratchSlots,
-                    switchExpressionSlots,
-                    channelOpSlots,
-                    scopeFrameSlots,
-                    selectStatementSlots,
-                    receiverSpillSlots,
-                    indexAssignmentValueSlots,
-                    goEnclosingScopes,
-                    il);
-            }
-
-            CollectConstValues(body, constValues);
-            CollectLocalsAndLabels(
-                body,
-                function,
-                locals,
-                localTypes,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                il);
-
-            // Slot 0 is the implicit `this`; user parameters shift up by one.
-            var paramSlots = new Dictionary<ParameterSymbol, int>
-            {
-                [function.ThisParameter] = 0,
-            };
-            for (var i = 0; i < function.Parameters.Length; i++)
-            {
-                paramSlots[function.Parameters[i]] = i + 1;
-            }
-
-            StandaloneSignatureHandle localsSignature = default;
-            if (localTypes.Count > 0)
-            {
-                var localsSigBlob = new BlobBuilder();
-                var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
-                foreach (var t in localTypes)
-                {
-                    EncodeLocalVariableType(encoder.AddVariable(), t);
-                }
-
-                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
-            }
-
-            var emitter = new BodyEmitter(
-                this,
-                il,
-                locals,
-                paramSlots,
-                labels,
-                appendSlots,
-                structLiteralSlots,
-                defaultExpressionSlots,
-                mapIndexSlots,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                receiverSpillSlots,
-                indexAssignmentValueSlots,
-                goEnclosingScopes,
-                constValues: constValues);
-
-            // base(args) — `this` followed by the (ref-kind aware) base arguments.
-            il.LoadArgument(0);
-            if (init != null && !init.Arguments.IsDefaultOrEmpty)
-            {
-                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
-            }
-
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-
-            // Run the user-authored constructor body.
-            emitter.EmitBlock(body);
-
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
-        }
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                function.Parameters.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in function.Parameters)
-                    {
-                        // ADR-0060: ref-kind constructor parameters are encoded as
-                        // managed pointers (`T&`). For `in`, also stamp the
-                        // IsReadOnlyAttribute modreq.
-                        var paramEncoder = ps.AddParameter();
-                        if (p.RefKind == RefKind.In)
-                        {
-                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
-                            if (!isReadOnlyAttrType.IsNil)
-                            {
-                                paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
-                            }
-                        }
-
-                        this.EncodeTypeSymbol(paramEncoder.Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
-
-        // ADR-0060: emit a Parameter row per source parameter so we can stamp
-        // ParameterAttributes.In/Out and (for `in`) IsReadOnlyAttribute.
-        var firstCtorParamHandle = this.NextParameterHandle();
-        for (var pi = 0; pi < function.Parameters.Length; pi++)
-        {
-            var p = function.Parameters[pi];
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: pi + 1);
-
-            if (p.RefKind == RefKind.In)
-            {
-                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
-            }
-        }
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: firstCtorParamHandle);
-    }
-
-    /// <summary>Issue #306: resolves the metadata token of the base constructor targeted by a <see cref="BaseConstructorInitializer"/>.</summary>
-    private EntityHandle GetBaseInitializerCtorToken(StructSymbol classSym, BaseConstructorInitializer init)
-    {
-        if (init.IsClrBase)
-        {
-            return this.GetCtorReference(init.ClrConstructor);
-        }
-
-        var gsharpBase = init.GSharpBaseType;
-        if (init.Arguments.Length > 0
-            && gsharpBase.HasPrimaryConstructor
-            && this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
-        {
-            return primaryHandle;
-        }
-
-        if (this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
-        {
-            return defaultHandle;
-        }
-
-        // Fall back to the conventional resolution (parameterless chain).
-        return this.GetBaseCtorToken(classSym);
-    }
-
     private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
     {
         return accessibility switch
@@ -4868,30 +3509,409 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private MethodDefinitionHandle EmitDefaultConstructor()
+    // ----- PR-E-8 TypeDefEmitter body-emission callbacks ----------------
+    // These three helpers were extracted from EmitStaticConstructor,
+    // EmitClassConstructorWithBaseInitializer, and EmitClassConstructorWithBody
+    // when those methods moved to TypeDefEmitter. They retain the
+    // BodyEmitter-driven IL emission so the still-private BodyEmitter
+    // nested class doesn't need a sibling-facing surface — TypeDefEmitter
+    // calls them via injected Func<…> callbacks. They are scheduled to
+    // move with BodyEmitter in PR-E-11 MethodBodyEmitter.
+
+    /// <summary>
+    /// Issue #262: builds the IL body for a static constructor (<c>.cctor</c>)
+    /// that runs each <see cref="StructSymbol.StaticFieldInitializers"/> in
+    /// declaration order. Returns the resulting body offset.
+    /// </summary>
+    private int EmitStaticConstructorBodyBytes(StructSymbol typeSym)
     {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        // Build a synthetic body: for each field with an initializer,
+        // emit the expression + stsfld.
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var field in typeSym.StaticFields)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.Call(this.wellKnown.ObjectCtorRef);
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            if (typeSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
+            {
+                // Synthesize: field = initExpr (as an expression statement).
+                var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, field, initExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
         }
 
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
+        var body = new BoundBlockStatement(null, statements.ToImmutable());
 
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
-                | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        CollectLocalsAndLabels(
+            body,
+            null,
+            locals,
+            localTypes,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            il);
+
+        var parameters = new Dictionary<ParameterSymbol, int>();
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new BodyEmitter(
+            this,
+            il,
+            locals,
+            parameters,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            constValues: constValues);
+        emitter.EmitBlock(body);
+        il.OpCode(ILOpCode.Ret);
+
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
+    /// Issue #306: builds the IL body for a forwarding constructor that
+    /// runs <c>base(args)</c> before assigning the primary-constructor
+    /// parameters into their same-named fields. Returns the resulting
+    /// body offset.
+    /// </summary>
+    private int EmitClassConstructorWithBaseInitializerBodyBytes(
+        StructSymbol classSym,
+        ImmutableArray<ParameterSymbol> parameters,
+        BaseConstructorInitializer init,
+        EntityHandle baseCtorToken)
+    {
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        // Pre-scan the base arguments so any scratch slots they require are
+        // allocated and registered in the locals signature.
+        if (!init.Arguments.IsDefaultOrEmpty)
+        {
+            var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
+            foreach (var arg in init.Arguments)
+            {
+                synth.Add(new BoundExpressionStatement(null, arg));
+            }
+
+            CollectLocalsAndLabels(
+                new BoundBlockStatement(null, synth.ToImmutable()),
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                receiverSpillSlots,
+                indexAssignmentValueSlots,
+                goEnclosingScopes,
+                il);
+        }
+
+        var paramSlots = new Dictionary<ParameterSymbol, int>();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            paramSlots[parameters[i]] = i + 1;
+        }
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new BodyEmitter(
+            this,
+            il,
+            locals,
+            paramSlots,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            constValues: constValues);
+
+        // base(args)
+        il.LoadArgument(0);
+        if (!init.Arguments.IsDefaultOrEmpty)
+        {
+            foreach (var arg in init.Arguments)
+            {
+                emitter.EmitValue(arg);
+            }
+        }
+
+        il.OpCode(ILOpCode.Call);
+        il.Token(baseCtorToken);
+
+        // this.<field> = arg; positional 1:1 with same-named fields.
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var param = parameters[i];
+            if (!classSym.TryGetField(param.Name, out var field))
+            {
+                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+            }
+
+            if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            {
+                throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
+            }
+
+            il.LoadArgument(0);
+            il.LoadArgument(i + 1);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(fieldHandle);
+        }
+
+        il.OpCode(ILOpCode.Ret);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
+    /// Issue #306: builds the IL body for a class constructor materialized
+    /// from an explicit <c>init(...)</c> declaration. Chains to the base
+    /// (either the explicit <c>: base(args)</c> initializer or the
+    /// conventional parameterless chain) and then runs the user-authored
+    /// constructor body via <see cref="BodyEmitter.EmitBlock"/>. Returns
+    /// the resulting body offset.
+    /// </summary>
+    private int EmitClassConstructorWithBodyBodyBytes(
+        StructSymbol classSym,
+        ConstructorSymbol ctor,
+        BaseConstructorInitializer init,
+        EntityHandle baseCtorToken)
+    {
+        var function = ctor.Function;
+        var body = this.emitCtx.Program.Functions[function];
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        // Pre-scan the base arguments so any scratch slots they require are
+        // allocated and registered in the locals signature.
+        if (init != null && !init.Arguments.IsDefaultOrEmpty)
+        {
+            var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
+            foreach (var arg in init.Arguments)
+            {
+                synth.Add(new BoundExpressionStatement(null, arg));
+            }
+
+            CollectLocalsAndLabels(
+                new BoundBlockStatement(null, synth.ToImmutable()),
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                receiverSpillSlots,
+                indexAssignmentValueSlots,
+                goEnclosingScopes,
+                il);
+        }
+
+        CollectConstValues(body, constValues);
+        CollectLocalsAndLabels(
+            body,
+            function,
+            locals,
+            localTypes,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            il);
+
+        // Slot 0 is the implicit `this`; user parameters shift up by one.
+        var paramSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [function.ThisParameter] = 0,
+        };
+        for (var i = 0; i < function.Parameters.Length; i++)
+        {
+            paramSlots[function.Parameters[i]] = i + 1;
+        }
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new BodyEmitter(
+            this,
+            il,
+            locals,
+            paramSlots,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            constValues: constValues);
+
+        // base(args) — `this` followed by the (ref-kind aware) base arguments.
+        il.LoadArgument(0);
+        if (init != null && !init.Arguments.IsDefaultOrEmpty)
+        {
+            emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
+        }
+
+        il.OpCode(ILOpCode.Call);
+        il.Token(baseCtorToken);
+
+        // Run the user-authored constructor body.
+        emitter.EmitBlock(body);
+
+        il.OpCode(ILOpCode.Ret);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
     }
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
