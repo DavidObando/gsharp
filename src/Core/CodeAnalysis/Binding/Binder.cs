@@ -110,6 +110,16 @@ public sealed class Binder
     // via Func / custom-delegate callbacks; never back-references Binder.
     private readonly OverloadResolver overloads;
 
+    // PR-B-5: the binder-side facade for per-pattern-kind binding.
+    // Owns BindPattern dispatch plus BindConstantPattern / BindTypePattern
+    // / BindPropertyPattern / BindRelationalPattern / BindListPattern.
+    // Switch-statement / switch-expression glue (discriminant binding,
+    // arm walking, exhaustiveness reporting, narrowing-frame management)
+    // stays on Binder for now and will move to StatementBinder (B-7) and
+    // ExpressionBinder (B-9). Composed via narrow Func callbacks; never
+    // back-references Binder.
+    private readonly PatternBinder patterns;
+
     private FunctionSymbol function;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
@@ -172,6 +182,12 @@ public sealed class Binder
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function);
+        patterns = new PatternBinder(
+            binderCtx,
+            conversions,
+            bindExpression: syntax => BindExpression(syntax),
+            bindTypeClause: BindTypeClause,
+            isNilLiteral: IsNilLiteral);
         this.function = function;
 
         if (function != null)
@@ -5501,7 +5517,7 @@ public sealed class Binder
             }
 
             scope = new BoundScope(scope);
-            var pattern = BindPattern(caseSyntax.Value, switchType);
+            var pattern = patterns.BindPattern(caseSyntax.Value, switchType);
             if (pattern is BoundDiscardPattern)
             {
                 if (hasDefault)
@@ -5578,7 +5594,7 @@ public sealed class Binder
             }
 
             scope = new BoundScope(scope);
-            pattern = BindPattern(armSyntax.Value, switchType);
+            pattern = patterns.BindPattern(armSyntax.Value, switchType);
             if (pattern is BoundDiscardPattern)
             {
                 if (hasDefault)
@@ -5632,132 +5648,6 @@ public sealed class Binder
             Diagnostics);
 
         return new BoundSwitchExpression(null, discriminant, boundArms, resultType);
-    }
-
-    private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        switch (syntax.Kind)
-        {
-            case SyntaxKind.ConstantPattern:
-                return BindConstantPattern((ConstantPatternSyntax)syntax, discriminantType);
-            case SyntaxKind.DiscardPattern:
-                return new BoundDiscardPattern(syntax, discriminantType);
-            case SyntaxKind.TypePattern:
-                return BindTypePattern((TypePatternSyntax)syntax, discriminantType);
-            case SyntaxKind.PropertyPattern:
-                return BindPropertyPattern((PropertyPatternSyntax)syntax, discriminantType);
-            case SyntaxKind.RelationalPattern:
-                return BindRelationalPattern((RelationalPatternSyntax)syntax, discriminantType);
-            case SyntaxKind.ListPattern:
-                return BindListPattern((ListPatternSyntax)syntax, discriminantType);
-            default:
-                throw new Exception($"Unexpected pattern syntax {syntax.Kind}");
-        }
-    }
-
-    private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        var expression = BindExpression(syntax.Expression);
-        var conversion = Conversion.Classify(expression.Type, discriminantType);
-        if (!conversion.Exists || conversion.IsExplicit)
-        {
-            if (expression.Type != TypeSymbol.Error && discriminantType != TypeSymbol.Error)
-            {
-                Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
-            }
-
-            return new BoundConstantPattern(syntax, discriminantType, new BoundErrorExpression(syntax));
-        }
-
-        var value = conversion.IsIdentity ? expression : new BoundConversionExpression(syntax, discriminantType, expression);
-        var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, discriminantType);
-        if (op == null && discriminantType is NullableTypeSymbol nullable)
-        {
-            var comparisonType = IsNilLiteral(expression) ? TypeSymbol.Null : nullable.UnderlyingType;
-            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, comparisonType)
-                ?? BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, nullable.UnderlyingType, nullable.UnderlyingType);
-        }
-
-        if (op == null && expression.Type != TypeSymbol.Error)
-        {
-            Diagnostics.ReportSwitchCaseTypeMismatch(syntax.Expression.Location, expression.Type, discriminantType);
-        }
-
-        return new BoundConstantPattern(syntax, discriminantType, value);
-    }
-
-    private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        var targetType = BindTypeClause(syntax.Type) ?? TypeSymbol.Error;
-        var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType, declaringSyntax: syntax.Identifier);
-        if (!scope.TryDeclareVariable(variable))
-        {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
-        }
-
-        return new BoundTypePattern(syntax, discriminantType, targetType, variable);
-    }
-
-    private BoundPattern BindPropertyPattern(PropertyPatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        var fields = ImmutableArray.CreateBuilder<BoundPropertyPatternField>();
-        if (discriminantType is not StructSymbol structType)
-        {
-            Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
-            return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
-        }
-
-        foreach (var fieldSyntax in syntax.Fields)
-        {
-            if (!structType.TryGetFieldIncludingInherited(fieldSyntax.Identifier.Text, out var field, out _))
-            {
-                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
-                fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
-                continue;
-            }
-
-            fields.Add(new BoundPropertyPatternField(syntax, field, BindPattern(fieldSyntax.Pattern, field.Type)));
-        }
-
-        return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
-    }
-
-    private BoundPattern BindRelationalPattern(RelationalPatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false);
-        var op = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, discriminantType, discriminantType);
-        if (op == null)
-        {
-            Diagnostics.ReportRelationalPatternOperatorUndefined(syntax.OperatorToken.Location, syntax.OperatorToken.Kind, discriminantType);
-            op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
-        }
-
-        return new BoundRelationalPattern(syntax, discriminantType, op, value);
-    }
-
-    private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
-    {
-        TypeSymbol elementType = TypeSymbol.Error;
-        if (discriminantType is ArrayTypeSymbol arrayType)
-        {
-            elementType = arrayType.ElementType;
-        }
-        else if (discriminantType is SliceTypeSymbol sliceType)
-        {
-            elementType = sliceType.ElementType;
-        }
-        else
-        {
-            Diagnostics.ReportListPatternRequiresArrayOrSlice(syntax.OpenSquareBracketToken.Location, discriminantType);
-        }
-
-        var elements = ImmutableArray.CreateBuilder<BoundPattern>();
-        foreach (var elementSyntax in syntax.Elements)
-        {
-            elements.Add(BindPattern(elementSyntax, elementType));
-        }
-
-        return new BoundListPattern(syntax, discriminantType, elements.ToImmutable(), elementType);
     }
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
