@@ -6,6 +6,7 @@ using System;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -423,7 +424,18 @@ internal sealed class WellKnownReferences
                 $"GetNullableGetValueReference: '{underlyingValueType?.FullName}' is not a value type.");
         }
 
-        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
+        // Issue #571: route Nullable<T> construction through the
+        // ReferenceResolver so the open `System.Nullable`1` definition and the
+        // (possibly MLC-backed) inner value type share a load context. Building
+        // it from host `typeof(System.Nullable<>)` here would yield a
+        // get_Value MethodInfo whose declaring type mixes contexts, which then
+        // fails as GS9998 inside the MemberRef encoding path.
+        if (!NullableLifting.TryConstructNullable(this.emitCtx.References, underlyingValueType, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{underlyingValueType.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
         var getValue = nullableClr.GetMethod("get_Value", Type.EmptyTypes)
             ?? throw new InvalidOperationException(
                 $"System.Nullable<{underlyingValueType.FullName}>::get_Value() is not resolvable.");
@@ -442,7 +454,13 @@ internal sealed class WellKnownReferences
                 $"GetNullableGetHasValueReference: '{underlyingValueType?.FullName}' is not a value type.");
         }
 
-        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
+        // Issue #571: see GetNullableGetValueReference for rationale.
+        if (!NullableLifting.TryConstructNullable(this.emitCtx.References, underlyingValueType, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{underlyingValueType.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
         var getHasValue = nullableClr.GetMethod("get_HasValue", Type.EmptyTypes)
             ?? throw new InvalidOperationException(
                 $"System.Nullable<{underlyingValueType.FullName}>::get_HasValue() is not resolvable.");
