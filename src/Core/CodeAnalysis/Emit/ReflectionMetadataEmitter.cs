@@ -156,10 +156,20 @@ internal sealed class ReflectionMetadataEmitter
     // WellKnownReferences.
     private StandaloneSignatureHandle hashCodeLocalSig;
 
+    // PR-E-4: SlotPlanner owns the slot-allocator BoundTreeWalker collectors
+    // (16 of them) and the SelectSlots value object they populate. The slot
+    // dictionaries themselves remain per-method-emit and stay on BodyEmitter /
+    // are passed into SlotPlanner entry points as arguments; SlotPlanner does
+    // not depend on this emitter — it takes its two RME-flavored dependencies
+    // (the MetadataTokenCache for GlobalFieldDefs lookups, and the
+    // NeedsRvalueReceiverSpill predicate) via constructor injection.
+    private readonly SlotPlanner slotPlanner;
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
         this.cache = new MetadataTokenCache();
+        this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
     }
 
     /// <summary>
@@ -7565,8 +7575,8 @@ internal sealed class ReflectionMetadataEmitter
         // recurse walker so every BoundExpression kind is visited and any
         // nested pattern switch / switch expression / channel op / scope /
         // select gets its slot pre-allocated.
-        var allocator = new PatternSwitchSlotAllocator(
-            this,
+        this.slotPlanner.RunPatternSwitchAllocator(
+            statement,
             locals,
             localTypes,
             patternSwitchSlots,
@@ -7577,7 +7587,6 @@ internal sealed class ReflectionMetadataEmitter
             selectStatementSlots,
             goEnclosingScopes,
             currentScope);
-        allocator.Visit(statement);
     }
 
     private void WalkExpressionForSwitches(
@@ -7600,8 +7609,8 @@ internal sealed class ReflectionMetadataEmitter
 
         // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale —
         // delegate to the comprehensive walker.
-        var allocator = new PatternSwitchSlotAllocator(
-            this,
+        this.slotPlanner.RunPatternSwitchAllocator(
+            expression,
             locals,
             localTypes,
             patternSwitchSlots,
@@ -7612,7 +7621,6 @@ internal sealed class ReflectionMetadataEmitter
             selectStatementSlots,
             goEnclosingScopes,
             currentScope);
-        allocator.Visit(expression);
     }
 
     private void WalkPatternForSwitchExpressions(
@@ -7634,8 +7642,8 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale.
-        var allocator = new PatternSwitchSlotAllocator(
-            this,
+        this.slotPlanner.RunPatternSwitchAllocator(
+            pattern,
             locals,
             localTypes,
             patternSwitchSlots,
@@ -7646,368 +7654,13 @@ internal sealed class ReflectionMetadataEmitter
             selectStatementSlots,
             goEnclosingScopes,
             currentScope);
-        allocator.Visit(pattern);
     }
 
-    private sealed class PatternSwitchSlotAllocator : BoundTreeWalker
+    private void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
     {
-        private readonly ReflectionMetadataEmitter outer;
-        private readonly Dictionary<VariableSymbol, int> locals;
-        private readonly List<TypeSymbol> localTypes;
-        private readonly Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots;
-        private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
-        private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
-        private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
-        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
-        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
-        private BoundScopeStatement currentScope;
-
-        public PatternSwitchSlotAllocator(
-            ReflectionMetadataEmitter outer,
-            Dictionary<VariableSymbol, int> locals,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-            Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-            Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-            BoundScopeStatement currentScope)
-        {
-            this.outer = outer;
-            this.locals = locals;
-            this.localTypes = localTypes;
-            this.patternSwitchSlots = patternSwitchSlots;
-            this.typePatternScratchSlots = typePatternScratchSlots;
-            this.switchExpressionSlots = switchExpressionSlots;
-            this.channelOpSlots = channelOpSlots;
-            this.scopeFrameSlots = scopeFrameSlots;
-            this.selectStatementSlots = selectStatementSlots;
-            this.goEnclosingScopes = goEnclosingScopes;
-            this.currentScope = currentScope;
-        }
-
-        protected override void VisitPatternSwitchStatement(BoundPatternSwitchStatement node)
-        {
-            if (!this.patternSwitchSlots.ContainsKey(node))
-            {
-                var discriminantSlot = this.localTypes.Count;
-                this.localTypes.Add(node.Discriminant.Type);
-                this.patternSwitchSlots[node] = discriminantSlot;
-            }
-
-            VisitExpression(node.Discriminant);
-            foreach (var arm in node.Arms)
-            {
-                if (arm.Pattern != null)
-                {
-                    AllocatePatternBindings(arm.Pattern, this.locals, this.localTypes, this.typePatternScratchSlots);
-                    VisitPattern(arm.Pattern);
-                }
-
-                VisitStatement(arm.Body);
-            }
-        }
-
-        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
-        {
-            // Issue #216: const decls have no IL slot.
-            // Issue #191: top-level globals are emitted as static fields on
-            // <Program>; do not allocate a local slot for them when they
-            // appear nested inside a switch arm / scope.
-            if (node.ConstantValue == null
-                && !this.locals.ContainsKey(node.Variable)
-                && !(node.Variable is GlobalVariableSymbol gv && this.outer.cache.GlobalFieldDefs.ContainsKey(gv)))
-            {
-                this.locals[node.Variable] = this.localTypes.Count;
-
-                // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's IL slot
-                // is the managed pointer `T&`, not the pointee `T`. Recording the
-                // slot type as ByRefTypeSymbol routes encoding through the byref
-                // local-sig path (EncodeLocalVariableType).
-                if (node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
-                {
-                    this.localTypes.Add(ByRefTypeSymbol.Get(lvs.Type));
-                }
-                else
-                {
-                    this.localTypes.Add(node.Variable.Type);
-                }
-            }
-
-            base.VisitVariableDeclaration(node);
-        }
-
-        // ADR-0060: an inline `out var name`, `out let name`, or `out _` argument
-        // synthesises a local in the binder without a corresponding
-        // BoundVariableDeclaration statement. Pick the local up here when we see
-        // its address taken so the emitter has a slot to ldloca from.
-        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
-        {
-            if (node.Operand is BoundVariableExpression bve
-                && bve.Variable is LocalVariableSymbol lvs
-                && lvs is not ParameterSymbol
-                && !this.locals.ContainsKey(lvs))
-            {
-                this.locals[lvs] = this.localTypes.Count;
-                this.localTypes.Add(lvs.Type);
-            }
-
-            base.VisitAddressOfExpression(node);
-        }
-
-        protected override void VisitGoStatement(BoundGoStatement node)
-        {
-            if (this.currentScope != null)
-            {
-                this.goEnclosingScopes[node] = this.currentScope;
-            }
-
-            base.VisitGoStatement(node);
-        }
-
-        protected override void VisitScopeStatement(BoundScopeStatement node)
-        {
-            AllocateScopeFrameSlots(node, this.localTypes, this.scopeFrameSlots);
-            var saved = this.currentScope;
-            this.currentScope = node;
-            try
-            {
-                base.VisitScopeStatement(node);
-            }
-            finally
-            {
-                this.currentScope = saved;
-            }
-        }
-
-        protected override void VisitSelectStatement(BoundSelectStatement node)
-        {
-            AllocateSelectSlots(node, this.locals, this.localTypes, this.selectStatementSlots);
-            base.VisitSelectStatement(node);
-        }
-
-        protected override void VisitChannelSendStatement(BoundChannelSendStatement node)
-        {
-            AllocateChannelSendSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelSendStatement(node);
-        }
-
-        protected override void VisitChannelReceiveExpression(BoundChannelReceiveExpression node)
-        {
-            AllocateChannelReceiveSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelReceiveExpression(node);
-        }
-
-        protected override void VisitSwitchExpression(BoundSwitchExpression node)
-        {
-            if (!this.switchExpressionSlots.ContainsKey(node))
-            {
-                var resultSlot = this.localTypes.Count;
-                this.localTypes.Add(node.Type);
-                var discrSlot = this.localTypes.Count;
-                this.localTypes.Add(node.Discriminant.Type);
-                this.switchExpressionSlots[node] = (resultSlot, discrSlot);
-            }
-
-            VisitExpression(node.Discriminant);
-            foreach (var arm in node.Arms)
-            {
-                if (arm.Pattern != null)
-                {
-                    AllocatePatternBindings(arm.Pattern, this.locals, this.localTypes, this.typePatternScratchSlots);
-                    VisitPattern(arm.Pattern);
-                }
-
-                VisitExpression(arm.Result);
-            }
-        }
-    }
-
-    private static void AllocateScopeFrameSlots(
-        BoundScopeStatement node,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots)
-    {
-        if (scopeFrameSlots.ContainsKey(node))
-        {
-            return;
-        }
-
-        var tasks = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(List<System.Threading.Tasks.Task>)));
-        var cts = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.CancellationTokenSource)));
-        var awaiter = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-        scopeFrameSlots[node] = (tasks, cts, awaiter);
-    }
-
-    private static void AllocateChannelSendSlots(
-        BoundChannelSendStatement node,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-    {
-        if (channelOpSlots.ContainsKey(node))
-        {
-            return;
-        }
-
-        var vt = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
-        var ta = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-        channelOpSlots[node] = (vt, ta, -1, -1);
-    }
-
-    private static void AllocateChannelReceiveSlots(
-        BoundChannelReceiveExpression node,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-    {
-        if (channelOpSlots.ContainsKey(node))
-        {
-            return;
-        }
-
-        var chType = (ChannelTypeSymbol)node.Channel.Type;
-        var elementClr = chType.ElementType.ClrType ?? typeof(object);
-        var vtClr = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
-        var taClr = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
-
-        var vt = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(vtClr));
-        var ta = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(taClr));
-        var result = localTypes.Count;
-        localTypes.Add(chType.ElementType.ClrType != null ? chType.ElementType : TypeSymbol.FromClrType(typeof(object)));
-        channelOpSlots[node] = (vt, ta, result, -1);
-    }
-
-    private static void AllocateSelectSlots(
-        BoundSelectStatement node,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
-    {
-        if (selectStatementSlots.ContainsKey(node))
-        {
-            return;
-        }
-
-        var channelSlots = new int[node.Cases.Length];
-        var valueSlots = new int[node.Cases.Length];
-        var outSlots = new int[node.Cases.Length];
-        Array.Fill(channelSlots, -1);
-        Array.Fill(valueSlots, -1);
-        Array.Fill(outSlots, -1);
-
-        for (var i = 0; i < node.Cases.Length; i++)
-        {
-            var arm = node.Cases[i];
-            if (arm.IsDefault)
-            {
-                continue;
-            }
-
-            channelSlots[i] = localTypes.Count;
-            localTypes.Add(arm.Channel.Type);
-
-            if (arm.CaseKind == SelectCaseKind.Send)
-            {
-                valueSlots[i] = localTypes.Count;
-                localTypes.Add(arm.Value.Type);
-                continue;
-            }
-
-            var chType = (ChannelTypeSymbol)arm.Channel.Type;
-            if (arm.CaseKind == SelectCaseKind.ReceiveBind && arm.Variable != null)
-            {
-                if (!locals.TryGetValue(arm.Variable, out var slot))
-                {
-                    slot = localTypes.Count;
-                    locals[arm.Variable] = slot;
-                    localTypes.Add(arm.Variable.Type);
-                }
-
-                outSlots[i] = slot;
-            }
-            else
-            {
-                outSlots[i] = localTypes.Count;
-                localTypes.Add(chType.ElementType.ClrType != null ? chType.ElementType : TypeSymbol.FromClrType(typeof(object)));
-            }
-        }
-
-        var tasksSlot = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task[])));
-        var waitValueTaskSlot = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)));
-        var whenAnyTaskSlot = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<System.Threading.Tasks.Task>)));
-        var whenAnyAwaiterSlot = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter<System.Threading.Tasks.Task>)));
-        var completedTaskSlot = localTypes.Count;
-        localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)));
-
-        selectStatementSlots[node] = new SelectSlots(
-            channelSlots,
-            valueSlots,
-            outSlots,
-            tasksSlot,
-            waitValueTaskSlot,
-            whenAnyTaskSlot,
-            whenAnyAwaiterSlot,
-            completedTaskSlot);
-    }
-
-    private static void AllocatePatternBindings(
-        BoundPattern pattern,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots)
-    {
-        switch (pattern)
-        {
-            case BoundTypePattern tp:
-                if (!typePatternScratchSlots.ContainsKey(tp))
-                {
-                    var scratch = localTypes.Count;
-                    localTypes.Add(TypeSymbol.FromClrType(typeof(object)));
-                    typePatternScratchSlots[tp] = scratch;
-                }
-
-                if (!locals.ContainsKey(tp.Variable))
-                {
-                    locals[tp.Variable] = localTypes.Count;
-                    localTypes.Add(tp.Variable.Type);
-                }
-
-                break;
-            case BoundPropertyPattern pp:
-                foreach (var field in pp.Fields)
-                {
-                    AllocatePatternBindings(field.Pattern, locals, localTypes, typePatternScratchSlots);
-                }
-
-                break;
-            case BoundListPattern lp:
-                foreach (var elem in lp.Elements)
-                {
-                    AllocatePatternBindings(elem, locals, localTypes, typePatternScratchSlots);
-                }
-
-                break;
-        }
-    }
-
-    private static void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
-    {
-        var collector = new BlockExpressionLocalCollector();
-        collector.Visit(body);
-        foreach (var variable in collector.Variables)
+        var collected = new List<VariableSymbol>();
+        this.slotPlanner.CollectBlockExpressionLocals(body, collected);
+        foreach (var variable in collected)
         {
             if (!locals.ContainsKey(variable))
             {
@@ -8017,12 +7670,12 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static IEnumerable<BoundStructLiteralExpression> CollectStructLiterals(BoundBlockStatement body)
+    private IEnumerable<BoundStructLiteralExpression> CollectStructLiterals(BoundBlockStatement body)
     {
         var list = new List<BoundStructLiteralExpression>();
         foreach (var s in body.Statements)
         {
-            WalkForStructLiterals(s, list);
+            this.slotPlanner.CollectStructLiterals(s, list);
         }
 
         return list;
@@ -8035,28 +7688,10 @@ internal sealed class ReflectionMetadataEmitter
     // body (separate lexical scope), so we recurse on Body explicitly to find
     // nested lambdas.
     private List<BoundFunctionLiteralExpression> CollectFunctionLiterals()
-    {
-        var sink = new List<BoundFunctionLiteralExpression>();
-        var collector = new LambdaCollector(sink);
-        foreach (var kvp in this.emitCtx.Program.Functions)
-        {
-            collector.Visit(kvp.Value);
-        }
-
-        return sink;
-    }
+        => this.slotPlanner.CollectFunctionLiterals();
 
     private List<BoundGoStatement> CollectGoStatements()
-    {
-        var sink = new List<BoundGoStatement>();
-        var collector = new GoStatementCollector(sink);
-        foreach (var kvp in this.emitCtx.Program.Functions)
-        {
-            collector.Visit(kvp.Value);
-        }
-
-        return sink;
-    }
+        => this.slotPlanner.CollectGoStatements();
 
     // Phase 4 emit parity (F2, type-erased generic user types): discover
     // every constructed StructSymbol referenced in the bound program
@@ -8164,7 +7799,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         foreach (var go in goStatements)
         {
-            var captured = CollectCapturedVariables(go.Expression);
+            var captured = this.slotPlanner.CollectCapturedVariables(go.Expression);
 
             // When the go target is async (returns Task/Task<T>), the closure must
             // return Task so that Task.Run(Func<Task>) properly awaits completion.
@@ -8991,37 +8626,6 @@ internal sealed class ReflectionMetadataEmitter
         return info;
     }
 
-    private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundExpression expression)
-    {
-        var seen = new HashSet<VariableSymbol>();
-        var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
-        var declared = new HashSet<VariableSymbol>();
-        var collector = new GoCapturedVariableCollector(seen, declared, captured);
-        collector.Collect(expression);
-        return captured.ToImmutable();
-    }
-
-    private static void WalkForStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
-    {
-        new StructLiteralCollector(sink).Visit(node);
-    }
-
-    private sealed class StructLiteralCollector : BoundTreeWalker
-    {
-        private readonly List<BoundStructLiteralExpression> sink;
-
-        public StructLiteralCollector(List<BoundStructLiteralExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitStructLiteralExpression(BoundStructLiteralExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitStructLiteralExpression(node);
-        }
-    }
-
     private void CollectStatements(
         ImmutableArray<BoundStatement> statements,
         FunctionSymbol function,
@@ -9179,31 +8783,31 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private static IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
+    private IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
     {
         var list = new List<BoundAppendExpression>();
-        WalkForAppends(node, list);
+        this.slotPlanner.CollectAppends(node, list);
         return list;
     }
 
-    private static IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)
+    private IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)
     {
         var sink = new List<BoundIndexExpression>();
-        new MapIndexReadCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectMapIndexReads((BoundStatement)root, sink);
         return sink;
     }
 
-    private static IEnumerable<BoundExpression> CollectIndexAssignmentValueSpills(BoundNode root)
+    private IEnumerable<BoundExpression> CollectIndexAssignmentValueSpills(BoundNode root)
     {
         var sink = new List<BoundExpression>();
-        new IndexAssignmentValueSpillCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectIndexAssignmentValueSpills((BoundStatement)root, sink);
         return sink;
     }
 
-    private static IEnumerable<BoundDefaultExpression> CollectDefaultExpressions(BoundNode root)
+    private IEnumerable<BoundDefaultExpression> CollectDefaultExpressions(BoundNode root)
     {
         var sink = new List<BoundDefaultExpression>();
-        new DefaultExpressionCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectDefaultExpressions((BoundStatement)root, sink);
         return sink;
     }
 
@@ -9213,7 +8817,7 @@ internal sealed class ReflectionMetadataEmitter
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         var sink = new List<BoundExpression>();
-        new ReceiverSpillCollector(this, function, locals, sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectReceiverSpills((BoundStatement)root, function, locals, sink);
         return sink;
     }
 
@@ -9222,10 +8826,10 @@ internal sealed class ReflectionMetadataEmitter
     // so the emitter can spill the assigned value (`dup; stloc tmp; setter;
     // ldloc tmp`) instead of re-evaluating the receiver and calling the
     // getter to recover the expression result.
-    private static IEnumerable<BoundExpression> CollectAssignmentValueSpills(BoundNode root)
+    private IEnumerable<BoundExpression> CollectAssignmentValueSpills(BoundNode root)
     {
         var sink = new List<BoundExpression>();
-        new AssignmentValueSpillCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectAssignmentValueSpills((BoundStatement)root, sink);
         return sink;
     }
 
@@ -9234,10 +8838,10 @@ internal sealed class ReflectionMetadataEmitter
     // temp slot must be typed as `Nullable<T>` (so the local-sig blob encodes
     // the struct) and pre-allocated alongside the other body-emit scratch
     // locals so it appears in the locals signature.
-    private static IEnumerable<BoundUnaryExpression> CollectNullableValueTypeUnwraps(BoundNode root)
+    private IEnumerable<BoundUnaryExpression> CollectNullableValueTypeUnwraps(BoundNode root)
     {
         var sink = new List<BoundUnaryExpression>();
-        new NullableValueTypeUnwrapCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectNullableValueTypeUnwraps((BoundStatement)root, sink);
         return sink;
     }
 
@@ -9246,10 +8850,10 @@ internal sealed class ReflectionMetadataEmitter
     // slot. The slot is keyed by the binary expression node and typed as the
     // LHS's NullableTypeSymbol so `EncodeTypeSymbol` emits the proper
     // `System.Nullable<T>` token in the local-sig blob.
-    private static IEnumerable<BoundBinaryExpression> CollectNullableValueTypeCoalesces(BoundNode root)
+    private IEnumerable<BoundBinaryExpression> CollectNullableValueTypeCoalesces(BoundNode root)
     {
         var sink = new List<BoundBinaryExpression>();
-        new NullableValueTypeCoalesceCollector(sink).Visit((BoundStatement)root);
+        this.slotPlanner.CollectNullableValueTypeCoalesces((BoundStatement)root, sink);
         return sink;
     }
 
@@ -9339,53 +8943,11 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
-    private static void WalkForAppends(BoundNode node, List<BoundAppendExpression> sink)
-    {
-        new AppendCollector(sink).Visit(node);
-    }
-
-    private sealed class AppendCollector : BoundTreeWalker
-    {
-        private readonly List<BoundAppendExpression> sink;
-
-        public AppendCollector(List<BoundAppendExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitAppendExpression(BoundAppendExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitAppendExpression(node);
-        }
-    }
-
-    private static IEnumerable<BoundNullConditionalAccessExpression> CollectNullConditionalCaptures(BoundNode node)
+    private IEnumerable<BoundNullConditionalAccessExpression> CollectNullConditionalCaptures(BoundNode node)
     {
         var list = new List<BoundNullConditionalAccessExpression>();
-        WalkForNullConditional(node, list);
+        this.slotPlanner.CollectNullConditional(node, list);
         return list;
-    }
-
-    private static void WalkForNullConditional(BoundNode node, List<BoundNullConditionalAccessExpression> sink)
-    {
-        new NullConditionalCollector(sink).Visit(node);
-    }
-
-    private sealed class NullConditionalCollector : BoundTreeWalker
-    {
-        private readonly List<BoundNullConditionalAccessExpression> sink;
-
-        public NullConditionalCollector(List<BoundNullConditionalAccessExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitNullConditionalAccessExpression(BoundNullConditionalAccessExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitNullConditionalAccessExpression(node);
-        }
     }
 
     private EntityHandle GetElementTypeToken(TypeSymbol element)
@@ -10725,177 +10287,6 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private sealed class BlockExpressionLocalCollector : BoundTreeWalker
-    {
-        public List<VariableSymbol> Variables { get; } = new List<VariableSymbol>();
-
-        protected override void VisitBlockExpression(BoundBlockExpression node)
-        {
-            foreach (var statement in node.Statements)
-            {
-                if (statement is BoundVariableDeclaration declaration)
-                {
-                    this.Variables.Add(declaration.Variable);
-                }
-            }
-
-            base.VisitBlockExpression(node);
-        }
-    }
-
-    // Walks an arbitrary bound sub-tree and records every BoundLabelStatement
-    // label it discovers. Implemented as a BoundTreeWalker subclass so it
-    // automatically descends through every statement and expression kind
-    // (including BoundBlockExpression, BoundSpillSequenceExpression, etc.)
-    // without having to enumerate them by hand.
-    private sealed class ExpressionBlockLabelCollector : BoundTreeWalker
-    {
-        private readonly HashSet<BoundLabel> sink;
-
-        public ExpressionBlockLabelCollector(HashSet<BoundLabel> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitStatement(BoundStatement node)
-        {
-            if (node is BoundLabelStatement label)
-            {
-                this.sink.Add(label.Label);
-                return;
-            }
-
-            base.VisitStatement(node);
-        }
-    }
-
-    private sealed class LambdaCollector : BoundTreeWalker
-    {
-        private readonly List<BoundFunctionLiteralExpression> sink;
-
-        public LambdaCollector(List<BoundFunctionLiteralExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitExpression(BoundExpression node)
-        {
-            if (node is BoundFunctionLiteralExpression lambda)
-            {
-                this.sink.Add(lambda);
-                this.VisitStatement(lambda.Body);
-                return;
-            }
-
-            base.VisitExpression(node);
-        }
-    }
-
-    private sealed class GoStatementCollector : BoundTreeWalker
-    {
-        private readonly List<BoundGoStatement> sink;
-
-        public GoStatementCollector(List<BoundGoStatement> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitExpression(BoundExpression node)
-        {
-            // Override the base dispatch so we descend into the body of any
-            // BoundFunctionLiteralExpression we encounter — go statements
-            // need to discover nested go statements inside lambda bodies too.
-            if (node is BoundFunctionLiteralExpression lambda)
-            {
-                this.VisitStatement(lambda.Body);
-                return;
-            }
-
-            base.VisitExpression(node);
-        }
-
-        protected override void VisitGoStatement(BoundGoStatement node)
-        {
-            this.sink.Add(node);
-            base.VisitGoStatement(node);
-        }
-    }
-
-    private sealed class GoCapturedVariableCollector : BoundTreeWalker
-    {
-        private readonly HashSet<VariableSymbol> seen;
-        private readonly HashSet<VariableSymbol> declared;
-        private readonly ImmutableArray<VariableSymbol>.Builder captured;
-
-        public GoCapturedVariableCollector(
-            HashSet<VariableSymbol> seen,
-            HashSet<VariableSymbol> declared,
-            ImmutableArray<VariableSymbol>.Builder captured)
-        {
-            this.seen = seen;
-            this.declared = declared;
-            this.captured = captured;
-        }
-
-        public void Collect(BoundExpression expression)
-        {
-            this.VisitExpression(expression);
-        }
-
-        public override void VisitExpression(BoundExpression node)
-        {
-            if (node is BoundVariableExpression ve)
-            {
-                this.CaptureIfFree(ve.Variable);
-                return;
-            }
-
-            base.VisitExpression(node);
-        }
-
-        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
-        {
-            this.CaptureIfFree(node.Variable);
-            base.VisitAssignmentExpression(node);
-        }
-
-        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
-        {
-            this.VisitExpression(node.Initializer);
-            this.declared.Add(node.Variable);
-        }
-
-        private void CaptureIfFree(VariableSymbol variable)
-        {
-            if (!this.declared.Contains(variable)
-                && this.seen.Add(variable))
-            {
-                this.captured.Add(variable);
-            }
-        }
-    }
-
-    private sealed class DefaultExpressionCollector : BoundTreeWalker
-    {
-        private readonly List<BoundDefaultExpression> sink;
-
-        public DefaultExpressionCollector(List<BoundDefaultExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitExpression(BoundExpression node)
-        {
-            if (node is BoundDefaultExpression de)
-            {
-                this.sink.Add(de);
-                return;
-            }
-
-            base.VisitExpression(node);
-        }
-    }
-
     /// <summary>
     /// Issue #456: deterministic ordering for FunctionSymbols emitted into
     /// the MethodDef table. Sort first by the function's source declaration
@@ -10969,328 +10360,6 @@ internal sealed class ReflectionMetadataEmitter
             sb.Append(')');
             return sb.ToString();
         }
-    }
-
-    private sealed class ReceiverSpillCollector : BoundTreeWalker
-    {
-        private readonly ReflectionMetadataEmitter outer;
-        private readonly FunctionSymbol function;
-        private readonly IReadOnlyDictionary<VariableSymbol, int> locals;
-        private readonly List<BoundExpression> sink;
-
-        public ReceiverSpillCollector(
-            ReflectionMetadataEmitter outer,
-            FunctionSymbol function,
-            IReadOnlyDictionary<VariableSymbol, int> locals,
-            List<BoundExpression> sink)
-        {
-            this.outer = outer;
-            this.function = function;
-            this.locals = locals;
-            this.sink = sink;
-        }
-
-        protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
-        {
-            this.AddIfNeeded(node.Receiver);
-            base.VisitImportedInstanceCallExpression(node);
-        }
-
-        protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
-        {
-            this.AddIfNeeded(node.Receiver);
-            base.VisitUserInstanceCallExpression(node);
-        }
-
-        protected override void VisitClrPropertyAccessExpression(BoundClrPropertyAccessExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitClrPropertyAccessExpression(node);
-        }
-
-        protected override void VisitClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitClrPropertyAssignmentExpression(node);
-        }
-
-        // Issue #418 (P1-5): G# computed/auto properties also need the spill
-        // infrastructure when the receiver is a non-addressable struct rvalue
-        // (e.g. `makePoint(5, 6).Sum`, `getOuter().Inner.Length`).
-        protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitPropertyAccessExpression(node);
-        }
-
-        protected override void VisitPropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitPropertyAssignmentExpression(node);
-        }
-
-        protected override void VisitClrEventSubscriptionExpression(BoundClrEventSubscriptionExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitClrEventSubscriptionExpression(node);
-        }
-
-        protected override void VisitEventSubscriptionExpression(BoundEventSubscriptionExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitEventSubscriptionExpression(node);
-        }
-
-        protected override void VisitClrIndexExpression(BoundClrIndexExpression node)
-        {
-            this.AddIfNeeded(node.Target);
-            base.VisitClrIndexExpression(node);
-        }
-
-        protected override void VisitTupleElementAccessExpression(BoundTupleElementAccessExpression node)
-        {
-            this.AddIfNeeded(node.Receiver);
-            base.VisitTupleElementAccessExpression(node);
-        }
-
-        protected override void VisitClrMethodGroupExpression(BoundClrMethodGroupExpression node)
-        {
-            if (node.Receiver != null)
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
-            base.VisitClrMethodGroupExpression(node);
-        }
-
-        private void AddIfNeeded(BoundExpression receiver)
-        {
-            if (this.outer.NeedsRvalueReceiverSpill(receiver, this.function, this.locals))
-            {
-                this.sink.Add(receiver);
-            }
-        }
-    }
-
-    private sealed class MapIndexReadCollector : BoundTreeWalker
-    {
-        private readonly List<BoundIndexExpression> sink;
-
-        public MapIndexReadCollector(List<BoundIndexExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitIndexExpression(BoundIndexExpression node)
-        {
-            if (node.Target.Type is MapTypeSymbol)
-            {
-                this.sink.Add(node);
-            }
-
-            base.VisitIndexExpression(node);
-        }
-    }
-
-    // Issue #418 (P1-1): collects every index-assignment expression so the body
-    // emitter can pre-allocate a scratch slot of the value's type. The emit sites
-    // use a dup + stloc tmp + store + ldloc tmp pattern to avoid re-evaluating
-    // the index/argument expressions when producing the assignment's result.
-    private sealed class IndexAssignmentValueSpillCollector : BoundTreeWalker
-    {
-        private readonly List<BoundExpression> sink;
-
-        public IndexAssignmentValueSpillCollector(List<BoundExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitIndexAssignmentExpression(BoundIndexAssignmentExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitIndexAssignmentExpression(node);
-        }
-
-        protected override void VisitClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitClrIndexAssignmentExpression(node);
-        }
-    }
-
-    // Issue #418 (P1-2): walker that collects every BoundPropertyAssignment /
-    // BoundClrPropertyAssignment expression so the slot allocator can give
-    // each one a value-temp local for the dup/stloc spill described in
-    // CollectAssignmentValueSpills.
-    private sealed class AssignmentValueSpillCollector : BoundTreeWalker
-    {
-        private readonly List<BoundExpression> sink;
-
-        public AssignmentValueSpillCollector(List<BoundExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitPropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitPropertyAssignmentExpression(node);
-        }
-
-        protected override void VisitClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitClrPropertyAssignmentExpression(node);
-        }
-
-        // ADR-0060 / issue #491: assignments to ref-kind parameters or to
-        // ref-aliasing locals lower to `<addr>; value; dup; stloc tmp; stind`.
-        // To preserve the assignment-as-expression result semantics without
-        // a re-read, the emitter spills the value to a temp local.
-        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
-        {
-            if (node.Variable is ParameterSymbol ps && ps.RefKind != RefKind.None)
-            {
-                this.sink.Add(node);
-            }
-            else if (node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
-            {
-                this.sink.Add(node);
-            }
-
-            base.VisitAssignmentExpression(node);
-        }
-
-        // ADR-0060: an explicit `*p = v` indirect-assignment expression spills
-        // its value to a temp for the same reason.
-        protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitIndirectAssignmentExpression(node);
-        }
-    }
-
-    // Issue #504: walks the bound tree collecting every `BoundUnaryExpression`
-    // whose operator is `NullAssertion` (`!!`) and whose operand is a
-    // value-type `Nullable<T>`. Each such site needs a `Nullable<T>`-typed
-    // temp slot so the emitter can spill the operand and call
-    // `Nullable<T>::get_Value` (which yields the underlying `T` or throws
-    // `InvalidOperationException`). The reference-type `!!` path uses the
-    // existing `dup; brtrue; throw NRE` pattern and needs no slot.
-    private sealed class NullableValueTypeUnwrapCollector : BoundTreeWalker
-    {
-        private readonly List<BoundUnaryExpression> sink;
-
-        public NullableValueTypeUnwrapCollector(List<BoundUnaryExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitUnaryExpression(BoundUnaryExpression node)
-        {
-            if (node.Op.Kind == BoundUnaryOperatorKind.NullAssertion
-                && node.Operand.Type is NullableTypeSymbol n
-                && n.UnderlyingType?.ClrType is { IsValueType: true })
-            {
-                this.sink.Add(node);
-            }
-
-            base.VisitUnaryExpression(node);
-        }
-    }
-
-    // Issue #519: walks the bound tree collecting every `BoundBinaryExpression`
-    // whose operator is `NullCoalesce` (`?:`) and whose LHS is a value-type
-    // `Nullable<T>`. Each such site needs a `Nullable<T>`-typed temp slot so
-    // the emitter can spill the LHS once, call `Nullable<T>::get_HasValue`
-    // off the slot's address, and either reload the slot (when the result
-    // type is `Nullable<T>`) or call `Nullable<T>::get_Value` off the slot's
-    // address (when the result type is the underlying `T`). The reference-
-    // type `?:` path uses the existing `dup; brtrue; pop; rhs` pattern and
-    // needs no slot.
-    private sealed class NullableValueTypeCoalesceCollector : BoundTreeWalker
-    {
-        private readonly List<BoundBinaryExpression> sink;
-
-        public NullableValueTypeCoalesceCollector(List<BoundBinaryExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitBinaryExpression(BoundBinaryExpression node)
-        {
-            if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
-                && node.Left.Type is NullableTypeSymbol n
-                && n.UnderlyingType?.ClrType is { IsValueType: true })
-            {
-                this.sink.Add(node);
-            }
-
-            base.VisitBinaryExpression(node);
-        }
-    }
-
-    private sealed class SelectSlots
-    {
-        public SelectSlots(
-            int[] channelSlots,
-            int[] valueSlots,
-            int[] outSlots,
-            int tasksSlot,
-            int waitValueTaskSlot,
-            int whenAnyTaskSlot,
-            int whenAnyAwaiterSlot,
-            int completedTaskSlot)
-        {
-            ChannelSlots = channelSlots;
-            ValueSlots = valueSlots;
-            OutSlots = outSlots;
-            TasksSlot = tasksSlot;
-            WaitValueTaskSlot = waitValueTaskSlot;
-            WhenAnyTaskSlot = whenAnyTaskSlot;
-            WhenAnyAwaiterSlot = whenAnyAwaiterSlot;
-            CompletedTaskSlot = completedTaskSlot;
-        }
-
-        public int[] ChannelSlots { get; }
-
-        public int[] ValueSlots { get; }
-
-        public int[] OutSlots { get; }
-
-        public int TasksSlot { get; }
-
-        public int WaitValueTaskSlot { get; }
-
-        public int WhenAnyTaskSlot { get; }
-
-        public int WhenAnyAwaiterSlot { get; }
-
-        public int CompletedTaskSlot { get; }
     }
 
     /// <summary>
@@ -11425,7 +10494,7 @@ internal sealed class ReflectionMetadataEmitter
             foreach (var statement in blockExpression.Statements)
             {
                 var nested = new HashSet<BoundLabel>();
-                CollectLabels(statement, nested);
+                this.CollectLabels(statement, nested);
                 foreach (var label in nested)
                 {
                     if (!this.labels.ContainsKey(label))
@@ -14069,7 +13138,7 @@ internal sealed class ReflectionMetadataEmitter
         private void EmitProtectedRegion(BoundBlockStatement block)
         {
             var labelSet = new HashSet<BoundLabel>();
-            CollectLabels(block, labelSet);
+            this.CollectLabels(block, labelSet);
             this.protectedRegionStack.Push(labelSet);
             try
             {
@@ -14081,7 +13150,7 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        private static void CollectLabels(BoundStatement statement, HashSet<BoundLabel> sink)
+        private void CollectLabels(BoundStatement statement, HashSet<BoundLabel> sink)
         {
             switch (statement)
             {
@@ -14093,34 +13162,34 @@ internal sealed class ReflectionMetadataEmitter
                 case BoundBlockStatement block:
                     foreach (var s in block.Statements)
                     {
-                        CollectLabels(s, sink);
+                        this.CollectLabels(s, sink);
                     }
 
                     return;
                 case BoundTryStatement t:
-                    CollectLabels(t.TryBlock, sink);
+                    this.CollectLabels(t.TryBlock, sink);
                     foreach (var c in t.CatchClauses)
                     {
-                        CollectLabels(c.Body, sink);
+                        this.CollectLabels(c.Body, sink);
                     }
 
                     if (t.FinallyBlock != null)
                     {
-                        CollectLabels(t.FinallyBlock, sink);
+                        this.CollectLabels(t.FinallyBlock, sink);
                     }
 
                     return;
                 case BoundScopeStatement sc:
-                    CollectLabels(sc.Body, sink);
+                    this.CollectLabels(sc.Body, sink);
                     return;
                 case BoundExpressionStatement es:
-                    CollectLabelsInExpression(es.Expression, sink);
+                    this.CollectLabelsInExpression(es.Expression, sink);
                     return;
                 case BoundConditionalGotoStatement cg:
-                    CollectLabelsInExpression(cg.Condition, sink);
+                    this.CollectLabelsInExpression(cg.Condition, sink);
                     return;
                 case BoundReturnStatement rs:
-                    CollectLabelsInExpression(rs.Expression, sink);
+                    this.CollectLabelsInExpression(rs.Expression, sink);
                     return;
                 default:
                     // All other structured statements (if/for/while/...) are
@@ -14136,8 +13205,7 @@ internal sealed class ReflectionMetadataEmitter
                     // for a same-region goto (issue #418 / P1-4). Use a generic
                     // walker as a safety net for any statement kind that might
                     // carry an expression-position block.
-                    var stmtWalker = new ExpressionBlockLabelCollector(sink);
-                    stmtWalker.Visit(statement);
+                    this.outer.slotPlanner.CollectExpressionBlockLabels(statement, sink);
                     return;
             }
         }
@@ -14145,15 +13213,14 @@ internal sealed class ReflectionMetadataEmitter
         // Recursively collects BoundLabelStatement labels that live inside a
         // BoundExpression sub-tree. This is the inverse-side of CollectLabels
         // for expression-position blocks (BoundBlockExpression et al.).
-        private static void CollectLabelsInExpression(BoundExpression expression, HashSet<BoundLabel> sink)
+        private void CollectLabelsInExpression(BoundExpression expression, HashSet<BoundLabel> sink)
         {
             if (expression == null)
             {
                 return;
             }
 
-            var walker = new ExpressionBlockLabelCollector(sink);
-            walker.Visit(expression);
+            this.outer.slotPlanner.CollectExpressionBlockLabels(expression, sink);
         }
 
         private void EmitBranch(BoundLabel target, BoundExpression conditional, bool jumpIfTrue)
