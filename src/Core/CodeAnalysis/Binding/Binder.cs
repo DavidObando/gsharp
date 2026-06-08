@@ -78,23 +78,14 @@ public sealed class Binder
     private static readonly ImmutableHashSet<AttributeTargetKind> VariableDeclarationAllowedTargets =
         ImmutableHashSet.Create(AttributeTargetKind.Field);
 
+    // PR-B-1: cross-cutting binder state lives on BinderContext so the
+    // upcoming Binder-component extractions (MemberLookup, ConversionClassifier,
+    // OverloadResolver, …) can consume it via constructor injection. The
+    // `scope` member is kept as a forwarding property here purely to limit the
+    // diff in this PR; subsequent extractions will switch to `binderCtx.RootScope`.
+    private readonly BinderContext binderCtx;
+
     private FunctionSymbol function;
-
-    private Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> loopStack = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
-    private int labelCounter;
-    private int nullConditionalCaptureCounter;
-    private int syntheticLocalCounter;
-    private int deferArgumentCounter;
-    private int outDiscardCounter;
-    private List<Dictionary<VariableSymbol, TypeSymbol>> narrowedVariables = new List<Dictionary<VariableSymbol, TypeSymbol>>();
-    private Dictionary<string, TypeParameterSymbol> currentTypeParameters;
-    private BoundScope scope;
-
-    // Issue #294: cache of imported static [Extension] classes for
-    // instance-syntax extension-method dispatch. Recomputed when the import
-    // count changes (imports only grow during binding).
-    private List<Type> cachedImportedExtensionClasses;
-    private int cachedImportedExtensionImportCount = -1;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
 #pragma warning disable SA1642
@@ -118,7 +109,7 @@ public sealed class Binder
     /// <param name="function">The function to bind.</param>
     public Binder(BoundScope parent, FunctionSymbol function)
     {
-        scope = new BoundScope(parent);
+        binderCtx = new BinderContext(parent);
         this.function = function;
 
         if (function != null)
@@ -260,15 +251,15 @@ public sealed class Binder
                 ?? ImmutableArray<TypeParameterSymbol>.Empty;
             if (!enclosingTypeParams.IsDefaultOrEmpty || function.IsGeneric)
             {
-                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
                 foreach (var tp in enclosingTypeParams)
                 {
-                    currentTypeParameters[tp.Name] = tp;
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }
 
                 foreach (var tp in function.TypeParameters)
                 {
-                    currentTypeParameters[tp.Name] = tp;
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }
             }
         }
@@ -277,7 +268,15 @@ public sealed class Binder
     /// <summary>
     /// Gets the diagnostics bag.
     /// </summary>
-    public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+    public DiagnosticBag Diagnostics => binderCtx.Diagnostics;
+
+#pragma warning disable SA1300 // Element should begin with an uppercase letter
+    private BoundScope scope
+#pragma warning restore SA1300
+    {
+        get => binderCtx.RootScope;
+        set => binderCtx.RootScope = value;
+    }
 
     /// <summary>
     /// Binds a set of syntax trees to the previous global scope, resulting in a new chained global scope.
@@ -1139,17 +1138,17 @@ public sealed class Binder
 
         // Phase 4.3 / ADR-0020: bind the optional type-parameter list FIRST so
         // field/parameter types in the body can reference T, U, etc.
-        var previousTypeParameters = currentTypeParameters;
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
         ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
         try
         {
             if (syntax.TypeParameterList != null)
             {
-                currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
                 typeParameters = BindTypeParameterList(syntax.TypeParameterList);
                 foreach (var tp in typeParameters)
                 {
-                    currentTypeParameters[tp.Name] = tp;
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }
             }
 
@@ -1157,7 +1156,7 @@ public sealed class Binder
         }
         finally
         {
-            currentTypeParameters = previousTypeParameters;
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
     }
 
@@ -1557,15 +1556,15 @@ public sealed class Binder
                 // is unwound at the end of each iteration so one method's type
                 // parameters never leak into the next or the surrounding type.
                 var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
-                var enclosingTypeParameters = currentTypeParameters;
+                var enclosingTypeParameters = binderCtx.CurrentTypeParameters;
                 if (!methodTypeParameters.IsDefaultOrEmpty)
                 {
-                    currentTypeParameters = enclosingTypeParameters == null
+                    binderCtx.CurrentTypeParameters = enclosingTypeParameters == null
                         ? new Dictionary<string, TypeParameterSymbol>()
                         : new Dictionary<string, TypeParameterSymbol>(enclosingTypeParameters);
                     foreach (var tp in methodTypeParameters)
                     {
-                        currentTypeParameters[tp.Name] = tp;
+                        binderCtx.CurrentTypeParameters[tp.Name] = tp;
                     }
                 }
 
@@ -1751,7 +1750,7 @@ public sealed class Binder
                 }
                 finally
                 {
-                    currentTypeParameters = enclosingTypeParameters;
+                    binderCtx.CurrentTypeParameters = enclosingTypeParameters;
                 }
             }
 
@@ -2167,15 +2166,15 @@ public sealed class Binder
 
                 // Issue #312 / ADR-0020: support generic static methods too.
                 var methodTypeParameters = BindTypeParameterList(methodSyntax.TypeParameterList);
-                var enclosingTypeParameters = currentTypeParameters;
+                var enclosingTypeParameters = binderCtx.CurrentTypeParameters;
                 if (!methodTypeParameters.IsDefaultOrEmpty)
                 {
-                    currentTypeParameters = enclosingTypeParameters == null
+                    binderCtx.CurrentTypeParameters = enclosingTypeParameters == null
                         ? new Dictionary<string, TypeParameterSymbol>()
                         : new Dictionary<string, TypeParameterSymbol>(enclosingTypeParameters);
                     foreach (var tp in methodTypeParameters)
                     {
-                        currentTypeParameters[tp.Name] = tp;
+                        binderCtx.CurrentTypeParameters[tp.Name] = tp;
                     }
                 }
 
@@ -2264,7 +2263,7 @@ public sealed class Binder
                 }
                 finally
                 {
-                    currentTypeParameters = enclosingTypeParameters;
+                    binderCtx.CurrentTypeParameters = enclosingTypeParameters;
                 }
             }
 
@@ -2914,13 +2913,13 @@ public sealed class Binder
     {
         // Phase 4.3c: push the interface's type parameters so that method
         // signatures can reference them.
-        var previousTypeParameters = currentTypeParameters;
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
         if (!interfaceSymbol.TypeParameters.IsDefaultOrEmpty)
         {
-            currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
             foreach (var tp in interfaceSymbol.TypeParameters)
             {
-                currentTypeParameters[tp.Name] = tp;
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
         }
 
@@ -2930,7 +2929,7 @@ public sealed class Binder
         }
         finally
         {
-            currentTypeParameters = previousTypeParameters;
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
     }
 
@@ -3169,13 +3168,13 @@ public sealed class Binder
         // Phase 4.1 / ADR-0020: bind generic type parameters first so that
         // BindTypeClause can find them when binding parameter / return types.
         var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
-        var previousTypeParameters = currentTypeParameters;
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
         if (!typeParameters.IsDefaultOrEmpty)
         {
-            currentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+            binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
             foreach (var tp in typeParameters)
             {
-                currentTypeParameters[tp.Name] = tp;
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
         }
 
@@ -3460,7 +3459,7 @@ public sealed class Binder
         }
         finally
         {
-            currentTypeParameters = previousTypeParameters;
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
     }
 
@@ -3836,7 +3835,7 @@ public sealed class Binder
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
         var memberNotNullFrame = new Dictionary<VariableSymbol, TypeSymbol>();
-        narrowedVariables.Add(memberNotNullFrame);
+        binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
             for (var i = startIndex; i < statementSyntaxes.Length; i++)
@@ -3899,7 +3898,7 @@ public sealed class Binder
         }
         finally
         {
-            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
         }
     }
 
@@ -3991,7 +3990,7 @@ public sealed class Binder
 
     private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
     {
-        if (narrowedVariables.Count == 0)
+        if (binderCtx.NarrowedVariables.Count == 0)
         {
             return;
         }
@@ -4015,9 +4014,9 @@ public sealed class Binder
         {
             if (scope.TryLookupSymbol(name) is VariableSymbol v)
             {
-                for (var i = narrowedVariables.Count - 1; i >= 0; i--)
+                for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
                 {
-                    narrowedVariables[i].Remove(v);
+                    binderCtx.NarrowedVariables[i].Remove(v);
                 }
             }
         }
@@ -4304,7 +4303,7 @@ public sealed class Binder
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
-            var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+            var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
             scope.TryDeclareVariable(tempVar);
 
@@ -4332,7 +4331,7 @@ public sealed class Binder
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
-            var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+            var tempName = $"<data{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
             scope.TryDeclareVariable(tempVar);
 
@@ -4368,7 +4367,7 @@ public sealed class Binder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        var tempName = $"<data{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempName = $"<data{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
         scope.TryDeclareVariable(tempVar);
 
@@ -5388,14 +5387,14 @@ public sealed class Binder
             return BindStatement(syntax);
         }
 
-        narrowedVariables.Add(frame);
+        binderCtx.NarrowedVariables.Add(frame);
         try
         {
             return BindStatement(syntax);
         }
         finally
         {
-            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
         }
     }
 
@@ -5406,14 +5405,14 @@ public sealed class Binder
             return BindExpression(syntax);
         }
 
-        narrowedVariables.Add(frame);
+        binderCtx.NarrowedVariables.Add(frame);
         try
         {
             return BindExpression(syntax);
         }
         finally
         {
-            narrowedVariables.RemoveAt(narrowedVariables.Count - 1);
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
         }
     }
 
@@ -5944,7 +5943,7 @@ public sealed class Binder
         var capturedArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         foreach (var argument in arguments)
         {
-            var variable = new LocalVariableSymbol($"$defer$arg${deferArgumentCounter++}", isReadOnly: true, argument.Type ?? TypeSymbol.Error);
+            var variable = new LocalVariableSymbol($"$defer$arg${binderCtx.DeferArgumentCounter++}", isReadOnly: true, argument.Type ?? TypeSymbol.Error);
             scope.TryDeclareVariable(variable);
             prefix.Add(new BoundVariableDeclaration(null, variable, argument));
             capturedArguments.Add(new BoundVariableExpression(null, variable));
@@ -6744,8 +6743,8 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        var bodyLabel = new BoundLabel($"body{labelCounter}");
-        var checkLabel = new BoundLabel($"check{labelCounter}");
+        var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
+        var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundGotoStatement(syntax, checkLabel));
@@ -6782,8 +6781,8 @@ public sealed class Binder
 
         scope = scope.Parent;
 
-        var bodyLabel = new BoundLabel($"body{labelCounter}");
-        var checkLabel = new BoundLabel($"check{labelCounter}");
+        var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
+        var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         if (init != null)
@@ -6817,38 +6816,38 @@ public sealed class Binder
 
     private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)
     {
-        labelCounter++;
-        breakLabel = new BoundLabel($"break{labelCounter}");
-        continueLabel = new BoundLabel($"continue{labelCounter}");
+        binderCtx.LabelCounter++;
+        breakLabel = new BoundLabel($"break{binderCtx.LabelCounter}");
+        continueLabel = new BoundLabel($"continue{binderCtx.LabelCounter}");
 
-        loopStack.Push((breakLabel, continueLabel));
+        binderCtx.LoopStack.Push((breakLabel, continueLabel));
         var boundBody = BindStatement(body);
-        loopStack.Pop();
+        binderCtx.LoopStack.Pop();
 
         return boundBody;
     }
 
     private BoundStatement BindBreakStatement(BreakStatementSyntax syntax)
     {
-        if (loopStack.Count == 0)
+        if (binderCtx.LoopStack.Count == 0)
         {
             Diagnostics.ReportInvalidBreakOrContinue(syntax.Keyword.Location, syntax.Keyword.Text);
             return BindErrorStatement();
         }
 
-        var breakLabel = loopStack.Peek().BreakLabel;
+        var breakLabel = binderCtx.LoopStack.Peek().BreakLabel;
         return new BoundGotoStatement(syntax, breakLabel);
     }
 
     private BoundStatement BindContinueStatement(ContinueStatementSyntax syntax)
     {
-        if (loopStack.Count == 0)
+        if (binderCtx.LoopStack.Count == 0)
         {
             Diagnostics.ReportInvalidBreakOrContinue(syntax.Keyword.Location, syntax.Keyword.Text);
             return BindErrorStatement();
         }
 
-        var continueLabel = loopStack.Peek().ContinueLabel;
+        var continueLabel = binderCtx.LoopStack.Peek().ContinueLabel;
         return new BoundGotoStatement(syntax, continueLabel);
     }
 
@@ -7567,9 +7566,9 @@ public sealed class Binder
     {
         // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
         // innermost frame outward — the topmost narrowing wins.
-        for (var i = narrowedVariables.Count - 1; i >= 0; i--)
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (narrowedVariables[i].TryGetValue(variable, out var narrowed))
+            if (binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed))
             {
                 return narrowed;
             }
@@ -7709,7 +7708,7 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
-        var tempName = "$copy" + System.Threading.Interlocked.Increment(ref syntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempName = "$copy" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, structType);
         scope.TryDeclareVariable(tempVar);
 
@@ -7777,7 +7776,7 @@ public sealed class Binder
 
         var resultType = target.Type;
 
-        var tempName = "$objinit" + System.Threading.Interlocked.Increment(ref syntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempName = "$objinit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
         scope.TryDeclareVariable(tempVar);
 
@@ -8140,7 +8139,7 @@ public sealed class Binder
 
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
         var synthetic = new FunctionSymbol(
-            $"<lambda{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>",
+            $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             parameterSymbols.ToImmutable(),
             returnType);
         synthetic.IsAsync = syntax.IsAsync;
@@ -9206,7 +9205,7 @@ public sealed class Binder
             string localName;
             if (syntax.DiscardToken != null)
             {
-                localName = $"<>out_discard_{outDiscardCounter++}";
+                localName = $"<>out_discard_{binderCtx.OutDiscardCounter++}";
             }
             else
             {
@@ -13537,7 +13536,7 @@ public sealed class Binder
 
         // Create a synthetic capture local. Name is not user-visible; we
         // include a leading `$` so it cannot collide with user identifiers.
-        var captureName = "$ncap_" + (++nullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
 
         // Bind the access using the capture as the receiver. We push a temp
@@ -13566,7 +13565,7 @@ public sealed class Binder
         if (whenNotNull.Type is not NullableTypeSymbol
             && whenNotNull.Type?.ClrType is { IsValueType: true })
         {
-            var resultSlotName = "$nres_" + nullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
             resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
         }
 
@@ -15141,9 +15140,9 @@ public sealed class Binder
     {
         var imports = scope.GetDeclaredImports();
         var importCount = imports.IsDefault ? 0 : imports.Length;
-        if (cachedImportedExtensionClasses != null && cachedImportedExtensionImportCount == importCount)
+        if (binderCtx.CachedImportedExtensionClasses != null && binderCtx.CachedImportedExtensionImportCount == importCount)
         {
-            return cachedImportedExtensionClasses;
+            return binderCtx.CachedImportedExtensionClasses;
         }
 
         var namespaces = new HashSet<string>(StringComparer.Ordinal);
@@ -15194,8 +15193,8 @@ public sealed class Binder
             }
         }
 
-        cachedImportedExtensionClasses = classes;
-        cachedImportedExtensionImportCount = importCount;
+        binderCtx.CachedImportedExtensionClasses = classes;
+        binderCtx.CachedImportedExtensionImportCount = importCount;
         return classes;
     }
 
@@ -15694,7 +15693,7 @@ public sealed class Binder
                 underlying = boundLeft.Type;
             }
 
-            var captureName = "$ncap_" + (++nullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
             var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: underlying);
             scope = new BoundScope(scope);
             scope.TryDeclareVariable(capture);
@@ -15726,7 +15725,7 @@ public sealed class Binder
             if (whenNotNull.Type is not NullableTypeSymbol
                 && whenNotNull.Type?.ClrType is { IsValueType: true })
             {
-                var resultSlotName = "$nres_" + nullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
             }
 
@@ -15741,7 +15740,7 @@ public sealed class Binder
             return new BoundErrorExpression(null);
         }
 
-        var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>";
+        var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type);
         if (!scope.TryDeclareVariable(tempVar))
         {
@@ -16376,7 +16375,7 @@ public sealed class Binder
             adapterParameters.Select(p => p.Type).ToImmutableArray(),
             adapterReturnType);
         var adapterFunction = new FunctionSymbol(
-            $"<lambda_erased{System.Threading.Interlocked.Increment(ref syntheticLocalCounter)}>",
+            $"<lambda_erased{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             adapterParameters.ToImmutable(),
             adapterReturnType,
             package: literal.Function.Package);
@@ -17090,7 +17089,7 @@ public sealed class Binder
     {
         // Phase 4.1 / ADR-0020: a generic function's type parameters shadow
         // outer type names while we are binding its signature and body.
-        if (currentTypeParameters != null && currentTypeParameters.TryGetValue(name, out var tp))
+        if (binderCtx.CurrentTypeParameters != null && binderCtx.CurrentTypeParameters.TryGetValue(name, out var tp))
         {
             return tp;
         }
