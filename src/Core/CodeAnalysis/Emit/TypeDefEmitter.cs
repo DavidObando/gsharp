@@ -49,10 +49,11 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// Plus the small helpers used exclusively by the methods above:
 /// <c>GetBaseCtorToken</c>, <c>GetBaseInitializerCtorToken</c>,
 /// <c>GetImportedBaseDefaultCtorReference</c>,
-/// <c>EmitIsReadOnlyAttribute</c>, <c>EmitIsByRefLikeAttribute</c>, and the
-/// private-static <c>MapTypeAccessibility</c> / <c>MapFieldAccessibility</c>
-/// accessibility maps (copied; the root keeps its own copy because
-/// <c>EmitGlobalFieldDefs</c> and <c>EmitFunction</c> still use them).
+/// <c>EmitIsReadOnlyAttribute</c>, <c>EmitIsByRefLikeAttribute</c>. The
+/// accessibility-map helpers (<c>MapTypeAccessibility</c> /
+/// <c>MapFieldAccessibility</c> / etc.) live in
+/// <see cref="AccessibilityMap"/> as of PR-E-12 — both this component and
+/// the root call into that single canonical home.
 /// </para>
 /// <para>
 /// Like every other PR-E-* component, <see cref="TypeDefEmitter"/> is
@@ -164,7 +165,7 @@ internal sealed class TypeDefEmitter
         {
             var sigBlob = new BlobBuilder();
             this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
-            var attrs = MapFieldAccessibility(field.Accessibility);
+            var attrs = AccessibilityMap.MapFieldAccessibility(field.Accessibility);
             if (field.IsReadOnly)
             {
                 attrs |= FieldAttributes.InitOnly;
@@ -238,7 +239,7 @@ internal sealed class TypeDefEmitter
             {
                 var sigBlob = new BlobBuilder();
                 this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), staticField.Type);
-                var attrs = MapFieldAccessibility(staticField.Accessibility) | FieldAttributes.Static;
+                var attrs = AccessibilityMap.MapFieldAccessibility(staticField.Accessibility) | FieldAttributes.Static;
                 if (staticField.IsReadOnly)
                 {
                     attrs |= FieldAttributes.InitOnly;
@@ -319,7 +320,7 @@ internal sealed class TypeDefEmitter
             var classAttrs = TypeAttributes.Class
                 | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
                 | TypeAttributes.BeforeFieldInit
-                | MapTypeAccessibility(structSym.Accessibility);
+                | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
             if (!structSym.IsOpen)
             {
                 classAttrs |= TypeAttributes.Sealed;
@@ -352,7 +353,7 @@ internal sealed class TypeDefEmitter
         {
             typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
-                | MapTypeAccessibility(structSym.Accessibility);
+                | AccessibilityMap.MapTypeAccessibility(structSym.Accessibility);
             baseType = this.wellKnown.ValueTypeRef;
         }
 
@@ -400,7 +401,7 @@ internal sealed class TypeDefEmitter
         {
             var sigBlob = new BlobBuilder();
             this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), field.Type);
-            var attrs = MapFieldAccessibility(field.Accessibility);
+            var attrs = AccessibilityMap.MapFieldAccessibility(field.Accessibility);
             if (field.IsReadOnly)
             {
                 attrs |= FieldAttributes.InitOnly;
@@ -511,7 +512,7 @@ internal sealed class TypeDefEmitter
 
         var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
             | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | MapTypeAccessibility(enumSym.Accessibility);
+            | AccessibilityMap.MapTypeAccessibility(enumSym.Accessibility);
 
         var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
@@ -580,7 +581,7 @@ internal sealed class TypeDefEmitter
     {
         var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
             | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
-            | MapTypeAccessibility(ifaceSym.Accessibility);
+            | AccessibilityMap.MapTypeAccessibility(ifaceSym.Accessibility);
         var handle = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
@@ -626,7 +627,7 @@ internal sealed class TypeDefEmitter
 
         var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
             | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
-            | MapTypeAccessibility(delegateSym.Accessibility);
+            | AccessibilityMap.MapTypeAccessibility(delegateSym.Accessibility);
 
         var delegateTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
@@ -1227,30 +1228,5 @@ internal sealed class TypeDefEmitter
             parent: typeHandle,
             constructor: obsoleteCtorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
-    }
-
-    // Local copy of the accessibility-mapping helpers. The root keeps its own
-    // copy because EmitGlobalFieldDefs / EmitFunction still call them, and
-    // duplicating two tiny switch expressions is cheaper than widening the
-    // root's private visibility just for sibling access (per the PR-0
-    // visibility-widening risk note).
-    private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
-    {
-        return accessibility switch
-        {
-            Accessibility.Internal => TypeAttributes.NotPublic,
-            Accessibility.Private => TypeAttributes.NotPublic,
-            _ => TypeAttributes.Public,
-        };
-    }
-
-    private static FieldAttributes MapFieldAccessibility(Accessibility accessibility)
-    {
-        return accessibility switch
-        {
-            Accessibility.Internal => FieldAttributes.Assembly,
-            Accessibility.Private => FieldAttributes.Private,
-            _ => FieldAttributes.Public,
-        };
     }
 }
