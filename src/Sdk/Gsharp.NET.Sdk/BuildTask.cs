@@ -224,10 +224,13 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         };
 
         using var proc = Process.Start(psi);
+        string lastStdoutLine = null;
+        string lastStderrLine = null;
         proc.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
             {
+                lastStdoutLine = e.Data;
                 this.LogCompilerLine(e.Data);
             }
         };
@@ -237,6 +240,8 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             {
                 return;
             }
+
+            lastStderrLine = e.Data;
 
             // "Failed." is gsc's terminal exit sentinel, not a diagnostic; the
             // real errors are surfaced from stdout via LogCompilerLine. Demote
@@ -255,27 +260,32 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         proc.BeginErrorReadLine();
         proc.WaitForExit();
 
-        // Issue #519: when gsc exits non-zero but no structured diagnostic
-        // was logged (for example, an unhandled emitter exception that
-        // bypassed the GS9998 wrapper, or a stdout-only diagnostic whose
-        // location prefix did not match `DiagnosticLine`), MSBuild would
-        // otherwise see `Execute` return false without any logged error and
-        // surface a bare MSB4181. Log a synthetic GS9998 carrying the
-        // observed exit code so the failure is at least visible in the
-        // error list (and project files can suppress/promote it via the
-        // normal NoWarn/WarnAsError plumbing).
+        // Issue #519 + 6.2 SilentEmitFailure invariant (boundary ring): when
+        // gsc exits non-zero but no structured diagnostic was logged, anchor
+        // the synthetic GS9998 at the first Compile item (so the IDE error
+        // pane navigates to a source file, not gsc.dll). Include the last
+        // captured output as a breadcrumb.
         if (proc.ExitCode != 0 && !this.Log.HasLoggedErrors)
         {
+            var anchorFile = this.Compile?.Length > 0
+                ? this.Compile[0].ItemSpec
+                : (this.GsharpCompilerFullPath ?? "gsc");
+
+            var lastOutput = lastStderrLine ?? lastStdoutLine;
+            var breadcrumb = string.IsNullOrWhiteSpace(lastOutput)
+                ? string.Empty
+                : $" Last compiler output: {lastOutput}";
+
             this.Log.LogError(
                 subcategory: null,
                 errorCode: "GS9998",
                 helpKeyword: null,
-                file: this.GsharpCompilerFullPath ?? "gsc",
-                lineNumber: 0,
-                columnNumber: 0,
-                endLineNumber: 0,
-                endColumnNumber: 0,
-                message: $"gsc exited with code {proc.ExitCode} but did not log a diagnostic. This typically indicates an unhandled compiler exception; please file an issue.");
+                file: anchorFile,
+                lineNumber: 1,
+                columnNumber: 1,
+                endLineNumber: 1,
+                endColumnNumber: 1,
+                message: $"gsc exited with code {proc.ExitCode} without emitting a structured diagnostic.{breadcrumb}");
         }
 
         return proc.ExitCode == 0 && !this.Log.HasLoggedErrors;

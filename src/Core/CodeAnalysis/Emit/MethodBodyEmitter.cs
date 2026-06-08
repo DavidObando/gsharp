@@ -79,6 +79,18 @@ internal sealed partial class MethodBodyEmitter
     // the current method isn't a closure Invoke.
     private readonly ClosureEmitter.ClosureInfo enclosingClosure;
 
+    // 6.2 SilentEmitFailure invariant: track the most recently dispatched
+    // BoundNode so that any exception thrown from deep in the emit pipeline
+    // can be re-anchored at the offending source construct. Updated at the
+    // top of EmitStatement and EmitExpression (the two dispatch chokepoints).
+    private BoundNode currentNode;
+
+    /// <summary>
+    /// Gets the <see cref="SyntaxNode"/> of the most recently dispatched
+    /// <see cref="BoundNode"/>, suitable for anchoring emit-failure diagnostics.
+    /// </summary>
+    internal SyntaxNode CurrentAnchor => this.currentNode?.Syntax;
+
     // Stack of currently-active protected regions; each entry holds the set of
     // bound labels defined lexically within that region (including nested
     // protected sub-regions). Used to translate goto/conditional-goto whose
@@ -197,6 +209,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStatement(BoundStatement statement)
     {
+        if (statement.Syntax != null)
+        {
+            this.currentNode = statement;
+        }
+
         this.RecordSequencePointFor(statement);
         switch (statement)
         {
@@ -271,13 +288,16 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitSelectStatement(select);
                 break;
             case BoundYieldStatement:
-                throw new NotSupportedException("Internal error: yield reached the emitter before iterator lowering.");
+                EmitDiagnosticException.Throw(statement.Syntax, "Internal error: yield reached the emitter before iterator lowering.");
+                break;
             case BoundAwaitSequencePoint:
                 this.il.OpCode(ILOpCode.Nop);
                 break;
             default:
-                throw new NotSupportedException(
+                EmitDiagnosticException.Throw(
+                    statement.Syntax,
                     $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
+                break;
         }
     }
 

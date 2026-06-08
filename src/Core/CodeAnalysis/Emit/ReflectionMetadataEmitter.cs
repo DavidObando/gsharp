@@ -2268,7 +2268,16 @@ internal sealed class ReflectionMetadataEmitter
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
                 asyncPlan: plan);
-            emitter.EmitBlock(body);
+
+            try
+            {
+                emitter.EmitBlock(body);
+            }
+            catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+            {
+                var anchor = emitter.CurrentAnchor ?? plan.KickoffMethod?.Declaration ?? body.Syntax;
+                EmitDiagnosticException.Wrap(anchor, ex);
+            }
 
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
@@ -2424,7 +2433,17 @@ internal sealed class ReflectionMetadataEmitter
             goEnclosingScopes,
             liftedBinarySlots: liftedBinarySlots,
             constValues: constValues);
-        emitter.EmitBlock(body);
+
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? typeSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
         il.OpCode(ILOpCode.Ret);
 
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
@@ -2724,7 +2743,15 @@ internal sealed class ReflectionMetadataEmitter
         il.Token(baseCtorToken);
 
         // Run the user-authored constructor body.
-        emitter.EmitBlock(body);
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? classSym.Declaration ?? body.Syntax;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
 
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
@@ -2899,7 +2926,20 @@ internal sealed class ReflectionMetadataEmitter
                     structThisParameter: structThis,
                     asyncIteratorEmitCtx: aiEmitCtx,
                     enclosingClosure: enclosingClosureInfo);
-                emitter.EmitBlock(body);
+
+                // 6.2 SilentEmitFailure invariant: wrap the per-function
+                // EmitBlock in a try/catch so any exception that escapes the
+                // body emitter is re-thrown as EmitDiagnosticException anchored
+                // at the last-visited BoundNode (or the function's syntax).
+                try
+                {
+                    emitter.EmitBlock(body);
+                }
+                catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+                {
+                    var anchor = emitter.CurrentAnchor ?? function.Declaration ?? body.Syntax;
+                    EmitDiagnosticException.Wrap(anchor, ex);
+                }
 
                 // Always cap with a trailing ret. Lowering does not guarantee one for void.
                 if (function.Type == TypeSymbol.Void)
