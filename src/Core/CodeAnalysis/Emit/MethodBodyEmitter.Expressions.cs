@@ -857,7 +857,17 @@ internal sealed partial class MethodBodyEmitter
             var innerClr = nullableType.UnderlyingType.ClrType
                 ?? throw new InvalidOperationException(
                     $"Null-conditional value-type result '{nullableType.UnderlyingType.Name}' has no CLR type.");
-            var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClr);
+
+            // Issue #571: construct Nullable<T> through the ReferenceResolver so
+            // the open generic definition lives in the same load context as the
+            // (possibly MLC-backed) inner value type. See MethodBodyEmitter.Conversions.
+            if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
+            var nullableInnerArg = nullableClr.GetGenericArguments()[0];
 
             // nil branch: ldloca slot; initobj Nullable<T>; ldloc slot
             this.il.LoadLocalAddress(slot);
@@ -869,9 +879,9 @@ internal sealed partial class MethodBodyEmitter
             // not-null branch: produce T, then newobj Nullable<T>::.ctor(!0)
             this.il.MarkLabel(nonNull);
             this.EmitExpression(nc.WhenNotNull);
-            var ctor = nullableClr.GetConstructor(new[] { innerClr })
+            var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
                 ?? throw new InvalidOperationException(
-                    $"Nullable<{innerClr.FullName}> has no single-arg constructor.");
+                    $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(ctor));
 

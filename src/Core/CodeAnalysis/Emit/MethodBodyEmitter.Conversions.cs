@@ -113,10 +113,24 @@ internal sealed partial class MethodBodyEmitter
             var innerClr = toValueNullableLift.UnderlyingType.ClrType
                 ?? throw new InvalidOperationException(
                     $"Nullable<{toValueNullableLift.UnderlyingType.Name}> lift has no CLR underlying type.");
-            var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClr);
-            var ctor = nullableClr.GetConstructor(new[] { innerClr })
+
+            // Issue #571: route the Nullable<T> construction through the
+            // ReferenceResolver so the open `System.Nullable`1` definition and
+            // the MLC-backed inner value type come from the same load context.
+            // Building it from host `typeof(System.Nullable<>)` mixes the host
+            // open generic with an MLC-backed `T`, which then fails inside
+            // TypeBuilder/MetadataBuilder ctor-reference encoding as GS9998
+            // with a bogus `(1,1,1,1)` cross-file location.
+            if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
+            var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+            var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
                 ?? throw new InvalidOperationException(
-                    $"Nullable<{innerClr.FullName}> has no single-arg constructor.");
+                    $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.GetCtorReference(ctor));
             return;

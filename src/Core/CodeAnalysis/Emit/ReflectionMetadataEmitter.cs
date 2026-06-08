@@ -3203,7 +3203,17 @@ internal sealed class ReflectionMetadataEmitter
         if (element is NullableTypeSymbol nullableElement
             && nullableElement.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr)
         {
-            var nullableClr = typeof(System.Nullable<>).MakeGenericType(nullableInnerClr);
+            // Issue #571: route Nullable<T> through the ReferenceResolver so the
+            // open definition and the (possibly MLC-backed) inner come from the
+            // same load context. The host `typeof(System.Nullable<>)` mixes
+            // contexts and trips GS9998 inside the TypeBuilder/MetadataBuilder
+            // ctor/member-reference paths.
+            if (!NullableLifting.TryConstructNullable(this.emitCtx.References, nullableInnerClr, out var nullableClr))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{nullableInnerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
             return this.GetTypeHandleForMember(nullableClr);
         }
 
@@ -3280,7 +3290,13 @@ internal sealed class ReflectionMetadataEmitter
         if (type is NullableTypeSymbol nullable
             && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr)
         {
-            var nullableType = typeof(System.Nullable<>).MakeGenericType(valueClr);
+            // Issue #571: see GetElementTypeToken for rationale.
+            if (!NullableLifting.TryConstructNullable(this.emitCtx.References, valueClr, out var nullableType))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{valueClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
             return this.GetTypeHandleForMember(nullableType);
         }
 
@@ -3762,7 +3778,15 @@ internal sealed class ReflectionMetadataEmitter
             // types backed by a CLR value type (primitives, BCL value types).
             if (inner?.ClrType is { IsValueType: true } innerClrVt)
             {
-                var nullableClr = typeof(System.Nullable<>).MakeGenericType(innerClrVt);
+                // Issue #571: build Nullable<T> from the open `System.Nullable`1`
+                // discovered through the ReferenceResolver so it shares the load
+                // context of the inner value type. See GetElementTypeToken.
+                if (!NullableLifting.TryConstructNullable(this.emitCtx.References, innerClrVt, out var nullableClr))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot construct Nullable<{innerClrVt.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+                }
+
                 this.EncodeClrType(encoder, nullableClr);
                 return;
             }
