@@ -2395,17 +2395,7 @@ public sealed class Binder
     /// when the symbol has no CLR type.
     /// </returns>
     private Type ResolveClrTypeForGenericArg(TypeSymbol typeSymbol)
-    {
-        if (typeSymbol is NullableTypeSymbol nullable
-            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt
-            && this.memberLookup.TryGetNullableConstructedType(innerVt, out var nullableClr))
-        {
-            return nullableClr;
-        }
-
-        var clr = typeSymbol?.ClrType;
-        return clr != null ? scope.References.MapClrTypeToReferences(clr) : null;
-    }
+        => NullableLifting.ResolveClrTypeForGenericArg(this.scope.References, typeSymbol);
 
     // Issue #337: build an (unresolved) CLR member method-group expression for a
     // member name that resolves to a method on an imported static type or a CLR

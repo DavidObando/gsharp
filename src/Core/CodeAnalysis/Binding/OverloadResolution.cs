@@ -153,8 +153,7 @@ internal static class OverloadResolution
             var t = target.IsByRef ? target.GetElementType()! : target;
 
             // Nullable<T> (value-type nullable)
-            if (t.IsGenericType
-                && string.Equals(t.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal))
+            if (NullableLifting.IsValueTypeNullableClr(t))
             {
                 return ImplicitConversionKind.NullableWrap;
             }
@@ -1750,12 +1749,7 @@ internal static class OverloadResolution
 
     private static bool IsNullableWrap(Type source, Type target)
     {
-        if (!target.IsGenericType)
-        {
-            return false;
-        }
-
-        if (!string.Equals(target.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal))
+        if (!NullableLifting.IsValueTypeNullableClr(target))
         {
             return false;
         }

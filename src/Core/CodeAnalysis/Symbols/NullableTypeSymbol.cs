@@ -54,13 +54,5 @@ public sealed class NullableTypeSymbol : TypeSymbol
     /// <param name="typeSymbol">The type symbol to resolve.</param>
     /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
     public static Type GetEffectiveClrType(TypeSymbol typeSymbol)
-    {
-        if (typeSymbol is NullableTypeSymbol nullable
-            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
-        {
-            return typeof(Nullable<>).MakeGenericType(innerVt);
-        }
-
-        return typeSymbol?.ClrType;
-    }
+        => NullableLifting.GetEffectiveClrType(typeSymbol);
 }
