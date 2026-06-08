@@ -39,6 +39,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitExpression(BoundExpression expression)
     {
+        this.currentNode = expression;
         switch (expression)
         {
             case BoundLiteralExpression literal:
@@ -408,12 +409,18 @@ internal sealed partial class MethodBodyEmitter
                 // method (e.g. GetEnumerator) for a for-in loop. Throw a
                 // descriptive exception so BuildEmitFailureDiagnostic surfaces
                 // a clear GS9998 message instead of an opaque MSB4181.
-                throw new InvalidOperationException(
-                    "Internal compiler error (GS0268): a for-in loop over an enumerable type could not be lowered. " +
-                    "The collection type may not expose a resolvable GetEnumerator()/MoveNext()/Current pattern.");
+                {
+                    const string msg = "Internal compiler error (GS0268): a for-in loop over an enumerable type could not be lowered. "
+                        + "The collection type may not expose a resolvable GetEnumerator()/MoveNext()/Current pattern.";
+                    EmitDiagnosticException.Throw(expression.Syntax, msg);
+                }
+
+                break;
             default:
-                throw new NotSupportedException(
+                EmitDiagnosticException.Throw(
+                    expression.Syntax,
                     $"Bound expression kind '{expression.Kind}' is not yet supported by the emitter.");
+                break;
         }
     }
 

@@ -127,6 +127,15 @@ public class Program
             // Permission-denied while reading sources or writing outputs.
             return ReportFatalIOError(ex);
         }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // 6.2 SilentEmitFailure invariant (outer ring): any exception
+            // that escapes Compilation.Emit or the compilation setup is
+            // formatted as a canonical GS9998 diagnostic line on stdout so
+            // the SDK BuildTask regex matches it and the IDE error pane
+            // navigates to the source file.
+            return ReportUnhandledException(ex, parsed);
+        }
     }
 
     // Tokenizes a single response-file line, splitting on whitespace while
@@ -196,6 +205,22 @@ public class Program
         // the SDK BuildTask's diagnostic regex surfaces it as a structured
         // MSBuild error rather than an opaque process crash.
         Console.Error.WriteLine($"gsc: error GS9999: {ex.Message}");
+        return Error;
+    }
+
+    private static int ReportUnhandledException(Exception ex, CommandLineArgs parsed)
+    {
+        // 6.2 SilentEmitFailure invariant (outer ring): format the exception
+        // as a canonical diagnostic line so the SDK BuildTask regex matches.
+        // Anchor at the first source file when available.
+        var file = parsed?.SourceFiles?.Count > 0
+            ? Path.GetFullPath(parsed.SourceFiles[0])
+            : "gsc";
+
+        var typeName = ex.GetType().Name;
+        var message = $"{typeName}: {ex.Message}";
+
+        Console.Out.WriteLine($"{file}(1,1,1,1): error GS9998: {message}");
         return Error;
     }
 

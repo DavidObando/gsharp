@@ -338,10 +338,11 @@ public class Compilation
             using var stream = File.Create(program.PackageName + ".dll");
             EmitAssembly(program, stream, References, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: null);
         }
-        catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             var diagnostic = BuildEmitFailureDiagnostic(ex);
-            return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
+            var combined = allWarnings.Add(diagnostic);
+            return new EmitResult(success: false, combined);
         }
 
         return new EmitResult(success: true, diagnostics: allWarnings);
@@ -463,10 +464,16 @@ public class Compilation
                 DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program.Structs, program.Functions.Keys);
             }
         }
-        catch (Exception ex) when (ex is NotSupportedException || ex is InvalidOperationException)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
+            // 6.2 SilentEmitFailure invariant: widen the catch to all non-fatal
+            // exceptions so that any emit-time failure (regardless of exception
+            // type) produces a structured GS9998 diagnostic anchored at the
+            // offending source construct. Previously this only caught
+            // NotSupportedException and InvalidOperationException (#519).
             var diagnostic = BuildEmitFailureDiagnostic(ex);
-            return new EmitResult(success: false, ImmutableArray.Create(diagnostic));
+            var combined = allWarnings.Add(diagnostic);
+            return new EmitResult(success: false, combined);
         }
 
         return new EmitResult(success: true, diagnostics: allWarnings);
@@ -484,22 +491,41 @@ public class Compilation
     public EmitResult Emit(Stream peStream, Stream refStream) =>
         Emit(peStream, pdbStream: null, refStream, docStream: null, assemblyName: null);
 
-    // Issue #519: the SDK BuildTask's diagnostic regex requires a non-empty
-    // file prefix to recognise a `gsc` stdout line as a diagnostic. A GS9998
-    // anchored at an empty-source location ("(1,1,1,1): error GS9998: ...")
-    // failed that regex and was logged only as a low-importance message, so
-    // BuildTask returned false without `Log.HasLoggedErrors` and surfaced as
-    // a silent MSB4181 instead of the intended GS diagnostic. Anchor the
-    // synthetic location at the first syntax tree (or a file-named empty
-    // SourceText when none is available) so the regex always matches and
-    // the failure surfaces.
+    // Issue #519 + 6.2 SilentEmitFailure invariant: anchor the synthetic
+    // GS9998 at the best available source location. Preference order:
+    // 1. EmitDiagnosticException.Anchor (precise node that triggered the failure)
+    // 2. First syntax tree root (file-level fallback)
+    // 3. File-named empty SourceText (guarantees the SDK regex matches)
+    // The message includes the exception type name so the user can distinguish
+    // different ICE flavors without needing a stack trace.
     private Diagnostic BuildEmitFailureDiagnostic(Exception ex)
     {
-        var firstTree = SyntaxTrees.FirstOrDefault();
-        var sourceText = firstTree?.Text
-            ?? SourceText.From(string.Empty, fileName: "gsc");
-        var location = new TextLocation(sourceText, new TextSpan(0, 0));
-        return new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, ex.Message);
+        // Unwrap EmitDiagnosticException to get the original exception type
+        // name in the message and the precise anchor.
+        var anchor = (ex as Emit.EmitDiagnosticException)?.Anchor
+            ?? (ex.InnerException as Emit.EmitDiagnosticException)?.Anchor;
+
+        TextLocation location;
+        if (anchor != null)
+        {
+            location = new TextLocation(anchor.SyntaxTree.Text, anchor.Span);
+        }
+        else
+        {
+            var firstTree = SyntaxTrees.FirstOrDefault();
+            var sourceText = firstTree?.Text
+                ?? SourceText.From(string.Empty, fileName: "gsc");
+            location = new TextLocation(sourceText, new TextSpan(0, 0));
+        }
+
+        // Build the message: include the root-cause exception type and message.
+        var rootEx = ex is Emit.EmitDiagnosticException ede && ede.InnerException != null
+            ? ede.InnerException
+            : ex;
+        var typeName = rootEx.GetType().Name;
+        var message = $"{typeName}: {rootEx.Message}";
+
+        return new Diagnostic(location, "GS9998", DiagnosticSeverity.Error, message);
     }
 
     /// <summary>
