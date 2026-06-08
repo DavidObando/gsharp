@@ -56,82 +56,18 @@ internal sealed class ReflectionMetadataEmitter
     // via constructor injection.
     private readonly EmitContext emitCtx;
 
-    private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
-    private AssemblyReferenceHandle systemRuntimeAssemblyRef;
-    // Issue #420 (P3-9): key by TypeIdentityComparer so that the same logical
-    // type reached through different MetadataLoadContext paths collapses to
-    // one TypeRef row instead of producing duplicates.
-    private readonly Dictionary<Type, TypeReferenceHandle> typeRefs = new Dictionary<Type, TypeReferenceHandle>(TypeIdentityComparer.Instance);
-    private readonly Dictionary<Type, TypeSpecificationHandle> typeSpecs = new Dictionary<Type, TypeSpecificationHandle>(TypeIdentityComparer.Instance);
-    private readonly Dictionary<MethodInfo, MemberReferenceHandle> methodRefs = new Dictionary<MethodInfo, MemberReferenceHandle>();
-    private readonly Dictionary<MethodInfo, MethodSpecificationHandle> methodSpecs = new Dictionary<MethodInfo, MethodSpecificationHandle>();
-
-    // Issue #420 (P3-7): cache for MethodSpec rows whose generic arguments include
-    // user-defined type symbols. The placeholder-closed MethodInfo is identical for
-    // all symbol arguments, so we must key by (MethodInfo, symbol arg list) with
-    // structural equality on the symbol array.
-    private readonly Dictionary<MethodSpecSymbolKey, MethodSpecificationHandle> methodSpecsWithSymbolArgs
-        = new Dictionary<MethodSpecSymbolKey, MethodSpecificationHandle>();
-
-    private readonly Dictionary<ConstructorInfo, MemberReferenceHandle> ctorRefs = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
-    private readonly Dictionary<FieldInfo, MemberReferenceHandle> fieldRefs = new Dictionary<FieldInfo, MemberReferenceHandle>();
-    private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-
-    // PR-E-1: metadataOnly, methodBodyStream, ilStream, assemblyVersionOverride
-    // have moved onto EmitContext (see the emitCtx field above).
-    private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
-    private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classPrimaryCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
-
-    // ADR-0063 §9: when a class declares multiple init(...) overloads, each
-    // ConstructorSymbol gets its own MethodDef. The first overload doubles as
-    // the entry in classCtorHandles for legacy lookups.
-    private readonly Dictionary<ConstructorSymbol, MethodDefinitionHandle> explicitCtorHandles = new Dictionary<ConstructorSymbol, MethodDefinitionHandle>();
-
-    // Issue #262: .cctor (type initializer) handles for types with static field initializers.
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> cctorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
-
-    // Phase 3.B.4: user-defined interface TypeDefs.
-    private readonly Dictionary<InterfaceSymbol, TypeDefinitionHandle> interfaceTypeDefs = new Dictionary<InterfaceSymbol, TypeDefinitionHandle>();
-
-    // Issue #193: user-defined enum TypeDefs and the per-member literal field rows.
-    // EnumSymbol is emitted as a sealed value type deriving from System.Enum with
-    // a public instance field 'value__' of int32 plus one public static literal
-    // field per EnumMemberSymbol carrying its integer constant.
-    private readonly Dictionary<EnumSymbol, TypeDefinitionHandle> enumTypeDefs = new Dictionary<EnumSymbol, TypeDefinitionHandle>();
-    private readonly Dictionary<EnumMemberSymbol, FieldDefinitionHandle> enumMemberFieldDefs = new Dictionary<EnumMemberSymbol, FieldDefinitionHandle>();
-
-    // ADR-0059 / issue #255: user-defined named delegate TypeDefs. Each
-    // DelegateTypeSymbol is emitted as a sealed reference type deriving from
-    // System.MulticastDelegate with a runtime-implemented `.ctor(object, IntPtr)`
-    // plus a runtime-implemented `Invoke` whose signature mirrors the
-    // delegate's declared parameters and return type.
-    private readonly Dictionary<DelegateTypeSymbol, TypeDefinitionHandle> delegateTypeDefs = new Dictionary<DelegateTypeSymbol, TypeDefinitionHandle>();
-    private readonly Dictionary<DelegateTypeSymbol, MethodDefinitionHandle> delegateInvokeHandles = new Dictionary<DelegateTypeSymbol, MethodDefinitionHandle>();
-    private readonly Dictionary<DelegateTypeSymbol, MethodDefinitionHandle> delegateCtorHandles = new Dictionary<DelegateTypeSymbol, MethodDefinitionHandle>();
-
-    // Issue #191: each user-declared top-level var/let/const becomes a static
-    // FieldDef on the entry-point package's <Program> TypeDef. Mapping symbol
-    // → field handle so EmitLoadVariable/EmitStoreVariable can route through
-    // ldsfld/stsfld instead of allocating a local slot.
-    private readonly Dictionary<GlobalVariableSymbol, FieldDefinitionHandle> globalFieldDefs = new Dictionary<GlobalVariableSymbol, FieldDefinitionHandle>();
-
-    // Phase 3.B.3 sub-step 2b: instance methods on user-defined classes.
-    private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> methodHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-
-    // ADR-0051 Phase 6: property accessor method handles for PropertyDef + MethodSemantics emission.
-    private readonly Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)> propertyAccessorHandles = new Dictionary<PropertySymbol, (MethodDefinitionHandle? Getter, MethodDefinitionHandle? Setter)>();
-
-    // Issue #418 (P1-7): tracks TypeDefs that already had a PropertyMap row emitted, so the
-    // static-property emission path can decide whether to add its own PropertyMap without
-    // relying on symbol-level heuristics (which fail when instance properties are declared
-    // but all skipped during emission, leaving the static PropertyDef rows orphaned).
-    private readonly HashSet<TypeDefinitionHandle> typesWithPropertyMap = new HashSet<TypeDefinitionHandle>();
-
-    // ADR-0052: event accessor method handles for EventDef + MethodSemantics emission.
-    // Issue #257: extended with optional Raise handle.
-    private readonly Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)> eventAccessorHandles = new Dictionary<EventSymbol, (MethodDefinitionHandle Add, MethodDefinitionHandle Remove, MethodDefinitionHandle? Raise)>();
+    // PR-E-2: every key→handle dictionary (assemblyRefs, typeRefs, typeSpecs,
+    // methodRefs, methodSpecs, methodSpecsWithSymbolArgs, ctorRefs, fieldRefs,
+    // functionHandles, methodHandles, structTypeDefs, structFieldDefs,
+    // classCtorHandles, classPrimaryCtorHandles, explicitCtorHandles,
+    // cctorHandles, interfaceTypeDefs, enumTypeDefs, enumMemberFieldDefs,
+    // delegateTypeDefs, delegateInvokeHandles, delegateCtorHandles,
+    // globalFieldDefs, propertyAccessorHandles, typesWithPropertyMap,
+    // eventAccessorHandles, dataStructOpEqualityHandles) plus the single
+    // systemRuntimeAssemblyRef handle and the MethodSpecSymbolKey structural
+    // key have moved into MetadataTokenCache. Subsequent extraction PRs will
+    // consume this same cache via constructor injection.
+    private readonly MetadataTokenCache cache;
 
     // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
     private MemberReferenceHandle? notImplementedExceptionCtorRef;
@@ -231,18 +167,13 @@ internal sealed class ReflectionMetadataEmitter
     private TypeReferenceHandle hashCodeTypeRef;
     private StandaloneSignatureHandle hashCodeLocalSig;
 
-    // Per-data-struct op_Equality MethodDef handle (issue #410). Populated when
-    // the operator is synthesized so future call sites could route through it
-    // directly. Not currently used by the BoundBinaryExpression lowering
-    // (which still boxes and dispatches via Object.Equals) but kept for
-    // forward-compatibility with future perf work.
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataStructOpEqualityHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
     private EntityHandle? systemAttributeTypeRef;
     private MemberReferenceHandle? systemAttributeCtorRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
+        this.cache = new MetadataTokenCache();
     }
 
     /// <summary>
@@ -664,7 +595,7 @@ internal sealed class ReflectionMetadataEmitter
             interfaceFirstMethodRow[i] = methodRow;
             foreach (var m in i.Methods)
             {
-                this.methodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.cache.MethodHandles[m] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
 
             // Plan accessor method rows for interface properties (issue #248).
@@ -682,7 +613,7 @@ internal sealed class ReflectionMetadataEmitter
                     setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 }
 
-                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
 
             // ADR-0052: plan accessor method rows for interface events.
@@ -691,7 +622,7 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+                this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
         }
 
@@ -731,7 +662,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                     aggregateMethodHandles[m] = handle;
-                    this.methodHandles[m] = handle;
+                    this.cache.MethodHandles[m] = handle;
                 }
             }
 
@@ -750,7 +681,7 @@ internal sealed class ReflectionMetadataEmitter
                     setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 }
 
-                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
 
             // ADR-0052: plan accessor method rows for class events.
@@ -759,7 +690,7 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+                this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // ADR-0053: plan method rows for static methods on classes.
@@ -769,7 +700,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                     aggregateMethodHandles[m] = handle;
-                    this.methodHandles[m] = handle;
+                    this.cache.MethodHandles[m] = handle;
                 }
             }
 
@@ -788,7 +719,7 @@ internal sealed class ReflectionMetadataEmitter
                     setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 }
 
-                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
 
             // Issue #263: plan accessor method rows for static events on classes.
@@ -797,13 +728,13 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+                this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // Issue #262: plan .cctor row for classes with static field initializers.
             if (!c.StaticFieldInitializers.IsEmpty)
             {
-                this.cctorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.cache.CctorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
         }
 
@@ -833,7 +764,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 aggregateMethodHandles[m] = handle;
-                this.methodHandles[m] = handle;
+                this.cache.MethodHandles[m] = handle;
             }
 
             // ADR-0051 Phase 6: plan accessor method rows for struct properties.
@@ -851,7 +782,7 @@ internal sealed class ReflectionMetadataEmitter
                     setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 }
 
-                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
 
             // ADR-0052: plan accessor method rows for struct events.
@@ -860,7 +791,7 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+                this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // ADR-0053: plan method rows for static methods on structs.
@@ -870,7 +801,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                     aggregateMethodHandles[m] = handle;
-                    this.methodHandles[m] = handle;
+                    this.cache.MethodHandles[m] = handle;
                 }
             }
 
@@ -889,7 +820,7 @@ internal sealed class ReflectionMetadataEmitter
                     setterHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 }
 
-                this.propertyAccessorHandles[prop] = (getterHandle, setterHandle);
+                this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
             }
 
             // Issue #263: plan accessor method rows for static events on structs.
@@ -898,13 +829,13 @@ internal sealed class ReflectionMetadataEmitter
                 var addHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
-                this.eventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+                this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
             // Issue #262: plan .cctor row for structs with static field initializers.
             if (!s.StaticFieldInitializers.IsEmpty)
             {
-                this.cctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.cache.CctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
         }
 
@@ -948,9 +879,9 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var iface in c.Interfaces)
                 {
-                    if (this.interfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
+                    if (this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
                     {
-                        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[c], ifaceHandle);
+                        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[c], ifaceHandle);
                     }
                 }
             }
@@ -966,7 +897,7 @@ internal sealed class ReflectionMetadataEmitter
                     if (ifaceSym?.ClrType is System.Type clrIface)
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
-                            this.structTypeDefs[c],
+                            this.cache.StructTypeDefs[c],
                             this.GetTypeHandleForMember(clrIface));
                     }
                 }
@@ -1117,12 +1048,12 @@ internal sealed class ReflectionMetadataEmitter
             packageCtorRows[pkg] = nextRow++;
             foreach (var fn in functionsByPackage[pkg])
             {
-                this.functionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                this.cache.FunctionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
             }
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
             {
-                this.functionHandles[this.emitCtx.Program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
             }
         }
 
@@ -1142,7 +1073,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     var handle = MetadataTokens.MethodDefinitionHandle(nextRow++);
                     aggregateMethodHandles[m] = handle;
-                    this.methodHandles[m] = handle;
+                    this.cache.MethodHandles[m] = handle;
                 }
             }
         }
@@ -1157,14 +1088,14 @@ internal sealed class ReflectionMetadataEmitter
         MethodDefinitionHandle entryHandle = default;
         if (this.emitCtx.Program.EntryPoint is not null)
         {
-            entryHandle = this.functionHandles[this.emitCtx.Program.EntryPoint];
+            entryHandle = this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint];
         }
 
         // Pre-register SM class ctor handles so iterator kickoff bodies
         // (emitted during B4) can reference them for newobj calls.
         foreach (var c in smClasses)
         {
-            this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
+            this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRows[c]);
         }
 
         // Issue #503: pre-register synthesized closure class ctor handles too.
@@ -1198,7 +1129,7 @@ internal sealed class ReflectionMetadataEmitter
 
             if (classCtorRows.TryGetValue(c, out var classCtorRow))
             {
-                this.classCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRow);
+                this.cache.ClassCtorHandles[c] = MetadataTokens.MethodDefinitionHandle(classCtorRow);
             }
         }
 
@@ -1279,7 +1210,7 @@ internal sealed class ReflectionMetadataEmitter
 
             var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
             var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
-            this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
+            this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[s], iAsyncSmRef);
         }
 
         // === PHASE B: Emit MethodDefs in row order ===
@@ -1311,7 +1242,7 @@ internal sealed class ReflectionMetadataEmitter
                 foreach (var explicitCtor in c.ExplicitConstructors)
                 {
                     var ctorHandle = this.EmitClassConstructorWithBody(c, explicitCtor);
-                    this.explicitCtorHandles[explicitCtor] = ctorHandle;
+                    this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle;
                     if (!firstAssigned)
                     {
                         firstHandle = ctorHandle;
@@ -1319,8 +1250,8 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
 
-                this.classCtorHandles[c] = firstHandle;
-                this.classPrimaryCtorHandles[c] = firstHandle;
+                this.cache.ClassCtorHandles[c] = firstHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = firstHandle;
             }
             else if (c.BaseConstructorInitializer != null)
             {
@@ -1334,18 +1265,18 @@ internal sealed class ReflectionMetadataEmitter
                     ? c.PrimaryConstructorParameters
                     : ImmutableArray<ParameterSymbol>.Empty;
                 var forwardingHandle = this.EmitClassConstructorWithBaseInitializer(c, ctorParams);
-                this.classCtorHandles[c] = forwardingHandle;
-                this.classPrimaryCtorHandles[c] = forwardingHandle;
+                this.cache.ClassCtorHandles[c] = forwardingHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = forwardingHandle;
             }
             else
             {
                 var ctorHandle = this.EmitClassDefaultConstructor(c);
-                this.classCtorHandles[c] = ctorHandle;
+                this.cache.ClassCtorHandles[c] = ctorHandle;
 
                 if (c.HasPrimaryConstructor)
                 {
                     var primaryHandle = this.EmitClassPrimaryConstructor(c);
-                    this.classPrimaryCtorHandles[c] = primaryHandle;
+                    this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
                 }
             }
 
@@ -1359,7 +1290,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
 
                     var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
-                    this.methodHandles[m] = emittedHandle;
+                    this.cache.MethodHandles[m] = emittedHandle;
                 }
             }
 
@@ -1377,7 +1308,7 @@ internal sealed class ReflectionMetadataEmitter
                     if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
                         var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
-                        this.methodHandles[m] = emittedHandle;
+                        this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
             }
@@ -1389,7 +1320,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitStaticEventAccessors(c);
 
             // Issue #262: emit .cctor for classes with static field initializers.
-            if (this.cctorHandles.ContainsKey(c))
+            if (this.cache.CctorHandles.ContainsKey(c))
             {
                 this.EmitStaticConstructor(c);
             }
@@ -1423,7 +1354,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
-                this.methodHandles[m] = emittedHandle;
+                this.cache.MethodHandles[m] = emittedHandle;
             }
 
             // ADR-0051 Phase 6: emit property accessor methods for structs.
@@ -1440,7 +1371,7 @@ internal sealed class ReflectionMetadataEmitter
                     if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
                         var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
-                        this.methodHandles[m] = emittedHandle;
+                        this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
             }
@@ -1452,7 +1383,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitStaticEventAccessors(s);
 
             // Issue #262: emit .cctor for structs with static field initializers.
-            if (this.cctorHandles.ContainsKey(s))
+            if (this.cache.CctorHandles.ContainsKey(s))
             {
                 this.EmitStaticConstructor(s);
             }
@@ -1491,12 +1422,12 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var c in smClasses)
         {
             var ctorHandle = this.EmitClassDefaultConstructor(c);
-            this.classCtorHandles[c] = ctorHandle;
+            this.cache.ClassCtorHandles[c] = ctorHandle;
 
             if (c.HasPrimaryConstructor)
             {
                 var primaryHandle = this.EmitClassPrimaryConstructor(c);
-                this.classPrimaryCtorHandles[c] = primaryHandle;
+                this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -1509,7 +1440,7 @@ internal sealed class ReflectionMetadataEmitter
                     }
 
                     var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
-                    this.methodHandles[m] = emittedHandle;
+                    this.cache.MethodHandles[m] = emittedHandle;
                 }
             }
         }
@@ -1534,7 +1465,7 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var c in smClasses)
         {
-            var nestedHandle = this.structTypeDefs[c];
+            var nestedHandle = this.cache.StructTypeDefs[c];
             if (TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
@@ -1548,9 +1479,9 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var s in smStructsOrdered)
         {
-            var nestedHandle = this.structTypeDefs[s];
+            var nestedHandle = this.cache.StructTypeDefs[s];
             if (this.asyncSmEnclosingClosures.TryGetValue(s, out var closureSym)
-                && this.structTypeDefs.TryGetValue(closureSym, out var closureHandle))
+                && this.cache.StructTypeDefs.TryGetValue(closureSym, out var closureHandle))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, closureHandle);
             }
@@ -2033,7 +1964,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = handle;
             }
 
-            this.structFieldDefs[field] = handle;
+            this.cache.StructFieldDefs[field] = handle;
 
             // Issue #186 / ADR-0047 §3: route any @-annotations bound onto
             // the field symbol onto the FieldDef row so attributes like
@@ -2060,7 +1991,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = backingHandle;
             }
 
-            this.structFieldDefs[prop.BackingField] = backingHandle;
+            this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
         }
 
         // ADR-0052: emit backing FieldDefs for field-like events.
@@ -2082,7 +2013,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = backingHandle;
             }
 
-            this.structFieldDefs[ev.BackingField] = backingHandle;
+            this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
         }
 
         // ADR-0053: emit static field definitions from shared block.
@@ -2107,7 +2038,7 @@ internal sealed class ReflectionMetadataEmitter
                     firstField = handle;
                 }
 
-                this.structFieldDefs[staticField] = handle;
+                this.cache.StructFieldDefs[staticField] = handle;
             }
         }
 
@@ -2130,7 +2061,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = backingHandle;
             }
 
-            this.structFieldDefs[prop.BackingField] = backingHandle;
+            this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
         }
 
         // Issue #263: emit backing FieldDefs for static field-like events.
@@ -2152,7 +2083,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = backingHandle;
             }
 
-            this.structFieldDefs[ev.BackingField] = backingHandle;
+            this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
         }
 
         if (firstField.IsNil)
@@ -2186,7 +2117,7 @@ internal sealed class ReflectionMetadataEmitter
                 // System.Attribute, regardless of any other resolution.
                 baseType = this.GetSystemAttributeTypeRef();
             }
-            else if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
                 baseType = baseHandle;
             }
@@ -2217,7 +2148,7 @@ internal sealed class ReflectionMetadataEmitter
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.structTypeDefs[structSym] = handle2;
+        this.cache.StructTypeDefs[structSym] = handle2;
         if (structSym.IsInline)
         {
             this.EmitIsReadOnlyAttribute(handle2);
@@ -2245,7 +2176,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
         {
             return;
         }
@@ -2253,7 +2184,7 @@ internal sealed class ReflectionMetadataEmitter
         PropertyDefinitionHandle firstPropDef = default;
         foreach (var prop in structSym.Properties)
         {
-            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
             {
                 continue;
             }
@@ -2304,7 +2235,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!firstPropDef.IsNil)
         {
             this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
-            this.typesWithPropertyMap.Add(typeDefHandle);
+            this.cache.TypesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
@@ -2319,7 +2250,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
-                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
@@ -2385,7 +2316,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
-                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
@@ -2459,7 +2390,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
         {
             return;
         }
@@ -2467,7 +2398,7 @@ internal sealed class ReflectionMetadataEmitter
         PropertyDefinitionHandle firstPropDef = default;
         foreach (var prop in structSym.StaticProperties)
         {
-            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
             {
                 continue;
             }
@@ -2522,10 +2453,10 @@ internal sealed class ReflectionMetadataEmitter
         // whose getter symbol has no entry in program.Functions), leaving no
         // PropertyMap. Without this row the static PropertyDef rows would be
         // orphaned and violate ECMA-335 §II.22.35.
-        if (!firstPropDef.IsNil && !this.typesWithPropertyMap.Contains(typeDefHandle))
+        if (!firstPropDef.IsNil && !this.cache.TypesWithPropertyMap.Contains(typeDefHandle))
         {
             this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
-            this.typesWithPropertyMap.Add(typeDefHandle);
+            this.cache.TypesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
@@ -2538,7 +2469,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
-                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.OpCode(ILOpCode.Ldsfld);
@@ -2586,7 +2517,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
-                && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
             {
                 var il = new InstructionEncoder(new BlobBuilder());
                 il.LoadArgument(0);
@@ -2643,7 +2574,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
         {
             return;
         }
@@ -2651,7 +2582,7 @@ internal sealed class ReflectionMetadataEmitter
         EventDefinitionHandle firstEventDef = default;
         foreach (var ev in structSym.StaticEvents)
         {
-            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var accessorHandles))
             {
                 continue;
             }
@@ -2708,7 +2639,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
-                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -2809,7 +2740,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
-                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -3135,7 +3066,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.structTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
         {
             return;
         }
@@ -3143,7 +3074,7 @@ internal sealed class ReflectionMetadataEmitter
         EventDefinitionHandle firstEventDef = default;
         foreach (var ev in structSym.Events)
         {
-            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var accessorHandles))
             {
                 continue;
             }
@@ -3209,12 +3140,12 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetTypeHandleForMember(type.ClrType);
         }
 
-        if (type is StructSymbol structSym && this.structTypeDefs.TryGetValue(structSym, out var td))
+        if (type is StructSymbol structSym && this.cache.StructTypeDefs.TryGetValue(structSym, out var td))
         {
             return td;
         }
 
-        if (type is InterfaceSymbol ifaceSym && this.interfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
+        if (type is InterfaceSymbol ifaceSym && this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
         {
             return ifaceDef;
         }
@@ -3232,7 +3163,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
-                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -3349,7 +3280,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
-                && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
+                && this.cache.StructFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
             {
                 // Issue #256: thread-safe CAS loop using Interlocked.CompareExchange<T>.
                 var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -3761,7 +3692,7 @@ internal sealed class ReflectionMetadataEmitter
                 firstField = handle;
             }
 
-            this.structFieldDefs[field] = handle;
+            this.cache.StructFieldDefs[field] = handle;
 
             // Issue #186: mirror the EmitStructTypeDef path for nested types
             // so user @-annotations on fields round-trip into CustomAttribute
@@ -3788,7 +3719,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             typeAttrs = classAttrs;
-            if (structSym.BaseClass != null && this.structTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
+            if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
                 baseType = baseHandle;
             }
@@ -3818,7 +3749,7 @@ internal sealed class ReflectionMetadataEmitter
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.structTypeDefs[structSym] = handle2;
+        this.cache.StructTypeDefs[structSym] = handle2;
         if (structSym.IsRefStruct)
         {
             // Issue #367: nested user-declared `ref struct` types are by-ref-like too.
@@ -3863,7 +3794,7 @@ internal sealed class ReflectionMetadataEmitter
             baseType: enumTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.enumTypeDefs[enumSym] = enumTypeDef;
+        this.cache.EnumTypeDefs[enumSym] = enumTypeDef;
 
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
         var valueFieldSigBlob = new BlobBuilder();
@@ -3892,7 +3823,7 @@ internal sealed class ReflectionMetadataEmitter
                 name: this.emitCtx.Metadata.GetOrAddString(member.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(memberSigBlob));
             memberFieldHandles.Add(memberFieldHandle);
-            this.enumMemberFieldDefs[member] = memberFieldHandle;
+            this.cache.EnumMemberFieldDefs[member] = memberFieldHandle;
         }
 
         // Constant rows must be added in increasing parent FieldDefinition
@@ -3941,7 +3872,7 @@ internal sealed class ReflectionMetadataEmitter
                 name: this.emitCtx.Metadata.GetOrAddString(g.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
 
-            this.globalFieldDefs[g] = handle;
+            this.cache.GlobalFieldDefs[g] = handle;
 
             // Route any @-annotations bound by #187 onto the FieldDef row so
             // attributes like @Obsolete round-trip into CustomAttribute rows.
@@ -4009,7 +3940,7 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
-        return this.structTypeDefs.TryGetValue(owner, out enclosingHandle);
+        return this.cache.StructTypeDefs.TryGetValue(owner, out enclosingHandle);
     }
 
     /// <summary>Emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on an inline struct TypeDef.</summary>
@@ -4853,7 +4784,7 @@ internal sealed class ReflectionMetadataEmitter
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
-        this.interfaceTypeDefs[ifaceSym] = handle;
+        this.cache.InterfaceTypeDefs[ifaceSym] = handle;
 
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.EmitUserAttributes(handle, ifaceSym, AttributeTargetKind.Type);
@@ -4900,7 +4831,7 @@ internal sealed class ReflectionMetadataEmitter
             baseType: multicastTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
-        this.delegateTypeDefs[delegateSym] = delegateTypeDef;
+        this.cache.DelegateTypeDefs[delegateSym] = delegateTypeDef;
 
         // ---- .ctor(object, native int) ----
         var ctorSigBlob = new BlobBuilder();
@@ -4931,7 +4862,7 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSigBlob),
             bodyOffset: -1,
             parameterList: ctorFirstParamHandle);
-        this.delegateCtorHandles[delegateSym] = ctorHandle;
+        this.cache.DelegateCtorHandles[delegateSym] = ctorHandle;
 
         // Sanity check: the actual .ctor row must match the row reserved by
         // the scheduler so the TypeDef's methodList pointer is valid.
@@ -5012,7 +4943,7 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(invokeSigBlob),
             bodyOffset: -1,
             parameterList: invokeParamList);
-        this.delegateInvokeHandles[delegateSym] = invokeHandle;
+        this.cache.DelegateInvokeHandles[delegateSym] = invokeHandle;
 
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
@@ -5030,7 +4961,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
+        if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
         {
             return;
         }
@@ -5038,7 +4969,7 @@ internal sealed class ReflectionMetadataEmitter
         PropertyDefinitionHandle firstPropDef = default;
         foreach (var prop in ifaceSym.Properties)
         {
-            if (!this.propertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var accessorHandles))
             {
                 continue;
             }
@@ -5118,7 +5049,7 @@ internal sealed class ReflectionMetadataEmitter
         if (!firstPropDef.IsNil)
         {
             this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
-            this.typesWithPropertyMap.Add(typeDefHandle);
+            this.cache.TypesWithPropertyMap.Add(typeDefHandle);
         }
     }
 
@@ -5133,7 +5064,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
+        if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
         {
             return;
         }
@@ -5141,7 +5072,7 @@ internal sealed class ReflectionMetadataEmitter
         EventDefinitionHandle firstEventDef = default;
         foreach (var ev in ifaceSym.Events)
         {
-            if (!this.eventAccessorHandles.TryGetValue(ev, out var accessorHandles))
+            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var accessorHandles))
             {
                 continue;
             }
@@ -5429,7 +5360,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="objectCtorRef"/>.</summary>
     private EntityHandle GetBaseCtorToken(StructSymbol classSym)
     {
-        if (classSym.BaseClass != null && this.classCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
+        if (classSym.BaseClass != null && this.cache.ClassCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
         {
             return baseCtor;
         }
@@ -5554,7 +5485,7 @@ internal sealed class ReflectionMetadataEmitter
                     throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
                 }
 
-                if (!this.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                 {
                     throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
                 }
@@ -5724,7 +5655,7 @@ internal sealed class ReflectionMetadataEmitter
                     throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
                 }
 
-                if (!this.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                 {
                     throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
                 }
@@ -5994,12 +5925,12 @@ internal sealed class ReflectionMetadataEmitter
         var gsharpBase = init.GSharpBaseType;
         if (init.Arguments.Length > 0
             && gsharpBase.HasPrimaryConstructor
-            && this.classPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
+            && this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
         {
             return primaryHandle;
         }
 
-        if (this.classCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
+        if (this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
         {
             return defaultHandle;
         }
@@ -6043,9 +5974,9 @@ internal sealed class ReflectionMetadataEmitter
     private void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
     {
         var field = structSym.Fields[0];
-        var fieldHandle = this.structFieldDefs[field];
-        var typeDef = this.structTypeDefs[structSym];
-        this.classPrimaryCtorHandles[structSym] = this.EmitInlineStructConstructor(structSym, field, fieldHandle);
+        var fieldHandle = this.cache.StructFieldDefs[field];
+        var typeDef = this.cache.StructTypeDefs[structSym];
+        this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitInlineStructConstructor(structSym, field, fieldHandle);
         this.EmitInlineEqualsObject(structSym, field, fieldHandle, typeDef);
         this.EmitInlineEqualsTyped(structSym, field, fieldHandle);
         this.EmitInlineGetHashCode(structSym, field, fieldHandle);
@@ -6305,12 +6236,12 @@ internal sealed class ReflectionMetadataEmitter
             !structSym.Fields.IsDefaultOrEmpty,
             "Data structs must have at least one field; the binder should have rejected an empty data struct.");
 
-        var typeDef = this.structTypeDefs[structSym];
+        var typeDef = this.cache.StructTypeDefs[structSym];
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         this.EmitDataStructGetHashCode(structSym);
         this.EmitDataStructToString(structSym);
-        this.dataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
+        this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
         this.EmitDataStructEqualityOperator(structSym, isInequality: true);
         this.EmitDataStructDeconstruct(structSym);
     }
@@ -6382,7 +6313,7 @@ internal sealed class ReflectionMetadataEmitter
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
             {
-                var fieldHandle = this.structFieldDefs[field];
+                var fieldHandle = this.cache.StructFieldDefs[field];
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
@@ -6442,7 +6373,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var field in fields)
                 {
-                    var fieldHandle = this.structFieldDefs[field];
+                    var fieldHandle = this.cache.StructFieldDefs[field];
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
                     il.Token(fieldHandle);
@@ -6463,7 +6394,7 @@ internal sealed class ReflectionMetadataEmitter
                 var addSpec = this.GetHashCodeAddObjectSpec();
                 foreach (var field in fields)
                 {
-                    var fieldHandle = this.structFieldDefs[field];
+                    var fieldHandle = this.cache.StructFieldDefs[field];
                     il.LoadLocalAddress(0);
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
@@ -6533,7 +6464,7 @@ internal sealed class ReflectionMetadataEmitter
             for (int i = 0; i < fields.Length; i++)
             {
                 var field = fields[i];
-                var fieldHandle = this.structFieldDefs[field];
+                var fieldHandle = this.cache.StructFieldDefs[field];
 
                 // Piece 2*i + 1: Convert.ToString(this.Fi, InvariantCulture)
                 il.OpCode(ILOpCode.Dup);
@@ -6595,7 +6526,7 @@ internal sealed class ReflectionMetadataEmitter
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
             {
-                var fieldHandle = this.structFieldDefs[field];
+                var fieldHandle = this.cache.StructFieldDefs[field];
                 il.LoadArgumentAddress(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
@@ -6651,7 +6582,7 @@ internal sealed class ReflectionMetadataEmitter
             for (int i = 0; i < fields.Length; i++)
             {
                 var field = fields[i];
-                var fieldHandle = this.structFieldDefs[field];
+                var fieldHandle = this.cache.StructFieldDefs[field];
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
@@ -6924,10 +6855,10 @@ internal sealed class ReflectionMetadataEmitter
     private int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan)
     {
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
-        var smTypeDef = this.structTypeDefs[smStruct];
+        var smTypeDef = this.cache.StructTypeDefs[smStruct];
         var builderInfo = plan.StateMachine.BuilderInfo;
-        var stateFieldHandle = this.structFieldDefs[plan.FieldMap.StateField];
-        var builderFieldHandle = this.structFieldDefs[plan.FieldMap.BuilderField];
+        var stateFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.StateField];
+        var builderFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.BuilderField];
 
         var il = new InstructionEncoder(new BlobBuilder());
 
@@ -6948,7 +6879,7 @@ internal sealed class ReflectionMetadataEmitter
         // Copy this (for instance methods)
         if (plan.FieldMap.ThisField != null && function.IsInstanceMethod)
         {
-            var thisFieldHandle = this.structFieldDefs[plan.FieldMap.ThisField];
+            var thisFieldHandle = this.cache.StructFieldDefs[plan.FieldMap.ThisField];
             il.LoadLocalAddress(0);
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Stfld);
@@ -6960,7 +6891,7 @@ internal sealed class ReflectionMetadataEmitter
         var paramIndex = 0;
         foreach (var copy in plan.KickoffPlan.ParameterCopies)
         {
-            var fieldHandle = this.structFieldDefs[copy.Field];
+            var fieldHandle = this.cache.StructFieldDefs[copy.Field];
             il.LoadLocalAddress(0);
             il.LoadArgument(paramIndex + paramSlotShift);
             il.OpCode(ILOpCode.Stfld);
@@ -7031,7 +6962,7 @@ internal sealed class ReflectionMetadataEmitter
             : startOpenMethod);
 
         // Build MethodSpec signature: instantiation with SM struct type.
-        var smTypeDef = this.structTypeDefs[smStruct];
+        var smTypeDef = this.cache.StructTypeDefs[smStruct];
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
@@ -7060,7 +6991,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 if (plan.FieldMap.StateField != null)
                 {
-                    if (this.structFieldDefs.ContainsKey(plan.FieldMap.BuilderField))
+                    if (this.cache.StructFieldDefs.ContainsKey(plan.FieldMap.BuilderField))
                     {
                         currentPlan = plan;
                         break;
@@ -7093,7 +7024,7 @@ internal sealed class ReflectionMetadataEmitter
             throw new InvalidOperationException("Cannot emit AwaitOnCompleted: no active async plan.");
         }
 
-        var builderFieldHandle = this.structFieldDefs[builderField];
+        var builderFieldHandle = this.cache.StructFieldDefs[builderField];
 
         // ldarg.0 (this)
         // ldflda builder
@@ -7126,7 +7057,7 @@ internal sealed class ReflectionMetadataEmitter
             ? openMethod.GetGenericMethodDefinition()
             : openMethod);
 
-        var smTypeDef = this.structTypeDefs[smStruct];
+        var smTypeDef = this.cache.StructTypeDefs[smStruct];
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(2);
 
@@ -8019,7 +7950,7 @@ internal sealed class ReflectionMetadataEmitter
             // appear nested inside a switch arm / scope.
             if (node.ConstantValue == null
                 && !this.locals.ContainsKey(node.Variable)
-                && !(node.Variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv)))
+                && !(node.Variable is GlobalVariableSymbol gv && this.outer.cache.GlobalFieldDefs.ContainsKey(gv)))
             {
                 this.locals[node.Variable] = this.localTypes.Count;
 
@@ -8386,19 +8317,19 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
-            if (this.structTypeDefs.TryGetValue(def, out var td))
+            if (this.cache.StructTypeDefs.TryGetValue(def, out var td))
             {
-                this.structTypeDefs[constructed] = td;
+                this.cache.StructTypeDefs[constructed] = td;
             }
 
-            if (this.classCtorHandles.TryGetValue(def, out var cc))
+            if (this.cache.ClassCtorHandles.TryGetValue(def, out var cc))
             {
-                this.classCtorHandles[constructed] = cc;
+                this.cache.ClassCtorHandles[constructed] = cc;
             }
 
-            if (this.classPrimaryCtorHandles.TryGetValue(def, out var pc))
+            if (this.cache.ClassPrimaryCtorHandles.TryGetValue(def, out var pc))
             {
-                this.classPrimaryCtorHandles[constructed] = pc;
+                this.cache.ClassPrimaryCtorHandles[constructed] = pc;
             }
 
             foreach (var cf in constructed.Fields)
@@ -8413,9 +8344,9 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 }
 
-                if (df != null && this.structFieldDefs.TryGetValue(df, out var fd))
+                if (df != null && this.cache.StructFieldDefs.TryGetValue(df, out var fd))
                 {
-                    this.structFieldDefs[cf] = fd;
+                    this.cache.StructFieldDefs[cf] = fd;
                 }
             }
         }
@@ -8634,11 +8565,11 @@ internal sealed class ReflectionMetadataEmitter
     private void AddIteratorInterfaceImplementations(StructSymbol smClass, IteratorStateMachineInfo info)
     {
         var elementClr = info.Plan.ElementType.ClrType ?? typeof(object);
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
     }
 
     private void SynthesizeAsyncIteratorStateMachines(PackageSymbol hostPackage)
@@ -9144,7 +9075,7 @@ internal sealed class ReflectionMetadataEmitter
     private void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, Lowering.Iterators.AsyncIteratorPlan plan)
     {
         var elementClr = plan.ElementType.ClrType ?? typeof(object);
-        var typeDef = this.structTypeDefs[smClass];
+        var typeDef = this.cache.StructTypeDefs[smClass];
 
         // IAsyncEnumerator<T>
         this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
@@ -9342,7 +9273,7 @@ internal sealed class ReflectionMetadataEmitter
                         // Issue #191: a GlobalVariableSymbol with a registered
                         // FieldDef stores into <Program>'s static field via
                         // stsfld; do not also allocate a local slot for it.
-                        if (decl.Variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+                        if (decl.Variable is GlobalVariableSymbol gv && this.cache.GlobalFieldDefs.ContainsKey(gv))
                         {
                             break;
                         }
@@ -9570,7 +9501,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         if (receiver is BoundFieldAccessExpression fa
-            && this.structFieldDefs.ContainsKey(fa.Field)
+            && this.cache.StructFieldDefs.ContainsKey(fa.Field)
             && this.IsAddressableFieldAccessForReceiverSpill(fa, function, locals))
         {
             return false;
@@ -9596,7 +9527,7 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv && this.globalFieldDefs.ContainsKey(gv))
+        if (variable is GlobalVariableSymbol gv && this.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
         }
@@ -9631,7 +9562,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         if (fa.Receiver is BoundFieldAccessExpression nested
-            && this.structFieldDefs.ContainsKey(nested.Field))
+            && this.cache.StructFieldDefs.ContainsKey(nested.Field))
         {
             return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals);
         }
@@ -9743,12 +9674,12 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetTypeReference(element.ClrType);
         }
 
-        if (element is StructSymbol structSym && this.structTypeDefs.TryGetValue(structSym, out var td))
+        if (element is StructSymbol structSym && this.cache.StructTypeDefs.TryGetValue(structSym, out var td))
         {
             return td;
         }
 
-        if (element is EnumSymbol enumSym && this.enumTypeDefs.TryGetValue(enumSym, out var etd))
+        if (element is EnumSymbol enumSym && this.cache.EnumTypeDefs.TryGetValue(enumSym, out var etd))
         {
             return etd;
         }
@@ -9879,7 +9810,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)
     {
-        if (this.assemblyRefs.TryGetValue(assembly, out var existing))
+        if (this.cache.AssemblyRefs.TryGetValue(assembly, out var existing))
         {
             return existing;
         }
@@ -9896,7 +9827,7 @@ internal sealed class ReflectionMetadataEmitter
             publicKeyOrToken: publicKeyOrTokenBlob,
             flags: default(AssemblyFlags),
             hashValue: default(BlobHandle));
-        this.assemblyRefs[assembly] = handle;
+        this.cache.AssemblyRefs[assembly] = handle;
         return handle;
     }
 
@@ -9910,9 +9841,9 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private AssemblyReferenceHandle GetSystemRuntimeAssemblyReference()
     {
-        if (!this.systemRuntimeAssemblyRef.IsNil)
+        if (!this.cache.SystemRuntimeAssemblyRef.IsNil)
         {
-            return this.systemRuntimeAssemblyRef;
+            return this.cache.SystemRuntimeAssemblyRef;
         }
 
         AssemblyName sysRuntimeName;
@@ -9935,14 +9866,14 @@ internal sealed class ReflectionMetadataEmitter
         var publicKeyOrTokenBlob = publicKeyToken is { Length: > 0 }
             ? this.emitCtx.Metadata.GetOrAddBlob(publicKeyToken)
             : default(BlobHandle);
-        this.systemRuntimeAssemblyRef = this.emitCtx.Metadata.AddAssemblyReference(
+        this.cache.SystemRuntimeAssemblyRef = this.emitCtx.Metadata.AddAssemblyReference(
             name: this.emitCtx.Metadata.GetOrAddString(sysRuntimeName.Name ?? "System.Runtime"),
             version: sysRuntimeName.Version ?? new Version(0, 0, 0, 0),
             culture: default(StringHandle),
             publicKeyOrToken: publicKeyOrTokenBlob,
             flags: default(AssemblyFlags),
             hashValue: default(BlobHandle));
-        return this.systemRuntimeAssemblyRef;
+        return this.cache.SystemRuntimeAssemblyRef;
     }
 
     /// <summary>
@@ -9970,7 +9901,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private TypeReferenceHandle GetTypeReference(Type type)
     {
-        if (this.typeRefs.TryGetValue(type, out var existing))
+        if (this.cache.TypeRefs.TryGetValue(type, out var existing))
         {
             return existing;
         }
@@ -10007,7 +9938,7 @@ internal sealed class ReflectionMetadataEmitter
             resolutionScope: resolutionScope,
             @namespace: @namespace,
             name: this.emitCtx.Metadata.GetOrAddString(type.Name));
-        this.typeRefs[type] = handle;
+        this.cache.TypeRefs[type] = handle;
         return handle;
     }
 
@@ -10021,7 +9952,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         if (type.IsConstructedGenericType)
         {
-            if (this.typeSpecs.TryGetValue(type, out var existingSpec))
+            if (this.cache.TypeSpecs.TryGetValue(type, out var existingSpec))
             {
                 return existingSpec;
             }
@@ -10030,7 +9961,7 @@ internal sealed class ReflectionMetadataEmitter
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
             this.EncodeClrType(encoder, type);
             var spec = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-            this.typeSpecs[type] = spec;
+            this.cache.TypeSpecs[type] = spec;
             return spec;
         }
 
@@ -10088,7 +10019,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private MemberReferenceHandle GetMethodReference(MethodInfo method)
     {
-        if (this.methodRefs.TryGetValue(method, out var existing))
+        if (this.cache.MethodRefs.TryGetValue(method, out var existing))
         {
             return existing;
         }
@@ -10139,7 +10070,7 @@ internal sealed class ReflectionMetadataEmitter
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.methodRefs[method] = handle;
+        this.cache.MethodRefs[method] = handle;
         return handle;
     }
 
@@ -10174,15 +10105,15 @@ internal sealed class ReflectionMetadataEmitter
             && typeArgSymbols.Any(s => s is StructSymbol or InterfaceSymbol or EnumSymbol);
         if (!hasSymbolArgs)
         {
-            if (this.methodSpecs.TryGetValue(method, out var existing))
+            if (this.cache.MethodSpecs.TryGetValue(method, out var existing))
             {
                 return existing;
             }
         }
         else
         {
-            var symbolKey = new MethodSpecSymbolKey(method, typeArgSymbols);
-            if (this.methodSpecsWithSymbolArgs.TryGetValue(symbolKey, out var existingSym))
+            var symbolKey = new MetadataTokenCache.MethodSpecSymbolKey(method, typeArgSymbols);
+            if (this.cache.MethodSpecsWithSymbolArgs.TryGetValue(symbolKey, out var existingSym))
             {
                 return existingSym;
             }
@@ -10213,11 +10144,11 @@ internal sealed class ReflectionMetadataEmitter
         var spec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         if (!hasSymbolArgs)
         {
-            this.methodSpecs[method] = spec;
+            this.cache.MethodSpecs[method] = spec;
         }
         else
         {
-            this.methodSpecsWithSymbolArgs[new MethodSpecSymbolKey(method, typeArgSymbols)] = spec;
+            this.cache.MethodSpecsWithSymbolArgs[new MetadataTokenCache.MethodSpecSymbolKey(method, typeArgSymbols)] = spec;
         }
 
         return spec;
@@ -10230,7 +10161,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
     {
-        if (this.ctorRefs.TryGetValue(ctor, out var existing))
+        if (this.cache.CtorRefs.TryGetValue(ctor, out var existing))
         {
             return existing;
         }
@@ -10268,7 +10199,7 @@ internal sealed class ReflectionMetadataEmitter
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.ctorRefs[ctor] = handle;
+        this.cache.CtorRefs[ctor] = handle;
         return handle;
     }
 
@@ -10278,7 +10209,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private MemberReferenceHandle GetFieldReference(FieldInfo field)
     {
-        if (this.fieldRefs.TryGetValue(field, out var existing))
+        if (this.cache.FieldRefs.TryGetValue(field, out var existing))
         {
             return existing;
         }
@@ -10302,7 +10233,7 @@ internal sealed class ReflectionMetadataEmitter
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(field.Name),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.fieldRefs[field] = handle;
+        this.cache.FieldRefs[field] = handle;
         return handle;
     }
 
@@ -10803,7 +10734,7 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is StructSymbol structSym)
         {
-            if (!this.structTypeDefs.TryGetValue(structSym, out var typeDef))
+            if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDef))
             {
                 throw new InvalidOperationException($"Struct '{structSym.Name}' has no emitted TypeDef.");
             }
@@ -10814,7 +10745,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             // Issue #193: a user-defined enum's signature surface is its
             // own TypeDef (a sealed value type derived from System.Enum).
-            if (!this.enumTypeDefs.TryGetValue(enumSym, out var enumTypeDef))
+            if (!this.cache.EnumTypeDefs.TryGetValue(enumSym, out var enumTypeDef))
             {
                 throw new InvalidOperationException($"Enum '{enumSym.Name}' has no emitted TypeDef.");
             }
@@ -10826,7 +10757,7 @@ internal sealed class ReflectionMetadataEmitter
             // Phase D: user-defined interface as a signature type. The
             // CLR encodes interfaces with the same CLASS bit as a reference
             // type (isValueType: false).
-            if (!this.interfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
+            if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef))
             {
                 throw new InvalidOperationException($"Interface '{ifaceSym.Name}' has no emitted TypeDef.");
             }
@@ -10838,7 +10769,7 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0059 / issue #255: a user-declared named delegate type
             // encodes as a reference type referring to its own TypeDef
             // (a sealed class deriving from System.MulticastDelegate).
-            if (!this.delegateTypeDefs.TryGetValue(delegateSym, out var delegateDef))
+            if (!this.cache.DelegateTypeDefs.TryGetValue(delegateSym, out var delegateDef))
             {
                 throw new InvalidOperationException($"Delegate '{delegateSym.Name}' has no emitted TypeDef.");
             }
@@ -12413,8 +12344,8 @@ internal sealed class ReflectionMetadataEmitter
                         }
                     }
 
-                    if (!this.outer.functionHandles.TryGetValue(call.Function, out var fnHandle)
-                        && !this.outer.methodHandles.TryGetValue(call.Function, out fnHandle))
+                    if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
+                        && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
                     {
                         throw new InvalidOperationException(
                             $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
@@ -12969,7 +12900,7 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         private void EmitFunctionToNamedDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, DelegateTypeSymbol targetDelegate)
         {
-            if (!this.outer.delegateCtorHandles.TryGetValue(targetDelegate, out var ctorHandle))
+            if (!this.outer.cache.DelegateCtorHandles.TryGetValue(targetDelegate, out var ctorHandle))
             {
                 throw new InvalidOperationException(
                     $"Named delegate '{targetDelegate.Name}' has no emitted .ctor MethodDef.");
@@ -13021,13 +12952,13 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (this.outer.closureInfos.TryGetValue(literal, out var closure))
             {
-                if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var closureCtor))
+                if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var closureCtor))
                 {
                     throw new InvalidOperationException(
                         $"Closure class '{closure.ClassSym.Name}' has no emitted constructor.");
                 }
 
-                if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var closureInvoke))
+                if (!this.outer.cache.MethodHandles.TryGetValue(closure.InvokeMethod, out var closureInvoke))
                 {
                     throw new InvalidOperationException(
                         $"Closure invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
@@ -13044,7 +12975,7 @@ internal sealed class ReflectionMetadataEmitter
                             $"Closure for '{literal.Function.Name}' has no field for captured '{captured.Name}'.");
                     }
 
-                    if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                    if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                     {
                         throw new InvalidOperationException(
                             $"Closure field '{field.Name}' has no emitted FieldDef.");
@@ -13069,7 +13000,7 @@ internal sealed class ReflectionMetadataEmitter
                     $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
             }
 
-            if (!this.outer.functionHandles.TryGetValue(literal.Function, out var methodHandle))
+            if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out var methodHandle))
             {
                 throw new InvalidOperationException(
                     $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
@@ -13093,8 +13024,8 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         private void EmitMethodGroupToNamedDelegate(BoundMethodGroupExpression methodGroup, MethodDefinitionHandle delegateCtorHandle)
         {
-            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
-                && !this.outer.methodHandles.TryGetValue(methodGroup.Function, out staticHandle))
+            if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out staticHandle))
             {
                 throw new InvalidOperationException(
                     $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
@@ -13803,7 +13734,7 @@ internal sealed class ReflectionMetadataEmitter
                 (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
             {
                 var field = inlineStruct.Fields[0];
-                var fieldHandle = this.outer.structFieldDefs[field];
+                var fieldHandle = this.outer.cache.StructFieldDefs[field];
                 this.EmitExpression(b.Left);
                 this.il.OpCode(ILOpCode.Ldfld);
                 this.il.Token(fieldHandle);
@@ -13839,7 +13770,7 @@ internal sealed class ReflectionMetadataEmitter
             if (b.Left.Type is StructSymbol ds && ds.IsData && b.Right.Type == ds &&
                 (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
             {
-                var structTypeDef = this.outer.structTypeDefs[ds];
+                var structTypeDef = this.outer.cache.StructTypeDefs[ds];
                 this.EmitExpression(b.Left);
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(structTypeDef);
@@ -14224,7 +14155,7 @@ internal sealed class ReflectionMetadataEmitter
             // <Program>; load via ldsfld so cross-method access (and reads
             // from other assemblies) share storage.
             if (variable is GlobalVariableSymbol gv
-                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+                && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
             {
                 this.il.OpCode(ILOpCode.Ldsfld);
                 this.il.Token(fieldHandle);
@@ -14248,7 +14179,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (this.enclosingClosure == null
                 || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField)
-                || !this.outer.structFieldDefs.TryGetValue(capField, out var capFieldHandle))
+                || !this.outer.cache.StructFieldDefs.TryGetValue(capField, out var capFieldHandle))
             {
                 return false;
             }
@@ -14266,7 +14197,7 @@ internal sealed class ReflectionMetadataEmitter
             // to swap stack order without spawning a scratch local field.
             if (this.enclosingClosure == null
                 || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField)
-                || !this.outer.structFieldDefs.TryGetValue(capField, out var capFieldHandle))
+                || !this.outer.cache.StructFieldDefs.TryGetValue(capField, out var capFieldHandle))
             {
                 return false;
             }
@@ -14314,7 +14245,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             if (variable is GlobalVariableSymbol gv
-                && this.outer.globalFieldDefs.ContainsKey(gv))
+                && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
             {
                 return true;
             }
@@ -14349,7 +14280,7 @@ internal sealed class ReflectionMetadataEmitter
             // <Program> static field (initialized in declaration order from
             // the entry-point method body).
             if (variable is GlobalVariableSymbol gv
-                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+                && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
             {
                 this.il.OpCode(ILOpCode.Stsfld);
                 this.il.Token(fieldHandle);
@@ -14996,20 +14927,20 @@ internal sealed class ReflectionMetadataEmitter
         {
             MethodDefinitionHandle ctorHandle;
             if (call.SelectedConstructor != null
-                && this.outer.explicitCtorHandles.TryGetValue(call.SelectedConstructor, out var selectedHandle))
+                && this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var selectedHandle))
             {
                 // ADR-0063 §9: bind-time overload resolution picked this exact
                 // ctor; emit a newobj against its specific MethodDef.
                 ctorHandle = selectedHandle;
             }
-            else if (!this.outer.classPrimaryCtorHandles.TryGetValue(call.StructType, out ctorHandle))
+            else if (!this.outer.cache.ClassPrimaryCtorHandles.TryGetValue(call.StructType, out ctorHandle))
             {
                 // Issue #523: synthesized classes (e.g. capture boxes) declare
                 // no primary constructor; for a zero-argument newobj we fall
                 // back to the parameterless default ctor that PHASE B emitted
                 // into classCtorHandles.
                 if (call.Arguments.IsDefaultOrEmpty
-                    && this.outer.classCtorHandles.TryGetValue(call.StructType, out var defaultCtorHandle))
+                    && this.outer.cache.ClassCtorHandles.TryGetValue(call.StructType, out var defaultCtorHandle))
                 {
                     ctorHandle = defaultCtorHandle;
                 }
@@ -15048,7 +14979,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
         {
-            if (!this.outer.methodHandles.TryGetValue(call.Method, out var methodHandle))
+            if (!this.outer.cache.MethodHandles.TryGetValue(call.Method, out var methodHandle))
             {
                 throw new InvalidOperationException(
                     $"Instance method '{call.Method.Name}' on '{call.Method.ReceiverType?.Name}' has no emitted handle.");
@@ -15184,7 +15115,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitStructLiteral(BoundStructLiteralExpression literal)
         {
-            if (!this.outer.structTypeDefs.TryGetValue(literal.StructType, out var typeDef))
+            if (!this.outer.cache.StructTypeDefs.TryGetValue(literal.StructType, out var typeDef))
             {
                 throw new InvalidOperationException(
                     $"Struct '{literal.StructType.Name}' has no emitted TypeDef.");
@@ -15193,7 +15124,7 @@ internal sealed class ReflectionMetadataEmitter
             // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
             if (literal.StructType.IsClass)
             {
-                if (!this.outer.classCtorHandles.TryGetValue(literal.StructType, out var ctorHandle))
+                if (!this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorHandle))
                 {
                     throw new InvalidOperationException(
                         $"Class '{literal.StructType.Name}' has no emitted default ctor.");
@@ -15205,7 +15136,7 @@ internal sealed class ReflectionMetadataEmitter
                 var classDef = literal.StructType.Definition ?? literal.StructType;
                 foreach (var init in literal.Initializers)
                 {
-                    if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+                    if (!this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var fieldHandle))
                     {
                         throw new InvalidOperationException(
                             $"Class field '{init.Field.Name}' has no emitted FieldDef.");
@@ -15264,7 +15195,7 @@ internal sealed class ReflectionMetadataEmitter
             var structDef = literal.StructType.Definition ?? literal.StructType;
             foreach (var init in literal.Initializers)
             {
-                if (!this.outer.structFieldDefs.TryGetValue(init.Field, out var fieldHandle))
+                if (!this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var fieldHandle))
                 {
                     throw new InvalidOperationException(
                         $"Struct field '{init.Field.Name}' has no emitted FieldDef.");
@@ -15305,7 +15236,7 @@ internal sealed class ReflectionMetadataEmitter
 
         private void EmitFieldAccess(BoundFieldAccessExpression fa)
         {
-            if (!this.outer.structFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+            if (!this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
                     $"Struct field '{fa.Field.Name}' has no emitted FieldDef.");
@@ -15685,7 +15616,7 @@ internal sealed class ReflectionMetadataEmitter
 
             foreach (var field in pp.Fields)
             {
-                if (!this.outer.structFieldDefs.TryGetValue(field.Field, out var fieldHandle))
+                if (!this.outer.cache.StructFieldDefs.TryGetValue(field.Field, out var fieldHandle))
                 {
                     throw new InvalidOperationException(
                         $"Property pattern field '{field.Field.Name}' has no emitted FieldDef.");
@@ -15795,7 +15726,7 @@ internal sealed class ReflectionMetadataEmitter
                 fas.Receiver == null || !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
                 $"EmitFieldAssignment precondition violated: BoundFieldAssignmentExpression value must not reassign the receiver variable for field '{fas.Field.Name}' — see issue #420 / P3-4.");
 
-            if (!this.outer.structFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
+            if (!this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
                     $"Struct field '{fas.Field.Name}' has no emitted FieldDef.");
@@ -15947,7 +15878,7 @@ internal sealed class ReflectionMetadataEmitter
         // so this only fires for computed properties that still reference the accessor.
         private void EmitPropertyAccess(BoundPropertyAccessExpression access)
         {
-            if (!this.outer.propertyAccessorHandles.TryGetValue(access.Property, out var handles) || !handles.Getter.HasValue)
+            if (!this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) || !handles.Getter.HasValue)
             {
                 throw new InvalidOperationException(
                     $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
@@ -15976,7 +15907,7 @@ internal sealed class ReflectionMetadataEmitter
         // ADR-0051 Phase 6: emit IL for BoundPropertyAssignmentExpression (computed properties).
         private void EmitPropertyAssignment(BoundPropertyAssignmentExpression assn)
         {
-            if (!this.outer.propertyAccessorHandles.TryGetValue(assn.Property, out var handles) || !handles.Setter.HasValue)
+            if (!this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) || !handles.Setter.HasValue)
             {
                 throw new InvalidOperationException(
                     $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
@@ -16214,7 +16145,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitExpression(node.Handler);
             }
 
-            if (this.outer.eventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
+            if (this.outer.cache.EventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
             {
                 var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
                 bool isStatic = node.Receiver == null;
@@ -16496,13 +16427,13 @@ internal sealed class ReflectionMetadataEmitter
                 //   dup
                 //   ldftn  <closureClass>::Invoke
                 //   newobj Func/Action::.ctor(object, IntPtr)
-                if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
+                if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
                 {
                     throw new InvalidOperationException(
                         $"Closure class '{closure.ClassSym.Name}' has no emitted constructor.");
                 }
 
-                if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
+                if (!this.outer.cache.MethodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
                 {
                     throw new InvalidOperationException(
                         $"Closure invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
@@ -16519,7 +16450,7 @@ internal sealed class ReflectionMetadataEmitter
                             $"Closure for '{literal.Function.Name}' has no field for captured '{captured.Name}'.");
                     }
 
-                    if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                    if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                     {
                         throw new InvalidOperationException(
                             $"Closure field '{field.Name}' has no emitted FieldDef.");
@@ -16546,7 +16477,7 @@ internal sealed class ReflectionMetadataEmitter
                     $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
             }
 
-            if (!this.outer.functionHandles.TryGetValue(literal.Function, out var methodHandle))
+            if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out var methodHandle))
             {
                 throw new InvalidOperationException(
                     $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
@@ -16577,8 +16508,8 @@ internal sealed class ReflectionMetadataEmitter
         // already go through EmitClrMethodGroup.
         private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type overrideDelegateType)
         {
-            if (!this.outer.functionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
-                && !this.outer.methodHandles.TryGetValue(methodGroup.Function, out methodHandle))
+            if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out methodHandle))
             {
                 throw new InvalidOperationException(
                     $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
@@ -16698,7 +16629,7 @@ internal sealed class ReflectionMetadataEmitter
             if (this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out var hoistedField))
             {
                 // Load from the state machine: ldarg.0; ldfld <smStruct>::<hoistedField>
-                if (!this.outer.structFieldDefs.TryGetValue(hoistedField, out var hoistedHandle))
+                if (!this.outer.cache.StructFieldDefs.TryGetValue(hoistedField, out var hoistedHandle))
                 {
                     throw new InvalidOperationException(
                         $"Hoisted field '{hoistedField.Name}' has no emitted FieldDef.");
@@ -16725,7 +16656,7 @@ internal sealed class ReflectionMetadataEmitter
             // needed — the signature is concrete, not type-erased).
             if (call.Target.Type is DelegateTypeSymbol namedDelegate)
             {
-                if (!this.outer.delegateInvokeHandles.TryGetValue(namedDelegate, out var namedInvokeHandle))
+                if (!this.outer.cache.DelegateInvokeHandles.TryGetValue(namedDelegate, out var namedInvokeHandle))
                 {
                     throw new InvalidOperationException(
                         $"Delegate '{namedDelegate.Name}' has no emitted Invoke MethodDef.");
@@ -16860,7 +16791,7 @@ internal sealed class ReflectionMetadataEmitter
                 // value on the evaluation stack produces invalid IL
                 // (InvalidProgramException at JIT time).
                 if (receiver is BoundFieldAccessExpression fa
-                    && this.outer.structFieldDefs.ContainsKey(fa.Field)
+                    && this.outer.cache.StructFieldDefs.ContainsKey(fa.Field)
                     && this.IsAddressableFieldAccess(fa))
                 {
                     this.EmitFieldAddress(fa);
@@ -16922,7 +16853,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             if (fa.Receiver is BoundFieldAccessExpression nested
-                && this.outer.structFieldDefs.ContainsKey(nested.Field))
+                && this.outer.cache.StructFieldDefs.ContainsKey(nested.Field))
             {
                 return this.IsAddressableFieldAccess(nested);
             }
@@ -16942,7 +16873,7 @@ internal sealed class ReflectionMetadataEmitter
                 return true;
             }
 
-            if (variable is GlobalVariableSymbol gv && this.outer.globalFieldDefs.ContainsKey(gv))
+            if (variable is GlobalVariableSymbol gv && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
             {
                 return true;
             }
@@ -16998,7 +16929,7 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #408 / #191: top-level globals are emitted as static fields
             // on <Program>; their address is taken with ldsflda.
             if (variable is GlobalVariableSymbol gv
-                && this.outer.globalFieldDefs.TryGetValue(gv, out var fieldHandle))
+                && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
             {
                 this.il.OpCode(ILOpCode.Ldsflda);
                 this.il.Token(fieldHandle);
@@ -17155,7 +17086,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             // ldarg.0 (this)
             // ldflda builder
-            var builderFieldHandle = this.outer.structFieldDefs[node.BuilderField];
+            var builderFieldHandle = this.outer.cache.StructFieldDefs[node.BuilderField];
             this.il.OpCode(ILOpCode.Ldarg_0);
             this.il.OpCode(ILOpCode.Ldflda);
             this.il.Token(builderFieldHandle);
@@ -17170,7 +17101,7 @@ internal sealed class ReflectionMetadataEmitter
                 .First(m => m.Name == "MoveNext" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
             var openRef = this.outer.GetMethodReference(openMoveNext.GetGenericMethodDefinition());
 
-            var smTypeDef = this.outer.structTypeDefs[node.SmClass];
+            var smTypeDef = this.outer.cache.StructTypeDefs[node.SmClass];
 
             var sigBlob = new BlobBuilder();
             var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
@@ -17184,7 +17115,7 @@ internal sealed class ReflectionMetadataEmitter
         /// <summary>ADR-0039: Emits the field address (ldflda) for a user struct field.</summary>
         private void EmitFieldAddress(BoundFieldAccessExpression fa)
         {
-            if (!this.outer.structFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
+            if (!this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
                     $"Cannot take address of field '{fa.Field.Name}': no emitted FieldDef.");
@@ -17206,7 +17137,7 @@ internal sealed class ReflectionMetadataEmitter
             }
             else if (!receiverIsClass
                 && fa.Receiver is BoundFieldAccessExpression nested
-                && this.outer.structFieldDefs.ContainsKey(nested.Field)
+                && this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
                 && this.IsAddressableFieldAccess(nested))
             {
                 this.EmitFieldAddress(nested);
@@ -17356,13 +17287,13 @@ internal sealed class ReflectionMetadataEmitter
                 throw new InvalidOperationException("Go statement has no synthesized display class.");
             }
 
-            if (!this.outer.classCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
+            if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
             {
                 throw new InvalidOperationException(
                     $"Go display class '{closure.ClassSym.Name}' has no emitted constructor.");
             }
 
-            if (!this.outer.methodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
+            if (!this.outer.cache.MethodHandles.TryGetValue(closure.InvokeMethod, out var invokeHandle))
             {
                 throw new InvalidOperationException(
                     $"Go display invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
@@ -17374,7 +17305,7 @@ internal sealed class ReflectionMetadataEmitter
             foreach (var captured in closure.CaptureFields.Keys)
             {
                 var field = closure.CaptureFields[captured];
-                if (!this.outer.structFieldDefs.TryGetValue(field, out var fieldHandle))
+                if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                 {
                     throw new InvalidOperationException(
                         $"Go display field '{field.Name}' has no emitted FieldDef.");
@@ -17938,55 +17869,5 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    // Issue #420 (P3-7): structural cache key for MethodSpec rows whose generic
-    // arguments include user-defined type symbols. Uses reference equality on the
-    // contained TypeSymbol entries (declared user types are interned per
-    // compilation), combined with structural equality on the array.
-    private readonly struct MethodSpecSymbolKey : IEquatable<MethodSpecSymbolKey>
-    {
-        private readonly MethodInfo method;
-        private readonly ImmutableArray<TypeSymbol> typeArgs;
-
-        public MethodSpecSymbolKey(MethodInfo method, ImmutableArray<TypeSymbol> typeArgs)
-        {
-            this.method = method;
-            this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
-        }
-
-        public bool Equals(MethodSpecSymbolKey other)
-        {
-            if (!ReferenceEquals(this.method, other.method))
-            {
-                return false;
-            }
-
-            if (this.typeArgs.Length != other.typeArgs.Length)
-            {
-                return false;
-            }
-
-            for (var i = 0; i < this.typeArgs.Length; i++)
-            {
-                if (!ReferenceEquals(this.typeArgs[i], other.typeArgs[i]))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        public override bool Equals(object obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
-
-        public override int GetHashCode()
-        {
-            var hash = RuntimeHelpers.GetHashCode(this.method);
-            for (var i = 0; i < this.typeArgs.Length; i++)
-            {
-                hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
-            }
-
-            return hash;
-        }
-    }
+    // PR-E-2: MethodSpecSymbolKey moved into MetadataTokenCache.
 }
