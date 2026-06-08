@@ -435,3 +435,16 @@ Cause/fix examples:
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0269 | Error | Unrecognised escape sequence `\X` in string literal. | `"\q"` — `\q` is not a valid escape. Use `\\` for a literal backslash. |
+
+## Internal compiler error diagnostics (GS9998–GS9999)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS9998 | Error | Internal compiler error (emit-time failure). The emit pipeline encountered an unexpected state and could not produce valid IL. The diagnostic message includes the exception type and a brief description of the failure. |
+| GS9999 | Error | Fatal I/O error. An unrecoverable file-system error occurred (permission denied, disk full, etc.) before or during assembly writing. |
+
+`GS9998` is the *silent emit failure* diagnostic. It is always anchored at the user's source file at the location of the expression or statement that triggered the failure. If you ever see `GS9998` anchored at `(1,1,1,1)` against `gsc.dll` instead of your source file, that itself is a bug — please file an issue.
+
+The message format is `<ExceptionType>: <description>`, for example `InvalidOperationException: Variable 'x' has no local slot`. This tells you what the compiler was trying to do when it failed, even though the underlying bug may not be your fault.
+
+Suppressing or `WarnAsError`-ing `GS9998` follows the same MSBuild plumbing as any other diagnostic (`/nowarn:GS9998` or `<NoWarn>GS9998</NoWarn>`), though suppressing it is not recommended since it masks genuine compiler bugs.
