@@ -538,30 +538,7 @@ internal sealed class MemberLookup
     /// <param name="constructed">The constructed nullable CLR type, on success.</param>
     /// <returns><see langword="true"/> when construction succeeded.</returns>
     public bool TryGetNullableConstructedType(Type underlying, out Type constructed)
-    {
-        constructed = null;
-        if (underlying == null)
-        {
-            return false;
-        }
-
-        if (!this.binderCtx.References.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
-        {
-            return false;
-        }
-
-        try
-        {
-            var mappedUnderlying = this.binderCtx.References.MapClrTypeToReferences(underlying) ?? underlying;
-            constructed = nullableOpen.MakeGenericType(mappedUnderlying);
-            return constructed != null;
-        }
-        catch
-        {
-            constructed = null;
-            return false;
-        }
-    }
+        => NullableLifting.TryConstructNullable(this.binderCtx.References, underlying, out constructed);
 
     /// <summary>
     /// Issue #294: collects every <c>static [Extension]</c> method named

@@ -3967,9 +3967,7 @@ internal sealed class ReflectionMetadataEmitter
     // default value, and `box Nullable<T>` for object widening — none of
     // which the reference-type path handles.
     internal static bool IsValueTypeNullable(NullableTypeSymbol nullable)
-    {
-        return nullable?.UnderlyingType?.ClrType is { IsValueType: true };
-    }
+        => NullableLifting.IsValueTypeNullable(nullable);
 
     private void EncodeClrType(SignatureTypeEncoder encoder, Type type)
     {

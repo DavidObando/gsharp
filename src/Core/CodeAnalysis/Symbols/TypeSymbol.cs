@@ -145,14 +145,10 @@ public class TypeSymbol : Symbol
         // (`Nullable<T>` aka `T?` in C#) as a GSharp `NullableTypeSymbol`
         // wrapping the underlying. Reference-type nullability driven by
         // `[NullableAttribute]` byte arrays is a follow-up.
-        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        if (NullableLifting.IsValueTypeNullableClr(clrType))
         {
-            var def = clrType.GetGenericTypeDefinition();
-            if (def.FullName == "System.Nullable`1")
-            {
-                var inner = clrType.GetGenericArguments()[0];
-                return NullableTypeSymbol.Get(FromClrType(inner));
-            }
+            var inner = clrType.GetGenericArguments()[0];
+            return NullableTypeSymbol.Get(FromClrType(inner));
         }
 
         // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
