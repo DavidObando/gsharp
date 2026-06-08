@@ -1,0 +1,634 @@
+// <copyright file="MethodBodyEmitter.Operators.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+#pragma warning disable SA1028 // trailing whitespace
+#pragma warning disable SA1116 // parameters begin on line after declaration
+#pragma warning disable SA1117 // parameters on same line
+#pragma warning disable SA1214 // readonly fields before non-readonly
+#pragma warning disable SA1515 // single-line comment preceded by blank line
+#pragma warning disable SA1201 // method should not follow a class
+#pragma warning disable SA1505 // opening brace should not be followed by a blank line — partial classes ship with a leading blank for readability
+#pragma warning disable SA1202 // 'internal' members should come before 'private' members
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+
+namespace GSharp.Core.CodeAnalysis.Emit;
+
+/// <summary>
+/// PR-E-11 partial of <see cref="MethodBodyEmitter"/>:
+/// unary/binary operators, shift guards, narrowing truncation.
+/// See <c>MethodBodyEmitter.cs</c> for the root partial (fields, constructor,
+/// statement/expression dispatch, and small shared helpers).
+/// </summary>
+internal sealed partial class MethodBodyEmitter
+{
+
+    private void EmitUnary(BoundUnaryExpression u)
+    {
+        // Phase 3.C.3: `!!` is a runtime null-assertion. Emit a check
+        // ahead of the operand load so we don't accidentally take a
+        // dependency on stack tracking inside the operand.
+        if (u.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
+        {
+            // Issue #504: a value-type `Nullable<T>` operand cannot use
+            // `dup; brtrue` (the `Nullable<T>` struct on the stack has no
+            // valid `brtrue` interpretation — it produces invalid IL).
+            // Instead, spill the struct to a pre-allocated `Nullable<T>`
+            // slot, take its address, and call `Nullable<T>::get_Value()`,
+            // which returns the underlying T or throws
+            // `InvalidOperationException` when `HasValue == false`. This
+            // matches the BCL `Nullable<T>.Value` property's semantics.
+            if (u.Operand.Type is NullableTypeSymbol operandNullable
+                && operandNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
+            {
+                if (!this.receiverSpillSlots.TryGetValue(u, out var unwrapSlot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — "
+                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                this.EmitExpression(u.Operand);
+                this.il.StoreLocal(unwrapSlot);
+                this.il.LoadLocalAddress(unwrapSlot);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.wellKnown.GetNullableGetValueReference(innerClr));
+                return;
+            }
+
+            this.EmitExpression(u.Operand);
+            this.il.OpCode(ILOpCode.Dup);
+            var nonNull = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brtrue, nonNull);
+            this.il.OpCode(ILOpCode.Pop);
+            var nreCtor = this.outer.wellKnown.GetNullReferenceExceptionCtorRef();
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(nreCtor);
+            this.il.OpCode(ILOpCode.Throw);
+            this.il.MarkLabel(nonNull);
+            return;
+        }
+
+        this.EmitExpression(u.Operand);
+        switch (u.Op.Kind)
+        {
+            case BoundUnaryOperatorKind.Identity:
+                break;
+            case BoundUnaryOperatorKind.Negation:
+                if (u.Op.OperandType == TypeSymbol.Decimal)
+                {
+                    var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
+                    this.il.Call(this.outer.GetMethodEntityHandle(neg));
+                }
+                else
+                {
+                    this.il.OpCode(ILOpCode.Neg);
+                }
+
+                break;
+            case BoundUnaryOperatorKind.LogicalNegation:
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            case BoundUnaryOperatorKind.OnesComplement:
+                this.il.OpCode(ILOpCode.Not);
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"Unary operator '{u.Op.Kind}' is not yet supported by the emitter.");
+        }
+
+        if (u.Op.Kind == BoundUnaryOperatorKind.OnesComplement
+            || u.Op.Kind == BoundUnaryOperatorKind.Negation)
+        {
+            EmitSubI4Truncation(u.Op.Type);
+        }
+    }
+
+    private void EmitBinary(BoundBinaryExpression b)
+    {
+        // Phase 3.C.3: `?:` (NullCoalesce). Short-circuit on the left.
+        if (b.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
+        {
+            // P3-5 / Issue #420: `dup; brtrue` is only legal for object
+            // references and primitive integers — it is invalid IL for
+            // struct stack values. When the LHS is a value-type
+            // `Nullable<T>` (issue #519), spill it to a `Nullable<T>`-
+            // typed temp slot and branch on `Nullable<T>::get_HasValue`
+            // instead. The non-null branch either reloads the slot
+            // (when the result type is `Nullable<T>`) or unwraps via
+            // `Nullable<T>::get_Value()` (when the result type is the
+            // underlying `T`); both shapes leave a verifiable stack
+            // matching the operator's declared result type.
+            if (b.Left.Type is NullableTypeSymbol leftNullable
+                && leftNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
+            {
+                if (!this.receiverSpillSlots.TryGetValue(b, out var slot))
+                {
+                    throw new InvalidOperationException(
+                        "No scratch slot pre-allocated for value-type Nullable<T> '?:' LHS — "
+                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                }
+
+                this.EmitExpression(b.Left);
+                this.il.StoreLocal(slot);
+                this.il.LoadLocalAddress(slot);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(this.outer.wellKnown.GetNullableGetHasValueReference(innerClr));
+                var fallback = this.il.DefineLabel();
+                var end = this.il.DefineLabel();
+                this.il.Branch(ILOpCode.Brfalse, fallback);
+
+                // Non-null branch: reproduce the operator's result type.
+                if (b.Type is NullableTypeSymbol)
+                {
+                    // Result is `Nullable<T>` — push the spilled wrapper as
+                    // a value. Reloading the slot preserves the present
+                    // wrapper (`HasValue == true`) so the consumer sees
+                    // the same boxed/wrapped shape it would have observed
+                    // had the coalesce been absent.
+                    this.il.LoadLocal(slot);
+                }
+                else
+                {
+                    // Result is the underlying `T` — call `get_Value()`
+                    // off the slot's address. `HasValue == true` was just
+                    // observed, so the call cannot throw; routing through
+                    // get_Value (rather than a field-style unwrap) keeps
+                    // the IL shape consistent with the `!!` emit path
+                    // introduced in PR #541 and uses no extra slots.
+                    this.il.LoadLocalAddress(slot);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.wellKnown.GetNullableGetValueReference(innerClr));
+                }
+
+                this.il.Branch(ILOpCode.Br, end);
+
+                // Null branch: evaluate RHS, which the binder typed to
+                // match the operator's result (either `T` or `Nullable<T>`).
+                this.il.MarkLabel(fallback);
+                this.EmitExpression(b.Right);
+                this.il.MarkLabel(end);
+                return;
+            }
+
+            // Defensive: any other value-typed LHS (raw struct or enum)
+            // remains unsupported by `?:`. Today the encoder rejects
+            // nullable user-defined structs/enums, so this branch is
+            // unreachable from valid source, but fail loudly rather
+            // than silently producing PEVerify-rejected IL.
+            var leftType = b.Left.Type;
+            if (ReflectionMetadataEmitter.IsValueTypeSymbol(leftType))
+            {
+                throw new NotSupportedException(
+                    $"Null-coalesce '?:' over value-type operand '{leftType?.Name}' is not yet supported by the emitter. "
+                    + "The current `dup; brtrue` short-circuit is invalid IL for struct stack values; a HasValue/Value "
+                    + "(or box-before-brtrue) emit path is required when nullable value types are supported.");
+            }
+
+            this.EmitExpression(b.Left);
+            this.il.OpCode(ILOpCode.Dup);
+            var done = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Brtrue, done);
+            this.il.OpCode(ILOpCode.Pop);
+            this.EmitExpression(b.Right);
+            this.il.MarkLabel(done);
+            return;
+        }
+
+        // String concatenation / equality go through BCL helpers.
+        if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
+        {
+            switch (b.Op.Kind)
+            {
+                case BoundBinaryOperatorKind.Sum:
+                    this.EmitExpression(b.Left);
+                    this.EmitExpression(b.Right);
+                    this.il.Call(this.outer.wellKnown.GetStringConcatReference());
+                    return;
+                case BoundBinaryOperatorKind.Equals:
+                    this.EmitExpression(b.Left);
+                    this.EmitExpression(b.Right);
+                    this.il.Call(this.outer.wellKnown.GetStringEqualsReference());
+                    return;
+                case BoundBinaryOperatorKind.NotEquals:
+                    this.EmitExpression(b.Left);
+                    this.EmitExpression(b.Right);
+                    this.il.Call(this.outer.wellKnown.GetStringEqualsReference());
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    return;
+            }
+        }
+
+        // Phase 7.4 / ADR-0033: inline structs compare their single field directly.
+        if (b.Left.Type is StructSymbol inlineStruct && inlineStruct.IsInline && b.Right.Type == inlineStruct &&
+            (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+        {
+            var field = inlineStruct.Fields[0];
+            var fieldHandle = this.outer.cache.StructFieldDefs[field];
+            this.EmitExpression(b.Left);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+            if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.GetElementTypeToken(field.Type));
+            }
+
+            this.EmitExpression(b.Right);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+            if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.GetElementTypeToken(field.Type));
+            }
+
+            this.il.Call(field.Type == TypeSymbol.String ? this.outer.wellKnown.GetStringEqualsReference() : this.outer.wellKnown.GetObjectStaticEqualsReference());
+            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
+        // Phase 3.B.2 / ADR-0029: structural == / != on data-struct
+        // values. Box both operands and dispatch through static
+        // Object.Equals(object, object) which routes through the
+        // virtual ValueType.Equals override.
+        if (b.Left.Type is StructSymbol ds && ds.IsData && b.Right.Type == ds &&
+            (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+        {
+            var structTypeDef = this.outer.cache.StructTypeDefs[ds];
+            this.EmitExpression(b.Left);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(structTypeDef);
+            this.EmitExpression(b.Right);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(structTypeDef);
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
+        // Phase 4 emit parity (F1, type-erased generics): `==` / `!=` over
+        // open type parameters (e.g. `a == b` in `Eq[T comparable]`). Both
+        // operands are erased to System.Object, so a raw `Ceq` would test
+        // reference equality and return false for equal boxed value types.
+        // Dispatch through static Object.Equals(object, object) — which
+        // routes to the boxed value's Equals override — for correct value
+        // semantics. Operands already sit on the stack as boxed objects.
+        if (b.Left.Type is TypeParameterSymbol && b.Right.Type is TypeParameterSymbol &&
+            (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
+        {
+            this.EmitExpression(b.Left);
+            this.EmitExpression(b.Right);
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
+        // Short-circuit evaluation for logical `&&` and `||`: the right
+        // operand must not be evaluated when the left operand already
+        // determines the result. Emit a dup + conditional branch so the
+        // LHS value is reused as the result without evaluating the RHS.
+        if (b.Op.Kind == BoundBinaryOperatorKind.LogicalAnd ||
+            b.Op.Kind == BoundBinaryOperatorKind.LogicalOr)
+        {
+            var endLabel = this.il.DefineLabel();
+            this.EmitExpression(b.Left);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.Branch(
+                b.Op.Kind == BoundBinaryOperatorKind.LogicalAnd ? ILOpCode.Brfalse : ILOpCode.Brtrue,
+                endLabel);
+            this.il.OpCode(ILOpCode.Pop);
+            this.EmitExpression(b.Right);
+            this.il.MarkLabel(endLabel);
+            return;
+        }
+
+        this.EmitExpression(b.Left);
+        this.EmitExpression(b.Right);
+        if (b.Left.Type == TypeSymbol.Decimal && b.Right.Type == TypeSymbol.Decimal)
+        {
+            if (this.TryEmitDecimalBinary(b.Op.Kind))
+            {
+                return;
+            }
+        }
+
+        bool isUnsigned = IsUnsignedOrChar(b.Left.Type);
+        switch (b.Op.Kind)
+        {
+            case BoundBinaryOperatorKind.Sum:
+                this.il.OpCode(ILOpCode.Add);
+                break;
+            case BoundBinaryOperatorKind.Difference:
+                this.il.OpCode(ILOpCode.Sub);
+                break;
+            case BoundBinaryOperatorKind.Product:
+                this.il.OpCode(ILOpCode.Mul);
+                break;
+            case BoundBinaryOperatorKind.Quotient:
+                this.il.OpCode(isUnsigned ? ILOpCode.Div_un : ILOpCode.Div);
+                break;
+            case BoundBinaryOperatorKind.Remainder:
+                this.il.OpCode(isUnsigned ? ILOpCode.Rem_un : ILOpCode.Rem);
+                break;
+            case BoundBinaryOperatorKind.ShiftLeft:
+                this.EmitShiftWithGoSemanticsGuard(ILOpCode.Shl, b.Left.Type);
+                break;
+            case BoundBinaryOperatorKind.ShiftRight:
+                this.EmitShiftWithGoSemanticsGuard(
+                    isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr,
+                    b.Left.Type);
+                break;
+            case BoundBinaryOperatorKind.BitwiseAnd:
+                this.il.OpCode(ILOpCode.And);
+                break;
+            case BoundBinaryOperatorKind.BitwiseOr:
+                this.il.OpCode(ILOpCode.Or);
+                break;
+            case BoundBinaryOperatorKind.BitwiseXor:
+                this.il.OpCode(ILOpCode.Xor);
+                break;
+            case BoundBinaryOperatorKind.BitClear:
+                // Go's a &^ b == a & ~b. Right operand is already on top: not, then and.
+                this.il.OpCode(ILOpCode.Not);
+                this.il.OpCode(ILOpCode.And);
+                break;
+            case BoundBinaryOperatorKind.Equals:
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            case BoundBinaryOperatorKind.NotEquals:
+                this.il.OpCode(ILOpCode.Ceq);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            case BoundBinaryOperatorKind.Less:
+                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                break;
+            case BoundBinaryOperatorKind.LessOrEquals:
+                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            case BoundBinaryOperatorKind.Greater:
+                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                break;
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"Binary operator '{b.Op.Kind}' is not yet supported by the emitter.");
+        }
+
+        EmitNarrowingTruncationIfNeeded(b.Op.Kind, b.Type);
+    }
+
+    private void EmitNarrowingTruncationIfNeeded(BoundBinaryOperatorKind kind, TypeSymbol resultType)
+    {
+        // IL evaluation-stack quirk: arithmetic, bitwise, and shift
+        // opcodes on sub-i4 operands produce an i4 result that is not
+        // truncated to the operand's natural width. For correctness of
+        // sbyte/byte/short/ushort/char result types, narrow back.
+        //
+        // Issue #534: enum types whose underlying CLR type is sub-i4
+        // (e.g., a byte-backed [Flags] enum) need the same truncation.
+        switch (kind)
+        {
+            case BoundBinaryOperatorKind.Sum:
+            case BoundBinaryOperatorKind.Difference:
+            case BoundBinaryOperatorKind.Product:
+            case BoundBinaryOperatorKind.Quotient:
+            case BoundBinaryOperatorKind.Remainder:
+            case BoundBinaryOperatorKind.ShiftLeft:
+            case BoundBinaryOperatorKind.ShiftRight:
+            case BoundBinaryOperatorKind.BitwiseAnd:
+            case BoundBinaryOperatorKind.BitwiseOr:
+            case BoundBinaryOperatorKind.BitwiseXor:
+            case BoundBinaryOperatorKind.BitClear:
+                EmitSubI4Truncation(resultType);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Issue #534: emits a conv.i1 / conv.u1 / conv.i2 / conv.u2
+    /// truncation instruction when <paramref name="resultType"/> is a
+    /// sub-i4 primitive <em>or</em> a CLR enum whose underlying type is
+    /// sub-i4. This keeps the evaluation-stack value in the correct range
+    /// after arithmetic, bitwise, or shift opcodes that always produce
+    /// an i4 result.
+    /// </summary>
+    private void EmitSubI4Truncation(TypeSymbol resultType)
+    {
+        // Fast path: check built-in primitive types first.
+        if (resultType == TypeSymbol.Int8)
+        {
+            this.il.OpCode(ILOpCode.Conv_i1);
+        }
+        else if (resultType == TypeSymbol.UInt8)
+        {
+            this.il.OpCode(ILOpCode.Conv_u1);
+        }
+        else if (resultType == TypeSymbol.Int16)
+        {
+            this.il.OpCode(ILOpCode.Conv_i2);
+        }
+        else if (resultType == TypeSymbol.UInt16 || resultType == TypeSymbol.Char)
+        {
+            this.il.OpCode(ILOpCode.Conv_u2);
+        }
+        else if (resultType?.ClrType != null && resultType.ClrType.IsEnum)
+        {
+            // Resolve the enum's underlying integral type and truncate
+            // if it is narrower than i4.
+            var underlying = System.Enum.GetUnderlyingType(resultType.ClrType);
+            var underlyingFull = underlying.FullName;
+            if (underlyingFull == "System.SByte")
+            {
+                this.il.OpCode(ILOpCode.Conv_i1);
+            }
+            else if (underlyingFull == "System.Byte")
+            {
+                this.il.OpCode(ILOpCode.Conv_u1);
+            }
+            else if (underlyingFull == "System.Int16")
+            {
+                this.il.OpCode(ILOpCode.Conv_i2);
+            }
+            else if (underlyingFull == "System.UInt16")
+            {
+                this.il.OpCode(ILOpCode.Conv_u2);
+            }
+        }
+    }
+
+    // Issue #421 (P2-2): IL `shl`/`shr`/`shr_un` mask the shift count to
+    // the low log2(stack-width) bits (5 for i4, 6 for i8). G# follows Go
+    // semantics, where a shift count >= the operand's natural width
+    // yields zero. Without this guard, `int32(1) << 33` would produce 2
+    // under the CLR mask but should produce 0 in Go. Emit a runtime
+    // check `count >= width` and substitute zero when the count is
+    // out-of-range; otherwise emit the normal shift opcode.
+    //
+    // Stack on entry: [value, count(i4)]; stack on exit: [result].
+    // For signed right shift this simplification (zero instead of
+    // sign-extension to all-ones for negative values) matches the
+    // documented G# behavior — interpreter and emitter agree on it.
+    private void EmitShiftWithGoSemanticsGuard(ILOpCode shiftOp, TypeSymbol leftType)
+    {
+        var zeroLabel = this.il.DefineLabel();
+        var endLabel = this.il.DefineLabel();
+
+        this.il.OpCode(ILOpCode.Dup);
+        this.EmitTypeBitWidth(leftType);
+        this.il.Branch(ILOpCode.Bge_un, zeroLabel);
+        this.il.OpCode(shiftOp);
+        this.il.Branch(ILOpCode.Br, endLabel);
+
+        this.il.MarkLabel(zeroLabel);
+        this.il.OpCode(ILOpCode.Pop);
+        this.il.OpCode(ILOpCode.Pop);
+        this.EmitZeroForShiftResult(leftType);
+
+        this.il.MarkLabel(endLabel);
+    }
+
+    private void EmitTypeBitWidth(TypeSymbol t)
+    {
+        if (t == TypeSymbol.Int8 || t == TypeSymbol.UInt8)
+        {
+            this.il.LoadConstantI4(8);
+        }
+        else if (t == TypeSymbol.Int16 || t == TypeSymbol.UInt16 || t == TypeSymbol.Char)
+        {
+            this.il.LoadConstantI4(16);
+        }
+        else if (t == TypeSymbol.Int32 || t == TypeSymbol.UInt32)
+        {
+            this.il.LoadConstantI4(32);
+        }
+        else if (t == TypeSymbol.Int64 || t == TypeSymbol.UInt64)
+        {
+            this.il.LoadConstantI4(64);
+        }
+        else if (t == TypeSymbol.NInt || t == TypeSymbol.NUInt)
+        {
+            // Width is sizeof(IntPtr) * 8, determined at IL runtime so
+            // 32-bit and 64-bit hosts both produce Go-correct results.
+            this.il.OpCode(ILOpCode.Sizeof);
+            this.il.Token(this.outer.GetTypeReference(typeof(IntPtr)));
+            this.il.LoadConstantI4(8);
+            this.il.OpCode(ILOpCode.Mul);
+        }
+        else
+        {
+            // Fallback (shouldn't reach here for non-integer types since
+            // shifts are only bound on integer operands).
+            this.il.LoadConstantI4(32);
+        }
+    }
+
+    private void EmitZeroForShiftResult(TypeSymbol t)
+    {
+        if (t == TypeSymbol.Int64 || t == TypeSymbol.UInt64)
+        {
+            this.il.LoadConstantI8(0);
+        }
+        else if (t == TypeSymbol.NInt || t == TypeSymbol.NUInt)
+        {
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Conv_i);
+        }
+        else
+        {
+            this.il.LoadConstantI4(0);
+        }
+    }
+
+    private bool TryEmitDecimalBinary(BoundBinaryOperatorKind kind)
+    {
+        string opName = kind switch
+        {
+            BoundBinaryOperatorKind.Sum => "op_Addition",
+            BoundBinaryOperatorKind.Difference => "op_Subtraction",
+            BoundBinaryOperatorKind.Product => "op_Multiply",
+            BoundBinaryOperatorKind.Quotient => "op_Division",
+            BoundBinaryOperatorKind.Remainder => "op_Modulus",
+            BoundBinaryOperatorKind.Equals => "op_Equality",
+            BoundBinaryOperatorKind.NotEquals => "op_Inequality",
+            BoundBinaryOperatorKind.Less => "op_LessThan",
+            BoundBinaryOperatorKind.LessOrEquals => "op_LessThanOrEqual",
+            BoundBinaryOperatorKind.Greater => "op_GreaterThan",
+            BoundBinaryOperatorKind.GreaterOrEquals => "op_GreaterThanOrEqual",
+            _ => null,
+        };
+        if (opName == null)
+        {
+            return false;
+        }
+
+        var op = typeof(decimal).GetMethod(opName, new[] { typeof(decimal), typeof(decimal) });
+        if (op == null)
+        {
+            return false;
+        }
+
+        this.il.Call(this.outer.GetMethodEntityHandle(op));
+        return true;
+    }
+
+    private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)
+    {
+        // Stream C emit parity: user-defined binary operator on a CLR type.
+        // C# operators are public-static methods, so we emit `call` against
+        // the resolved MethodInfo with both arguments pushed in source
+        // order.
+        this.EmitExpression(op.Left);
+        this.EmitExpression(op.Right);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.GetMethodReference(op.Method));
+        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
+    }
+
+    private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)
+    {
+        // Stream C emit parity: user-defined unary operator on a CLR type.
+        this.EmitExpression(op.Operand);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.GetMethodReference(op.Method));
+        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
+    }
+}
