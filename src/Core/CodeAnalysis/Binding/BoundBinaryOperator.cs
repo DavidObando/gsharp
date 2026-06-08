@@ -104,14 +104,31 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool);
         }
 
-        // Phase 6.8: enum equality compares the underlying int values.
-        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
-            && leftType is EnumSymbol le && rightType is EnumSymbol re && le == re)
+        // Issue #574 (closes the "same family as #534" enum operator gap):
+        // == / != / < / <= / > / >= on same-type enum values. Both
+        // user-defined enums (EnumSymbol) and imported CLR enums
+        // (ImportedTypeSymbol whose ClrType.IsEnum) are supported via the
+        // shared IsEnumType helper — mirroring the bitwise arm below.
+        // Enums sit on the eval stack as their underlying integer so the
+        // existing Ceq / Clt / Cgt emit paths work transparently; signed
+        // vs unsigned dispatch is handled by IsUnsignedOrChar reading
+        // through to the enum's underlying type at emit time.
+        if (leftType != null && leftType == rightType && IsEnumType(leftType))
         {
-            var enumKind = syntaxKind == SyntaxKind.EqualsEqualsToken
-                ? BoundBinaryOperatorKind.Equals
-                : BoundBinaryOperatorKind.NotEquals;
-            return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, TypeSymbol.Bool);
+            var cmpKind = syntaxKind switch
+            {
+                SyntaxKind.EqualsEqualsToken => (BoundBinaryOperatorKind?)BoundBinaryOperatorKind.Equals,
+                SyntaxKind.BangEqualsToken => BoundBinaryOperatorKind.NotEquals,
+                SyntaxKind.LessToken => BoundBinaryOperatorKind.Less,
+                SyntaxKind.LessOrEqualsToken => BoundBinaryOperatorKind.LessOrEquals,
+                SyntaxKind.GreaterToken => BoundBinaryOperatorKind.Greater,
+                SyntaxKind.GreaterOrEqualsToken => BoundBinaryOperatorKind.GreaterOrEquals,
+                _ => null,
+            };
+            if (cmpKind != null)
+            {
+                return new BoundBinaryOperator(syntaxKind, cmpKind.Value, leftType, rightType, TypeSymbol.Bool);
+            }
         }
 
         // Issue #534: bitwise |, &, ^ on same-type enum values.
@@ -174,7 +191,90 @@ public sealed class BoundBinaryOperator
             }
         }
 
+        // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a
+        // value-type Nullable<T>. Triggered when both operands are
+        // NullableTypeSymbol wrapping the SAME value-type underlying.
+        // (Mixed `T? op T` is handled in BindBinaryExpression by lifting
+        // the non-nullable side to T? via an implicit conversion before
+        // re-binding.) Arithmetic / bitwise lift to T?; equality and
+        // ordering lift to bool. Shifts are intentionally excluded —
+        // they take a non-matching int rhs and are rarely used on
+        // nullables; falling through here leaves them as a non-fatal
+        // "operator undefined" diagnostic at user-source level.
+        if (leftType is NullableTypeSymbol lN
+            && rightType is NullableTypeSymbol rN
+            && lN == rN
+            && lN.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            // Look up the underlying-form operator. If it does not exist
+            // (e.g. the user wrote `+` on `bool?`, which has no underlying
+            // form), there is no lifted form either.
+            var underlyingOp = Bind(syntaxKind, lN.UnderlyingType, rN.UnderlyingType);
+            if (underlyingOp != null && IsLiftableKind(underlyingOp.Kind))
+            {
+                TypeSymbol liftedResult = IsLiftedToBoolKind(underlyingOp.Kind)
+                    ? (TypeSymbol)TypeSymbol.Bool
+                    : NullableTypeSymbol.Get(underlyingOp.Type);
+                return new BoundBinaryOperator(syntaxKind, underlyingOp.Kind, leftType, rightType, liftedResult);
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// PR N-4: returns true for operator kinds that have a lifted
+    /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
+    /// ordering. Logical short-circuit (&amp;&amp;, ||), null-coalesce, and
+    /// shift operators are excluded; the former two require the user-
+    /// defined `true`/`false` operator surface, null-coalesce is itself
+    /// the way to consume a nullable, and shifts are bound on a non-
+    /// matching int rhs which the simple matching arm cannot lift.
+    /// </summary>
+    private static bool IsLiftableKind(BoundBinaryOperatorKind kind)
+    {
+        switch (kind)
+        {
+            case BoundBinaryOperatorKind.Sum:
+            case BoundBinaryOperatorKind.Difference:
+            case BoundBinaryOperatorKind.Product:
+            case BoundBinaryOperatorKind.Quotient:
+            case BoundBinaryOperatorKind.Remainder:
+            case BoundBinaryOperatorKind.BitwiseAnd:
+            case BoundBinaryOperatorKind.BitwiseOr:
+            case BoundBinaryOperatorKind.BitwiseXor:
+            case BoundBinaryOperatorKind.BitClear:
+            case BoundBinaryOperatorKind.Equals:
+            case BoundBinaryOperatorKind.NotEquals:
+            case BoundBinaryOperatorKind.Less:
+            case BoundBinaryOperatorKind.LessOrEquals:
+            case BoundBinaryOperatorKind.Greater:
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// PR N-4: returns true for operator kinds whose lifted form has
+    /// result type <c>bool</c> rather than <c>Nullable&lt;R&gt;</c>
+    /// (equality and ordering, per C# §7.3.7).
+    /// </summary>
+    private static bool IsLiftedToBoolKind(BoundBinaryOperatorKind kind)
+    {
+        switch (kind)
+        {
+            case BoundBinaryOperatorKind.Equals:
+            case BoundBinaryOperatorKind.NotEquals:
+            case BoundBinaryOperatorKind.Less:
+            case BoundBinaryOperatorKind.LessOrEquals:
+            case BoundBinaryOperatorKind.Greater:
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)

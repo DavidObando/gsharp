@@ -210,6 +210,22 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // PR N-4 / §6.1 / C# §7.3.7: lifted binary operators over a
+        // value-type Nullable<T>. The collector pre-allocates LHS / RHS
+        // (Nullable<T>) and optional result (Nullable<R>) slots; the
+        // emitted IL spills both operands once, branches on their
+        // HasValue flags, and then either calls get_Value to compute the
+        // underlying op (wrapping the scalar result as a fresh
+        // Nullable<R> for arithmetic / bitwise) or yields the relevant
+        // bool for equality / ordering. Must precede the bottom of this
+        // method, whose `add/clt/...` opcodes would otherwise see two
+        // struct values on the stack and produce invalid IL.
+        if (this.liftedBinarySlots.TryGetValue(b, out var liftedSlots))
+        {
+            this.EmitLiftedNullableBinary(b, liftedSlots);
+            return;
+        }
+
         // String concatenation / equality go through BCL helpers.
         if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
         {
@@ -608,6 +624,372 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.Call(this.outer.GetMethodEntityHandle(op));
         return true;
+    }
+
+    // PR N-4 / §6.1 / C# §7.3.7: emits a lifted binary operator over a
+    // value-type Nullable<T>. The pre-allocated slot bundle gives the
+    // emitter two Nullable<T>-typed operand slots and, for arithmetic /
+    // bitwise operators that produce Nullable<R>, one result slot.
+    //
+    // The emit shape varies by result type:
+    //
+    //   * Lifted equality (== / !=) on Nullable<T>:
+    //       spill x and y; compare HasValue flags;
+    //         - if HasValue differs → false
+    //         - if both have no value → true
+    //         - otherwise → underlying op (x.Value == y.Value)
+    //       Followed by `ldc.i4.0; ceq` for !=.
+    //
+    //   * Lifted ordering (< <= > >=) on Nullable<T>:
+    //       spill x and y; if either lacks value → false;
+    //         otherwise → underlying compare on x.Value / y.Value.
+    //
+    //   * Lifted arithmetic / bitwise on Nullable<T>:
+    //       spill x and y; if either lacks value → default(Nullable<R>);
+    //         otherwise → newobj Nullable<R>::.ctor(x.Value op y.Value).
+    private void EmitLiftedNullableBinary(BoundBinaryExpression b, LiftedBinarySlots slots)
+    {
+        var leftNullable = (NullableTypeSymbol)b.Left.Type;
+        var underlying = leftNullable.UnderlyingType;
+        var underlyingClr = underlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{underlying.Name}>: underlying has no CLR type.");
+
+        var lhsSlot = slots.LhsSlot;
+        var rhsSlot = slots.RhsSlot;
+
+        // Form 2: `x? == nil` / `x? != nil`. The IsNullCompare arm binds
+        // this with right-operand type Null; the slot bundle has no RHS
+        // and no result slot. Spill the LHS once and consult HasValue.
+        // For `== nil` the result is `!HasValue`; for `!= nil` it is
+        // `HasValue`.
+        if (b.Right.Type == TypeSymbol.Null)
+        {
+            var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
+
+            this.EmitExpression(b.Left);
+            this.il.StoreLocal(lhsSlot);
+            this.il.LoadLocalAddress(lhsSlot);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(getHasValue);
+
+            if (b.Op.Kind == BoundBinaryOperatorKind.Equals)
+            {
+                // !HasValue
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
+        // Spill both operands.
+        this.EmitExpression(b.Left);
+        this.il.StoreLocal(lhsSlot);
+        this.EmitExpression(b.Right);
+        this.il.StoreLocal(rhsSlot);
+
+        bool isEquality = b.Op.Kind == BoundBinaryOperatorKind.Equals
+            || b.Op.Kind == BoundBinaryOperatorKind.NotEquals;
+        bool isOrdering = b.Op.Kind == BoundBinaryOperatorKind.Less
+            || b.Op.Kind == BoundBinaryOperatorKind.LessOrEquals
+            || b.Op.Kind == BoundBinaryOperatorKind.Greater
+            || b.Op.Kind == BoundBinaryOperatorKind.GreaterOrEquals;
+
+        if (isEquality)
+        {
+            this.EmitLiftedEquality(b.Op.Kind, lhsSlot, rhsSlot, underlying, underlyingClr);
+            return;
+        }
+
+        if (isOrdering)
+        {
+            this.EmitLiftedOrdering(b.Op.Kind, lhsSlot, rhsSlot, underlying, underlyingClr);
+            return;
+        }
+
+        // Arithmetic / bitwise: produces Nullable<R>. Result slot is
+        // populated by the planner so the null branch can `initobj` a
+        // default Nullable<R> and `ldloc` it as a value.
+        if (slots.ResultSlot < 0)
+        {
+            throw new InvalidOperationException(
+                $"Lifted binary operator '{b.Op.Kind}' produces Nullable<R> but no result slot was pre-allocated; "
+                + "check LiftedBinaryOperatorCollector and the prepass in CollectLocalsAndLabels.");
+        }
+
+        this.EmitLiftedArithmetic(b.Op.Kind, lhsSlot, rhsSlot, slots.ResultSlot, underlying, underlyingClr);
+    }
+
+    private void EmitLiftedEquality(
+        BoundBinaryOperatorKind kind,
+        int lhsSlot,
+        int rhsSlot,
+        TypeSymbol underlying,
+        Type underlyingClr)
+    {
+        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
+        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+
+        var bothEmptyLabel = this.il.DefineLabel();
+        var flagsAgreeLabel = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        // Compare HasValue flags. If they differ, result is false.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.Branch(ILOpCode.Beq, flagsAgreeLabel);
+
+        // Mismatched HasValue → false.
+        this.il.LoadConstantI4(0);
+        this.il.Branch(ILOpCode.Br, end);
+
+        // Agreed: either both empty (→ true) or both present (→ underlying ceq).
+        this.il.MarkLabel(flagsAgreeLabel);
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.Branch(ILOpCode.Brfalse, bothEmptyLabel);
+
+        // Both present: load values and compare.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.EmitUnderlyingEqualityCeq(underlying);
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(bothEmptyLabel);
+        this.il.LoadConstantI4(1);
+
+        this.il.MarkLabel(end);
+
+        // For !=, append `ldc.i4.0; ceq` to negate.
+        if (kind == BoundBinaryOperatorKind.NotEquals)
+        {
+            this.il.LoadConstantI4(0);
+            this.il.OpCode(ILOpCode.Ceq);
+        }
+    }
+
+    private void EmitLiftedOrdering(
+        BoundBinaryOperatorKind kind,
+        int lhsSlot,
+        int rhsSlot,
+        TypeSymbol underlying,
+        Type underlyingClr)
+    {
+        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
+        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+
+        var falseLabel = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        // (lhs.HasValue & rhs.HasValue) — if any is absent, result is false.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.OpCode(ILOpCode.And);
+        this.il.Branch(ILOpCode.Brfalse, falseLabel);
+
+        // Both present: load underlying values and compare.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.EmitUnderlyingOrdering(kind, underlying);
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(falseLabel);
+        this.il.LoadConstantI4(0);
+
+        this.il.MarkLabel(end);
+    }
+
+    private void EmitLiftedArithmetic(
+        BoundBinaryOperatorKind kind,
+        int lhsSlot,
+        int rhsSlot,
+        int resultSlot,
+        TypeSymbol underlying,
+        Type underlyingClr)
+    {
+        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
+        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+
+        // Resolve Nullable<R> ctor / type tokens for the result.
+        // R == underlying for arithmetic / bitwise.
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, underlyingClr, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{underlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+        var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+            ?? throw new InvalidOperationException(
+                $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+        var nullableToken = this.outer.GetTypeHandleForMember(nullableClr);
+
+        var nullBranch = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        // Both present? If yes, fall through to compute; otherwise jump to null branch.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValue);
+        this.il.OpCode(ILOpCode.And);
+        this.il.Branch(ILOpCode.Brfalse, nullBranch);
+
+        // Compute underlying op and wrap as Nullable<R>.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getValue);
+        this.EmitUnderlyingArithmetic(kind, underlying);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.GetCtorReference(ctor));
+        this.il.Branch(ILOpCode.Br, end);
+
+        // Null branch: default(Nullable<R>) via initobj + ldloc.
+        this.il.MarkLabel(nullBranch);
+        this.il.LoadLocalAddress(resultSlot);
+        this.il.OpCode(ILOpCode.Initobj);
+        this.il.Token(nullableToken);
+        this.il.LoadLocal(resultSlot);
+
+        this.il.MarkLabel(end);
+    }
+
+    // Emits the IL for equality comparison on two values of `underlying`
+    // already on the stack. Decimal routes through the static
+    // op_Equality method; everything else uses `ceq`.
+    private void EmitUnderlyingEqualityCeq(TypeSymbol underlying)
+    {
+        if (underlying == TypeSymbol.Decimal)
+        {
+            if (!this.TryEmitDecimalBinary(BoundBinaryOperatorKind.Equals))
+            {
+                throw new InvalidOperationException("Lifted decimal equality emit failed: decimal op_Equality is not resolvable.");
+            }
+
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Ceq);
+    }
+
+    // Emits the IL for an ordering comparison on two values of
+    // `underlying` already on the stack. Mirrors the dispatch in
+    // EmitBinary's bottom switch for less / less-or-equals / greater /
+    // greater-or-equals: unsigned-or-char chooses the un-suffixed
+    // variant, and a (clt/cgt) + (ldc.i4.0; ceq) negation is used for
+    // <= and >=.
+    private void EmitUnderlyingOrdering(BoundBinaryOperatorKind kind, TypeSymbol underlying)
+    {
+        if (underlying == TypeSymbol.Decimal)
+        {
+            if (!this.TryEmitDecimalBinary(kind))
+            {
+                throw new InvalidOperationException($"Lifted decimal '{kind}' emit failed.");
+            }
+
+            return;
+        }
+
+        bool isUnsigned = IsUnsignedOrChar(underlying);
+        switch (kind)
+        {
+            case BoundBinaryOperatorKind.Less:
+                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                break;
+            case BoundBinaryOperatorKind.LessOrEquals:
+                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            case BoundBinaryOperatorKind.Greater:
+                this.il.OpCode(isUnsigned ? ILOpCode.Cgt_un : ILOpCode.Cgt);
+                break;
+            case BoundBinaryOperatorKind.GreaterOrEquals:
+                this.il.OpCode(isUnsigned ? ILOpCode.Clt_un : ILOpCode.Clt);
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+                break;
+            default:
+                throw new NotSupportedException($"EmitUnderlyingOrdering: unexpected kind '{kind}'.");
+        }
+    }
+
+    // Emits the IL for an arithmetic or bitwise op on two values of
+    // `underlying` already on the stack. Decimal routes through static
+    // op_* methods; primitive types map to the matching opcode and then
+    // apply sub-i4 truncation when the underlying is byte / sbyte /
+    // short / ushort / char.
+    private void EmitUnderlyingArithmetic(BoundBinaryOperatorKind kind, TypeSymbol underlying)
+    {
+        if (underlying == TypeSymbol.Decimal)
+        {
+            if (!this.TryEmitDecimalBinary(kind))
+            {
+                throw new NotSupportedException($"Lifted decimal '{kind}' emit failed.");
+            }
+
+            return;
+        }
+
+        bool isUnsigned = IsUnsignedOrChar(underlying);
+        switch (kind)
+        {
+            case BoundBinaryOperatorKind.Sum:
+                this.il.OpCode(ILOpCode.Add);
+                break;
+            case BoundBinaryOperatorKind.Difference:
+                this.il.OpCode(ILOpCode.Sub);
+                break;
+            case BoundBinaryOperatorKind.Product:
+                this.il.OpCode(ILOpCode.Mul);
+                break;
+            case BoundBinaryOperatorKind.Quotient:
+                this.il.OpCode(isUnsigned ? ILOpCode.Div_un : ILOpCode.Div);
+                break;
+            case BoundBinaryOperatorKind.Remainder:
+                this.il.OpCode(isUnsigned ? ILOpCode.Rem_un : ILOpCode.Rem);
+                break;
+            case BoundBinaryOperatorKind.BitwiseAnd:
+                this.il.OpCode(ILOpCode.And);
+                break;
+            case BoundBinaryOperatorKind.BitwiseOr:
+                this.il.OpCode(ILOpCode.Or);
+                break;
+            case BoundBinaryOperatorKind.BitwiseXor:
+                this.il.OpCode(ILOpCode.Xor);
+                break;
+            case BoundBinaryOperatorKind.BitClear:
+                this.il.OpCode(ILOpCode.Not);
+                this.il.OpCode(ILOpCode.And);
+                break;
+            default:
+                throw new NotSupportedException($"EmitUnderlyingArithmetic: unexpected kind '{kind}'.");
+        }
+
+        EmitNarrowingTruncationIfNeeded(kind, underlying);
     }
 
     private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)

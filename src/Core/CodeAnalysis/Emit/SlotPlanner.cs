@@ -152,6 +152,9 @@ internal sealed class SlotPlanner
     public void CollectNullableValueTypeCoalesces(BoundStatement root, List<BoundBinaryExpression> sink)
         => new NullableValueTypeCoalesceCollector(sink).Visit(root);
 
+    public void CollectLiftedBinaryOperators(BoundStatement root, List<BoundBinaryExpression> sink)
+        => new LiftedBinaryOperatorCollector(sink).Visit(root);
+
     public void RunPatternSwitchAllocator(
         BoundNode node,
         Dictionary<VariableSymbol, int> locals,
@@ -1036,6 +1039,129 @@ internal sealed class SlotPlanner
             base.VisitBinaryExpression(node);
         }
     }
+
+    // PR N-4 / §6.1 / C# §7.3.7: walks the bound tree collecting every
+    // BoundBinaryExpression that is a lifted operator over a value-type
+    // Nullable<T>. The emitter needs a fixed set of scratch slots per
+    // lifted operator site:
+    //   * one Nullable<T>-typed slot for the LHS spill (so the emitter can
+    //     take its address for call get_HasValue / get_Value),
+    //   * one Nullable<T>-typed slot for the RHS spill (same reason),
+    //   * one Nullable<R>-typed slot for the result when the operator
+    //     produces Nullable<R> (arithmetic / bitwise). The slot is used to
+    //     initobj a default Nullable<R> on the "null" branch and then load
+    //     it as a value. The slot is NOT allocated for lifted equality /
+    //     ordering, whose result is bool.
+    // Mirrors NullableValueTypeCoalesceCollector but yields a richer
+    // per-node slot bundle.
+    private sealed class LiftedBinaryOperatorCollector : BoundTreeWalker
+    {
+        private readonly List<BoundBinaryExpression> sink;
+
+        public LiftedBinaryOperatorCollector(List<BoundBinaryExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override void VisitBinaryExpression(BoundBinaryExpression node)
+        {
+            if (IsLiftedValueTypeBinary(node))
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitBinaryExpression(node);
+        }
+
+        private static bool IsLiftedValueTypeBinary(BoundBinaryExpression node)
+        {
+            // Form 1: classic lifted form — both LHS and RHS are
+            // value-type Nullable<T> wrapping the same underlying. The
+            // lifted binder arm enforces this; the mixed-mode binder
+            // lift inserts an implicit `T -> T?` conversion for the
+            // non-nullable side before binding the operator.
+            //
+            // Form 2: `value-type Nullable<T> == nil` / `!= nil` — bound
+            // by the IsNullCompare arm with left=Nullable<T>, right=Null.
+            // Without slot allocation the bottom of EmitBinary would
+            // load the LHS as a struct value and the RHS as `ldnull`
+            // and then emit `ceq` — an `InvalidProgramException` at
+            // runtime. Treating this as a lifted form lets the emitter
+            // spill the LHS once and consult `HasValue`.
+            bool leftIsValueNullable = node.Left.Type is NullableTypeSymbol left
+                && left.UnderlyingType?.ClrType is { IsValueType: true };
+            if (!leftIsValueNullable)
+            {
+                return false;
+            }
+
+            if (node.Right.Type == TypeSymbol.Null)
+            {
+                return node.Op.Kind is BoundBinaryOperatorKind.Equals
+                    or BoundBinaryOperatorKind.NotEquals;
+            }
+
+            if (node.Right.Type is not NullableTypeSymbol rightNullable
+                || (NullableTypeSymbol)node.Left.Type! != rightNullable)
+            {
+                return false;
+            }
+
+            // Exclude operators whose value-type Nullable<T> emit is already
+            // owned by dedicated collectors (NullCoalesce, NullAssertion).
+            switch (node.Op.Kind)
+            {
+                case BoundBinaryOperatorKind.Sum:
+                case BoundBinaryOperatorKind.Difference:
+                case BoundBinaryOperatorKind.Product:
+                case BoundBinaryOperatorKind.Quotient:
+                case BoundBinaryOperatorKind.Remainder:
+                case BoundBinaryOperatorKind.BitwiseAnd:
+                case BoundBinaryOperatorKind.BitwiseOr:
+                case BoundBinaryOperatorKind.BitwiseXor:
+                case BoundBinaryOperatorKind.BitClear:
+                case BoundBinaryOperatorKind.Equals:
+                case BoundBinaryOperatorKind.NotEquals:
+                case BoundBinaryOperatorKind.Less:
+                case BoundBinaryOperatorKind.LessOrEquals:
+                case BoundBinaryOperatorKind.Greater:
+                case BoundBinaryOperatorKind.GreaterOrEquals:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+}
+
+/// <summary>
+/// PR N-4 / §6.1 / C# §7.3.7: per-<see cref="BoundBinaryExpression"/>
+/// bundle of pre-allocated local slot indices that the body emitter
+/// consumes when lowering a lifted binary operator over a value-type
+/// <c>Nullable&lt;T&gt;</c>. Pre-allocated by <see cref="SlotPlanner"/>'s
+/// lifted-binary walker and stored in the per-method
+/// <c>liftedBinarySlots</c> dictionary.
+/// </summary>
+internal sealed class LiftedBinarySlots
+{
+    public LiftedBinarySlots(int lhsSlot, int rhsSlot, int resultSlot)
+    {
+        this.LhsSlot = lhsSlot;
+        this.RhsSlot = rhsSlot;
+        this.ResultSlot = resultSlot;
+    }
+
+    /// <summary>Gets the slot holding the spilled LHS <c>Nullable&lt;T&gt;</c>.</summary>
+    public int LhsSlot { get; }
+
+    /// <summary>Gets the slot holding the spilled RHS <c>Nullable&lt;T&gt;</c>.</summary>
+    public int RhsSlot { get; }
+
+    /// <summary>
+    /// Gets the slot holding the result <c>Nullable&lt;R&gt;</c>, or <c>-1</c>
+    /// when the lifted operator returns <c>bool</c> (equality / ordering).
+    /// </summary>
+    public int ResultSlot { get; }
 }
 
 /// <summary>

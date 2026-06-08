@@ -65,6 +65,7 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
+    private readonly Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots;
     private readonly ParameterSymbol structThisParameter;
     private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
     private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
@@ -111,6 +112,7 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
+        Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots = null,
         ParameterSymbol structThisParameter = null,
         Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
         Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
@@ -136,6 +138,7 @@ internal sealed partial class MethodBodyEmitter
         this.receiverSpillSlots = receiverSpillSlots;
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
         this.goEnclosingScopes = goEnclosingScopes;
+        this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
         this.structThisParameter = structThisParameter;
         this.asyncFieldMap = asyncFieldMap;
         this.asyncPlan = asyncPlan;
@@ -510,12 +513,30 @@ internal sealed partial class MethodBodyEmitter
 
     private static bool IsUnsignedOrChar(TypeSymbol t)
     {
-        return t == TypeSymbol.UInt8
+        if (t == TypeSymbol.UInt8
             || t == TypeSymbol.UInt16
             || t == TypeSymbol.UInt32
             || t == TypeSymbol.UInt64
             || t == TypeSymbol.NUInt
-            || t == TypeSymbol.Char;
+            || t == TypeSymbol.Char)
+        {
+            return true;
+        }
+
+        // Issue #574: enum comparisons (< <= > >=) dispatch through the
+        // enum's CLR underlying type. A byte/ushort/uint/ulong-backed
+        // enum needs the unsigned IL comparison opcodes (clt_un / cgt_un);
+        // a sbyte/short/int/long-backed enum needs the signed forms.
+        if (t?.ClrType?.IsEnum == true)
+        {
+            var underlyingName = System.Enum.GetUnderlyingType(t.ClrType).FullName;
+            return underlyingName == "System.Byte"
+                || underlyingName == "System.UInt16"
+                || underlyingName == "System.UInt32"
+                || underlyingName == "System.UInt64";
+        }
+
+        return false;
     }
 
     // Issue #520: the EmitLoad/StoreElement helpers need to distinguish
