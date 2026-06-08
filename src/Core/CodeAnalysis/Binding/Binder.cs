@@ -91,6 +91,15 @@ public sealed class Binder
     // not inherited; MemberLookup never back-references Binder.
     private readonly MemberLookup memberLookup;
 
+    // PR-B-3: the binder-side wrapper around Conversion.Classify. Owns the
+    // BindConversion / BindClr*Conversion family, the CLR-parameter conversion
+    // / argument-shaping helpers, the method-group → delegate resolution, the
+    // ref-kind argument validation, and the default-value attachment that
+    // previously lived directly on Binder. Composed via narrow Func callbacks
+    // for the still-on-Binder helpers it needs to call back into; never
+    // back-references Binder.
+    private readonly ConversionClassifier conversions;
+
     private FunctionSymbol function;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
@@ -117,6 +126,17 @@ public sealed class Binder
     {
         binderCtx = new BinderContext(parent);
         memberLookup = new MemberLookup(binderCtx);
+        conversions = new ConversionClassifier(
+            binderCtx,
+            memberLookup,
+            bindExpression: syntax => BindExpression(syntax),
+            bindExpressionWithTargetType: (syntax, targetType) => BindExpression(syntax, targetType),
+            isFormattableStringTargetType: IsFormattableStringTargetType,
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => BindInterpolatedStringAsFormattable(syntax, targetType),
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            isLvalue: IsLvalue,
+            getRefKindFromModifier: GetRefKindFromModifier,
+            refKindToString: RefKindToString);
         this.function = function;
 
         if (function != null)
@@ -1015,12 +1035,12 @@ public sealed class Binder
                 parameterName,
                 parameterType,
                 declaringSyntax: parameterSyntax.Identifier,
-                refKind: BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null));
+                refKind: conversions.BindAndValidateParameterRefKind(parameterSyntax, parameterName, parameterType, isVariadic: false, asyncOrIteratorKind: null));
 
             // ADR-0063 §5: delegate declarations can declare default-valued
             // parameters; the value is recorded on the parameter symbol for
             // call-site default substitution.
-            BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam);
+            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam);
             parameters.Add(delegateParam);
         }
 
@@ -1229,7 +1249,7 @@ public sealed class Binder
                 }
 
                 var primaryCtorParam = new ParameterSymbol(paramName, paramType, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
-                BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
+                conversions.BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
                 ctorBuilder.Add(primaryCtorParam);
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
@@ -1588,7 +1608,7 @@ public sealed class Binder
                             Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                         }
 
-                        var parameterRefKind = BindAndValidateParameterRefKind(
+                        var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                             parameterSyntax,
                             parameterName,
                             parameterType,
@@ -1602,7 +1622,7 @@ public sealed class Binder
                         else
                         {
                             var classMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                            BindAndAttachParameterDefaultValue(parameterSyntax, classMethodParam);
+                            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, classMethodParam);
                             parameters.Add(classMethodParam);
                         }
                     }
@@ -2130,7 +2150,7 @@ public sealed class Binder
                 if (fieldSyntax.Initializer != null)
                 {
                     var boundInit = BindExpression(fieldSyntax.Initializer);
-                    var convertedInit = BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
+                    var convertedInit = conversions.BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
                     initializersBuilder[fieldSymbol] = convertedInit;
                 }
 
@@ -2198,7 +2218,7 @@ public sealed class Binder
                             Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                         }
 
-                        var parameterRefKind = BindAndValidateParameterRefKind(
+                        var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                             parameterSyntax,
                             parameterName,
                             parameterType,
@@ -2212,7 +2232,7 @@ public sealed class Binder
                         else
                         {
                             var staticMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                            BindAndAttachParameterDefaultValue(parameterSyntax, staticMethodParam);
+                            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, staticMethodParam);
                             parameters.Add(staticMethodParam);
                         }
                     }
@@ -2893,7 +2913,7 @@ public sealed class Binder
                     Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
                 }
 
-                var parameterRefKind = BindAndValidateParameterRefKind(
+                var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                     parameterSyntax,
                     parameterName,
                     parameterType,
@@ -2907,7 +2927,7 @@ public sealed class Binder
                 else
                 {
                     var ifaceMethodParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                    BindAndAttachParameterDefaultValue(parameterSyntax, ifaceMethodParam);
+                    conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ifaceMethodParam);
                     parameters.Add(ifaceMethodParam);
                 }
             }
@@ -3171,7 +3191,7 @@ public sealed class Binder
                         parameterType = SliceTypeSymbol.Get(parameterType);
                     }
 
-                    var parameterRefKind = BindAndValidateParameterRefKind(
+                    var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                         parameterSyntax,
                         parameterName,
                         parameterType,
@@ -3179,7 +3199,7 @@ public sealed class Binder
                         syntax.IsAsync ? "async" : null);
 
                     var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                    BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
+                    conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
                     parameters.Add(parameter);
                     parameterSymbolBySyntax[pIndex] = parameter;
                 }
@@ -4027,7 +4047,7 @@ public sealed class Binder
             {
                 var initializer = BindExpression(syntax.Initializer);
                 variableType = type ?? initializer.Type;
-                convertedInitializer = BindConversion(syntax.Initializer.Location, initializer, variableType);
+                convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
             }
         }
 
@@ -5412,7 +5432,7 @@ public sealed class Binder
             }
 
             var tempRef = new BoundVariableExpression(null, temps[i]);
-            var converted = BindConversion(values[i].Location, tempRef, variable.Type);
+            var converted = conversions.BindConversion(values[i].Location, tempRef, variable.Type);
             statements.Add(new BoundExpressionStatement(syntax, new BoundAssignmentExpression(null, variable, converted)));
         }
 
@@ -5669,7 +5689,7 @@ public sealed class Binder
 
     private BoundPattern BindRelationalPattern(RelationalPatternSyntax syntax, TypeSymbol discriminantType)
     {
-        var value = BindConversion(syntax.Expression, discriminantType, allowExplicit: false);
+        var value = conversions.BindConversion(syntax.Expression, discriminantType, allowExplicit: false);
         var op = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, discriminantType, discriminantType);
         if (op == null)
         {
@@ -5801,7 +5821,7 @@ public sealed class Binder
     private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
     {
         var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
-        var disposeCall = TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
+        var disposeCall = conversions.TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
         if (disposeCall == null)
         {
             return (declaration, null, BindErrorStatement());
@@ -5889,26 +5909,6 @@ public sealed class Binder
         return capturedArguments.ToImmutable();
     }
 
-    private BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
-    {
-        var clrType = variable.Type?.ClrType;
-        if (clrType == null)
-        {
-            Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
-            return null;
-        }
-
-        var disposeMethod = clrType.GetMethod("Dispose", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, binder: null, types: System.Type.EmptyTypes, modifiers: null);
-        if (disposeMethod == null)
-        {
-            Diagnostics.ReportTypeNotDisposable(location, variable.Type);
-            return null;
-        }
-
-        var receiver = new BoundVariableExpression(null, variable);
-        return new BoundImportedInstanceCallExpression(null, receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
-    }
-
     private BoundStatement BindGoStatement(GoStatementSyntax syntax)
     {
         var expression = BindExpression(syntax.Expression);
@@ -5946,7 +5946,7 @@ public sealed class Binder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        var value = BindConversion(syntax.Value, chan.ElementType);
+        var value = conversions.BindConversion(syntax.Value, chan.ElementType);
         return new BoundChannelSendStatement(syntax, channel, value);
     }
 
@@ -5962,7 +5962,7 @@ public sealed class Binder
         BoundExpression capacity = null;
         if (syntax.Capacity != null)
         {
-            capacity = BindConversion(syntax.Capacity, TypeSymbol.Int32);
+            capacity = conversions.BindConversion(syntax.Capacity, TypeSymbol.Int32);
         }
 
         return new BoundMakeChannelExpression(null, chan, capacity);
@@ -6088,7 +6088,7 @@ public sealed class Binder
 
             if (caseSyntax.CaseKind == SelectCaseKind.Send)
             {
-                valueExpr = BindConversion(caseSyntax.Value, chan.ElementType);
+                valueExpr = conversions.BindConversion(caseSyntax.Value, chan.ElementType);
                 body = BindStatement(caseSyntax.Body);
             }
             else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
@@ -6172,7 +6172,7 @@ public sealed class Binder
         var expression = BindExpression(syntax.Expression);
         if (expression.Type != null && elementType != null && expression.Type != elementType)
         {
-            expression = BindConversion(syntax.Expression.Location, expression, elementType);
+            expression = conversions.BindConversion(syntax.Expression.Location, expression, elementType);
         }
 
         return new BoundYieldStatement(syntax, expression);
@@ -6705,7 +6705,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    expression = BindConversion(syntax.Expression.Location, expression, function.Type);
+                    expression = conversions.BindConversion(syntax.Expression.Location, expression, function.Type);
                 }
             }
         }
@@ -6841,7 +6841,7 @@ public sealed class Binder
 
     private BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
-        return BindConversion(syntax, targetType);
+        return conversions.BindConversion(syntax, targetType);
     }
 
     private BoundExpression BindExpression(ExpressionSyntax syntax, bool canBeVoid = false)
@@ -7393,7 +7393,7 @@ public sealed class Binder
                 implicitField.Field,
                 $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
 
-            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
+            var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitField.Field.Type);
             return new BoundFieldAssignmentExpression(null, implicitField.Receiver, implicitField.StructType, implicitField.Field, convertedValue);
         }
 
@@ -7410,7 +7410,7 @@ public sealed class Binder
                 implicitStaticField.Field,
                 $"{implicitStaticField.StructType.Name}.{implicitStaticField.Field.Name}");
 
-            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
+            var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
             return new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
         }
 
@@ -7428,7 +7428,7 @@ public sealed class Binder
                 implicitStaticProp.Property,
                 $"{implicitStaticProp.StructType.Name}.{implicitStaticProp.Property.Name}");
 
-            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitStaticProp.Property.Type);
+            var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticProp.Property.Type);
             return new BoundPropertyAssignmentExpression(
                 null,
                 receiver: null,
@@ -7451,7 +7451,7 @@ public sealed class Binder
                 implicitProp.Property,
                 $"{implicitProp.StructType.Name}.{implicitProp.Property.Name}");
 
-            var convertedValue = BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
+            var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
             return new BoundPropertyAssignmentExpression(
                 null,
                 new BoundVariableExpression(null, implicitProp.Receiver),
@@ -7475,7 +7475,7 @@ public sealed class Binder
             }
         }
 
-        var convertedExpression = BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
+        var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
         return new BoundAssignmentExpression(null, variable, convertedExpression);
     }
@@ -7521,7 +7521,7 @@ public sealed class Binder
             }
 
             var valueExpr = BindExpression(initSyntax.Value);
-            valueExpr = BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
+            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
             explicitValues[fieldName] = (field, declaringType, valueExpr);
         }
 
@@ -7635,7 +7635,7 @@ public sealed class Binder
             }
 
             var value = BindExpression(initSyntax.Value);
-            var converted = BindConversion(initSyntax.Value.Location, value, instTargetSymbol);
+            var converted = conversions.BindConversion(initSyntax.Value.Location, value, instTargetSymbol);
             var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
             return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, instanceMember, converted, instTargetSymbol);
         }
@@ -7645,7 +7645,7 @@ public sealed class Binder
             if (structSymbol.TryGetFieldIncludingInherited(propertyName, out var field, out _))
             {
                 var value = BindExpression(initSyntax.Value);
-                var converted = BindConversion(initSyntax.Value.Location, value, field.Type);
+                var converted = conversions.BindConversion(initSyntax.Value.Location, value, field.Type);
                 return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
             }
 
@@ -7659,7 +7659,7 @@ public sealed class Binder
                 }
 
                 var value = BindExpression(initSyntax.Value);
-                var converted = BindConversion(initSyntax.Value.Location, value, prop.Type);
+                var converted = conversions.BindConversion(initSyntax.Value.Location, value, prop.Type);
                 var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
                 return new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, structSymbol, prop, converted);
             }
@@ -7684,7 +7684,7 @@ public sealed class Binder
                     }
 
                     var value = BindExpression(initSyntax.Value);
-                    var converted = BindConversion(initSyntax.Value.Location, value, inhTargetSymbol);
+                    var converted = conversions.BindConversion(initSyntax.Value.Location, value, inhTargetSymbol);
                     var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
                     return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, inhMember, converted, inhTargetSymbol);
                 }
@@ -7841,7 +7841,7 @@ public sealed class Binder
             }
 
             var valueExpr = BindExpression(initSyntax.Value);
-            valueExpr = BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
+            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
             inits.Add(new BoundFieldInitializer(field, valueExpr));
         }
 
@@ -7900,7 +7900,7 @@ public sealed class Binder
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
             // which honors the default at the call site.
-            BindAndAttachParameterDefaultValue(p, lambdaParam);
+            conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
@@ -8009,7 +8009,7 @@ public sealed class Binder
 
             _ = staticWritable;
             _ = staticTargetType;
-            var staticConverted = BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
+            var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
 
@@ -8025,7 +8025,7 @@ public sealed class Binder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var staticConverted = BindConversion(syntax.Value.Location, staticValue, staticField.Type);
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
                 return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
             }
 
@@ -8040,7 +8040,7 @@ public sealed class Binder
                         return new BoundErrorExpression(null);
                     }
 
-                    var propConverted = BindConversion(syntax.Value.Location, staticValue, prop.Type);
+                    var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
                     return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
                 }
             }
@@ -8083,7 +8083,7 @@ public sealed class Binder
             _ = instWritable;
             _ = instTargetType;
             var instReceiver = new BoundVariableExpression(null, variable);
-            var instConverted = BindConversion(syntax.Value.Location, value, instTargetSymbol);
+            var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, instTargetSymbol);
         }
 
@@ -8104,7 +8104,7 @@ public sealed class Binder
                     return new BoundErrorExpression(null);
                 }
 
-                var propConverted = BindConversion(syntax.Value.Location, value, prop.Type);
+                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
                 return new BoundPropertyAssignmentExpression(null, new BoundVariableExpression(null, variable), structSymbol, prop, propConverted);
             }
 
@@ -8133,7 +8133,7 @@ public sealed class Binder
                     _ = inhWritable;
                     _ = inhTargetType;
                     var inhReceiver = new BoundVariableExpression(null, variable);
-                    var inhConverted = BindConversion(syntax.Value.Location, value, inhTargetSymbol);
+                    var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, inhReceiver, clrMember, inhConverted, inhTargetSymbol);
                 }
             }
@@ -8159,7 +8159,7 @@ public sealed class Binder
             field,
             $"{structSymbol.Name}.{field.Name}");
 
-        var converted = BindConversion(syntax.Value.Location, value, field.Type);
+        var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
         return new BoundFieldAssignmentExpression(null, variable, structSymbol, field, converted);
     }
 
@@ -8299,7 +8299,7 @@ public sealed class Binder
         }
         else
         {
-            convertedHandler = BindConversion(syntax.Value.Location, boundHandler, handlerTypeSymbol);
+            convertedHandler = conversions.BindConversion(syntax.Value.Location, boundHandler, handlerTypeSymbol);
         }
 
         return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
@@ -8358,7 +8358,7 @@ public sealed class Binder
         }
 
         var binaryResult = new BoundBinaryExpression(null, leftExpr, op, boundRhs);
-        var convertedResult = BindConversion(syntax.Value.Location, binaryResult, leftType);
+        var convertedResult = conversions.BindConversion(syntax.Value.Location, binaryResult, leftType);
 
         // Route through the correct assignment path depending on variable kind.
         if (variable is ImplicitFieldVariableSymbol implicitField)
@@ -8491,7 +8491,7 @@ public sealed class Binder
             {
                 var receiver = new BoundVariableExpression(null, function.ThisParameter);
                 var group = BuildInstanceMethodGroup(receiver, methods);
-                return BindConversion(handlerSyntax.Location, group, targetDelegateType);
+                return conversions.BindConversion(handlerSyntax.Location, group, targetDelegateType);
             }
         }
 
@@ -8518,7 +8518,7 @@ public sealed class Binder
                 if (!methods.IsDefaultOrEmpty)
                 {
                     var group = BuildInstanceMethodGroup(boundReceiver, methods);
-                    return BindConversion(handlerSyntax.Location, group, targetDelegateType);
+                    return conversions.BindConversion(handlerSyntax.Location, group, targetDelegateType);
                 }
             }
 
@@ -8534,12 +8534,12 @@ public sealed class Binder
 
         if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
         {
-            return BindConversion(handlerSyntax.Location, clrGroup, targetDelegateType);
+            return conversions.BindConversion(handlerSyntax.Location, clrGroup, targetDelegateType);
         }
 
         if (bound is BoundMethodGroupExpression userGroup)
         {
-            return BindConversion(handlerSyntax.Location, userGroup, targetDelegateType);
+            return conversions.BindConversion(handlerSyntax.Location, userGroup, targetDelegateType);
         }
 
         return bound;
@@ -8565,12 +8565,12 @@ public sealed class Binder
 
         if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
         {
-            return BindConversion(memberAccess.Location, clrGroup, targetDelegateType);
+            return conversions.BindConversion(memberAccess.Location, clrGroup, targetDelegateType);
         }
 
         if (bound is BoundMethodGroupExpression userGroup)
         {
-            return BindConversion(memberAccess.Location, userGroup, targetDelegateType);
+            return conversions.BindConversion(memberAccess.Location, userGroup, targetDelegateType);
         }
 
         return bound;
@@ -8632,7 +8632,7 @@ public sealed class Binder
             }
 
             var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
-            var converted = BindConversion(syntax.Value.Location, binary, staticField.Type);
+            var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
             result = new BoundFieldAssignmentExpression(null, null, staticStruct, staticField, converted);
             return true;
         }
@@ -8661,7 +8661,7 @@ public sealed class Binder
             }
 
             var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
-            var converted = BindConversion(syntax.Value.Location, binary, prop.Type);
+            var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
             result = new BoundPropertyAssignmentExpression(null, receiver: null, staticStruct, prop, converted);
             return true;
         }
@@ -8786,7 +8786,7 @@ public sealed class Binder
 
                 if (userOp != null && userOp.Parameters.Length == 1)
                 {
-                    var convertedOperand = BindConversion(syntax.Operand.Location, boundOperand, userOp.Parameters[0].Type);
+                    var convertedOperand = conversions.BindConversion(syntax.Operand.Location, boundOperand, userOp.Parameters[0].Type);
                     if (isStructReceiver)
                     {
                         return new BoundUserInstanceCallExpression(null, convertedOperand, userOp, ImmutableArray<BoundExpression>.Empty);
@@ -8837,7 +8837,7 @@ public sealed class Binder
 
         if (rawOperand is ConditionalRefArgumentExpressionSyntax condOperand)
         {
-            return BindConditionalRefArgument(condOperand, outerModifier: null);
+            return conversions.BindConditionalRefArgument(condOperand, outerModifier: null);
         }
 
         // ADR-0062: a general conditional expression as the operand of `&`
@@ -9032,7 +9032,7 @@ public sealed class Binder
 
         if (rawExpr is ConditionalRefArgumentExpressionSyntax condSyntax)
         {
-            return BindConditionalRefArgument(condSyntax, syntax.RefKindModifier);
+            return conversions.BindConditionalRefArgument(condSyntax, syntax.RefKindModifier);
         }
 
         // ADR-0062: a general conditional expression as the payload of
@@ -9070,124 +9070,10 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// ADR-0061: binds a conditional ref-argument expression (<c>cond ? a : b</c>)
-    /// at a ref-kind modifier payload or `&amp;` operand. Validates condition type,
-    /// both-branches-are-lvalues, branch type identity, ref/readonly compatibility,
-    /// and inner-modifier matching. Produces a <see cref="BoundConditionalAddressExpression"/>
-    /// on success.
-    /// </summary>
-    /// <param name="syntax">The conditional ref-argument syntax.</param>
-    /// <param name="outerModifier">The outer ref-kind modifier token (<see langword="null"/> for the bare <c>&amp;</c> operand form).</param>
-    /// <returns>The bound conditional address expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
-    private BoundExpression BindConditionalRefArgument(
-        ConditionalRefArgumentExpressionSyntax syntax,
-        SyntaxToken outerModifier)
-    {
-        // Condition must be bool.
-        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
-
-        // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
-        // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
-        // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
-        // mismatch since `&` already denotes mutable byref.
-        string outerText = outerModifier?.Text ?? "&";
-        if (syntax.WhenTrueRefKindModifier != null
-            && !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText))
-        {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenTrueRefKindModifier.Location,
-                outerText,
-                syntax.WhenTrueRefKindModifier.Text);
-            return new BoundErrorExpression(null);
-        }
-
-        if (syntax.WhenFalseRefKindModifier != null
-            && !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText))
-        {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenFalseRefKindModifier.Location,
-                outerText,
-                syntax.WhenFalseRefKindModifier.Text);
-            return new BoundErrorExpression(null);
-        }
-
-        // Each branch must itself be a plain lvalue expression — not a nested
-        // conditional, not a ref-argument, not an inline-declaration. We
-        // explicitly reject the inline-declaration form here (GS0250) before
-        // attempting to bind.
-        if (syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration)
-        {
-            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location);
-            return new BoundErrorExpression(null);
-        }
-
-        if (syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration)
-        {
-            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location);
-            return new BoundErrorExpression(null);
-        }
-
-        var whenTrue = BindExpression(syntax.WhenTrue);
-        var whenFalse = BindExpression(syntax.WhenFalse);
-
-        if (whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression)
-        {
-            return new BoundErrorExpression(null);
-        }
-
-        if (!IsLvalue(whenTrue))
-        {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
-            return new BoundErrorExpression(null);
-        }
-
-        if (!IsLvalue(whenFalse))
-        {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
-            return new BoundErrorExpression(null);
-        }
-
-        // Branch types must match exactly — no implicit widening or nullable
-        // adjustment, since the resulting byref selects between slots whose
-        // physical type must agree.
-        if (!ReferenceEquals(whenTrue.Type, whenFalse.Type)
-            && !string.Equals(whenTrue.Type?.Name, whenFalse.Type?.Name, System.StringComparison.Ordinal))
-        {
-            Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
-                syntax.Location,
-                whenTrue.Type?.Name ?? "?",
-                whenFalse.Type?.Name ?? "?");
-            return new BoundErrorExpression(null);
-        }
-
-        // Readonly check: for `ref` (and bare `&`), neither branch may be a
-        // read-only local. For `in` either branch may be read-only. For `out`
-        // both must be writable. (Definite-assignment is enforced elsewhere
-        // by RefKindDefiniteAssignmentAnalyzer.)
-        bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
-        if (requiresWritable)
-        {
-            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
-            {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
-                return new BoundErrorExpression(null);
-            }
-
-            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
-            {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
-                return new BoundErrorExpression(null);
-            }
-        }
-
-        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
-    }
-
-    /// <summary>
     /// ADR-0062: binds a general conditional expression as a conditional
     /// address-of when used as the payload of a ref-kind modifier or as the
     /// operand of <c>&amp;</c>. Reuses the same validation rules as
-    /// <see cref="BindConditionalRefArgument"/> minus the inner-modifier
+    /// <see cref="ConversionClassifier.BindConditionalRefArgument"/> minus the inner-modifier
     /// checks (which the generalized syntax does not carry).
     /// </summary>
     /// <param name="syntax">The general conditional expression syntax.</param>
@@ -9436,25 +9322,7 @@ public sealed class Binder
             return branch;
         }
 
-        return BindConversion(location, branch, target);
-    }
-
-    /// <summary>
-    /// ADR-0061: validates that an inner ref-kind modifier on a conditional
-    /// ref-argument branch is compatible with the outer modifier. The bare
-    /// <c>&amp;</c> operand form accepts only inner <c>ref</c> (no <c>in</c>/<c>out</c>).
-    /// </summary>
-    /// <param name="inner">The inner modifier text.</param>
-    /// <param name="outer">The outer modifier text (or "&amp;" for the bare address-of form).</param>
-    /// <returns><see langword="true"/> when compatible.</returns>
-    private static bool InnerModifierMatchesOuter(string inner, string outer)
-    {
-        if (outer == "&")
-        {
-            return inner == "ref";
-        }
-
-        return string.Equals(inner, outer, System.StringComparison.Ordinal);
+        return conversions.BindConversion(location, branch, target);
     }
 
     /// <summary>ADR-0060: human-readable label for a <see cref="RefKind"/>.</summary>
@@ -9516,114 +9384,6 @@ public sealed class Binder
             "in" => RefKind.In,
             _ => RefKind.None,
         };
-    }
-
-    /// <summary>
-    /// ADR-0060: validates the ref-kind modifier on a parameter syntax and emits the
-    /// appropriate diagnostics. Returns the (possibly cleared) <see cref="RefKind"/>.
-    /// Shared between the free-function, struct-method, interface-member, class-method,
-    /// constructor, and named-delegate parameter binding sites so the validation rules
-    /// stay consistent.
-    /// </summary>
-    /// <param name="parameterSyntax">The parameter syntax to validate.</param>
-    /// <param name="parameterName">The (already-extracted) parameter name for diagnostics.</param>
-    /// <param name="parameterType">The bound parameter type, for the <c>*T</c> rejection check.</param>
-    /// <param name="isVariadic">Whether the parameter is variadic (rejects ref-kind via GS0241).</param>
-    /// <param name="asyncOrIteratorKind">
-    /// Non-null when the containing function is <c>async</c>/<c>sequence</c>/<c>async sequence</c>;
-    /// fires the GS0226 family if any ref-kind modifier is present. Pass <see langword="null"/>
-    /// when the containing surface (interface declaration, delegate type, constructor) does not
-    /// support async at all.
-    /// </param>
-    /// <returns>The validated <see cref="RefKind"/> (cleared to <see cref="RefKind.None"/> on rejection).</returns>
-    private RefKind BindAndValidateParameterRefKind(
-        ParameterSyntax parameterSyntax,
-        string parameterName,
-        TypeSymbol parameterType,
-        bool isVariadic,
-        string asyncOrIteratorKind)
-    {
-        var parameterRefKind = GetRefKindFromModifier(parameterSyntax.RefKindModifier);
-
-        // ADR-0060 §2: a `*T` type cannot appear as a parameter type. The CLR's
-        // managed-pointer-typed parameter slot would normally surface as `T&`
-        // via the keyword form; suggest the rewrite.
-        if (parameterType is ByRefTypeSymbol pointerParamType)
-        {
-            Diagnostics.ReportPointerTypeCannotBeParameterType(
-                parameterSyntax.Type.Location,
-                parameterName,
-                pointerParamType.PointeeType.Name);
-        }
-
-        // ADR-0060 §8: a variadic parameter (`...T`) cannot also carry a ref-kind
-        // modifier — the CLR cannot represent an array of managed pointers.
-        if (parameterRefKind != RefKind.None && isVariadic)
-        {
-            Diagnostics.ReportRefKindOnVariadicParameter(parameterSyntax.Location, parameterName);
-            parameterRefKind = RefKind.None;
-        }
-
-        // ADR-0060 §10: ban ref-kind parameters on async / iterator (sequence) functions.
-        // The state-machine rewriter cannot hoist a managed pointer into a field.
-        if (parameterRefKind != RefKind.None && asyncOrIteratorKind != null)
-        {
-            Diagnostics.ReportRefKindOnAsyncOrIterator(parameterSyntax.Location, parameterName, asyncOrIteratorKind);
-            parameterRefKind = RefKind.None;
-        }
-
-        return parameterRefKind;
-    }
-
-    /// <summary>
-    /// ADR-0060: at call sites that target a G#-authored function/method/constructor
-    /// with a <c>ref</c>/<c>out</c>/<c>in</c> parameter, the bound argument should
-    /// already be a <see cref="BoundAddressOfExpression"/> whose operand type matches
-    /// the parameter's pointee type (either from a bare <c>&amp;x</c> back-compat
-    /// form, or from a <see cref="RefArgumentExpressionSyntax"/> lowered through
-    /// <see cref="BindRefArgumentExpression"/>). In that case we pass the argument
-    /// through unchanged — the conversion machinery would otherwise try to coerce
-    /// <c>*T</c> into <c>T</c> and fail. The returned value's type may be a
-    /// <see cref="ByRefTypeSymbol"/> wrapping the expected type.
-    /// </summary>
-    /// <param name="location">The diagnostic location for any conversion error.</param>
-    /// <param name="argument">The bound argument.</param>
-    /// <param name="expectedType">The (substituted) parameter type.</param>
-    /// <param name="parameter">The target parameter (carrying <see cref="RefKind"/>).</param>
-    /// <returns>The argument, possibly with a normal conversion applied.</returns>
-    private BoundExpression BindCallArgumentWithRefKind(
-        TextLocation location,
-        BoundExpression argument,
-        TypeSymbol expectedType,
-        ParameterSymbol parameter)
-    {
-        if (parameter != null && parameter.RefKind != RefKind.None)
-        {
-            if (argument is BoundAddressOfExpression addr)
-            {
-                var operandType = addr.Operand?.Type;
-                if (operandType == expectedType || operandType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
-                {
-                    return argument;
-                }
-
-                // Fall through: type mismatch on the address-of operand. Surface
-                // the standard "cannot convert" diagnostic via BindConversion.
-            }
-            else if (argument is BoundConditionalAddressExpression condAddr)
-            {
-                // ADR-0061: conditional address-of also accepted at ref-kind
-                // parameter positions. The shared pointee type was validated
-                // by BindConditionalRefArgument.
-                var pointeeType = condAddr.PointeeType;
-                if (pointeeType == expectedType || pointeeType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
-                {
-                    return argument;
-                }
-            }
-        }
-
-        return BindConversion(location, argument, expectedType);
     }
 
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
@@ -9751,59 +9511,6 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #327/#321: appends synthesized default-value arguments for any
-    /// trailing optional parameters the call site omitted. <paramref name="parameters"/>
-    /// is the full parameter list of the resolved CLR method/constructor;
-    /// <paramref name="suppliedArguments"/> are the arguments already bound for
-    /// the leading parameters (for instance/extension calls this includes the
-    /// receiver mapped onto the first parameter). When no parameters are
-    /// omitted, the supplied array is returned unchanged.
-    /// </summary>
-    /// <param name="suppliedArguments">Bound arguments mapped to the leading parameters.</param>
-    /// <param name="parameters">The resolved method's full parameter list.</param>
-    /// <returns>The argument array padded to the parameter count with defaults.</returns>
-    private static ImmutableArray<BoundExpression> AppendOmittedOptionalArguments(
-        ImmutableArray<BoundExpression> suppliedArguments,
-        System.Reflection.ParameterInfo[] parameters)
-    {
-        if (suppliedArguments.Length >= parameters.Length)
-        {
-            return suppliedArguments;
-        }
-
-        var builder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
-        builder.AddRange(suppliedArguments);
-        for (var i = suppliedArguments.Length; i < parameters.Length; i++)
-        {
-            builder.Add(CreateOptionalDefaultArgument(parameters[i]));
-        }
-
-        return builder.MoveToImmutable();
-    }
-
-    /// <summary>
-    /// Issue #327/#321: builds the bound expression for an omitted optional
-    /// parameter. An explicit constant default (e.g. <c>int x = 5</c>) becomes
-    /// the corresponding literal; <c>= default</c>/<c>= null</c> and
-    /// constant-less <c>[Optional]</c> parameters (e.g.
-    /// <c>CancellationToken cancellationToken = default</c>) become the zero
-    /// value of the parameter type.
-    /// </summary>
-    /// <param name="parameter">The omitted optional parameter.</param>
-    /// <returns>The bound default-value argument.</returns>
-    private static BoundExpression CreateOptionalDefaultArgument(System.Reflection.ParameterInfo parameter)
-    {
-        var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
-
-        if (TryGetConstantParameterDefault(parameter, out var constant))
-        {
-            return new BoundLiteralExpression(null, constant);
-        }
-
-        return new BoundDefaultExpression(null, typeSymbol);
-    }
-
-    /// <summary>
     /// Issue #506: synthesises C#-style <c>params T[]</c> expansion for a CLR
     /// call site that won overload resolution in expanded form. The trailing
     /// positional arguments (those mapped to the final <c>params</c> parameter)
@@ -9866,7 +9573,7 @@ public sealed class Binder
             ordered[paramsIndex] = new BoundArrayCreationExpression(callSyntax, sliceType, paramsElementBuilder.ToImmutable());
             for (var i = 0; i < parameters.Length; i++)
             {
-                ordered[i] ??= CreateOptionalDefaultArgument(parameters[i]);
+                ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]);
             }
 
             return ImmutableArray.Create(ordered);
@@ -9928,10 +9635,10 @@ public sealed class Binder
                 location = callSyntax?.Location ?? default;
             }
 
-            return BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
+            return conversions.BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
         }
 
-        if (TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var udc))
+        if (conversions.TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var udc))
         {
             return udc;
         }
@@ -10188,180 +9895,6 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #327: reads a primitive/string constant default from an optional
-    /// parameter's metadata, when present. Returns <c>false</c> for
-    /// <c>= default</c>, <c>= null</c>, or non-primitive constants so the caller
-    /// falls back to <see cref="BoundDefaultExpression"/>.
-    /// </summary>
-    /// <param name="parameter">The optional parameter to inspect.</param>
-    /// <param name="value">The constant default value, when present.</param>
-    /// <returns>Whether a usable primitive/string constant default exists.</returns>
-    private static bool TryGetConstantParameterDefault(System.Reflection.ParameterInfo parameter, out object value)
-    {
-        value = null;
-        object raw;
-        try
-        {
-            raw = parameter.RawDefaultValue;
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (raw == null || raw is System.DBNull)
-        {
-            return false;
-        }
-
-        // Only primitive/string constants flow through BoundLiteralExpression's
-        // known value kinds; the constant's CLR type is also the IL form for an
-        // enum parameter (whose default is encoded as its underlying integral).
-        switch (raw)
-        {
-            case bool:
-            case sbyte:
-            case byte:
-            case short:
-            case ushort:
-            case int:
-            case uint:
-            case long:
-            case ulong:
-            case float:
-            case double:
-            case char:
-            case string:
-                value = raw;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    /// <summary>
-    /// ADR-0063: binds, validates, and (when valid) records a user-declared optional
-    /// default value on <paramref name="parameter"/>. Enforces the v1 restrictions:
-    /// the default must be a compile-time constant representable in CLR parameter
-    /// metadata, the parameter must not be <c>ref</c>/<c>out</c>/<c>in</c>, must not
-    /// be variadic, and must not be the receiver parameter. Reports
-    /// <see cref="DiagnosticBag.ReportInvalidOptionalParameter"/> on misuse.
-    /// </summary>
-    /// <param name="parameterSyntax">The parameter syntax carrying the default clause.</param>
-    /// <param name="parameter">The bound parameter symbol to attach the default to.</param>
-    /// <param name="isReceiver">True when the parameter is a method's source receiver.</param>
-    private void BindAndAttachParameterDefaultValue(ParameterSyntax parameterSyntax, ParameterSymbol parameter, bool isReceiver = false)
-    {
-        if (parameterSyntax == null || !parameterSyntax.HasDefaultValue || parameter == null)
-        {
-            return;
-        }
-
-        var location = parameterSyntax.DefaultValue?.Location ?? parameterSyntax.Location;
-
-        if (isReceiver)
-        {
-            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, "the receiver parameter cannot declare a default value.");
-            return;
-        }
-
-        if (parameter.IsVariadic)
-        {
-            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, "a variadic parameter cannot declare a default value.");
-            return;
-        }
-
-        if (parameter.RefKind != RefKind.None)
-        {
-            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, $"a '{RefKindToString(parameter.RefKind)}' parameter cannot declare a default value.");
-            return;
-        }
-
-        // Bind the default-value expression in the surrounding scope. Diagnostics
-        // (undefined symbol, etc.) bubble through normally.
-        var bound = BindExpression(parameterSyntax.DefaultValue);
-        if (bound == null || bound is BoundErrorExpression || parameter.Type == TypeSymbol.Error)
-        {
-            return;
-        }
-
-        // The default must be a compile-time constant of one of the kinds the CLR
-        // parameter Constant table can represent.
-        if (!TryExtractConstantDefault(bound, parameter.Type, out var constant, out var reason))
-        {
-            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, reason);
-            return;
-        }
-
-        parameter.SetExplicitDefaultValue(constant);
-    }
-
-    /// <summary>
-    /// ADR-0063: extracts a CLR-Constant-table representable default value from a
-    /// bound expression, applying limited implicit conversion to the parameter type
-    /// (numeric widening / nil → reference|nullable). Returns false with a
-    /// human-visible reason otherwise.
-    /// </summary>
-    private static bool TryExtractConstantDefault(BoundExpression bound, TypeSymbol parameterType, out object value, out string reason)
-    {
-        value = null;
-        reason = null;
-
-        // Unwrap a conversion that the binder may have inserted around a literal.
-        var inner = bound;
-        while (inner is BoundConversionExpression bce)
-        {
-            inner = bce.Expression;
-        }
-
-        if (inner is BoundLiteralExpression lit)
-        {
-            value = lit.Value;
-        }
-        else
-        {
-            reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, or nil).";
-            return false;
-        }
-
-        // `nil` is only valid for a reference-compatible or nullable parameter type.
-        if (value == null)
-        {
-            if (parameterType is NullableTypeSymbol || (parameterType.ClrType is System.Type ct && !ct.IsValueType))
-            {
-                return true;
-            }
-
-            reason = $"'nil' is not a valid default for value-type parameter of type '{parameterType.Name}'.";
-            value = null;
-            return false;
-        }
-
-        // Numeric / bool / char / string / enum-underlying types are CLR Constant-table representable.
-        switch (value)
-        {
-            case bool:
-            case sbyte:
-            case byte:
-            case short:
-            case ushort:
-            case int:
-            case uint:
-            case long:
-            case ulong:
-            case float:
-            case double:
-            case char:
-            case string:
-                return true;
-            default:
-                reason = $"the default value type '{value.GetType().Name}' is not representable in CLR parameter metadata.";
-                value = null;
-                return false;
-        }
-    }
-
-    /// <summary>
     /// Issue #343: returns the underlying value expression for a call-argument
     /// node. When the node is a <see cref="NamedArgumentExpressionSyntax"/>
     /// wrapper (e.g. <c>x: 1</c>), unwraps to the inner value expression so the
@@ -10443,7 +9976,7 @@ public sealed class Binder
     /// Issue #343: re-orders source-order bound arguments into the resolved
     /// callee's parameter order, filling any unfilled (skipped) optional slots
     /// with their compile-time default expressions. Generalises
-    /// <see cref="AppendOmittedOptionalArguments"/> to handle named arguments
+    /// <see cref="ConversionClassifier.AppendOmittedOptionalArguments"/> to handle named arguments
     /// that target non-trailing parameter positions (so an interior optional
     /// parameter can be omitted).
     /// </summary>
@@ -10460,7 +9993,7 @@ public sealed class Binder
         {
             // No named-argument reordering required — preserve the existing
             // trailing-optional behaviour.
-            return AppendOmittedOptionalArguments(suppliedArguments, parameters);
+            return ConversionClassifier.AppendOmittedOptionalArguments(suppliedArguments, parameters);
         }
 
         var ordered = new BoundExpression[parameters.Length];
@@ -10472,7 +10005,7 @@ public sealed class Binder
 
         for (var i = 0; i < parameters.Length; i++)
         {
-            ordered[i] ??= CreateOptionalDefaultArgument(parameters[i]);
+            ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]);
         }
 
         return ImmutableArray.Create(ordered);
@@ -10860,8 +10393,8 @@ public sealed class Binder
 
                 if (userOp != null && userOp.Parameters.Length == 2)
                 {
-                    var convertedLeft = BindConversion(syntax.Left.Location, boundLeft, userOp.Parameters[0].Type);
-                    var convertedRight = BindConversion(syntax.Right.Location, boundRight, userOp.Parameters[1].Type);
+                    var convertedLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, userOp.Parameters[0].Type);
+                    var convertedRight = conversions.BindConversion(syntax.Right.Location, boundRight, userOp.Parameters[1].Type);
                     if (leftIsStructReceiver)
                     {
                         return new BoundUserInstanceCallExpression(null, convertedLeft, userOp, ImmutableArray.Create(convertedRight));
@@ -11081,7 +10614,7 @@ public sealed class Binder
             {
                 var argument = boundArguments[i];
                 var parameter = parameters[i];
-                var converted = BindConversion(primaryParameterSyntax[i]?.Location ?? syntax.Location, argument, parameter.Type, allowExplicit: false);
+                var converted = conversions.BindConversion(primaryParameterSyntax[i]?.Location ?? syntax.Location, argument, parameter.Type, allowExplicit: false);
                 if (ReferenceEquals(converted.Type, TypeSymbol.Error))
                 {
                     hasErrorsP = true;
@@ -11179,7 +10712,7 @@ public sealed class Binder
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
-                if (TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                 {
                     boundArguments[i] = convertedArg;
                     continue;
@@ -11425,7 +10958,7 @@ public sealed class Binder
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
-                if (TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
                 {
                     convertedArguments.Add(convertedArg);
                     continue;
@@ -11441,7 +10974,7 @@ public sealed class Binder
             }
             else
             {
-                convertedArguments.Add(BindConversion(argLocation, argument, parameter.Type));
+                convertedArguments.Add(conversions.BindConversion(argLocation, argument, parameter.Type));
             }
         }
 
@@ -11560,7 +11093,7 @@ public sealed class Binder
     {
         // Phase 4-exit: prefer CLR class instantiation over the single-arg
         // conversion-call hijack below, so that `StringBuilder(16)` resolves
-        // to a CLR ctor rather than `BindConversion(int → StringBuilder)`.
+        // to a CLR ctor rather than `conversions.BindConversion(int → StringBuilder)`.
         // Also handles closed-generic imports (`List[int]()`,
         // `Dictionary[string, int]()`). Interpreter-only — resolves a
         // ConstructorInfo and emits BoundClrConstructorCallExpression.
@@ -11582,7 +11115,7 @@ public sealed class Binder
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
                 ReportObsoleteUseIfApplicable(syntax.Identifier.Location, type, type.Name);
-                return BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+                return conversions.BindConversion(syntax.Arguments[0], type, allowExplicit: true);
             }
         }
 
@@ -11687,7 +11220,7 @@ public sealed class Binder
             var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
             for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                convertedArgs.Add(BindConversion(syntax.Arguments[i].Location, boundArguments[i], fnType.ParameterTypes[i]));
+                convertedArgs.Add(conversions.BindConversion(syntax.Arguments[i].Location, boundArguments[i], fnType.ParameterTypes[i]));
             }
 
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, convertedArgs.MoveToImmutable());
@@ -11715,7 +11248,7 @@ public sealed class Binder
             var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
             for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                convertedNamedArgs.Add(BindConversion(syntax.Arguments[i].Location, boundArguments[i], namedDelegateSym.Parameters[i].Type));
+                convertedNamedArgs.Add(conversions.BindConversion(syntax.Arguments[i].Location, boundArguments[i], namedDelegateSym.Parameters[i].Type));
             }
 
             return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, namedDelegateVar), namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
@@ -12078,7 +11611,7 @@ public sealed class Binder
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
-                if (TryApplyUserDefinedImplicitArgumentConversion(argument, expectedType, out var convertedArg))
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, expectedType, out var convertedArg))
                 {
                     boundArguments[i] = convertedArg;
                     continue;
@@ -12100,7 +11633,7 @@ public sealed class Binder
                 // - nil → Nullable<T> becomes BoundDefaultExpression (initobj)
                 // - T → Nullable<T> becomes BoundConversionExpression (newobj ctor)
                 var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = BindConversion(argLoc, argument, expectedType);
+                boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
         }
 
@@ -12625,7 +12158,7 @@ public sealed class Binder
                     return true;
                 }
 
-                var element = BindConversion(syntax.Arguments[1], sliceType.ElementType);
+                var element = conversions.BindConversion(syntax.Arguments[1], sliceType.ElementType);
                 result = new BoundAppendExpression(syntax, slice, element, sliceType);
                 return true;
             }
@@ -12654,7 +12187,7 @@ public sealed class Binder
                     return true;
                 }
 
-                var keyExpr = BindConversion(syntax.Arguments[1], mapType.KeyType);
+                var keyExpr = conversions.BindConversion(syntax.Arguments[1], mapType.KeyType);
                 result = new BoundMapDeleteExpression(syntax, mapExpr, keyExpr);
                 return true;
             }
@@ -12885,7 +12418,7 @@ public sealed class Binder
         // `object` parameter from a value-type argument require a boxing
         // conversion in IL; route through BindClrParameterConversions so the
         // emitter sees a BoundConversionExpression and emits `box <T>`.
-        var ctorConvertedArgs = BindClrParameterConversions(ctorHandlerArgs, ctorParameters, syntax, ctorDownstreamMapping);
+        var ctorConvertedArgs = conversions.BindClrParameterConversions(ctorHandlerArgs, ctorParameters, syntax, ctorDownstreamMapping);
         var ctorArgs = BuildOrderedCallArguments(ctorConvertedArgs, ctorDownstreamMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
@@ -13526,7 +13059,7 @@ public sealed class Binder
                 }
 
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i]));
+                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(ce.Arguments[i].Location, arguments[i], expectedType, method.Parameters[i]));
             }
 
             if (substitution != null)
@@ -13762,7 +13295,7 @@ public sealed class Binder
                         var propType = prop.PropertyType.IsByRef
                             ? MapClrMemberType(prop.PropertyType)
                             : ClrNullability.GetPropertyTypeSymbol(prop);
-                        return AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
+                        return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
                     }
 
                     var fld = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
@@ -13954,7 +13487,7 @@ public sealed class Binder
                 // Issue #506 follow-up: ensure value-type → object boxing fires
                 // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
                 // selecting the fixed `(string, object)` overload).
-                var staticConvertedArgs = BindClrParameterConversions(staticHandlerArgs, staticParameters, ce, staticDownstreamMapping);
+                var staticConvertedArgs = conversions.BindClrParameterConversions(staticHandlerArgs, staticParameters, ce, staticDownstreamMapping);
                 var staticArguments = BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
@@ -14173,11 +13706,11 @@ public sealed class Binder
                         var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
                         var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping);
                         var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
-                        var instConvertedArgs = BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
+                        var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
                         var instArguments = BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                        return AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
+                        return ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
                     case OverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                         return new BoundErrorExpression(null);
@@ -14300,7 +13833,7 @@ public sealed class Binder
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], functionType.ParameterTypes[i]));
+            convertedArgs.Add(conversions.BindConversion(ce.Arguments[i].Location, arguments[i], functionType.ParameterTypes[i]));
         }
 
         var fieldLoad = new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
@@ -14464,7 +13997,7 @@ public sealed class Binder
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
                 var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping);
                 var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping);
-                var inheritedConvertedArgs = BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping);
+                var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping);
                 var inheritedArguments = BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
@@ -14507,7 +14040,7 @@ public sealed class Binder
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            convertedArgs.Add(BindConversion(ce.Arguments[i].Location, arguments[i], delegateSym.Parameters[i].Type));
+            convertedArgs.Add(conversions.BindConversion(ce.Arguments[i].Location, arguments[i], delegateSym.Parameters[i].Type));
         }
 
         return new BoundIndirectCallExpression(null, receiver, delegateSym.EquivalentFunctionType, convertedArgs.MoveToImmutable());
@@ -14630,7 +14163,7 @@ public sealed class Binder
 
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
         var receiverParamType = substitution != null ? SubstituteType(extension.Parameters[0].Type, substitution) : extension.Parameters[0].Type;
-        convertedArgs.Add(BindConversion(ce.Location, receiver, receiverParamType));
+        convertedArgs.Add(conversions.BindConversion(ce.Location, receiver, receiverParamType));
         for (var i = 0; i < permutedArguments.Length; i++)
         {
             var paramType = extension.Parameters[i + 1].Type;
@@ -14651,7 +14184,7 @@ public sealed class Binder
             else
             {
                 var expectedType = substitution != null ? SubstituteType(paramType, substitution) : paramType;
-                convertedArgs.Add(BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
+                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
             }
         }
 
@@ -14801,7 +14334,7 @@ public sealed class Binder
         // value-type → object boxing fires for fixed-arity imported extension
         // calls too. The receiver occupies arg slot 0 (and is already typed
         // correctly via the extension dispatch).
-        bound = BindClrParameterConversions(bound, parameters, ce, downstreamMapping, receiverArgCount: 1);
+        bound = conversions.BindClrParameterConversions(bound, parameters, ce, downstreamMapping, receiverArgCount: 1);
 
         // Issue #327 / #343: re-order arguments into parameter positions when
         // named arguments were used; otherwise fall through to the existing
@@ -14970,7 +14503,7 @@ public sealed class Binder
                 continue;
             }
 
-            convertedArgs.Add(BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(permutedSyntax[i].Location, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
         if (substitution != null)
@@ -15035,7 +14568,7 @@ public sealed class Binder
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
         foreach (var elementSyntax in syntax.Elements)
         {
-            elements.Add(BindConversion(elementSyntax, elementType));
+            elements.Add(conversions.BindConversion(elementSyntax, elementType));
         }
 
         if (syntax.LengthToken == null)
@@ -15076,8 +14609,8 @@ public sealed class Binder
         var entries = ImmutableArray.CreateBuilder<BoundMapEntry>(syntax.Entries.Count);
         foreach (var entrySyntax in syntax.Entries)
         {
-            var key = BindConversion(entrySyntax.Key, mts.KeyType);
-            var value = BindConversion(entrySyntax.Value, mts.ValueType);
+            var key = conversions.BindConversion(entrySyntax.Key, mts.KeyType);
+            var value = conversions.BindConversion(entrySyntax.Value, mts.ValueType);
             entries.Add(new BoundMapEntry(key, value));
         }
 
@@ -15105,14 +14638,14 @@ public sealed class Binder
         // element type set to V.
         if (target.Type is MapTypeSymbol mapType)
         {
-            var key = BindConversion(indexSyntax, mapType.KeyType);
+            var key = conversions.BindConversion(indexSyntax, mapType.KeyType);
             return new BoundIndexExpression(null, target, key, mapType.ValueType);
         }
 
         var element = GetIndexElementType(target.Type);
         if (element != null)
         {
-            var index = BindConversion(indexSyntax, TypeSymbol.Int32);
+            var index = conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
             return new BoundIndexExpression(null, target, index, element);
         }
 
@@ -15128,7 +14661,7 @@ public sealed class Binder
             if (this.memberLookup.TryResolveClrIndexer(clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot))
             {
                 var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
-                return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
+                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
             }
         }
         else if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget)
@@ -15137,7 +14670,7 @@ public sealed class Binder
             if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
             {
                 var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
-                return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
+                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
             }
         }
 
@@ -15465,16 +14998,16 @@ public sealed class Binder
         {
             if (boundValueOverride != null)
             {
-                return BindConversion(diagnosticLocation, boundValueOverride, elementType);
+                return conversions.BindConversion(diagnosticLocation, boundValueOverride, elementType);
             }
 
-            return BindConversion(valueSyntax, elementType);
+            return conversions.BindConversion(valueSyntax, elementType);
         }
 
         var element = GetIndexElementType(variable.Type);
         if (element != null)
         {
-            var index = BindConversion(indexSyntax, TypeSymbol.Int32);
+            var index = conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
             var value = BindValue(element);
             return new BoundIndexAssignmentExpression(null, variable, index, value, element);
         }
@@ -15483,7 +15016,7 @@ public sealed class Binder
         // value bound to V.
         if (variable.Type is MapTypeSymbol mapType)
         {
-            var keyExpr = BindConversion(indexSyntax, mapType.KeyType);
+            var keyExpr = conversions.BindConversion(indexSyntax, mapType.KeyType);
             var valExpr = BindValue(mapType.ValueType);
             return new BoundIndexAssignmentExpression(null, variable, keyExpr, valExpr, mapType.ValueType);
         }
@@ -15603,20 +15136,6 @@ public sealed class Binder
         }
 
         return TypeSymbol.FromClrType(propertyType);
-    }
-
-    // ADR-0056 §1: when a CLR member access (call, property, or indexer)
-    // resolves to a member whose CLR return type is `T&` (a `ByRefTypeSymbol`)
-    // and appears in an rvalue position, auto-dereference it so its observable
-    // type is the pointee `T`. This reuses ADR-0039's `BoundDereferenceExpression`
-    // (no new bound-node kind). Taking an address with `&` and passing `ref`/`out`
-    // arguments are unaffected because those produce `BoundAddressOfExpression`,
-    // not a ref-returning member access.
-    private static BoundExpression AutoDereferenceRefReturn(BoundExpression expression)
-    {
-        return expression.Type is ByRefTypeSymbol
-            ? new BoundDereferenceExpression(null, expression)
-            : expression;
     }
 
     // ADR-0056 §1: map a CLR member's return/field type to a `TypeSymbol`,
@@ -15786,112 +15305,6 @@ public sealed class Binder
         };
     }
 
-    private BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
-    {
-        // ADR-0055 Tier 4: contextual conversion of an interpolated string to
-        // IFormattable/FormattableString. Handled here, before eager string
-        // lowering, so the format/alignment intent is preserved.
-        if (syntax is InterpolatedStringExpressionSyntax interpolated && IsFormattableStringTargetType(type))
-        {
-            return BindInterpolatedStringAsFormattable(interpolated, type);
-        }
-
-        var expression = BindExpression(syntax);
-        return BindConversion(syntax.Location, expression, type, allowExplicit);
-    }
-
-    private BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
-    {
-        // Issue #337: a CLR member method group has no fixed type until the
-        // target delegate signature drives overload selection. Resolve it here,
-        // where the expected type is known, before classifying conversions.
-        if (expression is BoundClrMethodGroupExpression { ResolvedMethod: null } clrMethodGroup)
-        {
-            return BindClrMethodGroupConversion(diagnosticLocation, clrMethodGroup, type);
-        }
-
-        // ADR-0063 §9: a user-function method group with multiple candidates
-        // resolves here against the target delegate/function-type signature.
-        if (expression is BoundMethodGroupExpression { FunctionType: null } userMethodGroup)
-        {
-            return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type);
-        }
-
-        if (expression is BoundFunctionLiteralExpression literal
-            && type is FunctionTypeSymbol targetFunctionType
-            && TypeSymbol.ContainsTypeParameter(targetFunctionType))
-        {
-            return CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
-        }
-
-        var conversion = Conversion.Classify(expression.Type, type);
-
-        if (!conversion.Exists)
-        {
-            // Stream E: fall back to a user-defined op_Implicit (and
-            // op_Explicit when allowed) on either source or target CLR type.
-            if (expression.Type?.ClrType != null && type?.ClrType != null
-                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
-            {
-                _ = isExplicit;
-                return new BoundClrConversionCallExpression(null, expression, convMethod, type);
-            }
-
-            if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
-            {
-                Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
-            }
-
-            return new BoundErrorExpression(null);
-        }
-
-        if (!allowExplicit && conversion.IsExplicit)
-        {
-            Diagnostics.ReportCannotConvertImplicitly(diagnosticLocation, expression.Type, type);
-        }
-
-        if (conversion.IsIdentity)
-        {
-            return expression;
-        }
-
-        // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
-        // a reference type (`object`, an interface, a delegate base, etc.), which
-        // the CLR forbids. The `(string)span` form is excluded: it lowers to a
-        // `ToString()` call rather than a box. Identity conversions (ref struct to
-        // the same ref struct) already returned above.
-        if (TypeSymbol.IsByRefLike(expression.Type)
-            && type != TypeSymbol.String
-            && type?.ClrType != null
-            && !type.ClrType.IsValueType
-            && expression.Type != TypeSymbol.Error)
-        {
-            Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
-            return new BoundErrorExpression(null);
-        }
-
-        // Issue #504: lower `nil → Nullable<value-type>` to a
-        // BoundDefaultExpression of the target Nullable<T>. Value-type
-        // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
-        // against a `valuetype System.Nullable<T>` slot produces invalid IL
-        // ("Common Language Runtime detected an invalid program"). The
-        // default-expression emit path materialises `default(Nullable<T>)`
-        // via a pre-allocated `ldloca/initobj/ldloc` slot, which is the
-        // verifiable representation of a missing-value Nullable<T>. The
-        // reference-type Nullable<T> case (e.g. `nil → string?`) still
-        // shares the CLR representation of `T` and is fine emitting `ldnull`,
-        // so it continues through the normal BoundConversionExpression path
-        // below.
-        if (expression.Type == TypeSymbol.Null
-            && type is NullableTypeSymbol nilTargetNullable
-            && nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true })
-        {
-            return new BoundDefaultExpression(null, type);
-        }
-
-        return new BoundConversionExpression(null, type, expression);
-    }
-
     private BoundFunctionLiteralExpression CreateErasedFunctionLiteralAdapter(
         BoundFunctionLiteralExpression literal,
         FunctionTypeSymbol targetFunctionType)
@@ -15989,102 +15402,6 @@ public sealed class Binder
         return builder.ToImmutable();
     }
 
-    private ImmutableArray<BoundExpression> BindClrParameterConversions(
-        ImmutableArray<BoundExpression> arguments,
-        ParameterInfo[] parameters,
-        CallExpressionSyntax call,
-        ImmutableArray<int> parameterMapping = default,
-        int receiverArgCount = 0)
-    {
-        ImmutableArray<BoundExpression>.Builder builder = null;
-        for (var i = 0; i < arguments.Length; i++)
-        {
-            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
-            var argument = arguments[i];
-            var rebound = argument;
-            if (paramIndex < parameters.Length)
-            {
-                var parameterType = parameters[paramIndex].ParameterType;
-                if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
-                {
-                    var targetType = TypeSymbol.FromClrType(parameterType);
-                    if (argument.Type != targetType
-                        && Conversion.Classify(argument.Type, targetType).Exists
-                        && NeedsBindClrParameterConversion(argument.Type, parameterType))
-                    {
-                        // Issue #506: the source-argument list may not align with
-                        // the bound-argument list when a synthesised receiver
-                        // occupies leading slots (imported extension calls) or
-                        // when params expansion has replaced N positional source
-                        // args with one synthesised array. Fall back to the
-                        // overall call location when the source slot is absent.
-                        var sourceIndex = i - receiverArgCount;
-                        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
-                            ? call.Arguments[sourceIndex].Location
-                            : call?.Location ?? default;
-                        rebound = BindConversion(location, argument, targetType, allowExplicit: true);
-                    }
-                }
-            }
-
-            if (rebound != argument && builder == null)
-            {
-                builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-                for (var j = 0; j < i; j++)
-                {
-                    builder.Add(arguments[j]);
-                }
-            }
-
-            builder?.Add(rebound);
-        }
-
-        if (builder == null)
-        {
-            return arguments;
-        }
-
-        for (var i = builder.Count; i < arguments.Length; i++)
-        {
-            builder.Add(arguments[i]);
-        }
-
-        return builder.ToImmutable();
-    }
-
-    /// <summary>
-    /// Issue #506 follow-up: returns <see langword="true"/> when the bound
-    /// argument's static type needs an actual IL-visible conversion to land in
-    /// the CLR parameter's slot (boxing, numeric coercion, func→delegate
-    /// materialisation, etc.). Skips no-op rewraps where the source and
-    /// destination share the same CLR type — for example
-    /// <c>string?</c> → <c>string</c>, where the difference is purely the
-    /// nullability wrapper and emit is identical. Those no-op rewraps would
-    /// otherwise wrap a <see cref="BoundVariableExpression"/> argument in a
-    /// <see cref="BoundConversionExpression"/>, defeating nullable-flow
-    /// narrowing patterns (e.g. <c>!String.IsNullOrEmpty(s)</c> can no longer
-    /// strip <c>s</c>'s nullability).
-    /// </summary>
-    /// <param name="from">The bound argument's static type.</param>
-    /// <param name="targetParameterType">The CLR parameter type.</param>
-    /// <returns>Whether a rebinding conversion is required.</returns>
-    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType)
-    {
-        if (from == null || targetParameterType == null)
-        {
-            return false;
-        }
-
-        // FunctionTypeSymbol carries no ClrType but always needs delegate
-        // materialisation when handed to a CLR delegate parameter.
-        if (from.ClrType == null)
-        {
-            return true;
-        }
-
-        return from.ClrType != targetParameterType;
-    }
-
     private static bool TryGetFunctionLiteral(BoundExpression expression, out BoundFunctionLiteralExpression literal)
     {
         if (expression is BoundFunctionLiteralExpression direct)
@@ -16100,29 +15417,6 @@ public sealed class Binder
         }
 
         literal = null;
-        return false;
-    }
-
-    // ADR-0056 (#344), low-hanging-fruit item #3: a call argument whose declared
-    // parameter type is reachable only through a user-defined CLR `op_Implicit`
-    // (e.g. `[]T -> System.ReadOnlySpan[T]` / `Span[T]`) is converted here, the
-    // same way local-init/explicit-target conversions go through `BindConversion`.
-    // Built-in conversions (identity, numeric widening, ...) classify earlier and
-    // never reach this fallback, so existing overloads keep selecting unchanged.
-    // Returns true and emits a `BoundClrConversionCallExpression` when a
-    // user-defined implicit conversion applies; false leaves the argument as-is.
-    private bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
-    {
-        if (argument?.Type?.ClrType != null
-            && expectedType?.ClrType != null
-            && argument.Type != TypeSymbol.Error
-            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
-        {
-            converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
-            return true;
-        }
-
-        converted = argument;
         return false;
     }
 
@@ -16347,205 +15641,6 @@ public sealed class Binder
 
         methodGroup = new BoundClrMethodGroupExpression(null, receiver, declaringType, name, candidates.ToImmutable());
         return true;
-    }
-
-    // Issue #337: resolve an unresolved CLR method group against an expected
-    // target type. The target must be a CLR delegate type; the group's overloads
-    // are filtered by signature compatibility with the delegate's Invoke method
-    // (arity + return-type compatibility), then C#-style overload resolution
-    // picks the single best candidate using the delegate's parameter types as
-    // the "argument" types. On success the resolved method-group node carries the
-    // selected MethodInfo and target delegate type; on failure a GS0218 is
-    // reported.
-    private BoundExpression BindClrMethodGroupConversion(TextLocation diagnosticLocation, BoundClrMethodGroupExpression group, TypeSymbol targetType)
-    {
-        var delegateClr = targetType?.ClrType;
-        if (delegateClr == null || !ClrTypeUtilities.IsDelegateType(delegateClr))
-        {
-            // A non-delegate target (e.g. `var x int32 = Console.WriteLine`) or
-            // an already-errored target: report unless the target itself is an
-            // error type (which already produced a diagnostic).
-            if (targetType != null && targetType != TypeSymbol.Error)
-            {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
-            }
-
-            return new BoundErrorExpression(null);
-        }
-
-        var invoke = delegateClr.GetMethod("Invoke");
-        if (invoke == null)
-        {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
-            return new BoundErrorExpression(null);
-        }
-
-        var invokeParams = invoke.GetParameters();
-        var argTypes = new Type[invokeParams.Length];
-        for (var i = 0; i < invokeParams.Length; i++)
-        {
-            argTypes[i] = invokeParams[i].ParameterType;
-        }
-
-        var applicable = new List<MethodInfo>();
-        foreach (var candidate in group.Candidates)
-        {
-            if (candidate.GetParameters().Length != invokeParams.Length)
-            {
-                continue;
-            }
-
-            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
-            {
-                continue;
-            }
-
-            applicable.Add(candidate);
-        }
-
-        if (applicable.Count > 0)
-        {
-            var resolution = OverloadResolution.Resolve(applicable, argTypes);
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
-            {
-                return new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
-            }
-        }
-
-        Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
-        return new BoundErrorExpression(null);
-    }
-
-    // Issue #337: a method-group overload's return type is compatible with a
-    // delegate's Invoke return type when both are void, or when the method's
-    // (non-void) return is identity / implicitly reference- or value-convertible
-    // (by name, MetadataLoadContext-safe) to the delegate's (non-void) return.
-    private static bool IsMethodGroupReturnCompatible(Type methodReturn, Type invokeReturn)
-    {
-        var invokeVoid = invokeReturn == null
-            || string.Equals(invokeReturn.FullName, "System.Void", StringComparison.Ordinal);
-        var methodVoid = methodReturn == null
-            || string.Equals(methodReturn.FullName, "System.Void", StringComparison.Ordinal);
-
-        if (invokeVoid || methodVoid)
-        {
-            return invokeVoid && methodVoid;
-        }
-
-        return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
-    }
-
-    // ADR-0063 §9: resolve a multi-overload user-function method group against
-    // a target delegate or native function type. The pick is the unique
-    // candidate whose parameter types and return type exactly match the
-    // target's invoke signature. When zero or multiple candidates match, a
-    // GS0218 ("cannot convert method group") diagnostic is reported.
-    private BoundExpression BindUserMethodGroupConversion(TextLocation diagnosticLocation, BoundMethodGroupExpression group, TypeSymbol targetType)
-    {
-        var groupName = group.Function?.Name ?? "<method group>";
-
-        ImmutableArray<TypeSymbol> targetParameterTypes;
-        TypeSymbol targetReturnType;
-        if (targetType is FunctionTypeSymbol nativeFn)
-        {
-            targetParameterTypes = nativeFn.ParameterTypes;
-            targetReturnType = nativeFn.ReturnType;
-        }
-        else if (targetType is DelegateTypeSymbol userDelegate)
-        {
-            var pb = ImmutableArray.CreateBuilder<TypeSymbol>(userDelegate.Parameters.Length);
-            foreach (var p in userDelegate.Parameters)
-            {
-                pb.Add(p.Type);
-            }
-
-            targetParameterTypes = pb.MoveToImmutable();
-            targetReturnType = userDelegate.ReturnType;
-        }
-        else
-        {
-            if (targetType != null && targetType != TypeSymbol.Error)
-            {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
-            }
-
-            return new BoundErrorExpression(null);
-        }
-
-        FunctionSymbol pick = null;
-        foreach (var candidate in group.Candidates)
-        {
-            if (candidate.Parameters.Length != targetParameterTypes.Length)
-            {
-                continue;
-            }
-
-            var paramsMatch = true;
-            for (var i = 0; i < candidate.Parameters.Length; i++)
-            {
-                if (!ReferenceEquals(candidate.Parameters[i].Type, targetParameterTypes[i]))
-                {
-                    paramsMatch = false;
-                    break;
-                }
-            }
-
-            if (!paramsMatch)
-            {
-                continue;
-            }
-
-            var candidateReturn = candidate.Type ?? TypeSymbol.Void;
-            if (!ReferenceEquals(candidateReturn, targetReturnType))
-            {
-                continue;
-            }
-
-            if (pick != null)
-            {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
-                return new BoundErrorExpression(null);
-            }
-
-            pick = candidate;
-        }
-
-        if (pick == null)
-        {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
-            return new BoundErrorExpression(null);
-        }
-
-        var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length);
-        foreach (var p in pick.Parameters)
-        {
-            pickParams.Add(p.Type);
-        }
-
-        var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);
-        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, group.Receiver, pick, pickFnType);
-
-        // If the target is the native function type matching the pick exactly,
-        // identity-convert; otherwise let the regular conversion machinery turn
-        // the function-typed value into the user delegate.
-        if (ReferenceEquals(targetType, pickFnType))
-        {
-            return resolvedGroup;
-        }
-
-        var conversion = Conversion.Classify(pickFnType, targetType);
-        if (!conversion.Exists)
-        {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
-            return new BoundErrorExpression(null);
-        }
-
-        if (conversion.IsIdentity)
-        {
-            return resolvedGroup;
-        }
-
-        return new BoundConversionExpression(null, targetType, resolvedGroup);
     }
 
     // ADR-0047 §6 / #175: if <paramref name="symbol"/> carries an
@@ -16940,9 +16035,9 @@ public sealed class Binder
                 {
                     if (Conversion.Classify(element.Type, elementTypeSymbol).Exists)
                     {
-                        element = BindConversion(argLocation(srcIndex), element, elementTypeSymbol, allowExplicit: true);
+                        element = conversions.BindConversion(argLocation(srcIndex), element, elementTypeSymbol, allowExplicit: true);
                     }
-                    else if (TryApplyUserDefinedImplicitArgumentConversion(element, elementTypeSymbol, out var udc))
+                    else if (conversions.TryApplyUserDefinedImplicitArgumentConversion(element, elementTypeSymbol, out var udc))
                     {
                         element = udc;
                     }
@@ -17002,7 +16097,7 @@ public sealed class Binder
             }
             else
             {
-                convertedArgs.Add(BindConversion(argLoc, orderedArg, targetType));
+                convertedArgs.Add(conversions.BindConversion(argLoc, orderedArg, targetType));
             }
         }
 
@@ -17046,7 +16141,7 @@ public sealed class Binder
                 return null;
             }
 
-            convertedArgs.Add(BindConversion(argLocation(i), argument, parameter.Type));
+            convertedArgs.Add(conversions.BindConversion(argLocation(i), argument, parameter.Type));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol);
@@ -17145,7 +16240,7 @@ public sealed class Binder
                 Diagnostics.ReportVariadicParameterNotSupportedHere(parameterSyntax.Location, parameterName);
             }
 
-            var parameterRefKind = BindAndValidateParameterRefKind(
+            var parameterRefKind = conversions.BindAndValidateParameterRefKind(
                 parameterSyntax,
                 parameterName,
                 parameterType,
@@ -17159,7 +16254,7 @@ public sealed class Binder
             else
             {
                 var ctorParam = new ParameterSymbol(parameterName, parameterType, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                BindAndAttachParameterDefaultValue(parameterSyntax, ctorParam);
+                conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ctorParam);
                 parameters.Add(ctorParam);
             }
         }
