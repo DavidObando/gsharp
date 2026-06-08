@@ -8,6 +8,7 @@
 #pragma warning disable SA1214 // readonly fields before non-readonly
 #pragma warning disable SA1515 // single-line comment preceded by blank line
 #pragma warning disable SA1201 // method should not follow a class (this file mixes private helper classes inline with methods)
+#pragma warning disable SA1202 // 'internal' members should come before 'private' members (PR-E-5: IsValueTypeSymbol was widened to internal in-place for ConversionEmitter; ordering is restored once Phase 2 decomposition finishes)
 
 using System;
 using System.Collections.Generic;
@@ -164,6 +165,25 @@ internal sealed class ReflectionMetadataEmitter
     // (the MetadataTokenCache for GlobalFieldDefs lookups, and the
     // NeedsRvalueReceiverSpill predicate) via constructor injection.
     private readonly SlotPlanner slotPlanner;
+
+    // PR-E-5: SlotPlanner's sibling — ConversionEmitter — owns conversion-
+    // shaped IL emission. In this PR it hosts the two stateless top-level
+    // helpers (EmitBoxIfNeeded, EmitDefaultValue) that take an
+    // InstructionEncoder by parameter. The BodyEmitter-internal conversion
+    // methods (EmitConversion, EmitErasedObjectReturnWidening,
+    // EmitNarrowingTruncationIfNeeded, EmitSubI4Truncation, EmitDefault,
+    // EmitClrConversionCall, EmitZeroInit) remain on BodyEmitter for now;
+    // they call back into closure-emit helpers slated for E-9
+    // ClosureEmitter, and BodyEmitter itself is promoted to a top-level
+    // type with a MethodBodyEmitter.Conversions.cs partial in E-11
+    // MethodBodyEmitter. Both motions land cleanly in E-11; bringing them
+    // forward here would require widening BodyEmitter's private surface
+    // only to take it apart again two PRs later.
+    // Not readonly because instantiation depends on EmitContext.Core* /
+    // wellKnown / GetElementTypeToken closing over fields that are only
+    // valid after EmitCore has resolved the BCL core types — mirrors the
+    // wellKnown pattern.
+    private ConversionEmitter conversionEmitter;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -332,6 +352,12 @@ internal sealed class ReflectionMetadataEmitter
         // TypeRefs, Object..ctor MemberRef); every other well-known ref is
         // lazily materialised on first access via its paired Get* method.
         this.wellKnown = new WellKnownReferences(this.emitCtx, this.GetTypeReference, this.GetMethodReference);
+
+        // PR-E-5: now that wellKnown is materialised, wire ConversionEmitter.
+        // GetElementTypeToken is passed as a delegate (same pattern as
+        // SlotPlanner's needsRvalueReceiverSpill) so the new component does
+        // not need a hard back-reference to this emitter.
+        this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.GetElementTypeToken);
 
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
@@ -5795,15 +5821,9 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: this.NextParameterHandle());
     }
 
-    private void EmitBoxIfNeeded(InstructionEncoder il, TypeSymbol type)
-    {
-        if (IsValueTypeSymbol(type))
-        {
-            il.OpCode(ILOpCode.Box);
-            il.Token(this.GetElementTypeToken(type));
-        }
-    }
-
+    // PR-E-5: EmitBoxIfNeeded(InstructionEncoder, TypeSymbol) moved to
+    // ConversionEmitter. Internal call sites now route through
+    // this.conversionEmitter.EmitBoxIfNeeded(il, type).
     private int FinishInlineBody(InstructionEncoder il)
     {
         return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il);
@@ -5839,13 +5859,13 @@ internal sealed class ReflectionMetadataEmitter
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.LoadArgument(1);
             il.OpCode(ILOpCode.Unbox);
             il.Token(typeDef);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             il.OpCode(ILOpCode.Ret);
         }
@@ -5875,11 +5895,11 @@ internal sealed class ReflectionMetadataEmitter
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.LoadArgumentAddress(1);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             il.OpCode(ILOpCode.Ret);
         }
@@ -5897,7 +5917,7 @@ internal sealed class ReflectionMetadataEmitter
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.OpCode(ILOpCode.Callvirt);
             il.Token(this.wellKnown.GetObjectInstanceGetHashCodeReference());
             il.OpCode(ILOpCode.Ret);
@@ -5917,7 +5937,7 @@ internal sealed class ReflectionMetadataEmitter
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.OpCode(ILOpCode.Callvirt);
             il.Token(this.wellKnown.GetObjectInstanceToStringReference());
             il.Call(this.wellKnown.GetStringConcatReference());
@@ -5949,11 +5969,11 @@ internal sealed class ReflectionMetadataEmitter
             il.LoadArgumentAddress(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.LoadArgumentAddress(1);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
-            this.EmitBoxIfNeeded(il, field.Type);
+            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
             il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             if (isInequality)
             {
@@ -6096,11 +6116,11 @@ internal sealed class ReflectionMetadataEmitter
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
-                this.EmitBoxIfNeeded(il, field.Type);
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 il.LoadArgumentAddress(1);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
-                this.EmitBoxIfNeeded(il, field.Type);
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 il.Call(this.wellKnown.GetObjectStaticEqualsReference());
                 il.Branch(ILOpCode.Brfalse, retFalse);
             }
@@ -6156,7 +6176,7 @@ internal sealed class ReflectionMetadataEmitter
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
                     il.Token(fieldHandle);
-                    this.EmitBoxIfNeeded(il, field.Type);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 }
 
                 il.OpCode(ILOpCode.Call);
@@ -6178,7 +6198,7 @@ internal sealed class ReflectionMetadataEmitter
                     il.LoadArgument(0);
                     il.OpCode(ILOpCode.Ldfld);
                     il.Token(fieldHandle);
-                    this.EmitBoxIfNeeded(il, field.Type);
+                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                     il.OpCode(ILOpCode.Call);
                     il.Token(addSpec);
                 }
@@ -6251,7 +6271,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
-                this.EmitBoxIfNeeded(il, field.Type);
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 il.Call(this.wellKnown.GetCultureInvariantGetterReference());
                 il.Call(this.wellKnown.GetConvertToStringReference());
                 il.OpCode(ILOpCode.Stelem_ref);
@@ -6309,11 +6329,11 @@ internal sealed class ReflectionMetadataEmitter
                 il.LoadArgumentAddress(0);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
-                this.EmitBoxIfNeeded(il, field.Type);
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 il.LoadArgumentAddress(1);
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
-                this.EmitBoxIfNeeded(il, field.Type);
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
                 il.Call(this.wellKnown.GetObjectStaticEqualsReference());
                 il.Branch(ILOpCode.Brfalse, retFalse);
             }
@@ -6581,50 +6601,10 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: this.NextParameterHandle());
     }
 
-    /// <summary>
-    /// Emits IL for pushing the default value of a CLR type onto the stack.
-    /// </summary>
-    private void EmitDefaultValue(InstructionEncoder il, Type type)
-    {
-        if (type == typeof(int) || type == typeof(bool) || type == typeof(byte)
-            || type == typeof(short) || type == typeof(char))
-        {
-            il.LoadConstantI4(0);
-        }
-        else if (type == typeof(long))
-        {
-            il.LoadConstantI8(0);
-        }
-        else if (type == typeof(float))
-        {
-            il.OpCode(ILOpCode.Ldc_r4);
-            il.CodeBuilder.WriteSingle(0.0f);
-        }
-        else if (type == typeof(double))
-        {
-            il.OpCode(ILOpCode.Ldc_r8);
-            il.CodeBuilder.WriteDouble(0.0);
-        }
-        else if (type.IsValueType)
-        {
-            // For value types we need initobj pattern but SetResult takes the value
-            // by value, not by ref. Use a local initialized to default.
-            // Simplified: just push 0 for small structs or use ldloca + initobj.
-            // For now, use a simple approach: push ldloca on a temp, initobj, ldloc.
-            // Actually, the simplest correct approach: if it's a primitive, handled above.
-            // For struct value types, we can't easily push default without a local.
-            // Let's use ldloca on the arg slot (but we don't have one).
-            // Simplest: we won't support generic Task<CustomStruct> yet.
-            // For the common cases (Task<int>, Task<string>, Task<bool>), the above handles it.
-            // Fallback: push 0 and hope for the best (works for small value types).
-            il.LoadConstantI4(0);
-        }
-        else
-        {
-            // Reference types: default is null.
-            il.OpCode(ILOpCode.Ldnull);
-        }
-    }
+    // PR-E-5: EmitDefaultValue(InstructionEncoder, Type) moved to
+    // ConversionEmitter. The pre-refactor source had no callers for this
+    // helper — it sits in the conversion-shaped emit surface alongside
+    // EmitBoxIfNeeded and is preserved for parity / future use.
 
     /// <summary>
     /// Emits the kickoff body for an async function: creates the state-machine
@@ -9734,7 +9714,12 @@ internal sealed class ReflectionMetadataEmitter
     // Phase 4 emit parity (F1): used by call sites to decide whether a value
     // crossing the open-generic boundary needs box / unbox.any. Mirrors the
     // CLR's value-type predicate over GSharp type symbols.
-    private static bool IsValueTypeSymbol(TypeSymbol type)
+    // PR-E-5: widened from `private static` to `internal static` so the
+    // extracted ConversionEmitter (a sibling file in this assembly) can
+    // call into the canonical value-type test without taking a hard
+    // back-reference to the root emitter. The predicate itself is
+    // structurally pure and has no other dependencies.
+    internal static bool IsValueTypeSymbol(TypeSymbol type)
     {
         if (type == TypeSymbol.Int32 || type == TypeSymbol.Bool)
         {
