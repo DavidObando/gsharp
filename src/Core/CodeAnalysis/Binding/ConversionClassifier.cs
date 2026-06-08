@@ -1,0 +1,1148 @@
+// <copyright file="ConversionClassifier.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Reflection;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
+
+namespace GSharp.Core.CodeAnalysis.Binding;
+
+/// <summary>
+/// PR-B-3: the binder-side facade that wraps the pure
+/// <see cref="Conversion.Classify(TypeSymbol, TypeSymbol)"/> type-pair
+/// classifier in the diagnostic-emitting <c>BindConversion</c> family,
+/// and owns the CLR-parameter conversion, method-group → delegate
+/// resolution, ref-kind validation, default-value attachment,
+/// optional-argument appending, conditional-ref argument shaping,
+/// and user-defined implicit-conversion lookup that previously lived
+/// directly on <see cref="Binder"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This type is the binder-side wrapper: it consumes
+/// <see cref="BinderContext"/> for the diagnostics bag and reference
+/// resolver, and <see cref="MemberLookup"/> for delegate-type / member
+/// shape probes. It never back-references <see cref="Binder"/>; the
+/// few callbacks it needs (re-binding a sub-expression, the
+/// interpolated-string / function-literal adapters) are injected
+/// through narrow <see cref="Func{T, TResult}"/> seams in the
+/// constructor.
+/// </para>
+/// <para>
+/// The pure value-shaped <see cref="Conversion"/> type in
+/// <c>Conversion.cs</c> is unchanged and continues to expose the static
+/// <see cref="Conversion.Classify(TypeSymbol, TypeSymbol)"/> entry
+/// point. This class merely wraps that classifier with the diagnostic
+/// emission and bound-tree shaping previously embedded in
+/// <see cref="Binder"/>.
+/// </para>
+/// <para>
+/// The lifted <c>T → T?</c> conversion (#571), the slice-conversion-
+/// set-equals-array-conversion-set rule (#570), and the related Wave-3
+/// architectural fixes from <c>~/gsharp-bug-overview.md</c> will land
+/// in this class in a follow-up PR after the full Binder decomposition
+/// is complete. This PR only sets up the structural home for those
+/// fixes; it makes no behavior change.
+/// </para>
+/// </remarks>
+internal sealed class ConversionClassifier
+{
+    private readonly BinderContext binderCtx;
+    private readonly MemberLookup memberLookup;
+    private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
+    private readonly Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType;
+    private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
+    private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
+    private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
+    private readonly Func<BoundExpression, bool> isLvalue;
+    private readonly Func<SyntaxToken, RefKind> getRefKindFromModifier;
+    private readonly Func<RefKind, string> refKindToString;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ConversionClassifier"/>
+    /// class.
+    /// </summary>
+    /// <param name="binderCtx">The shared binder context that exposes the
+    /// diagnostics bag and reference resolver.</param>
+    /// <param name="memberLookup">The binder-side member-lookup facade used
+    /// for delegate-shape probes during method-group → delegate conversion
+    /// (the <see cref="MemberLookup.TryGetDelegateFunctionType"/> seam).</param>
+    /// <param name="bindExpression">Callback to re-bind a sub-expression
+    /// through the still-on-Binder expression-binding entry point.</param>
+    /// <param name="bindExpressionWithTargetType">Callback to bind a sub-
+    /// expression with a target-type hint (used by
+    /// <see cref="BindConditionalRefArgument"/> to bind the condition as
+    /// <see cref="TypeSymbol.Bool"/>).</param>
+    /// <param name="isFormattableStringTargetType">Callback to test whether
+    /// a target type is one of the ADR-0055 Tier 4 formattable-string
+    /// shapes (<c>IFormattable</c> / <c>FormattableString</c>). Kept on
+    /// <see cref="Binder"/> because the interpolated-string binder uses
+    /// it from multiple non-conversion call sites.</param>
+    /// <param name="bindInterpolatedStringAsFormattable">Callback that
+    /// performs the ADR-0055 Tier 4 contextual conversion of an
+    /// interpolated string to <c>IFormattable</c>/<c>FormattableString</c>.</param>
+    /// <param name="createErasedFunctionLiteralAdapter">Callback that
+    /// wraps a function-literal expression in an erased-signature adapter
+    /// for the target generic function type. Owned by the lambda binder
+    /// (which holds the nested rewriter), surfaced here as a callback.</param>
+    /// <param name="isLvalue">Callback that classifies a bound expression
+    /// as an l-value (addressable). Used by the conditional-ref-argument
+    /// validator.</param>
+    /// <param name="getRefKindFromModifier">Callback that maps a
+    /// <c>ref</c>/<c>out</c>/<c>in</c> modifier token to a
+    /// <see cref="RefKind"/>.</param>
+    /// <param name="refKindToString">Callback used only for the
+    /// human-readable diagnostic message when an optional parameter
+    /// also carries a ref-kind modifier.</param>
+    public ConversionClassifier(
+        BinderContext binderCtx,
+        MemberLookup memberLookup,
+        Func<ExpressionSyntax, BoundExpression> bindExpression,
+        Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType,
+        Func<TypeSymbol, bool> isFormattableStringTargetType,
+        Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
+        Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
+        Func<BoundExpression, bool> isLvalue,
+        Func<SyntaxToken, RefKind> getRefKindFromModifier,
+        Func<RefKind, string> refKindToString)
+    {
+        this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
+        this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
+        this.bindExpression = bindExpression ?? throw new ArgumentNullException(nameof(bindExpression));
+        this.bindExpressionWithTargetType = bindExpressionWithTargetType ?? throw new ArgumentNullException(nameof(bindExpressionWithTargetType));
+        this.isFormattableStringTargetType = isFormattableStringTargetType ?? throw new ArgumentNullException(nameof(isFormattableStringTargetType));
+        this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable ?? throw new ArgumentNullException(nameof(bindInterpolatedStringAsFormattable));
+        this.createErasedFunctionLiteralAdapter = createErasedFunctionLiteralAdapter ?? throw new ArgumentNullException(nameof(createErasedFunctionLiteralAdapter));
+        this.isLvalue = isLvalue ?? throw new ArgumentNullException(nameof(isLvalue));
+        this.getRefKindFromModifier = getRefKindFromModifier ?? throw new ArgumentNullException(nameof(getRefKindFromModifier));
+        this.refKindToString = refKindToString ?? throw new ArgumentNullException(nameof(refKindToString));
+    }
+
+    private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
+
+    // ----- Pure static helpers (no instance state) -----
+
+    /// <summary>
+    /// Issue #327/#321: appends synthesized default-value arguments for any
+    /// trailing optional parameters the call site omitted.
+    /// <paramref name="parameters"/> is the full parameter list of the
+    /// resolved CLR method/constructor; <paramref name="suppliedArguments"/>
+    /// are the arguments already bound for the leading parameters (for
+    /// instance/extension calls this includes the receiver mapped onto the
+    /// first parameter). When no parameters are omitted, the supplied array
+    /// is returned unchanged.
+    /// </summary>
+    /// <param name="suppliedArguments">Bound arguments mapped to the leading
+    /// parameters.</param>
+    /// <param name="parameters">The resolved method's full parameter list.</param>
+    /// <returns>The argument array padded to the parameter count with
+    /// defaults.</returns>
+    public static ImmutableArray<BoundExpression> AppendOmittedOptionalArguments(
+        ImmutableArray<BoundExpression> suppliedArguments,
+        ParameterInfo[] parameters)
+    {
+        if (suppliedArguments.Length >= parameters.Length)
+        {
+            return suppliedArguments;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+        builder.AddRange(suppliedArguments);
+        for (var i = suppliedArguments.Length; i < parameters.Length; i++)
+        {
+            builder.Add(CreateOptionalDefaultArgument(parameters[i]));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #327/#321: builds the bound expression for an omitted optional
+    /// parameter. An explicit constant default (e.g. <c>int x = 5</c>)
+    /// becomes the corresponding literal; <c>= default</c>/<c>= null</c> and
+    /// constant-less <c>[Optional]</c> parameters (e.g.
+    /// <c>CancellationToken cancellationToken = default</c>) become the zero
+    /// value of the parameter type.
+    /// </summary>
+    /// <param name="parameter">The omitted optional parameter.</param>
+    /// <returns>The bound default-value argument.</returns>
+    public static BoundExpression CreateOptionalDefaultArgument(ParameterInfo parameter)
+    {
+        var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
+
+        if (TryGetConstantParameterDefault(parameter, out var constant))
+        {
+            return new BoundLiteralExpression(null, constant);
+        }
+
+        return new BoundDefaultExpression(null, typeSymbol);
+    }
+
+    /// <summary>
+    /// ADR-0056 §1: when a CLR member returns a <see cref="ByRefTypeSymbol"/>
+    /// (e.g. <c>ref T</c> from a span indexer or a ref-returning property /
+    /// method), automatically dereference at the use site so that downstream
+    /// code observes the pointee type. Returns the expression unchanged
+    /// otherwise.
+    /// </summary>
+    /// <param name="expression">The bound member-access / call / index
+    /// expression.</param>
+    /// <returns>The (possibly dereferenced) bound expression.</returns>
+    public static BoundExpression AutoDereferenceRefReturn(BoundExpression expression)
+    {
+        return expression.Type is ByRefTypeSymbol
+            ? new BoundDereferenceExpression(null, expression)
+            : expression;
+    }
+
+    // ----- Core conversion entry points -----
+
+    /// <summary>
+    /// Binds <paramref name="syntax"/> as an expression and converts it to
+    /// <paramref name="type"/>. Mirrors the
+    /// <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>
+    /// core overload after delegating to the still-on-<see cref="Binder"/>
+    /// expression-binder for the initial bind.
+    /// </summary>
+    /// <param name="syntax">The expression syntax to bind and convert.</param>
+    /// <param name="type">The target conversion type.</param>
+    /// <param name="allowExplicit">When <see langword="true"/>, suppresses
+    /// the "implicit conversion required" diagnostic for an explicit-only
+    /// classification.</param>
+    /// <returns>The converted bound expression (or a
+    /// <see cref="BoundErrorExpression"/> on failure with diagnostics
+    /// already reported).</returns>
+    public BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
+    {
+        // ADR-0055 Tier 4: contextual conversion of an interpolated string to
+        // IFormattable/FormattableString. Handled here, before eager string
+        // lowering, so the format/alignment intent is preserved.
+        if (syntax is InterpolatedStringExpressionSyntax interpolated && isFormattableStringTargetType(type))
+        {
+            return bindInterpolatedStringAsFormattable(interpolated, type);
+        }
+
+        var expression = bindExpression(syntax);
+        return BindConversion(syntax.Location, expression, type, allowExplicit);
+    }
+
+    /// <summary>
+    /// Core <c>BindConversion</c> overload: classifies the conversion from
+    /// <paramref name="expression"/>'s static type to <paramref name="type"/>,
+    /// surfaces the appropriate diagnostic when the classification is
+    /// missing or implicit-only at an explicit target, and produces the
+    /// shaped <see cref="BoundExpression"/>.
+    /// </summary>
+    /// <param name="diagnosticLocation">The location used for reported
+    /// diagnostics.</param>
+    /// <param name="expression">The bound source expression.</param>
+    /// <param name="type">The target conversion type.</param>
+    /// <param name="allowExplicit">When <see langword="true"/>, suppresses
+    /// the "implicit conversion required" diagnostic for an explicit-only
+    /// classification.</param>
+    /// <returns>The shaped bound expression.</returns>
+    public BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
+    {
+        // Issue #337: a CLR member method group has no fixed type until the
+        // target delegate signature drives overload selection. Resolve it here,
+        // where the expected type is known, before classifying conversions.
+        if (expression is BoundClrMethodGroupExpression { ResolvedMethod: null } clrMethodGroup)
+        {
+            return BindClrMethodGroupConversion(diagnosticLocation, clrMethodGroup, type);
+        }
+
+        // ADR-0063 §9: a user-function method group with multiple candidates
+        // resolves here against the target delegate/function-type signature.
+        if (expression is BoundMethodGroupExpression { FunctionType: null } userMethodGroup)
+        {
+            return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type);
+        }
+
+        if (expression is BoundFunctionLiteralExpression literal
+            && type is FunctionTypeSymbol targetFunctionType
+            && TypeSymbol.ContainsTypeParameter(targetFunctionType))
+        {
+            return createErasedFunctionLiteralAdapter(literal, targetFunctionType);
+        }
+
+        var conversion = Conversion.Classify(expression.Type, type);
+
+        if (!conversion.Exists)
+        {
+            // Stream E: fall back to a user-defined op_Implicit (and
+            // op_Explicit when allowed) on either source or target CLR type.
+            if (expression.Type?.ClrType != null && type?.ClrType != null
+                && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
+            {
+                _ = isExplicit;
+                return new BoundClrConversionCallExpression(null, expression, convMethod, type);
+            }
+
+            if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
+            {
+                Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        if (!allowExplicit && conversion.IsExplicit)
+        {
+            Diagnostics.ReportCannotConvertImplicitly(diagnosticLocation, expression.Type, type);
+        }
+
+        if (conversion.IsIdentity)
+        {
+            return expression;
+        }
+
+        // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
+        // a reference type (`object`, an interface, a delegate base, etc.), which
+        // the CLR forbids. The `(string)span` form is excluded: it lowers to a
+        // `ToString()` call rather than a box. Identity conversions (ref struct to
+        // the same ref struct) already returned above.
+        if (TypeSymbol.IsByRefLike(expression.Type)
+            && type != TypeSymbol.String
+            && type?.ClrType != null
+            && !type.ClrType.IsValueType
+            && expression.Type != TypeSymbol.Error)
+        {
+            Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
+            return new BoundErrorExpression(null);
+        }
+
+        // Issue #504: lower `nil → Nullable<value-type>` to a
+        // BoundDefaultExpression of the target Nullable<T>. Value-type
+        // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
+        // against a `valuetype System.Nullable<T>` slot produces invalid IL
+        // ("Common Language Runtime detected an invalid program"). The
+        // default-expression emit path materialises `default(Nullable<T>)`
+        // via a pre-allocated `ldloca/initobj/ldloc` slot, which is the
+        // verifiable representation of a missing-value Nullable<T>. The
+        // reference-type Nullable<T> case (e.g. `nil → string?`) still
+        // shares the CLR representation of `T` and is fine emitting `ldnull`,
+        // so it continues through the normal BoundConversionExpression path
+        // below.
+        if (expression.Type == TypeSymbol.Null
+            && type is NullableTypeSymbol nilTargetNullable
+            && nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            return new BoundDefaultExpression(null, type);
+        }
+
+        return new BoundConversionExpression(null, type, expression);
+    }
+
+    // ----- CLR parameter / argument conversions -----
+
+    /// <summary>
+    /// Issue #506 / ADR-0056: rebinds positional arguments whose declared
+    /// CLR parameter type needs an actual IL-visible conversion (boxing,
+    /// numeric coercion, func→delegate materialisation, ...). Returns the
+    /// input array unchanged when no rebinding is required.
+    /// </summary>
+    /// <param name="arguments">The source-order bound arguments.</param>
+    /// <param name="parameters">The resolved CLR method's parameter list.</param>
+    /// <param name="call">The originating call expression (used for argument-
+    /// site diagnostic locations).</param>
+    /// <param name="parameterMapping">Optional per-source-argument → parameter
+    /// index map for named-argument call shapes.</param>
+    /// <param name="receiverArgCount">Number of leading argument slots
+    /// reserved for a synthesised receiver (0 for plain calls, 1 for
+    /// imported extension calls).</param>
+    /// <returns>The (possibly rebound) argument array.</returns>
+    public ImmutableArray<BoundExpression> BindClrParameterConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        CallExpressionSyntax call,
+        ImmutableArray<int> parameterMapping = default,
+        int receiverArgCount = 0)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var argument = arguments[i];
+            var rebound = argument;
+            if (paramIndex < parameters.Length)
+            {
+                var parameterType = parameters[paramIndex].ParameterType;
+                if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
+                {
+                    var targetType = TypeSymbol.FromClrType(parameterType);
+                    if (argument.Type != targetType
+                        && Conversion.Classify(argument.Type, targetType).Exists
+                        && NeedsBindClrParameterConversion(argument.Type, parameterType))
+                    {
+                        // Issue #506: the source-argument list may not align with
+                        // the bound-argument list when a synthesised receiver
+                        // occupies leading slots (imported extension calls) or
+                        // when params expansion has replaced N positional source
+                        // args with one synthesised array. Fall back to the
+                        // overall call location when the source slot is absent.
+                        var sourceIndex = i - receiverArgCount;
+                        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                            ? call.Arguments[sourceIndex].Location
+                            : call?.Location ?? default;
+                        rebound = BindConversion(location, argument, targetType, allowExplicit: true);
+                    }
+                }
+            }
+
+            if (rebound != argument && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(arguments[j]);
+                }
+            }
+
+            builder?.Add(rebound);
+        }
+
+        if (builder == null)
+        {
+            return arguments;
+        }
+
+        for (var i = builder.Count; i < arguments.Length; i++)
+        {
+            builder.Add(arguments[i]);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// ADR-0056 (#344), low-hanging-fruit item #3: a call argument whose
+    /// declared parameter type is reachable only through a user-defined CLR
+    /// <c>op_Implicit</c> (e.g. <c>[]T -&gt; System.ReadOnlySpan[T]</c> /
+    /// <c>Span[T]</c>) is converted here, the same way local-init / explicit-
+    /// target conversions go through <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>.
+    /// Built-in conversions (identity, numeric widening, ...) classify
+    /// earlier and never reach this fallback, so existing overloads keep
+    /// selecting unchanged. Returns true and emits a
+    /// <see cref="BoundClrConversionCallExpression"/> when a user-defined
+    /// implicit conversion applies; false leaves the argument as-is.
+    /// </summary>
+    /// <param name="argument">The bound source argument.</param>
+    /// <param name="expectedType">The expected parameter type.</param>
+    /// <param name="converted">On <see langword="true"/>, the rebound
+    /// argument carrying the user-defined conversion call.</param>
+    /// <returns>Whether a user-defined implicit conversion was applied.</returns>
+    public bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
+    {
+        if (argument?.Type?.ClrType != null
+            && expectedType?.ClrType != null
+            && argument.Type != TypeSymbol.Error
+            && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, convMethod, expectedType);
+            return true;
+        }
+
+        converted = argument;
+        return false;
+    }
+
+    // ----- Method-group → delegate conversions -----
+
+    /// <summary>
+    /// Issue #337: resolves a CLR member method group whose target delegate
+    /// signature drives overload selection. Produces a
+    /// <see cref="BoundClrMethodGroupExpression"/> carrying the resolved
+    /// <see cref="MethodInfo"/> (or a <see cref="BoundErrorExpression"/>
+    /// with a diagnostic when no compatible candidate exists).
+    /// </summary>
+    /// <param name="diagnosticLocation">The location for reported diagnostics.</param>
+    /// <param name="group">The unresolved CLR method group.</param>
+    /// <param name="targetType">The target delegate type.</param>
+    /// <returns>The shaped bound expression.</returns>
+    public BoundExpression BindClrMethodGroupConversion(TextLocation diagnosticLocation, BoundClrMethodGroupExpression group, TypeSymbol targetType)
+    {
+        var delegateClr = targetType?.ClrType;
+        if (delegateClr == null || !ClrTypeUtilities.IsDelegateType(delegateClr))
+        {
+            // A non-delegate target (e.g. `var x int32 = Console.WriteLine`) or
+            // an already-errored target: report unless the target itself is an
+            // error type (which already produced a diagnostic).
+            if (targetType != null && targetType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        var invoke = delegateClr.GetMethod("Invoke");
+        if (invoke == null)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        var invokeParams = invoke.GetParameters();
+        var argTypes = new Type[invokeParams.Length];
+        for (var i = 0; i < invokeParams.Length; i++)
+        {
+            argTypes[i] = invokeParams[i].ParameterType;
+        }
+
+        var applicable = new List<MethodInfo>();
+        foreach (var candidate in group.Candidates)
+        {
+            if (candidate.GetParameters().Length != invokeParams.Length)
+            {
+                continue;
+            }
+
+            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
+            {
+                continue;
+            }
+
+            applicable.Add(candidate);
+        }
+
+        if (applicable.Count > 0)
+        {
+            var resolution = OverloadResolution.Resolve(applicable, argTypes);
+            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                return new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
+            }
+        }
+
+        Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+        return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// ADR-0063 §9: resolves a multi-overload user-function method group
+    /// against a target delegate or native function type. The pick is the
+    /// unique candidate whose parameter types and return type exactly match
+    /// the target's invoke signature. When zero or multiple candidates
+    /// match, a <c>GS0218</c> ("cannot convert method group") diagnostic
+    /// is reported.
+    /// </summary>
+    /// <param name="diagnosticLocation">The location for reported diagnostics.</param>
+    /// <param name="group">The unresolved user-function method group.</param>
+    /// <param name="targetType">The target delegate / function type.</param>
+    /// <returns>The shaped bound expression.</returns>
+    public BoundExpression BindUserMethodGroupConversion(TextLocation diagnosticLocation, BoundMethodGroupExpression group, TypeSymbol targetType)
+    {
+        var groupName = group.Function?.Name ?? "<method group>";
+
+        ImmutableArray<TypeSymbol> targetParameterTypes;
+        TypeSymbol targetReturnType;
+        if (targetType is FunctionTypeSymbol nativeFn)
+        {
+            targetParameterTypes = nativeFn.ParameterTypes;
+            targetReturnType = nativeFn.ReturnType;
+        }
+        else if (targetType is DelegateTypeSymbol userDelegate)
+        {
+            var pb = ImmutableArray.CreateBuilder<TypeSymbol>(userDelegate.Parameters.Length);
+            foreach (var p in userDelegate.Parameters)
+            {
+                pb.Add(p.Type);
+            }
+
+            targetParameterTypes = pb.MoveToImmutable();
+            targetReturnType = userDelegate.ReturnType;
+        }
+        else
+        {
+            if (targetType != null && targetType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
+        FunctionSymbol pick = null;
+        foreach (var candidate in group.Candidates)
+        {
+            if (candidate.Parameters.Length != targetParameterTypes.Length)
+            {
+                continue;
+            }
+
+            var paramsMatch = true;
+            for (var i = 0; i < candidate.Parameters.Length; i++)
+            {
+                if (!ReferenceEquals(candidate.Parameters[i].Type, targetParameterTypes[i]))
+                {
+                    paramsMatch = false;
+                    break;
+                }
+            }
+
+            if (!paramsMatch)
+            {
+                continue;
+            }
+
+            var candidateReturn = candidate.Type ?? TypeSymbol.Void;
+            if (!ReferenceEquals(candidateReturn, targetReturnType))
+            {
+                continue;
+            }
+
+            if (pick != null)
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+                return new BoundErrorExpression(null);
+            }
+
+            pick = candidate;
+        }
+
+        if (pick == null)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length);
+        foreach (var p in pick.Parameters)
+        {
+            pickParams.Add(p.Type);
+        }
+
+        var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);
+        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, group.Receiver, pick, pickFnType);
+
+        // If the target is the native function type matching the pick exactly,
+        // identity-convert; otherwise let the regular conversion machinery turn
+        // the function-typed value into the user delegate.
+        if (ReferenceEquals(targetType, pickFnType))
+        {
+            return resolvedGroup;
+        }
+
+        var conversion = Conversion.Classify(pickFnType, targetType);
+        if (!conversion.Exists)
+        {
+            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            return new BoundErrorExpression(null);
+        }
+
+        if (conversion.IsIdentity)
+        {
+            return resolvedGroup;
+        }
+
+        return new BoundConversionExpression(null, targetType, resolvedGroup);
+    }
+
+    // ----- Ref-kind argument validation -----
+
+    /// <summary>
+    /// ADR-0062: binds a conditional ref-argument
+    /// (<c>cond ? &amp;a : &amp;b</c>) and validates the inner / outer
+    /// ref-kind compatibility, l-value-ness, and branch type agreement.
+    /// </summary>
+    /// <param name="syntax">The conditional ref-argument syntax.</param>
+    /// <param name="outerModifier">The outer ref-kind modifier token, or
+    /// <see langword="null"/> for the bare <c>&amp;</c> operand form.</param>
+    /// <returns>The shaped bound expression.</returns>
+    public BoundExpression BindConditionalRefArgument(
+        ConditionalRefArgumentExpressionSyntax syntax,
+        SyntaxToken outerModifier)
+    {
+        // Condition must be bool.
+        var condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
+
+        // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
+        // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
+        // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
+        // mismatch since `&` already denotes mutable byref.
+        string outerText = outerModifier?.Text ?? "&";
+        if (syntax.WhenTrueRefKindModifier != null
+            && !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText))
+        {
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
+                syntax.WhenTrueRefKindModifier.Location,
+                outerText,
+                syntax.WhenTrueRefKindModifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        if (syntax.WhenFalseRefKindModifier != null
+            && !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText))
+        {
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
+                syntax.WhenFalseRefKindModifier.Location,
+                outerText,
+                syntax.WhenFalseRefKindModifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        // Each branch must itself be a plain lvalue expression — not a nested
+        // conditional, not a ref-argument, not an inline-declaration. We
+        // explicitly reject the inline-declaration form here (GS0250) before
+        // attempting to bind.
+        if (syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration)
+        {
+            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        if (syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration)
+        {
+            Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        var whenTrue = bindExpression(syntax.WhenTrue);
+        var whenFalse = bindExpression(syntax.WhenFalse);
+
+        if (whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!isLvalue(whenTrue))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        if (!isLvalue(whenFalse))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
+            return new BoundErrorExpression(null);
+        }
+
+        // Branch types must match exactly — no implicit widening or nullable
+        // adjustment, since the resulting byref selects between slots whose
+        // physical type must agree.
+        if (!ReferenceEquals(whenTrue.Type, whenFalse.Type)
+            && !string.Equals(whenTrue.Type?.Name, whenFalse.Type?.Name, System.StringComparison.Ordinal))
+        {
+            Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
+                syntax.Location,
+                whenTrue.Type?.Name ?? "?",
+                whenFalse.Type?.Name ?? "?");
+            return new BoundErrorExpression(null);
+        }
+
+        // Readonly check: for `ref` (and bare `&`), neither branch may be a
+        // read-only local. For `in` either branch may be read-only. For `out`
+        // both must be writable. (Definite-assignment is enforced elsewhere
+        // by RefKindDefiniteAssignmentAnalyzer.)
+        bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
+        if (requiresWritable)
+        {
+            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+
+            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
+            {
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+    }
+
+    /// <summary>
+    /// ADR-0060: validates a parameter's <see cref="RefKind"/> against the
+    /// surrounding declaration shape (pointer-typed parameters, variadic
+    /// parameters, async/iterator functions). Surfaces the corresponding
+    /// diagnostic for each violation and returns the (possibly downgraded)
+    /// <see cref="RefKind"/>.
+    /// </summary>
+    /// <param name="parameterSyntax">The parameter syntax.</param>
+    /// <param name="parameterName">The parameter's declared name.</param>
+    /// <param name="parameterType">The bound parameter type.</param>
+    /// <param name="isVariadic">Whether the parameter is variadic.</param>
+    /// <param name="asyncOrIteratorKind">A non-<see langword="null"/> kind
+    /// label (<c>"async"</c> / <c>"iterator"</c>) when the surrounding
+    /// function is a state-machine kickoff that cannot host a managed
+    /// pointer.</param>
+    /// <returns>The validated ref-kind.</returns>
+    public RefKind BindAndValidateParameterRefKind(
+        ParameterSyntax parameterSyntax,
+        string parameterName,
+        TypeSymbol parameterType,
+        bool isVariadic,
+        string asyncOrIteratorKind)
+    {
+        var parameterRefKind = getRefKindFromModifier(parameterSyntax.RefKindModifier);
+
+        // ADR-0060 §2: a `*T` type cannot appear as a parameter type. The CLR's
+        // managed-pointer-typed parameter slot would normally surface as `T&`
+        // via the keyword form; suggest the rewrite.
+        if (parameterType is ByRefTypeSymbol pointerParamType)
+        {
+            Diagnostics.ReportPointerTypeCannotBeParameterType(
+                parameterSyntax.Type.Location,
+                parameterName,
+                pointerParamType.PointeeType.Name);
+        }
+
+        // ADR-0060 §8: a variadic parameter (`...T`) cannot also carry a ref-kind
+        // modifier — the CLR cannot represent an array of managed pointers.
+        if (parameterRefKind != RefKind.None && isVariadic)
+        {
+            Diagnostics.ReportRefKindOnVariadicParameter(parameterSyntax.Location, parameterName);
+            parameterRefKind = RefKind.None;
+        }
+
+        // ADR-0060 §10: ban ref-kind parameters on async / iterator (sequence) functions.
+        // The state-machine rewriter cannot hoist a managed pointer into a field.
+        if (parameterRefKind != RefKind.None && asyncOrIteratorKind != null)
+        {
+            Diagnostics.ReportRefKindOnAsyncOrIterator(parameterSyntax.Location, parameterName, asyncOrIteratorKind);
+            parameterRefKind = RefKind.None;
+        }
+
+        return parameterRefKind;
+    }
+
+    /// <summary>
+    /// ADR-0060: at call sites that target a G#-authored
+    /// function/method/constructor with a <c>ref</c>/<c>out</c>/<c>in</c>
+    /// parameter, the bound argument should already be a
+    /// <see cref="BoundAddressOfExpression"/> whose operand type matches
+    /// the parameter's pointee type. In that case we pass the argument
+    /// through unchanged — the conversion machinery would otherwise try
+    /// to coerce <c>*T</c> into <c>T</c> and fail.
+    /// </summary>
+    /// <param name="location">The diagnostic location for any conversion
+    /// error.</param>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="expectedType">The (substituted) parameter type.</param>
+    /// <param name="parameter">The target parameter (carrying
+    /// <see cref="RefKind"/>).</param>
+    /// <returns>The argument, possibly with a normal conversion applied.</returns>
+    public BoundExpression BindCallArgumentWithRefKind(
+        TextLocation location,
+        BoundExpression argument,
+        TypeSymbol expectedType,
+        ParameterSymbol parameter)
+    {
+        if (parameter != null && parameter.RefKind != RefKind.None)
+        {
+            if (argument is BoundAddressOfExpression addr)
+            {
+                var operandType = addr.Operand?.Type;
+                if (operandType == expectedType || operandType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                {
+                    return argument;
+                }
+
+                // Fall through: type mismatch on the address-of operand. Surface
+                // the standard "cannot convert" diagnostic via BindConversion.
+            }
+            else if (argument is BoundConditionalAddressExpression condAddr)
+            {
+                // ADR-0061: conditional address-of also accepted at ref-kind
+                // parameter positions. The shared pointee type was validated
+                // by BindConditionalRefArgument.
+                var pointeeType = condAddr.PointeeType;
+                if (pointeeType == expectedType || pointeeType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                {
+                    return argument;
+                }
+            }
+        }
+
+        return BindConversion(location, argument, expectedType);
+    }
+
+    // ----- Optional / default-value argument shaping -----
+
+    /// <summary>
+    /// ADR-0063: binds, validates, and (when valid) records a user-declared
+    /// optional default value on <paramref name="parameter"/>. Enforces the
+    /// v1 restrictions: the default must be a compile-time constant
+    /// representable in CLR parameter metadata, the parameter must not be
+    /// <c>ref</c>/<c>out</c>/<c>in</c>, must not be variadic, and must not
+    /// be the receiver parameter. Reports
+    /// <see cref="DiagnosticBag.ReportInvalidOptionalParameter"/> on misuse.
+    /// </summary>
+    /// <param name="parameterSyntax">The parameter syntax carrying the
+    /// default clause.</param>
+    /// <param name="parameter">The bound parameter symbol to attach the
+    /// default to.</param>
+    /// <param name="isReceiver">True when the parameter is a method's source
+    /// receiver.</param>
+    public void BindAndAttachParameterDefaultValue(ParameterSyntax parameterSyntax, ParameterSymbol parameter, bool isReceiver = false)
+    {
+        if (parameterSyntax == null || !parameterSyntax.HasDefaultValue || parameter == null)
+        {
+            return;
+        }
+
+        var location = parameterSyntax.DefaultValue?.Location ?? parameterSyntax.Location;
+
+        if (isReceiver)
+        {
+            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, "the receiver parameter cannot declare a default value.");
+            return;
+        }
+
+        if (parameter.IsVariadic)
+        {
+            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, "a variadic parameter cannot declare a default value.");
+            return;
+        }
+
+        if (parameter.RefKind != RefKind.None)
+        {
+            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, $"a '{refKindToString(parameter.RefKind)}' parameter cannot declare a default value.");
+            return;
+        }
+
+        // Bind the default-value expression in the surrounding scope. Diagnostics
+        // (undefined symbol, etc.) bubble through normally.
+        var bound = bindExpression(parameterSyntax.DefaultValue);
+        if (bound == null || bound is BoundErrorExpression || parameter.Type == TypeSymbol.Error)
+        {
+            return;
+        }
+
+        // The default must be a compile-time constant of one of the kinds the CLR
+        // parameter Constant table can represent.
+        if (!TryExtractConstantDefault(bound, parameter.Type, out var constant, out var reason))
+        {
+            Diagnostics.ReportInvalidOptionalParameter(location, parameter.Name, reason);
+            return;
+        }
+
+        parameter.SetExplicitDefaultValue(constant);
+    }
+
+    // ----- using-statement helper -----
+
+    /// <summary>
+    /// ADR-0048 / using-statement support: builds a <c>variable.Dispose()</c>
+    /// call against the CLR <c>Dispose</c> method on the variable's type.
+    /// Reports <see cref="DiagnosticBag.ReportTypeNotDisposable"/> when the
+    /// type does not expose a public parameterless <c>Dispose</c>.
+    /// </summary>
+    /// <param name="variable">The variable to dispose.</param>
+    /// <param name="location">The diagnostic location.</param>
+    /// <returns>The bound call expression, or <see langword="null"/> on
+    /// failure.</returns>
+    public BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
+    {
+        var clrType = variable.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
+            return null;
+        }
+
+        var disposeMethod = clrType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance, binder: null, types: Type.EmptyTypes, modifiers: null);
+        if (disposeMethod == null)
+        {
+            Diagnostics.ReportTypeNotDisposable(location, variable.Type);
+            return null;
+        }
+
+        var receiver = new BoundVariableExpression(null, variable);
+        return new BoundImportedInstanceCallExpression(null, receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+    }
+
+    // ----- Private helpers (kept here because they are only used by methods in this class) -----
+
+    /// <summary>
+    /// Issue #506 follow-up: returns <see langword="true"/> when the bound
+    /// argument's static type needs an actual IL-visible conversion to land in
+    /// the CLR parameter's slot (boxing, numeric coercion, func→delegate
+    /// materialisation, etc.). Skips no-op rewraps where the source and
+    /// destination share the same CLR type — for example
+    /// <c>string?</c> → <c>string</c>, where the difference is purely the
+    /// nullability wrapper and emit is identical. Those no-op rewraps would
+    /// otherwise wrap a <see cref="BoundVariableExpression"/> argument in a
+    /// <see cref="BoundConversionExpression"/>, defeating nullable-flow
+    /// narrowing patterns (e.g. <c>!String.IsNullOrEmpty(s)</c> can no longer
+    /// strip <c>s</c>'s nullability).
+    /// </summary>
+    /// <param name="from">The bound argument's static type.</param>
+    /// <param name="targetParameterType">The CLR parameter type.</param>
+    /// <returns>Whether a rebinding conversion is required.</returns>
+    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType)
+    {
+        if (from == null || targetParameterType == null)
+        {
+            return false;
+        }
+
+        // FunctionTypeSymbol carries no ClrType but always needs delegate
+        // materialisation when handed to a CLR delegate parameter.
+        if (from.ClrType == null)
+        {
+            return true;
+        }
+
+        return from.ClrType != targetParameterType;
+    }
+
+    // Issue #337: a method-group overload's return type is compatible with a
+    // delegate's Invoke return type when both are void, or when the method's
+    // (non-void) return is identity / implicitly reference- or value-convertible
+    // (by name, MetadataLoadContext-safe) to the delegate's (non-void) return.
+    private static bool IsMethodGroupReturnCompatible(Type methodReturn, Type invokeReturn)
+    {
+        var invokeVoid = invokeReturn == null
+            || string.Equals(invokeReturn.FullName, "System.Void", StringComparison.Ordinal);
+        var methodVoid = methodReturn == null
+            || string.Equals(methodReturn.FullName, "System.Void", StringComparison.Ordinal);
+
+        if (invokeVoid || methodVoid)
+        {
+            return invokeVoid && methodVoid;
+        }
+
+        return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
+    }
+
+    // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch
+    // must agree with the outer modifier text (`ref`, `out`, `in`, or `&`).
+    // The bare `&` form is compatible only with `ref` / `&` semantics.
+    private static bool InnerModifierMatchesOuter(string inner, string outer)
+    {
+        if (string.Equals(inner, outer, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (string.Equals(outer, "&", StringComparison.Ordinal))
+        {
+            return string.Equals(inner, "ref", StringComparison.Ordinal);
+        }
+
+        if (string.Equals(inner, "&", StringComparison.Ordinal))
+        {
+            return string.Equals(outer, "ref", StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
+    // Issue #327/#321: extracts the CLR `RawDefaultValue` for an optional
+    // parameter when it is one of the primitive/string constant kinds that
+    // BoundLiteralExpression carries directly; returns false for `[Optional]`
+    // without a constant and any non-primitive type.
+    private static bool TryGetConstantParameterDefault(ParameterInfo parameter, out object value)
+    {
+        value = null;
+        object raw;
+        try
+        {
+            raw = parameter.RawDefaultValue;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (raw == null || raw is System.DBNull)
+        {
+            return false;
+        }
+
+        // Only primitive/string constants flow through BoundLiteralExpression's
+        // known value kinds; the constant's CLR type is also the IL form for an
+        // enum parameter (whose default is encoded as its underlying integral).
+        switch (raw)
+        {
+            case bool:
+            case sbyte:
+            case byte:
+            case short:
+            case ushort:
+            case int:
+            case uint:
+            case long:
+            case ulong:
+            case float:
+            case double:
+            case char:
+            case string:
+                value = raw;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // ADR-0063: extracts a CLR-Constant-table representable default value from a
+    // bound expression, applying limited implicit conversion to the parameter type
+    // (numeric widening / nil → reference|nullable). Returns false with a
+    // human-visible reason otherwise.
+    private static bool TryExtractConstantDefault(BoundExpression bound, TypeSymbol parameterType, out object value, out string reason)
+    {
+        value = null;
+        reason = null;
+
+        // Unwrap a conversion that the binder may have inserted around a literal.
+        var inner = bound;
+        while (inner is BoundConversionExpression bce)
+        {
+            inner = bce.Expression;
+        }
+
+        if (inner is BoundLiteralExpression lit)
+        {
+            value = lit.Value;
+        }
+        else
+        {
+            reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, or nil).";
+            return false;
+        }
+
+        // `nil` is only valid for a reference-compatible or nullable parameter type.
+        if (value == null)
+        {
+            if (parameterType is NullableTypeSymbol || (parameterType.ClrType is System.Type ct && !ct.IsValueType))
+            {
+                return true;
+            }
+
+            reason = $"'nil' is not a valid default for value-type parameter of type '{parameterType.Name}'.";
+            value = null;
+            return false;
+        }
+
+        // Numeric / bool / char / string / enum-underlying types are CLR Constant-table representable.
+        switch (value)
+        {
+            case bool:
+            case sbyte:
+            case byte:
+            case short:
+            case ushort:
+            case int:
+            case uint:
+            case long:
+            case ulong:
+            case float:
+            case double:
+            case char:
+            case string:
+                return true;
+            default:
+                reason = $"the default value type '{value.GetType().Name}' is not representable in CLR parameter metadata.";
+                value = null;
+                return false;
+        }
+    }
+}
