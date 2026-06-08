@@ -69,21 +69,21 @@ internal sealed class ReflectionMetadataEmitter
     // consume this same cache via constructor injection.
     private readonly MetadataTokenCache cache;
 
-    // ADR-0051 Phase 6: cached MemberReferenceHandle for NotImplementedException..ctor().
-    private MemberReferenceHandle? notImplementedExceptionCtorRef;
-
-    // ADR-0052: cached MemberReferenceHandles for Delegate.Combine and Delegate.Remove.
-    private MemberReferenceHandle? delegateCombineRef;
-    private MemberReferenceHandle? delegateRemoveRef;
-
-    // Issue #256: cached open MemberRef for Interlocked.CompareExchange<T>(ref T, T, T).
-    private MemberReferenceHandle? interlockedCompareExchangeOpenRef;
-
-    // Issue #420 (P3-11): cached MemberRefs for IsReadOnlyAttribute/IsByRefLikeAttribute/ObsoleteAttribute ctors,
-    // so repeated emission of these markers doesn't create duplicate MemberRef rows.
-    private MemberReferenceHandle? isReadOnlyAttributeCtorRef;
-    private MemberReferenceHandle? isByRefLikeAttributeCtorRef;
-    private MemberReferenceHandle? obsoleteAttributeStringBoolCtorRef;
+    // PR-E-3: the well-known BCL MemberRef/TypeRef fields
+    // (notImplementedExceptionCtorRef, delegateCombineRef/RemoveRef,
+    // interlockedCompareExchangeOpenRef, isReadOnly/IsByRefLike/ObsoleteAttribute
+    // ctor refs, objectTypeRef/valueTypeRef/objectCtorRef, stringConcatRef/
+    // EqualsRef/ConcatArrayRef, objectStatic/InstanceXxxRef, nullRefException
+    // CtorRef, convertToStringRef, cultureInvariantGetterRef, hashCodeTypeRef/
+    // AddOpenRef/ToHashCodeRef/CombineOpenRefs[], systemAttribute Type/CtorRef)
+    // and their paired Get* lazy initializers have moved into
+    // WellKnownReferences. The lone StandaloneSignatureHandle hashCodeLocalSig
+    // and its `GetHashCodeLocalSignature()` initializer stay on the emitter:
+    // that's a per-emit StandaloneSignature row (not a Type/MemberRef) and is
+    // squarely in PR-E-6 DataStructSynthesizer scope.
+    // Not readonly because instantiation depends on EmitContext.Core* having
+    // been resolved first — that happens during EmitCore, not the ctor.
+    private WellKnownReferences wellKnown;
 
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
@@ -147,28 +147,14 @@ internal sealed class ReflectionMetadataEmitter
     // coreInt32Type, coreBooleanType, coreArrayType, coreValueType,
     // coreSystemType, coreRuntimeTypeHandleType, coreEnumType,
     // coreMulticastDelegateType, coreIntPtrType) moved onto EmitContext.
-    private TypeReferenceHandle objectTypeRef;
-    private TypeReferenceHandle valueTypeRef;
-    private MemberReferenceHandle objectCtorRef;
-    private MemberReferenceHandle stringConcatRef;
-    private MemberReferenceHandle stringEqualsRef;
-    private MemberReferenceHandle objectStaticEqualsRef;
-    private MemberReferenceHandle objectInstanceToStringRef;
-    private MemberReferenceHandle objectInstanceGetHashCodeRef;
-    private MemberReferenceHandle nullRefExceptionCtorRef;
-
-    // Issue #410 / ADR-0029: cached member refs for data-struct synthesized members.
-    private MemberReferenceHandle stringConcatArrayRef;
-    private MemberReferenceHandle convertToStringRef;
-    private MemberReferenceHandle cultureInvariantGetterRef;
-    private MemberReferenceHandle hashCodeAddOpenRef;
-    private MemberReferenceHandle hashCodeToHashCodeRef;
-    private readonly MemberReferenceHandle?[] hashCodeCombineOpenRefs = new MemberReferenceHandle?[8];
-    private TypeReferenceHandle hashCodeTypeRef;
+    // PR-E-3: objectTypeRef, valueTypeRef, objectCtorRef,
+    // stringConcatRef/EqualsRef, objectStaticEqualsRef,
+    // objectInstanceToStringRef/GetHashCodeRef, nullRefExceptionCtorRef,
+    // stringConcatArrayRef, convertToStringRef, cultureInvariantGetterRef,
+    // hashCodeAddOpenRef/ToHashCodeRef, hashCodeCombineOpenRefs[],
+    // hashCodeTypeRef, systemAttributeTypeRef/CtorRef moved onto
+    // WellKnownReferences.
     private StandaloneSignatureHandle hashCodeLocalSig;
-
-    private EntityHandle? systemAttributeTypeRef;
-    private MemberReferenceHandle? systemAttributeCtorRef;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -328,9 +314,14 @@ internal sealed class ReflectionMetadataEmitter
         // type for user-declared named delegate emission.
         this.emitCtx.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
         this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(System.IntPtr));
-        this.objectTypeRef = this.GetTypeReference(this.emitCtx.CoreObjectType);
-        this.valueTypeRef = this.GetTypeReference(this.emitCtx.CoreValueType);
-        this.objectCtorRef = this.GetObjectDefaultCtorReference();
+
+        // PR-E-3: WellKnownReferences depends on EmitContext.Core* and on the
+        // dedup-cached GetTypeReference / GetMethodReference resolvers that
+        // still live on this emitter. Its ctor eagerly resolves the three
+        // refs the rest of EmitCore needs immediately (Object/ValueType
+        // TypeRefs, Object..ctor MemberRef); every other well-known ref is
+        // lazily materialised on first access via its paired Get* method.
+        this.wellKnown = new WellKnownReferences(this.emitCtx, this.GetTypeReference, this.GetMethodReference);
 
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
@@ -1158,7 +1149,7 @@ internal sealed class ReflectionMetadataEmitter
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
                 name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
-                baseType: this.objectTypeRef,
+                baseType: this.wellKnown.ObjectTypeRef,
                 fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[globalsHostPkg]));
             programTypeDefHandles[globalsHostPkg] = programHandle;
@@ -1180,7 +1171,7 @@ internal sealed class ReflectionMetadataEmitter
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
                 @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
                 name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
-                baseType: this.objectTypeRef,
+                baseType: this.wellKnown.ObjectTypeRef,
                 fieldList: MetadataTokens.FieldDefinitionHandle(fieldListRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[pkg]));
             programTypeDefHandles[pkg] = programHandle;
@@ -2115,7 +2106,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Phase 4 of #141 / ADR-0047 §5: @Attribute sugar — base is
                 // System.Attribute, regardless of any other resolution.
-                baseType = this.GetSystemAttributeTypeRef();
+                baseType = this.wellKnown.GetSystemAttributeTypeRef();
             }
             else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
             {
@@ -2130,7 +2121,7 @@ internal sealed class ReflectionMetadataEmitter
             }
             else
             {
-                baseType = this.objectTypeRef;
+                baseType = this.wellKnown.ObjectTypeRef;
             }
         }
         else
@@ -2138,7 +2129,7 @@ internal sealed class ReflectionMetadataEmitter
             typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                 | MapTypeAccessibility(structSym.Accessibility);
-            baseType = this.valueTypeRef;
+            baseType = this.wellKnown.ValueTypeRef;
         }
 
         var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
@@ -2269,7 +2260,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Fallback: throw new NotImplementedException().
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2336,7 +2327,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Fallback: throw new NotImplementedException().
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2485,7 +2476,7 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2534,7 +2525,7 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2662,7 +2653,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Call);
-                il.Token(this.GetDelegateCombineRef());
+                il.Token(this.wellKnown.GetDelegateCombineRef());
                 il.OpCode(ILOpCode.Castclass);
                 il.Token(eventTypeHandle);
                 il.OpCode(ILOpCode.Stloc_2);
@@ -2702,7 +2693,7 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2763,7 +2754,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(0);
                 il.OpCode(ILOpCode.Call);
-                il.Token(this.GetDelegateRemoveRef());
+                il.Token(this.wellKnown.GetDelegateRemoveRef());
                 il.OpCode(ILOpCode.Castclass);
                 il.Token(eventTypeHandle);
                 il.OpCode(ILOpCode.Stloc_2);
@@ -2803,7 +2794,7 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -2830,26 +2821,6 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
-    }
-
-    /// <summary>Resolves a MemberReferenceHandle for System.NotImplementedException..ctor().</summary>
-    private MemberReferenceHandle GetNotImplementedExceptionCtor()
-    {
-        if (this.notImplementedExceptionCtorRef.HasValue)
-        {
-            return this.notImplementedExceptionCtorRef.Value;
-        }
-
-        var nieType = typeof(System.NotImplementedException);
-        var nieTypeRef = this.GetTypeReference(nieType);
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-        this.notImplementedExceptionCtorRef = this.emitCtx.Metadata.AddMemberReference(
-            nieTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-        return this.notImplementedExceptionCtorRef.Value;
     }
 
     /// <summary>
@@ -3187,7 +3158,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
-                il.Token(this.GetDelegateCombineRef());
+                il.Token(this.wellKnown.GetDelegateCombineRef());
                 il.OpCode(ILOpCode.Castclass);
                 il.Token(eventTypeHandle);
                 il.OpCode(ILOpCode.Stloc_2);
@@ -3230,7 +3201,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Fallback: throw new NotImplementedException().
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -3304,7 +3275,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldloc_1);
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
-                il.Token(this.GetDelegateRemoveRef());
+                il.Token(this.wellKnown.GetDelegateRemoveRef());
                 il.OpCode(ILOpCode.Castclass);
                 il.Token(eventTypeHandle);
                 il.OpCode(ILOpCode.Stloc_2);
@@ -3347,7 +3318,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Fallback: throw new NotImplementedException().
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -3406,7 +3377,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Fallback: throw new NotImplementedException().
                 var il = new InstructionEncoder(new BlobBuilder());
-                var nieCtor = this.GetNotImplementedExceptionCtor();
+                var nieCtor = this.wellKnown.GetNotImplementedExceptionCtor();
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
@@ -3466,96 +3437,12 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: firstParamHandle);
     }
 
-    /// <summary>ADR-0052: resolves a MemberReferenceHandle for Delegate.Combine(Delegate, Delegate).</summary>
-    private MemberReferenceHandle GetDelegateCombineRef()
-    {
-        if (this.delegateCombineRef.HasValue)
-        {
-            return this.delegateCombineRef.Value;
-        }
-
-        var delegateTypeRef = this.GetTypeReference(typeof(System.Delegate));
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(2,
-                r => r.Type().Type(delegateTypeRef, isValueType: false),
-                ps =>
-                {
-                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
-                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
-                });
-
-        this.delegateCombineRef = this.emitCtx.Metadata.AddMemberReference(
-            delegateTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("Combine"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.delegateCombineRef.Value;
-    }
-
-    /// <summary>ADR-0052: resolves a MemberReferenceHandle for Delegate.Remove(Delegate, Delegate).</summary>
-    private MemberReferenceHandle GetDelegateRemoveRef()
-    {
-        if (this.delegateRemoveRef.HasValue)
-        {
-            return this.delegateRemoveRef.Value;
-        }
-
-        var delegateTypeRef = this.GetTypeReference(typeof(System.Delegate));
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(2,
-                r => r.Type().Type(delegateTypeRef, isValueType: false),
-                ps =>
-                {
-                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
-                    ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
-                });
-
-        this.delegateRemoveRef = this.emitCtx.Metadata.AddMemberReference(
-            delegateTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("Remove"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.delegateRemoveRef.Value;
-    }
-
-    /// <summary>
-    /// Issue #256: resolves the open MemberRef for Interlocked.CompareExchange&lt;T&gt;(ref T, T, T).
-    /// </summary>
-    private MemberReferenceHandle GetInterlockedCompareExchangeOpenRef()
-    {
-        if (this.interlockedCompareExchangeOpenRef.HasValue)
-        {
-            return this.interlockedCompareExchangeOpenRef.Value;
-        }
-
-        var interlockedTypeRef = this.GetTypeReference(typeof(System.Threading.Interlocked));
-
-        // Signature: static T CompareExchange<T>(ref T, T, T) with 1 generic param.
-        // In open form, T is !!0 (method type parameter at index 0).
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false, genericParameterCount: 1)
-            .Parameters(3,
-                r => r.Type().GenericMethodTypeParameter(0),
-                ps =>
-                {
-                    ps.AddParameter().Type(isByRef: true).GenericMethodTypeParameter(0);
-                    ps.AddParameter().Type().GenericMethodTypeParameter(0);
-                    ps.AddParameter().Type().GenericMethodTypeParameter(0);
-                });
-
-        this.interlockedCompareExchangeOpenRef = this.emitCtx.Metadata.AddMemberReference(
-            interlockedTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("CompareExchange"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.interlockedCompareExchangeOpenRef.Value;
-    }
-
     /// <summary>
     /// Issue #256: produces a MethodSpec for Interlocked.CompareExchange&lt;EventType&gt;.
     /// </summary>
     private EntityHandle GetInterlockedCompareExchangeSpec(TypeSymbol eventType)
     {
-        var openRef = this.GetInterlockedCompareExchangeOpenRef();
+        var openRef = this.wellKnown.GetInterlockedCompareExchangeOpenRef();
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         var typeEncoder = argsEncoder.AddArgument();
@@ -3730,7 +3617,7 @@ internal sealed class ReflectionMetadataEmitter
             }
             else
             {
-                baseType = this.objectTypeRef;
+                baseType = this.wellKnown.ObjectTypeRef;
             }
         }
         else
@@ -3738,7 +3625,7 @@ internal sealed class ReflectionMetadataEmitter
             typeAttrs = TypeAttributes.SequentialLayout | TypeAttributes.Sealed
                 | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit
                 | TypeAttributes.NestedPrivate;
-            baseType = this.valueTypeRef;
+            baseType = this.wellKnown.ValueTypeRef;
         }
 
         // Nested types have no namespace in ECMA-335 metadata.
@@ -3947,7 +3834,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="typeHandle">The inline struct TypeDef handle.</param>
     private void EmitIsReadOnlyAttribute(TypeDefinitionHandle typeHandle)
     {
-        var ctorRef = this.GetIsReadOnlyAttributeCtorRef();
+        var ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef();
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
@@ -3967,7 +3854,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="paramHandle">The Parameter row to annotate.</param>
     private void EmitIsReadOnlyAttributeOnParameter(ParameterHandle paramHandle)
     {
-        var ctorRef = this.GetIsReadOnlyAttributeCtorRef();
+        var ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef();
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
@@ -3977,43 +3864,6 @@ internal sealed class ReflectionMetadataEmitter
             parent: paramHandle,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// ADR-0060 §6: returns the TypeRef handle for
-    /// <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c>, used as the
-    /// <c>modreq</c> on each emitted <c>in</c> parameter signature.
-    /// </summary>
-    /// <returns>The TypeRef entity handle, or <see langword="default"/> if the type can't be resolved.</returns>
-    private EntityHandle GetIsReadOnlyAttributeTypeRef()
-    {
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
-            ? resolved
-            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
-        return this.GetTypeReference(attrType);
-    }
-
-    private MemberReferenceHandle GetIsReadOnlyAttributeCtorRef()
-    {
-        if (this.isReadOnlyAttributeCtorRef.HasValue)
-        {
-            return this.isReadOnlyAttributeCtorRef.Value;
-        }
-
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
-            ? resolved
-            : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        this.isReadOnlyAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-        return this.isReadOnlyAttributeCtorRef.Value;
     }
 
     /// <summary>
@@ -4032,7 +3882,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="typeHandle">The ref-struct TypeDef handle.</param>
     private void EmitIsByRefLikeAttribute(TypeDefinitionHandle typeHandle)
     {
-        var ctorRef = this.GetIsByRefLikeAttributeCtorRef();
+        var ctorRef = this.wellKnown.GetIsByRefLikeAttributeCtorRef();
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
@@ -4043,7 +3893,7 @@ internal sealed class ReflectionMetadataEmitter
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
 
-        var obsoleteCtorRef = this.GetObsoleteAttributeStringBoolCtorRef();
+        var obsoleteCtorRef = this.wellKnown.GetObsoleteAttributeStringBoolCtorRef();
 
         var obsoleteBlob = new BlobBuilder();
         obsoleteBlob.WriteUInt16(0x0001);
@@ -4055,56 +3905,6 @@ internal sealed class ReflectionMetadataEmitter
             parent: typeHandle,
             constructor: obsoleteCtorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
-    }
-
-    private MemberReferenceHandle GetIsByRefLikeAttributeCtorRef()
-    {
-        if (this.isByRefLikeAttributeCtorRef.HasValue)
-        {
-            return this.isByRefLikeAttributeCtorRef.Value;
-        }
-
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
-            ? resolved
-            : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        this.isByRefLikeAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-        return this.isByRefLikeAttributeCtorRef.Value;
-    }
-
-    private MemberReferenceHandle GetObsoleteAttributeStringBoolCtorRef()
-    {
-        if (this.obsoleteAttributeStringBoolCtorRef.HasValue)
-        {
-            return this.obsoleteAttributeStringBoolCtorRef.Value;
-        }
-
-        var obsoleteType = this.emitCtx.References.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
-            ? obsoleteResolved
-            : typeof(System.ObsoleteAttribute);
-        var obsoleteTypeRef = this.GetTypeReference(obsoleteType);
-
-        var obsoleteCtorSig = new BlobBuilder();
-        new BlobEncoder(obsoleteCtorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(2, r => r.Void(), p =>
-            {
-                p.AddParameter().Type().String();
-                p.AddParameter().Type().Boolean();
-            });
-
-        this.obsoleteAttributeStringBoolCtorRef = this.emitCtx.Metadata.AddMemberReference(
-            obsoleteTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(obsoleteCtorSig));
-        return this.obsoleteAttributeStringBoolCtorRef.Value;
     }
 
     /// <summary>
@@ -4890,7 +4690,7 @@ internal sealed class ReflectionMetadataEmitter
                         var paramEncoder = ps.AddParameter();
                         if (p.RefKind == RefKind.In)
                         {
-                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
                             if (!isReadOnlyAttrType.IsNil)
                             {
                                 paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
@@ -5357,7 +5157,7 @@ internal sealed class ReflectionMetadataEmitter
             parameterList: this.NextParameterHandle());
     }
 
-    /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="objectCtorRef"/>.</summary>
+    /// <summary>Resolves the <c>.ctor()</c> token a derived class's ctor should chain to: either the base class's default ctor (already emitted) or <see cref="WellKnownReferences.ObjectCtorRef"/>.</summary>
     private EntityHandle GetBaseCtorToken(StructSymbol classSym)
     {
         if (classSym.BaseClass != null && this.cache.ClassCtorHandles.TryGetValue(classSym.BaseClass, out var baseCtor))
@@ -5369,7 +5169,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             // Phase 4 of #141 / ADR-0047 §5: chain to System.Attribute..ctor()
             // since the base type was overridden away from System.Object.
-            return this.GetSystemAttributeCtorRef();
+            return this.wellKnown.GetSystemAttributeCtorRef();
         }
 
         if (classSym.ImportedBaseType?.ClrType is Type importedBaseClr)
@@ -5379,7 +5179,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetImportedBaseDefaultCtorReference(importedBaseClr);
         }
 
-        return this.objectCtorRef;
+        return this.wellKnown.ObjectCtorRef;
     }
 
     /// <summary>
@@ -5422,37 +5222,6 @@ internal sealed class ReflectionMetadataEmitter
             parent: this.GetTypeReference(importedBaseClr),
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    private EntityHandle GetSystemAttributeTypeRef()
-    {
-        if (!this.systemAttributeTypeRef.HasValue)
-        {
-            var t = this.emitCtx.References.TryResolveType("System.Attribute", out var resolved)
-                ? resolved
-                : typeof(System.Attribute);
-            this.systemAttributeTypeRef = this.GetTypeReference(t);
-        }
-
-        return this.systemAttributeTypeRef.Value;
-    }
-
-    private MemberReferenceHandle GetSystemAttributeCtorRef()
-    {
-        if (!this.systemAttributeCtorRef.HasValue)
-        {
-            var attrTypeRef = this.GetSystemAttributeTypeRef();
-            var ctorSig = new BlobBuilder();
-            new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-                .Parameters(0, r => r.Void(), _ => { });
-
-            this.systemAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
-                attrTypeRef,
-                this.emitCtx.Metadata.GetOrAddString(".ctor"),
-                this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-        }
-
-        return this.systemAttributeCtorRef.Value;
     }
 
     /// <summary>
@@ -5866,7 +5635,7 @@ internal sealed class ReflectionMetadataEmitter
                         var paramEncoder = ps.AddParameter();
                         if (p.RefKind == RefKind.In)
                         {
-                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
                             if (!isReadOnlyAttrType.IsNil)
                             {
                                 paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
@@ -6067,7 +5836,7 @@ internal sealed class ReflectionMetadataEmitter
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
             this.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.GetObjectStaticEqualsReference());
+            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -6101,7 +5870,7 @@ internal sealed class ReflectionMetadataEmitter
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
             this.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.GetObjectStaticEqualsReference());
+            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -6120,7 +5889,7 @@ internal sealed class ReflectionMetadataEmitter
             il.Token(fieldHandle);
             this.EmitBoxIfNeeded(il, field.Type);
             il.OpCode(ILOpCode.Callvirt);
-            il.Token(this.GetObjectInstanceGetHashCodeReference());
+            il.Token(this.wellKnown.GetObjectInstanceGetHashCodeReference());
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -6140,10 +5909,10 @@ internal sealed class ReflectionMetadataEmitter
             il.Token(fieldHandle);
             this.EmitBoxIfNeeded(il, field.Type);
             il.OpCode(ILOpCode.Callvirt);
-            il.Token(this.GetObjectInstanceToStringReference());
-            il.Call(this.GetStringConcatReference());
+            il.Token(this.wellKnown.GetObjectInstanceToStringReference());
+            il.Call(this.wellKnown.GetStringConcatReference());
             il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(")"));
-            il.Call(this.GetStringConcatReference());
+            il.Call(this.wellKnown.GetStringConcatReference());
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -6175,7 +5944,7 @@ internal sealed class ReflectionMetadataEmitter
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
             this.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.GetObjectStaticEqualsReference());
+            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
             if (isInequality)
             {
                 il.LoadConstantI4(0);
@@ -6322,7 +6091,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.GetObjectStaticEqualsReference());
+                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
                 il.Branch(ILOpCode.Brfalse, retFalse);
             }
 
@@ -6389,7 +6158,7 @@ internal sealed class ReflectionMetadataEmitter
                 // ldloca.s 0; initobj HashCode
                 il.LoadLocalAddress(0);
                 il.OpCode(ILOpCode.Initobj);
-                il.Token(this.GetHashCodeTypeReference());
+                il.Token(this.wellKnown.GetHashCodeTypeReference());
 
                 var addSpec = this.GetHashCodeAddObjectSpec();
                 foreach (var field in fields)
@@ -6405,7 +6174,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
 
                 il.LoadLocalAddress(0);
-                il.Call(this.GetHashCodeToHashCodeReference());
+                il.Call(this.wellKnown.GetHashCodeToHashCodeReference());
                 il.OpCode(ILOpCode.Ret);
 
                 localsSignature = this.GetHashCodeLocalSignature();
@@ -6473,8 +6242,8 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.GetCultureInvariantGetterReference());
-                il.Call(this.GetConvertToStringReference());
+                il.Call(this.wellKnown.GetCultureInvariantGetterReference());
+                il.Call(this.wellKnown.GetConvertToStringReference());
                 il.OpCode(ILOpCode.Stelem_ref);
 
                 // Piece 2*i + 2: separator (", F{i+1}=" if more fields, else ")")
@@ -6487,7 +6256,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Stelem_ref);
             }
 
-            il.Call(this.GetStringConcatArrayReference());
+            il.Call(this.wellKnown.GetStringConcatArrayReference());
             il.OpCode(ILOpCode.Ret);
         }
 
@@ -6535,7 +6304,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.GetObjectStaticEqualsReference());
+                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
                 il.Branch(ILOpCode.Brfalse, retFalse);
             }
 
@@ -7102,7 +6871,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
-            il.Call(this.objectCtorRef);
+            il.Call(this.wellKnown.ObjectCtorRef);
             il.OpCode(ILOpCode.Ret);
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
@@ -7338,7 +7107,7 @@ internal sealed class ReflectionMetadataEmitter
                         var paramEncoder = ps.AddParameter();
                         if (p.RefKind == RefKind.In)
                         {
-                            var isReadOnlyAttrType = this.GetIsReadOnlyAttributeTypeRef();
+                            var isReadOnlyAttrType = this.wellKnown.GetIsReadOnlyAttributeTypeRef();
                             if (!isReadOnlyAttrType.IsNil)
                             {
                                 paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false);
@@ -9697,91 +9466,6 @@ internal sealed class ReflectionMetadataEmitter
         return fallback;
     }
 
-    private MemberReferenceHandle GetNullReferenceExceptionCtorRef()
-    {
-        // System.NullReferenceException::.ctor() — used to back the `!!`
-        // operator's runtime check when its operand is null.
-        if (!this.nullRefExceptionCtorRef.IsNil)
-        {
-            return this.nullRefExceptionCtorRef;
-        }
-
-        var nreType = this.ResolveCoreType("System.NullReferenceException", typeof(NullReferenceException));
-        var nreTypeRef = this.GetTypeReference(nreType);
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-        this.nullRefExceptionCtorRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: nreTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.nullRefExceptionCtorRef;
-    }
-
-    // Issue #504: returns a callable MemberRef for `System.Nullable<T>::get_Value`
-    // closed over the supplied value-type underlying CLR type. Used by `!!` emit
-    // to unwrap a `Nullable<T>` operand (throws `InvalidOperationException` at
-    // runtime when `HasValue` is false, matching the BCL property).
-    private MemberReferenceHandle GetNullableGetValueReference(Type underlyingValueType)
-    {
-        if (underlyingValueType == null || !underlyingValueType.IsValueType)
-        {
-            throw new InvalidOperationException(
-                $"GetNullableGetValueReference: '{underlyingValueType?.FullName}' is not a value type.");
-        }
-
-        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
-        var getValue = nullableClr.GetMethod("get_Value", Type.EmptyTypes)
-            ?? throw new InvalidOperationException(
-                $"System.Nullable<{underlyingValueType.FullName}>::get_Value() is not resolvable.");
-        return this.GetMethodReference(getValue);
-    }
-
-    // Issue #519: returns a callable MemberRef for `System.Nullable<T>::get_HasValue`
-    // closed over the supplied value-type underlying CLR type. Used by `?:` emit
-    // on a value-type `Nullable<T>` operand to branch on the presence flag without
-    // box/dup tricks (which are illegal on a struct stack value).
-    private MemberReferenceHandle GetNullableGetHasValueReference(Type underlyingValueType)
-    {
-        if (underlyingValueType == null || !underlyingValueType.IsValueType)
-        {
-            throw new InvalidOperationException(
-                $"GetNullableGetHasValueReference: '{underlyingValueType?.FullName}' is not a value type.");
-        }
-
-        var nullableClr = typeof(System.Nullable<>).MakeGenericType(underlyingValueType);
-        var getHasValue = nullableClr.GetMethod("get_HasValue", Type.EmptyTypes)
-            ?? throw new InvalidOperationException(
-                $"System.Nullable<{underlyingValueType.FullName}>::get_HasValue() is not resolvable.");
-        return this.GetMethodReference(getHasValue);
-    }
-
-    private MemberReferenceHandle GetStringLengthReference()
-    {
-        // System.String::get_Length() — used to implement len(string).
-        var method = this.emitCtx.CoreStringType.GetMethod("get_Length", Type.EmptyTypes)
-            ?? throw new InvalidOperationException("String.get_Length is not resolvable from the supplied references.");
-        return this.GetMethodReference(method);
-    }
-
-    private MemberReferenceHandle GetStringCharsReference()
-    {
-        // System.String::get_Chars(Int32) — used for string indexing (issue #537).
-        var method = this.emitCtx.CoreStringType.GetMethod("get_Chars", new[] { typeof(int) })
-            ?? throw new InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.");
-        return this.GetMethodReference(method);
-    }
-
-    private MemberReferenceHandle GetTypeFromHandleReference()
-    {
-        // System.Type::GetTypeFromHandle(RuntimeTypeHandle) — backs `typeof(T)`.
-        var method = this.emitCtx.CoreSystemType.GetMethod(
-            "GetTypeFromHandle",
-            new[] { this.emitCtx.CoreRuntimeTypeHandleType })
-            ?? throw new InvalidOperationException("Type.GetTypeFromHandle(RuntimeTypeHandle) is not resolvable from the supplied references.");
-        return this.GetMethodReference(method);
-    }
-
     private EntityHandle GetTypeOfToken(TypeSymbol type)
     {
         // Issue #143: `typeof(T)` token resolution. `NullableTypeSymbol` over a
@@ -9796,16 +9480,6 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return this.GetElementTypeToken(type);
-    }
-
-    private MemberReferenceHandle GetArrayCopyReference()
-    {
-        // System.Array::Copy(Array, Array, Int32) — used to implement append(slice, element).
-        var method = this.emitCtx.CoreArrayType.GetMethod(
-            "Copy",
-            new[] { this.emitCtx.CoreArrayType, this.emitCtx.CoreArrayType, this.emitCtx.CoreInt32Type })
-            ?? throw new InvalidOperationException("Array.Copy(Array, Array, int) is not resolvable from the supplied references.");
-        return this.GetMethodReference(method);
     }
 
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)
@@ -10237,197 +9911,6 @@ internal sealed class ReflectionMetadataEmitter
         return handle;
     }
 
-    private MemberReferenceHandle GetObjectDefaultCtorReference()
-    {
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-        return this.emitCtx.Metadata.AddMemberReference(
-            parent: this.objectTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    private MemberReferenceHandle GetStringConcatReference()
-    {
-        if (!this.stringConcatRef.IsNil)
-        {
-            return this.stringConcatRef;
-        }
-
-        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().String(),
-                ps =>
-                {
-                    ps.AddParameter().Type().String();
-                    ps.AddParameter().Type().String();
-                });
-        this.stringConcatRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: stringTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString("Concat"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.stringConcatRef;
-    }
-
-    private MemberReferenceHandle GetStringEqualsReference()
-    {
-        if (!this.stringEqualsRef.IsNil)
-        {
-            return this.stringEqualsRef;
-        }
-
-        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().Boolean(),
-                ps =>
-                {
-                    ps.AddParameter().Type().String();
-                    ps.AddParameter().Type().String();
-                });
-        this.stringEqualsRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: stringTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.stringEqualsRef;
-    }
-
-    private MemberReferenceHandle GetObjectInstanceToStringReference()
-    {
-        if (!this.objectInstanceToStringRef.IsNil)
-        {
-            return this.objectInstanceToStringRef;
-        }
-
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Type().String(), _ => { });
-        this.objectInstanceToStringRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: this.objectTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString("ToString"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.objectInstanceToStringRef;
-    }
-
-    private MemberReferenceHandle GetObjectInstanceGetHashCodeReference()
-    {
-        if (!this.objectInstanceGetHashCodeRef.IsNil)
-        {
-            return this.objectInstanceGetHashCodeRef;
-        }
-
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Type().Int32(), _ => { });
-        this.objectInstanceGetHashCodeRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: this.objectTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.objectInstanceGetHashCodeRef;
-    }
-
-    /// <summary>
-    /// Returns a MemberRef for static <c>bool System.Object.Equals(object, object)</c>.
-    /// Used by Phase 3.B.2 data-struct <c>==</c> / <c>!=</c> lowering: we box
-    /// the operand values and call this static helper, which routes through
-    /// the virtual <c>ValueType.Equals(object)</c> override (reflection-based
-    /// field-by-field comparison) for user value types. Same observable
-    /// semantics as the interpreter's structural equality (ADR-0029); a
-    /// future iteration may replace this with a direct synthesized
-    /// <c>Equals(T)</c> method for performance.
-    /// </summary>
-    private MemberReferenceHandle GetObjectStaticEqualsReference()
-    {
-        if (!this.objectStaticEqualsRef.IsNil)
-        {
-            return this.objectStaticEqualsRef;
-        }
-
-        var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().Boolean(),
-                ps =>
-                {
-                    ps.AddParameter().Type().Object();
-                    ps.AddParameter().Type().Object();
-                });
-        this.objectStaticEqualsRef = this.emitCtx.Metadata.AddMemberReference(
-            parent: this.objectTypeRef,
-            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.objectStaticEqualsRef;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: returns a TypeRef for <c>System.HashCode</c>,
-    /// used by data-struct <c>GetHashCode</c> synthesis. Cached because
-    /// <see cref="GetTypeReference(Type)"/> already caches by Type, but the
-    /// data-struct helpers need a strongly-typed handle.
-    /// </summary>
-    private TypeReferenceHandle GetHashCodeTypeReference()
-    {
-        if (!this.hashCodeTypeRef.IsNil)
-        {
-            return this.hashCodeTypeRef;
-        }
-
-        this.hashCodeTypeRef = this.GetTypeReference(typeof(System.HashCode));
-        return this.hashCodeTypeRef;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves an open MemberRef for the
-    /// <c>System.HashCode.Combine&lt;T1, ..., Tn&gt;</c> overload with the
-    /// given arity (1 ≤ <paramref name="arity"/> ≤ 8). Each open parameter
-    /// is encoded as a generic method parameter (<c>!!i</c>) and instantiated
-    /// to <see cref="object"/> via a MethodSpec at the call site.
-    /// </summary>
-    private MemberReferenceHandle GetHashCodeCombineOpenReference(int arity)
-    {
-        if (arity < 1 || arity > 8)
-        {
-            throw new ArgumentOutOfRangeException(nameof(arity), arity, "HashCode.Combine supports arities 1 through 8.");
-        }
-
-        var cached = this.hashCodeCombineOpenRefs[arity - 1];
-        if (cached.HasValue)
-        {
-            return cached.Value;
-        }
-
-        var hashCodeRef = this.GetHashCodeTypeReference();
-
-        // Signature: static int Combine<T1,...,Tn>(T1, ..., Tn) with `arity`
-        // generic method parameters. In open form each Ti is !!i.
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false, genericParameterCount: arity)
-            .Parameters(
-                arity,
-                r => r.Type().Int32(),
-                ps =>
-                {
-                    for (int i = 0; i < arity; i++)
-                    {
-                        ps.AddParameter().Type().GenericMethodTypeParameter(i);
-                    }
-                });
-
-        var openRef = this.emitCtx.Metadata.AddMemberReference(
-            hashCodeRef,
-            this.emitCtx.Metadata.GetOrAddString("Combine"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        this.hashCodeCombineOpenRefs[arity - 1] = openRef;
-        return openRef;
-    }
-
     /// <summary>
     /// Issue #410 / ADR-0029: produces a MethodSpec instantiating
     /// <c>HashCode.Combine&lt;T1,...,Tn&gt;</c> with <see cref="object"/> for
@@ -10438,7 +9921,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private EntityHandle GetHashCodeCombineObjectSpec(int arity)
     {
-        var openRef = this.GetHashCodeCombineOpenReference(arity);
+        var openRef = this.wellKnown.GetHashCodeCombineOpenReference(arity);
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(arity);
         for (int i = 0; i < arity; i++)
@@ -10450,68 +9933,16 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: resolves the open MemberRef for the instance
-    /// method <c>System.HashCode.Add&lt;T&gt;(T)</c>, used by the &gt;8-field
-    /// fold path for <c>GetHashCode</c>.
-    /// </summary>
-    private MemberReferenceHandle GetHashCodeAddOpenReference()
-    {
-        if (!this.hashCodeAddOpenRef.IsNil)
-        {
-            return this.hashCodeAddOpenRef;
-        }
-
-        var hashCodeRef = this.GetHashCodeTypeReference();
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true, genericParameterCount: 1)
-            .Parameters(
-                1,
-                r => r.Void(),
-                ps => ps.AddParameter().Type().GenericMethodTypeParameter(0));
-
-        this.hashCodeAddOpenRef = this.emitCtx.Metadata.AddMemberReference(
-            hashCodeRef,
-            this.emitCtx.Metadata.GetOrAddString("Add"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.hashCodeAddOpenRef;
-    }
-
-    /// <summary>
     /// Issue #410 / ADR-0029: produces a MethodSpec for
     /// <c>HashCode.Add&lt;object&gt;(object)</c>.
     /// </summary>
     private EntityHandle GetHashCodeAddObjectSpec()
     {
-        var openRef = this.GetHashCodeAddOpenReference();
+        var openRef = this.wellKnown.GetHashCodeAddOpenReference();
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         argsEncoder.AddArgument().Object();
         return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for instance method
-    /// <c>System.HashCode.ToHashCode()</c>.
-    /// </summary>
-    private MemberReferenceHandle GetHashCodeToHashCodeReference()
-    {
-        if (!this.hashCodeToHashCodeRef.IsNil)
-        {
-            return this.hashCodeToHashCodeRef;
-        }
-
-        var hashCodeRef = this.GetHashCodeTypeReference();
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Type().Int32(), _ => { });
-
-        this.hashCodeToHashCodeRef = this.emitCtx.Metadata.AddMemberReference(
-            hashCodeRef,
-            this.emitCtx.Metadata.GetOrAddString("ToHashCode"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.hashCodeToHashCodeRef;
     }
 
     /// <summary>
@@ -10526,99 +9957,12 @@ internal sealed class ReflectionMetadataEmitter
             return this.hashCodeLocalSig;
         }
 
-        var hashCodeRef = this.GetHashCodeTypeReference();
+        var hashCodeRef = this.wellKnown.GetHashCodeTypeReference();
         var sigBlob = new BlobBuilder();
         var encoder = new BlobEncoder(sigBlob).LocalVariableSignature(1);
         encoder.AddVariable().Type().Type(hashCodeRef, isValueType: true);
         this.hashCodeLocalSig = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.hashCodeLocalSig;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// <c>System.Convert.ToString(object, IFormatProvider)</c> overload used
-    /// by data-struct <c>ToString</c> synthesis. Handles null reference-type
-    /// fields gracefully (returns the empty string) per the ADR.
-    /// </summary>
-    private MemberReferenceHandle GetConvertToStringReference()
-    {
-        if (!this.convertToStringRef.IsNil)
-        {
-            return this.convertToStringRef;
-        }
-
-        var convertRef = this.GetTypeReference(typeof(System.Convert));
-        var ifpRef = this.GetTypeReference(typeof(System.IFormatProvider));
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().String(),
-                ps =>
-                {
-                    ps.AddParameter().Type().Object();
-                    ps.AddParameter().Type().Type(ifpRef, isValueType: false);
-                });
-
-        this.convertToStringRef = this.emitCtx.Metadata.AddMemberReference(
-            convertRef,
-            this.emitCtx.Metadata.GetOrAddString("ToString"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.convertToStringRef;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// property getter <c>System.Globalization.CultureInfo::get_InvariantCulture</c>,
-    /// used to thread an invariant <see cref="System.IFormatProvider"/> into
-    /// <c>Convert.ToString</c> during data-struct <c>ToString</c> synthesis.
-    /// </summary>
-    private MemberReferenceHandle GetCultureInvariantGetterReference()
-    {
-        if (!this.cultureInvariantGetterRef.IsNil)
-        {
-            return this.cultureInvariantGetterRef;
-        }
-
-        var cultureInfoRef = this.GetTypeReference(typeof(System.Globalization.CultureInfo));
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(0, r => r.Type().Type(cultureInfoRef, isValueType: false), _ => { });
-
-        this.cultureInvariantGetterRef = this.emitCtx.Metadata.AddMemberReference(
-            cultureInfoRef,
-            this.emitCtx.Metadata.GetOrAddString("get_InvariantCulture"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.cultureInvariantGetterRef;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: resolves the MemberRef for the static
-    /// <c>System.String.Concat(string[])</c> overload used to assemble the
-    /// data-struct <c>ToString</c> output from a per-field array of pieces.
-    /// </summary>
-    private MemberReferenceHandle GetStringConcatArrayReference()
-    {
-        if (!this.stringConcatArrayRef.IsNil)
-        {
-            return this.stringConcatArrayRef;
-        }
-
-        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                1,
-                r => r.Type().String(),
-                ps => ps.AddParameter().Type().SZArray().String());
-
-        this.stringConcatArrayRef = this.emitCtx.Metadata.AddMemberReference(
-            stringTypeRef,
-            this.emitCtx.Metadata.GetOrAddString("Concat"),
-            this.emitCtx.Metadata.GetOrAddBlob(sig));
-        return this.stringConcatArrayRef;
     }
 
     /// <summary>
@@ -12462,7 +11806,7 @@ internal sealed class ReflectionMetadataEmitter
                         // Issue #537: string indexing via get_Chars(int32).
                         this.EmitExpression(idx.Target);
                         this.EmitExpression(idx.Index);
-                        this.il.Call(this.outer.GetStringCharsReference());
+                        this.il.Call(this.outer.wellKnown.GetStringCharsReference());
                     }
                     else
                     {
@@ -13560,7 +12904,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.StoreLocal(unwrapSlot);
                     this.il.LoadLocalAddress(unwrapSlot);
                     this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.GetNullableGetValueReference(innerClr));
+                    this.il.Token(this.outer.wellKnown.GetNullableGetValueReference(innerClr));
                     return;
                 }
 
@@ -13569,7 +12913,7 @@ internal sealed class ReflectionMetadataEmitter
                 var nonNull = this.il.DefineLabel();
                 this.il.Branch(ILOpCode.Brtrue, nonNull);
                 this.il.OpCode(ILOpCode.Pop);
-                var nreCtor = this.outer.GetNullReferenceExceptionCtorRef();
+                var nreCtor = this.outer.wellKnown.GetNullReferenceExceptionCtorRef();
                 this.il.OpCode(ILOpCode.Newobj);
                 this.il.Token(nreCtor);
                 this.il.OpCode(ILOpCode.Throw);
@@ -13642,7 +12986,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.StoreLocal(slot);
                     this.il.LoadLocalAddress(slot);
                     this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.GetNullableGetHasValueReference(innerClr));
+                    this.il.Token(this.outer.wellKnown.GetNullableGetHasValueReference(innerClr));
                     var fallback = this.il.DefineLabel();
                     var end = this.il.DefineLabel();
                     this.il.Branch(ILOpCode.Brfalse, fallback);
@@ -13667,7 +13011,7 @@ internal sealed class ReflectionMetadataEmitter
                         // introduced in PR #541 and uses no extra slots.
                         this.il.LoadLocalAddress(slot);
                         this.il.OpCode(ILOpCode.Call);
-                        this.il.Token(this.outer.GetNullableGetValueReference(innerClr));
+                        this.il.Token(this.outer.wellKnown.GetNullableGetValueReference(innerClr));
                     }
 
                     this.il.Branch(ILOpCode.Br, end);
@@ -13712,17 +13056,17 @@ internal sealed class ReflectionMetadataEmitter
                     case BoundBinaryOperatorKind.Sum:
                         this.EmitExpression(b.Left);
                         this.EmitExpression(b.Right);
-                        this.il.Call(this.outer.GetStringConcatReference());
+                        this.il.Call(this.outer.wellKnown.GetStringConcatReference());
                         return;
                     case BoundBinaryOperatorKind.Equals:
                         this.EmitExpression(b.Left);
                         this.EmitExpression(b.Right);
-                        this.il.Call(this.outer.GetStringEqualsReference());
+                        this.il.Call(this.outer.wellKnown.GetStringEqualsReference());
                         return;
                     case BoundBinaryOperatorKind.NotEquals:
                         this.EmitExpression(b.Left);
                         this.EmitExpression(b.Right);
-                        this.il.Call(this.outer.GetStringEqualsReference());
+                        this.il.Call(this.outer.wellKnown.GetStringEqualsReference());
                         this.il.LoadConstantI4(0);
                         this.il.OpCode(ILOpCode.Ceq);
                         return;
@@ -13753,7 +13097,7 @@ internal sealed class ReflectionMetadataEmitter
                     this.il.Token(this.outer.GetElementTypeToken(field.Type));
                 }
 
-                this.il.Call(field.Type == TypeSymbol.String ? this.outer.GetStringEqualsReference() : this.outer.GetObjectStaticEqualsReference());
+                this.il.Call(field.Type == TypeSymbol.String ? this.outer.wellKnown.GetStringEqualsReference() : this.outer.wellKnown.GetObjectStaticEqualsReference());
                 if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
                 {
                     this.il.LoadConstantI4(0);
@@ -13777,7 +13121,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitExpression(b.Right);
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(structTypeDef);
-                this.il.Call(this.outer.GetObjectStaticEqualsReference());
+                this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
                 if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
                 {
                     this.il.LoadConstantI4(0);
@@ -13799,7 +13143,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.EmitExpression(b.Left);
                 this.EmitExpression(b.Right);
-                this.il.Call(this.outer.GetObjectStaticEqualsReference());
+                this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
                 if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
                 {
                     this.il.LoadConstantI4(0);
@@ -14846,7 +14190,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitExpression(len.Operand);
             if (len.Operand.Type == TypeSymbol.String)
             {
-                this.il.Call(this.outer.GetStringLengthReference());
+                this.il.Call(this.outer.wellKnown.GetStringLengthReference());
             }
             else if (len.Operand.Type is MapTypeSymbol mapType)
             {
@@ -14870,7 +14214,7 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #143: `typeof(T)` -> ldtoken <T> ; call Type::GetTypeFromHandle.
             this.il.OpCode(ILOpCode.Ldtoken);
             this.il.Token(this.outer.GetTypeOfToken(typeOf.OperandType));
-            this.il.Call(this.outer.GetTypeFromHandleReference());
+            this.il.Call(this.outer.wellKnown.GetTypeFromHandleReference());
         }
 
         private void EmitAppend(BoundAppendExpression app)
@@ -14909,7 +14253,7 @@ internal sealed class ReflectionMetadataEmitter
             this.il.LoadLocal(slots.Src);
             this.il.OpCode(ILOpCode.Ldlen);
             this.il.OpCode(ILOpCode.Conv_i4);
-            this.il.Call(this.outer.GetArrayCopyReference());
+            this.il.Call(this.outer.wellKnown.GetArrayCopyReference());
 
             // dst[src.Length] = element
             this.il.LoadLocal(slots.Dst);
@@ -15499,7 +14843,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 loadValue();
                 this.EmitExpression(cp.Value);
-                this.il.Call(this.outer.GetStringEqualsReference());
+                this.il.Call(this.outer.wellKnown.GetStringEqualsReference());
                 this.il.Branch(ILOpCode.Brfalse, failLabel);
                 return;
             }
@@ -16715,7 +16059,7 @@ internal sealed class ReflectionMetadataEmitter
 
             this.il.LoadConstantI4(call.Arguments.Length);
             this.il.OpCode(ILOpCode.Newarr);
-            this.il.Token(this.outer.objectTypeRef);
+            this.il.Token(this.outer.wellKnown.ObjectTypeRef);
 
             for (int i = 0; i < call.Arguments.Length; i++)
             {
