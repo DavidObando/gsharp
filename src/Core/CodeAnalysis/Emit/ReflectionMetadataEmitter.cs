@@ -48,10 +48,14 @@ internal sealed class ReflectionMetadataEmitter
     // (System.Reflection.Metadata, dotnet-symbol, debuggers). 0x0100 = v1.0.
     private const ushort PortablePdbVersion = 0x0100;
 
-    private readonly BoundProgram program;
-    private readonly ReferenceResolver references;
-    private readonly string assemblyNameOverride;
-    private readonly MetadataBuilder metadata = new MetadataBuilder();
+    // PR-E-1: cross-cutting emit state (BoundProgram, ReferenceResolver,
+    // MetadataBuilder, IL stream/encoder, assembly-identity overrides,
+    // metadata-only flag, PDB plumbing, and the BCL core* Type cache) has
+    // moved into EmitContext. Subsequent extraction PRs (MetadataTokenCache,
+    // WellKnownReferences, SlotPlanner, …) will consume this same context
+    // via constructor injection.
+    private readonly EmitContext emitCtx;
+
     private readonly Dictionary<Assembly, AssemblyReferenceHandle> assemblyRefs = new Dictionary<Assembly, AssemblyReferenceHandle>();
     private AssemblyReferenceHandle systemRuntimeAssemblyRef;
     // Issue #420 (P3-9): key by TypeIdentityComparer so that the same logical
@@ -72,14 +76,9 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<ConstructorInfo, MemberReferenceHandle> ctorRefs = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
     private readonly Dictionary<FieldInfo, MemberReferenceHandle> fieldRefs = new Dictionary<FieldInfo, MemberReferenceHandle>();
     private readonly Dictionary<FunctionSymbol, MethodDefinitionHandle> functionHandles = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
-    private readonly MethodBodyStreamEncoder methodBodyStream;
-    private readonly BlobBuilder ilStream = new BlobBuilder();
 
-    private readonly bool metadataOnly;
-
-    // Phase 7.7b: informational version string stamped on the assembly.
-    private string assemblyVersionOverride;
-
+    // PR-E-1: metadataOnly, methodBodyStream, ilStream, assemblyVersionOverride
+    // have moved onto EmitContext (see the emitCtx field above).
     private readonly Dictionary<StructSymbol, TypeDefinitionHandle> structTypeDefs = new Dictionary<StructSymbol, TypeDefinitionHandle>();
     private readonly Dictionary<FieldSymbol, FieldDefinitionHandle> structFieldDefs = new Dictionary<FieldSymbol, FieldDefinitionHandle>();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> classCtorHandles = new Dictionary<StructSymbol, MethodDefinitionHandle>();
@@ -196,19 +195,7 @@ internal sealed class ReflectionMetadataEmitter
     // Async iterator state-machine plans produced by AsyncIteratorRewriter.
     private ImmutableArray<Lowering.Iterators.AsyncIteratorPlan> asyncIteratorPlans = ImmutableArray<Lowering.Iterators.AsyncIteratorPlan>.Empty;
 
-    // Phase 3 (ADR-0027 §7.7a) Portable PDB options. Defaults to a None-format
-    // instance so the existing PE-only emit path stays bit-for-bit identical
-    // until Phases 4-7 light up the actual PDB pipeline.
-    private DebugInformationOptions debugInformation = new();
-
-    // Phase 3 (ADR-0027 §7.7a) Portable PDB destination stream. Only consumed
-    // when debugInformation.Format is Portable; null in every other config.
-    private Stream pdbStream;
-
-    // Phase 4 (ADR-0027 §7.7a) Portable PDB collaborator. Instantiated by
-    // EmitCore only when debugInformation.Format == Portable; null otherwise
-    // so the existing PE-only emit path stays bit-for-bit identical.
-    private PortablePdbEmitter pdb;
+    // PR-E-1: debugInformation, pdbStream, pdb moved onto EmitContext.
 
     // Maps async iterator SM class to its plan (populated during SynthesizeAsyncIteratorStateMachines).
     private readonly Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan> asyncIteratorInfos = new Dictionary<StructSymbol, Lowering.Iterators.AsyncIteratorPlan>();
@@ -220,17 +207,10 @@ internal sealed class ReflectionMetadataEmitter
     // SM structs NOT in this dictionary nest inside the per-package <Program> class.
     private readonly Dictionary<StructSymbol, StructSymbol> asyncSmEnclosingClosures = new Dictionary<StructSymbol, StructSymbol>();
 
-    private Type coreObjectType;
-    private Type coreStringType;
-    private Type coreInt32Type;
-    private Type coreBooleanType;
-    private Type coreArrayType;
-    private Type coreValueType;
-    private Type coreSystemType;
-    private Type coreRuntimeTypeHandleType;
-    private Type coreEnumType;
-    private Type coreMulticastDelegateType;
-    private Type coreIntPtrType;
+    // PR-E-1: the BCL core* Type fields (coreObjectType, coreStringType,
+    // coreInt32Type, coreBooleanType, coreArrayType, coreValueType,
+    // coreSystemType, coreRuntimeTypeHandleType, coreEnumType,
+    // coreMulticastDelegateType, coreIntPtrType) moved onto EmitContext.
     private TypeReferenceHandle objectTypeRef;
     private TypeReferenceHandle valueTypeRef;
     private MemberReferenceHandle objectCtorRef;
@@ -262,11 +242,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
-        this.program = program;
-        this.references = references ?? ReferenceResolver.Default();
-        this.assemblyNameOverride = assemblyName;
-        this.metadataOnly = metadataOnly;
-        this.methodBodyStream = new MethodBodyStreamEncoder(this.ilStream);
+        this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
     }
 
     /// <summary>
@@ -339,7 +315,7 @@ internal sealed class ReflectionMetadataEmitter
         string assemblyVersion = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
-        emitter.assemblyVersionOverride = assemblyVersion;
+        emitter.emitCtx.AssemblyVersionOverride = assemblyVersion;
         if (asyncRewriteResult != null)
         {
             emitter.asyncStateMachinePlans = asyncRewriteResult.StateMachines;
@@ -355,8 +331,8 @@ internal sealed class ReflectionMetadataEmitter
             emitter.asyncIteratorPlans = asyncIteratorRewriteResult.Plans;
         }
 
-        emitter.debugInformation = debugInformation ?? new DebugInformationOptions();
-        emitter.pdbStream = pdbStream;
+        emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
+        emitter.emitCtx.PdbStream = pdbStream;
 
         emitter.EmitCore(peStream);
     }
@@ -368,21 +344,21 @@ internal sealed class ReflectionMetadataEmitter
         // for portable PDBs or for embedded PDBs (Phase 7). Sidecar emission
         // additionally requires a destination stream; embedded emission does
         // not because the blob is written into the PE itself. Leaving
-        // `this.pdb` null in every other configuration is what keeps the
+        // `this.emitCtx.Pdb` null in every other configuration is what keeps the
         // legacy emit path bit-for-bit identical.
-        var format = this.debugInformation.Format;
-        var needsPdb = (format == DebugInformationFormat.Portable && this.pdbStream != null)
+        var format = this.emitCtx.DebugInformation.Format;
+        var needsPdb = (format == DebugInformationFormat.Portable && this.emitCtx.PdbStream != null)
             || format == DebugInformationFormat.Embedded;
         if (needsPdb)
         {
-            this.pdb = new PortablePdbEmitter(this.debugInformation);
+            this.emitCtx.Pdb = new PortablePdbEmitter(this.emitCtx.DebugInformation);
 
             // #217: Wire per-file import information so the PDB emitter can
             // produce per-tree ImportScope rows. Group only the explicit
             // (user-written) imports — implicit ones have a null Declaration
             // and therefore no syntax-tree anchor.
             var importsGrouped = new Dictionary<SyntaxTree, ImmutableArray<ImportSymbol>>();
-            foreach (var import in this.program.Imports)
+            foreach (var import in this.emitCtx.Program.Imports)
             {
                 var tree = import.Declaration?.SyntaxTree;
                 if (tree is null)
@@ -398,31 +374,31 @@ internal sealed class ReflectionMetadataEmitter
                 importsGrouped[tree] = list.Add(import);
             }
 
-            this.pdb.SetImportsPerTree(importsGrouped);
+            this.emitCtx.Pdb.SetImportsPerTree(importsGrouped);
 
             // Wire per-reference metadata so the PDB emitter can produce the
             // CompilationMetadataReferences CDI blob (issue #219).
-            this.pdb.SetReferenceInfos(this.references.GetReferenceInfos());
+            this.emitCtx.Pdb.SetReferenceInfos(this.emitCtx.References.GetReferenceInfos());
         }
 
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref
         //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
         //    target framework rather than the gsc host's System.Private.CoreLib.
-        this.coreObjectType = this.ResolveCoreType("System.Object", typeof(object));
-        this.coreStringType = this.ResolveCoreType("System.String", typeof(string));
-        this.coreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
-        this.coreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
-        this.coreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
-        this.coreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
-        this.coreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
-        this.coreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
-        this.coreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
+        this.emitCtx.CoreObjectType = this.ResolveCoreType("System.Object", typeof(object));
+        this.emitCtx.CoreStringType = this.ResolveCoreType("System.String", typeof(string));
+        this.emitCtx.CoreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
+        this.emitCtx.CoreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
+        this.emitCtx.CoreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
+        this.emitCtx.CoreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
+        this.emitCtx.CoreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
+        this.emitCtx.CoreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
+        this.emitCtx.CoreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
         // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
         // type for user-declared named delegate emission.
-        this.coreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
-        this.coreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(System.IntPtr));
-        this.objectTypeRef = this.GetTypeReference(this.coreObjectType);
-        this.valueTypeRef = this.GetTypeReference(this.coreValueType);
+        this.emitCtx.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
+        this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(System.IntPtr));
+        this.objectTypeRef = this.GetTypeReference(this.emitCtx.CoreObjectType);
+        this.valueTypeRef = this.GetTypeReference(this.emitCtx.CoreValueType);
         this.objectCtorRef = this.GetObjectDefaultCtorReference();
 
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
@@ -443,9 +419,9 @@ internal sealed class ReflectionMetadataEmitter
         // package (which always exists for compilable programs that run).
         var lambdaLiterals = this.CollectFunctionLiterals();
         var goStatements = this.CollectGoStatements();
-        var hostPackageGuess = this.program.EntryPoint?.Package
-            ?? this.program.EntryPointPackage
-            ?? (this.program.Packages.IsDefaultOrEmpty ? null : this.program.Packages[0]);
+        var hostPackageGuess = this.emitCtx.Program.EntryPoint?.Package
+            ?? this.emitCtx.Program.EntryPointPackage
+            ?? (this.emitCtx.Program.Packages.IsDefaultOrEmpty ? null : this.emitCtx.Program.Packages[0]);
         this.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
         this.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.SynthesizeIteratorStateMachines(hostPackageGuess);
@@ -456,7 +432,7 @@ internal sealed class ReflectionMetadataEmitter
         // Synthesized closure classes are appended after user aggregates so
         // their TypeDefs come last among the class block; field-row planning
         // walks the combined list so closure fields get well-defined rows.
-        var allAggregates = this.program.Structs;
+        var allAggregates = this.emitCtx.Program.Structs;
         if (this.synthesizedClosureClasses.Count > 0)
         {
             allAggregates = allAggregates.AddRange(this.synthesizedClosureClasses);
@@ -519,7 +495,7 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        var interfaces = this.program.Interfaces;
+        var interfaces = this.emitCtx.Program.Interfaces;
 
         // Field-row planning: non-SM types first, then SM types. This ensures
         // fieldList pointers are non-decreasing when <Program> (which owns no
@@ -639,7 +615,7 @@ internal sealed class ReflectionMetadataEmitter
         // planned right after non-SM struct fields so the enum TypeDef can
         // be emitted between non-SM struct TypeDefs and <Program> without
         // violating the monotone fieldList constraint.
-        var enums = this.program.Enums;
+        var enums = this.emitCtx.Program.Enums;
         var enumFirstFieldRow = new Dictionary<EnumSymbol, int>();
         foreach (var e in enums)
         {
@@ -654,7 +630,7 @@ internal sealed class ReflectionMetadataEmitter
         // at the first global field (when any). SM struct fields are planned
         // after these globals so SM field rows remain strictly greater than
         // <Program>'s fieldList pointer.
-        var globals = this.program.Globals;
+        var globals = this.emitCtx.Program.Globals;
         int programFirstFieldRow = nextFieldRow;
         var globalFieldRows = new Dictionary<GlobalVariableSymbol, int>();
         foreach (var g in globals)
@@ -724,7 +700,7 @@ internal sealed class ReflectionMetadataEmitter
         // BEFORE non-SM class ctors. The delegate TypeDef rows themselves are
         // emitted immediately after interfaces so methodList pointers stay
         // monotone non-decreasing across the table.
-        var delegates = this.program.Delegates;
+        var delegates = this.emitCtx.Program.Delegates;
         var delegateCtorRows = new Dictionary<DelegateTypeSymbol, int>();
         var delegateInvokeRows = new Dictionary<DelegateTypeSymbol, int>();
         foreach (var d in delegates)
@@ -935,10 +911,10 @@ internal sealed class ReflectionMetadataEmitter
         int firstPackageCtorRow = methodRow;
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
-        this.metadata.AddTypeDefinition(
+        this.emitCtx.Metadata.AddTypeDefinition(
             attributes: default(TypeAttributes),
             @namespace: default(StringHandle),
-            name: this.metadata.GetOrAddString("<Module>"),
+            name: this.emitCtx.Metadata.GetOrAddString("<Module>"),
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
@@ -974,7 +950,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (this.interfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
                     {
-                        this.metadata.AddInterfaceImplementation(this.structTypeDefs[c], ifaceHandle);
+                        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[c], ifaceHandle);
                     }
                 }
             }
@@ -989,7 +965,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (ifaceSym?.ClrType is System.Type clrIface)
                     {
-                        this.metadata.AddInterfaceImplementation(
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
                             this.structTypeDefs[c],
                             this.GetTypeHandleForMember(clrIface));
                     }
@@ -1047,9 +1023,9 @@ internal sealed class ReflectionMetadataEmitter
         //        package.ctor  → [package's non-entry user fns]  → [package's entry point if any]
         //    The entry-point function (if any) is placed last in its package
         //    so the EntryPoint token resolves cleanly.
-        var packages = this.program.Packages.IsDefaultOrEmpty
-            ? ImmutableArray.Create(this.program.EntryPointPackage ?? new PackageSymbol("Default", declaration: null))
-            : this.program.Packages;
+        var packages = this.emitCtx.Program.Packages.IsDefaultOrEmpty
+            ? ImmutableArray.Create(this.emitCtx.Program.EntryPointPackage ?? new PackageSymbol("Default", declaration: null))
+            : this.emitCtx.Program.Packages;
 
         var functionsByPackage = new Dictionary<PackageSymbol, List<FunctionSymbol>>();
         foreach (var pkg in packages)
@@ -1057,9 +1033,9 @@ internal sealed class ReflectionMetadataEmitter
             functionsByPackage[pkg] = new List<FunctionSymbol>();
         }
 
-        foreach (var kvp in this.program.Functions)
+        foreach (var kvp in this.emitCtx.Program.Functions)
         {
-            if (kvp.Key == this.program.EntryPoint)
+            if (kvp.Key == this.emitCtx.Program.EntryPoint)
             {
                 continue;
             }
@@ -1078,7 +1054,7 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
-            var owningPackage = kvp.Key.Package ?? this.program.EntryPointPackage ?? packages[0];
+            var owningPackage = kvp.Key.Package ?? this.emitCtx.Program.EntryPointPackage ?? packages[0];
             if (!functionsByPackage.TryGetValue(owningPackage, out var bucket))
             {
                 bucket = new List<FunctionSymbol>();
@@ -1089,7 +1065,7 @@ internal sealed class ReflectionMetadataEmitter
             bucket.Add(kvp.Key);
         }
 
-        var entryPointPackage = this.program.EntryPoint?.Package ?? this.program.EntryPointPackage;
+        var entryPointPackage = this.emitCtx.Program.EntryPoint?.Package ?? this.emitCtx.Program.EntryPointPackage;
 
         // Issue #456: enumeration of `program.Functions` walks a
         // Dictionary<FunctionSymbol, ...> whose hash buckets depend on
@@ -1144,9 +1120,9 @@ internal sealed class ReflectionMetadataEmitter
                 this.functionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
             }
 
-            if (this.program.EntryPoint is not null && pkg == entryPointPackage)
+            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
             {
-                this.functionHandles[this.program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                this.functionHandles[this.emitCtx.Program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
             }
         }
 
@@ -1179,9 +1155,9 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         MethodDefinitionHandle entryHandle = default;
-        if (this.program.EntryPoint is not null)
+        if (this.emitCtx.Program.EntryPoint is not null)
         {
-            entryHandle = this.functionHandles[this.program.EntryPoint];
+            entryHandle = this.functionHandles[this.emitCtx.Program.EntryPoint];
         }
 
         // Pre-register SM class ctor handles so iterator kickoff bodies
@@ -1246,11 +1222,11 @@ internal sealed class ReflectionMetadataEmitter
             this.RegisterConstructedTypeAliases();
             this.EmitGlobalFieldDefs(globals);
 
-            var programHandle = this.metadata.AddTypeDefinition(
+            var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
-                @namespace: this.metadata.GetOrAddString(globalsHostPkg.Name),
-                name: this.metadata.GetOrAddString("<Program>"),
+                @namespace: this.emitCtx.Metadata.GetOrAddString(globalsHostPkg.Name),
+                name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
                 baseType: this.objectTypeRef,
                 fieldList: MetadataTokens.FieldDefinitionHandle(programFirstFieldRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[globalsHostPkg]));
@@ -1268,11 +1244,11 @@ internal sealed class ReflectionMetadataEmitter
             // were emitted above) point their fieldList past the global field
             // range so the monotone <Program> fieldList constraint holds.
             var fieldListRow = programFirstFieldRow + globals.Length;
-            var programHandle = this.metadata.AddTypeDefinition(
+            var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
                     | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit,
-                @namespace: this.metadata.GetOrAddString(pkg.Name),
-                name: this.metadata.GetOrAddString("<Program>"),
+                @namespace: this.emitCtx.Metadata.GetOrAddString(pkg.Name),
+                name: this.emitCtx.Metadata.GetOrAddString("<Program>"),
                 baseType: this.objectTypeRef,
                 fieldList: MetadataTokens.FieldDefinitionHandle(fieldListRow),
                 methodList: MetadataTokens.MethodDefinitionHandle(packageCtorRows[pkg]));
@@ -1303,7 +1279,7 @@ internal sealed class ReflectionMetadataEmitter
 
             var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
             var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
-            this.metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
+            this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[s], iAsyncSmRef);
         }
 
         // === PHASE B: Emit MethodDefs in row order ===
@@ -1377,7 +1353,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in c.Methods)
                 {
-                    if (!this.program.Functions.TryGetValue(m, out var body))
+                    if (!this.emitCtx.Program.Functions.TryGetValue(m, out var body))
                     {
                         body = this.lambdaBodies[m];
                     }
@@ -1398,7 +1374,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in c.StaticMethods)
                 {
-                    if (this.program.Functions.TryGetValue(m, out var staticBody))
+                    if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
                         var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
                         this.methodHandles[m] = emittedHandle;
@@ -1441,7 +1417,7 @@ internal sealed class ReflectionMetadataEmitter
 
             foreach (var m in s.Methods)
             {
-                if (!this.program.Functions.TryGetValue(m, out var body))
+                if (!this.emitCtx.Program.Functions.TryGetValue(m, out var body))
                 {
                     body = this.lambdaBodies[m];
                 }
@@ -1461,7 +1437,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in s.StaticMethods)
                 {
-                    if (this.program.Functions.TryGetValue(m, out var staticBody))
+                    if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
                         var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
                         this.methodHandles[m] = emittedHandle;
@@ -1496,7 +1472,7 @@ internal sealed class ReflectionMetadataEmitter
 
             foreach (var fn in functionsByPackage[pkg])
             {
-                if (!this.program.Functions.TryGetValue(fn, out var body))
+                if (!this.emitCtx.Program.Functions.TryGetValue(fn, out var body))
                 {
                     body = this.lambdaBodies[fn];
                 }
@@ -1504,10 +1480,10 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitFunction(fn, body, isEntryPoint: false);
             }
 
-            if (this.program.EntryPoint is not null && pkg == entryPointPackage)
+            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
             {
-                var entryBody = this.program.Functions[this.program.EntryPoint];
-                this.EmitFunction(this.program.EntryPoint, entryBody, isEntryPoint: true);
+                var entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint];
+                this.EmitFunction(this.emitCtx.Program.EntryPoint, entryBody, isEntryPoint: true);
             }
         }
 
@@ -1527,7 +1503,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var m in c.Methods)
                 {
-                    if (!this.program.Functions.TryGetValue(m, out var body))
+                    if (!this.emitCtx.Program.Functions.TryGetValue(m, out var body))
                     {
                         body = this.lambdaBodies[m];
                     }
@@ -1561,13 +1537,13 @@ internal sealed class ReflectionMetadataEmitter
             var nestedHandle = this.structTypeDefs[c];
             if (TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
             {
-                this.metadata.AddNestedType(nestedHandle, receiverEnclosing);
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
                 continue;
             }
 
             var smPkg = this.GetSmPackage(c, packages, entryPointPackage);
             var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
-            this.metadata.AddNestedType(nestedHandle, enclosingHandle);
+            this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
         }
 
         foreach (var s in smStructsOrdered)
@@ -1576,47 +1552,47 @@ internal sealed class ReflectionMetadataEmitter
             if (this.asyncSmEnclosingClosures.TryGetValue(s, out var closureSym)
                 && this.structTypeDefs.TryGetValue(closureSym, out var closureHandle))
             {
-                this.metadata.AddNestedType(nestedHandle, closureHandle);
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, closureHandle);
             }
             else if (TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing))
             {
-                this.metadata.AddNestedType(nestedHandle, receiverEnclosing);
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
             }
             else
             {
                 var smPkg = this.GetSmPackage(s, packages, entryPointPackage);
                 var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
-                this.metadata.AddNestedType(nestedHandle, enclosingHandle);
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
             }
         }
 
         // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
         // patch it with a content-derived value after PE serialization.
-        var assemblyName = this.assemblyNameOverride ?? this.program.PackageName ?? "Default";
-        var mvidFixup = this.metadata.ReserveGuid();
-        this.metadata.AddModule(
+        var assemblyName = this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "Default";
+        var mvidFixup = this.emitCtx.Metadata.ReserveGuid();
+        this.emitCtx.Metadata.AddModule(
             generation: 0,
-            moduleName: this.metadata.GetOrAddString(assemblyName + ".dll"),
+            moduleName: this.emitCtx.Metadata.GetOrAddString(assemblyName + ".dll"),
             mvid: mvidFixup.Handle,
             encId: default(GuidHandle),
             encBaseId: default(GuidHandle));
 
-        var assemblyHandle = this.metadata.AddAssembly(
-            name: this.metadata.GetOrAddString(assemblyName),
+        var assemblyHandle = this.emitCtx.Metadata.AddAssembly(
+            name: this.emitCtx.Metadata.GetOrAddString(assemblyName),
             version: this.ParseAssemblyVersion(),
             culture: default(StringHandle),
             publicKey: default(BlobHandle),
             flags: 0,
             hashAlgorithm: AssemblyHashAlgorithm.Sha1);
 
-        if (this.metadataOnly)
+        if (this.emitCtx.MetadataOnly)
         {
             this.EmitReferenceAssemblyAttribute(assemblyHandle);
         }
 
         // Phase 7.7b: emit cross-language interop attributes for NuGet consumability.
         this.EmitAssemblyInteropAttributes(assemblyHandle);
-        if (!this.metadataOnly && this.pdb != null)
+        if (!this.emitCtx.MetadataOnly && this.emitCtx.Pdb != null)
         {
             this.EmitDebuggableAttribute(assemblyHandle);
         }
@@ -1628,13 +1604,13 @@ internal sealed class ReflectionMetadataEmitter
         BlobBuilder pdbBlob = null;
         BlobContentId pdbContentId = default;
         byte[] pdbChecksum = null;
-        var pdbEnabled = this.pdb != null;
+        var pdbEnabled = this.emitCtx.Pdb != null;
         if (pdbEnabled)
         {
-            var peRowCounts = this.metadata.GetRowCounts();
-            (pdbBlob, pdbContentId) = this.pdb.Serialize(
+            var peRowCounts = this.emitCtx.Metadata.GetRowCounts();
+            (pdbBlob, pdbContentId) = this.emitCtx.Pdb.Serialize(
                 peRowCounts,
-                this.metadataOnly ? default : entryHandle,
+                this.emitCtx.MetadataOnly ? default : entryHandle,
                 ComputeDeterministicContentId);
             pdbChecksum = ComputePdbChecksum(pdbBlob);
         }
@@ -1646,7 +1622,7 @@ internal sealed class ReflectionMetadataEmitter
         // full PDB blob inline. Pass null to ManagedPEBuilder when PDB is off
         // so the legacy emit path stays bit-for-bit identical.
         DebugDirectoryBuilder debugDirectory = null;
-        var isEmbedded = this.debugInformation.Format == DebugInformationFormat.Embedded;
+        var isEmbedded = this.emitCtx.DebugInformation.Format == DebugInformationFormat.Embedded;
         if (pdbEnabled)
         {
             debugDirectory = new DebugDirectoryBuilder();
@@ -1659,15 +1635,15 @@ internal sealed class ReflectionMetadataEmitter
             // debugger's working directory. A relative path here would leave
             // breakpoints unbound. Mirrors the source-path fix in 34002ff.
             string codeViewPath;
-            if (!string.IsNullOrEmpty(this.debugInformation.PdbFilePath))
+            if (!string.IsNullOrEmpty(this.emitCtx.DebugInformation.PdbFilePath))
             {
                 codeViewPath = isEmbedded
-                    ? Path.GetFileName(this.debugInformation.PdbFilePath)
-                    : Path.GetFullPath(this.debugInformation.PdbFilePath);
+                    ? Path.GetFileName(this.emitCtx.DebugInformation.PdbFilePath)
+                    : Path.GetFullPath(this.emitCtx.DebugInformation.PdbFilePath);
             }
             else
             {
-                codeViewPath = (this.assemblyNameOverride ?? this.program.PackageName ?? "module") + ".pdb";
+                codeViewPath = (this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "module") + ".pdb";
             }
 
             debugDirectory.AddCodeViewEntry(
@@ -1682,7 +1658,7 @@ internal sealed class ReflectionMetadataEmitter
                 checksum: ImmutableArray.Create(pdbChecksum));
 
             // Reproducible: opt-in marker that this build is byte-deterministic.
-            if (this.debugInformation.Deterministic)
+            if (this.emitCtx.DebugInformation.Deterministic)
             {
                 debugDirectory.AddReproducibleEntry();
             }
@@ -1708,12 +1684,12 @@ internal sealed class ReflectionMetadataEmitter
                 : Characteristics.ExecutableImage);
         var peBlob = new BlobBuilder();
         BlobContentId contentId;
-        if (this.metadataOnly)
+        if (this.emitCtx.MetadataOnly)
         {
             var mvidBuilder = new MvidPEBuilder(
                 header: peHeaderBuilder,
-                metadataRootBuilder: new MetadataRootBuilder(this.metadata),
-                ilStream: this.ilStream,
+                metadataRootBuilder: new MetadataRootBuilder(this.emitCtx.Metadata),
+                ilStream: this.emitCtx.IlStream,
                 entryPoint: default,
                 debugDirectoryBuilder: debugDirectory,
                 deterministicIdProvider: ComputeDeterministicContentId);
@@ -1724,8 +1700,8 @@ internal sealed class ReflectionMetadataEmitter
         {
             var peBuilder = new ManagedPEBuilder(
                 header: peHeaderBuilder,
-                metadataRootBuilder: new MetadataRootBuilder(this.metadata),
-                ilStream: this.ilStream,
+                metadataRootBuilder: new MetadataRootBuilder(this.emitCtx.Metadata),
+                ilStream: this.emitCtx.IlStream,
                 entryPoint: entryHandle,
                 debugDirectoryBuilder: debugDirectory,
                 deterministicIdProvider: ComputeDeterministicContentId);
@@ -1739,9 +1715,9 @@ internal sealed class ReflectionMetadataEmitter
         // sidecar — the blob already lives in the PE. Portable format writes
         // to the supplied stream when one was provided (callers that want
         // only an embedded PDB pass `pdbStream: null`).
-        if (pdbEnabled && !isEmbedded && this.pdbStream != null)
+        if (pdbEnabled && !isEmbedded && this.emitCtx.PdbStream != null)
         {
-            pdbBlob.WriteContentTo(this.pdbStream);
+            pdbBlob.WriteContentTo(this.emitCtx.PdbStream);
         }
     }
 
@@ -1771,7 +1747,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitReferenceAssemblyAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", out var resolved)
             ? resolved
             : throw new InvalidOperationException(
                 "Reference assembly emit requires System.Runtime.CompilerServices.ReferenceAssemblyAttribute to be resolvable from the supplied references.");
@@ -1781,37 +1757,37 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        var ctorRef = this.metadata.AddMemberReference(
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         // Empty fixed/named argument blob: prolog 0x0001 + 0 named args.
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
         valueBlob.WriteUInt16(0);
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: assemblyHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
-    /// Parses <see cref="assemblyVersionOverride"/> into a <see cref="Version"/> suitable
+    /// Parses <see cref="EmitContext.AssemblyVersionOverride"/> into a <see cref="Version"/> suitable
     /// for the assembly row. Falls back to <c>1.0.0.0</c> when the string is absent or
     /// does not parse as a version.
     /// </summary>
     private Version ParseAssemblyVersion()
     {
-        if (string.IsNullOrEmpty(this.assemblyVersionOverride))
+        if (string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
         {
             return new Version(1, 0, 0, 0);
         }
 
         // NuGet versions can contain pre-release suffixes (e.g. "1.2.3-beta.1").
         // Extract just the numeric prefix for System.Version.
-        var versionStr = this.assemblyVersionOverride;
+        var versionStr = this.emitCtx.AssemblyVersionOverride;
         var dashIdx = versionStr.IndexOf('-');
         if (dashIdx >= 0)
         {
@@ -1847,13 +1823,13 @@ internal sealed class ReflectionMetadataEmitter
     {
         // 1. AssemblyInformationalVersionAttribute — carries the full NuGet
         // version string including pre-release suffix.
-        if (!string.IsNullOrEmpty(this.assemblyVersionOverride))
+        if (!string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
         {
             this.EmitStringAttribute(
                 assemblyHandle,
                 "System.Reflection.AssemblyInformationalVersionAttribute",
                 typeof(System.Reflection.AssemblyInformationalVersionAttribute),
-                this.assemblyVersionOverride);
+                this.emitCtx.AssemblyVersionOverride);
         }
 
         // 2. NullableContextAttribute(1) — declares the assembly's default
@@ -1869,7 +1845,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        var attrType = this.references.TryResolveType("System.Diagnostics.DebuggableAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", out var resolved)
             ? resolved
             : typeof(System.Diagnostics.DebuggableAttribute);
         var attrTypeRef = this.GetTypeReference(attrType);
@@ -1882,10 +1858,10 @@ internal sealed class ReflectionMetadataEmitter
                 p.AddParameter().Type().Boolean();
             });
 
-        var ctorRef = this.metadata.AddMemberReference(
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001); // Prolog
@@ -1893,10 +1869,10 @@ internal sealed class ReflectionMetadataEmitter
         valueBlob.WriteBoolean(true);  // isJITOptimizerDisabled
         valueBlob.WriteUInt16(0);      // NumNamed
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: assemblyHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -1905,7 +1881,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitStringAttribute(EntityHandle parent, string typeName, Type fallbackType, string value)
     {
-        var attrType = this.references.TryResolveType(typeName, out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType(typeName, out var resolved)
             ? resolved
             : fallbackType;
         var attrTypeRef = this.GetTypeReference(attrType);
@@ -1914,20 +1890,20 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), p => p.AddParameter().Type().String());
 
-        var ctorRef = this.metadata.AddMemberReference(
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001); // Prolog
         valueBlob.WriteSerializedString(value);
         valueBlob.WriteUInt16(0); // NumNamed
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: parent,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -1937,7 +1913,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitNullableContextAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        if (!this.references.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
         {
             // The attribute may not exist in older TFMs — skip silently.
             return;
@@ -1949,20 +1925,20 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Byte());
 
-        var ctorRef = this.metadata.AddMemberReference(
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001); // Prolog
         valueBlob.WriteByte(1);        // Flag = Annotated (non-null by default)
         valueBlob.WriteUInt16(0);      // NumNamed
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: assemblyHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -2048,10 +2024,10 @@ internal sealed class ReflectionMetadataEmitter
                 attrs |= FieldAttributes.InitOnly;
             }
 
-            var handle = this.metadata.AddFieldDefinition(
+            var handle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: attrs,
-                name: this.metadata.GetOrAddString(field.Name),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(field.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = handle;
@@ -2075,10 +2051,10 @@ internal sealed class ReflectionMetadataEmitter
 
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
-            var backingHandle = this.metadata.AddFieldDefinition(
+            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Private,
-                name: this.metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = backingHandle;
@@ -2097,10 +2073,10 @@ internal sealed class ReflectionMetadataEmitter
 
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
-            var backingHandle = this.metadata.AddFieldDefinition(
+            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Private,
-                name: this.metadata.GetOrAddString(ev.BackingField.Name),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = backingHandle;
@@ -2122,10 +2098,10 @@ internal sealed class ReflectionMetadataEmitter
                     attrs |= FieldAttributes.InitOnly;
                 }
 
-                var handle = this.metadata.AddFieldDefinition(
+                var handle = this.emitCtx.Metadata.AddFieldDefinition(
                     attributes: attrs,
-                    name: this.metadata.GetOrAddString(staticField.Name),
-                    signature: this.metadata.GetOrAddBlob(sigBlob));
+                    name: this.emitCtx.Metadata.GetOrAddString(staticField.Name),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
                 if (firstField.IsNil)
                 {
                     firstField = handle;
@@ -2145,10 +2121,10 @@ internal sealed class ReflectionMetadataEmitter
 
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
-            var backingHandle = this.metadata.AddFieldDefinition(
+            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Assembly | FieldAttributes.Static,
-                name: this.metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = backingHandle;
@@ -2167,10 +2143,10 @@ internal sealed class ReflectionMetadataEmitter
 
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), ev.Type);
-            var backingHandle = this.metadata.AddFieldDefinition(
+            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Private | FieldAttributes.Static,
-                name: this.metadata.GetOrAddString(ev.BackingField.Name),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = backingHandle;
@@ -2234,10 +2210,10 @@ internal sealed class ReflectionMetadataEmitter
             baseType = this.valueTypeRef;
         }
 
-        var handle2 = this.metadata.AddTypeDefinition(
+        var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
-            name: this.metadata.GetOrAddString(structSym.Name),
+            @namespace: this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty),
+            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
@@ -2302,10 +2278,10 @@ internal sealed class ReflectionMetadataEmitter
                 .PropertySignature(isInstanceProperty: true)
                 .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
 
-            var propDef = this.metadata.AddProperty(
+            var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.metadata.GetOrAddString(prop.Name),
-                signature: this.metadata.GetOrAddBlob(propertySignature));
+                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
             if (firstPropDef.IsNil)
             {
@@ -2315,19 +2291,19 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
             if (emittedGetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
             }
 
             if (emittedSetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
         if (!firstPropDef.IsNil)
         {
-            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
             this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
@@ -2340,7 +2316,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
@@ -2350,9 +2326,9 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
-            else if (prop.GetterSymbol != null && this.program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
+            else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
             {
                 // Computed property with bound body: emit using EmitFunction infrastructure.
                 var handle = this.EmitFunction(prop.GetterSymbol, getterBody, isEntryPoint: false);
@@ -2366,7 +2342,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2389,11 +2365,11 @@ internal sealed class ReflectionMetadataEmitter
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"get_{prop.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -2406,7 +2382,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
@@ -2417,9 +2393,9 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Stfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
-            else if (prop.SetterSymbol != null && this.program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
+            else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
             {
                 // Computed property with bound body: emit using EmitFunction infrastructure.
                 var handle = this.EmitFunction(prop.SetterSymbol, setterBody, isEntryPoint: false);
@@ -2433,7 +2409,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2458,16 +2434,16 @@ internal sealed class ReflectionMetadataEmitter
 
         // Emit a Parameter row for "value" so the setter has a named parameter.
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
+            name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"set_{prop.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -2516,10 +2492,10 @@ internal sealed class ReflectionMetadataEmitter
                 .PropertySignature(isInstanceProperty: false)
                 .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
 
-            var propDef = this.metadata.AddProperty(
+            var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.metadata.GetOrAddString(prop.Name),
-                signature: this.metadata.GetOrAddBlob(propertySignature));
+                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
             if (firstPropDef.IsNil)
             {
@@ -2529,12 +2505,12 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
             if (emittedGetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
             }
 
             if (emittedSetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
         }
 
@@ -2548,7 +2524,7 @@ internal sealed class ReflectionMetadataEmitter
         // orphaned and violate ECMA-335 §II.22.35.
         if (!firstPropDef.IsNil && !this.typesWithPropertyMap.Contains(typeDefHandle))
         {
-            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
             this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
@@ -2559,7 +2535,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitStaticPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
@@ -2568,9 +2544,9 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ldsfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
-            else if (prop.GetterSymbol != null && this.program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
+            else if (prop.GetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
             {
                 var handle = this.EmitFunction(prop.GetterSymbol, getterBody, isEntryPoint: false);
                 return handle;
@@ -2582,7 +2558,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2592,11 +2568,11 @@ internal sealed class ReflectionMetadataEmitter
 
         var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"get_{prop.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -2607,7 +2583,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitStaticPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (prop.IsAutoProperty && prop.BackingField != null
                 && this.structFieldDefs.TryGetValue(prop.BackingField, out var backingHandle))
@@ -2617,9 +2593,9 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Stsfld);
                 il.Token(backingHandle);
                 il.OpCode(ILOpCode.Ret);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
-            else if (prop.SetterSymbol != null && this.program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
+            else if (prop.SetterSymbol != null && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
             {
                 var handle = this.EmitFunction(prop.SetterSymbol, setterBody, isEntryPoint: false);
                 return handle;
@@ -2631,7 +2607,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2642,16 +2618,16 @@ internal sealed class ReflectionMetadataEmitter
         var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
+            name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"set_{prop.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -2696,9 +2672,9 @@ internal sealed class ReflectionMetadataEmitter
             // Emit EventDef row.
             var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
 
-            var eventDef = this.metadata.AddEvent(
+            var eventDef = this.emitCtx.Metadata.AddEvent(
                 attributes: EventAttributes.None,
-                name: this.metadata.GetOrAddString(ev.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
 
             if (firstEventDef.IsNil)
@@ -2707,11 +2683,11 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
             if (raiseMethod.HasValue)
             {
-                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
             }
         }
 
@@ -2719,7 +2695,7 @@ internal sealed class ReflectionMetadataEmitter
         // Only add if no instance events already created an EventMap for this type.
         if (!firstEventDef.IsNil && structSym.Events.IsDefaultOrEmpty)
         {
-            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
+            this.emitCtx.Metadata.AddEventMap(typeDefHandle, firstEventDef);
         }
     }
 
@@ -2729,7 +2705,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitStaticEventAddAccessor(StructSymbol structSym, EventSymbol ev)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
@@ -2783,11 +2759,11 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
-            else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
+            else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
                 var handle = this.EmitFunction(ev.AddMethodSymbol, addBody, isEntryPoint: false);
                 return handle;
@@ -2799,7 +2775,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2810,16 +2786,16 @@ internal sealed class ReflectionMetadataEmitter
         var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("value"),
+            name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"add_{ev.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"add_{ev.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -2830,7 +2806,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitStaticEventRemoveAccessor(StructSymbol structSym, EventSymbol ev)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
@@ -2884,11 +2860,11 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
-            else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
+            else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
                 var handle = this.EmitFunction(ev.RemoveMethodSymbol, removeBody, isEntryPoint: false);
                 return handle;
@@ -2900,7 +2876,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -2911,16 +2887,16 @@ internal sealed class ReflectionMetadataEmitter
         var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("value"),
+            name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"remove_{ev.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -2938,10 +2914,10 @@ internal sealed class ReflectionMetadataEmitter
         var ctorSig = new BlobBuilder();
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
-        this.notImplementedExceptionCtorRef = this.metadata.AddMemberReference(
+        this.notImplementedExceptionCtorRef = this.emitCtx.Metadata.AddMemberReference(
             nieTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.notImplementedExceptionCtorRef.Value;
     }
 
@@ -3188,9 +3164,9 @@ internal sealed class ReflectionMetadataEmitter
             // Emit EventDef row.
             var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
 
-            var eventDef = this.metadata.AddEvent(
+            var eventDef = this.emitCtx.Metadata.AddEvent(
                 attributes: EventAttributes.None,
-                name: this.metadata.GetOrAddString(ev.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
 
             if (firstEventDef.IsNil)
@@ -3199,18 +3175,18 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, addMethod);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, removeMethod);
             if (raiseMethod.HasValue)
             {
-                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, raiseMethod.Value);
             }
         }
 
         // EventMap row: links the TypeDef to its first EventDef.
         if (!firstEventDef.IsNil)
         {
-            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
+            this.emitCtx.Metadata.AddEventMap(typeDefHandle, firstEventDef);
         }
     }
 
@@ -3253,7 +3229,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitEventAddAccessor(StructSymbol structSym, EventSymbol ev)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
@@ -3309,11 +3285,11 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
-            else if (ev.AddMethodSymbol != null && this.program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
+            else if (ev.AddMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.AddMethodSymbol, out var addBody))
             {
                 // Explicit accessor with bound body: emit using EmitFunction infrastructure.
                 var handle = this.EmitFunction(ev.AddMethodSymbol, addBody, isEntryPoint: false);
@@ -3327,7 +3303,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -3350,16 +3326,16 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("value"),
+            name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"add_{ev.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"add_{ev.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -3370,7 +3346,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitEventRemoveAccessor(StructSymbol structSym, EventSymbol ev)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (ev.IsFieldLike && ev.BackingField != null
                 && this.structFieldDefs.TryGetValue(ev.BackingField, out var backingHandle))
@@ -3426,11 +3402,11 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
                 this.EncodeTypeSymbol(localsEncoder.AddVariable().Type(), ev.Type);
-                var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-                bodyOffset = this.methodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: 3, localVariablesSignature: localsSignature);
             }
-            else if (ev.RemoveMethodSymbol != null && this.program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
+            else if (ev.RemoveMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RemoveMethodSymbol, out var removeBody))
             {
                 // Explicit accessor with bound body: emit using EmitFunction infrastructure.
                 var handle = this.EmitFunction(ev.RemoveMethodSymbol, removeBody, isEntryPoint: false);
@@ -3444,7 +3420,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -3467,16 +3443,16 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var firstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("value"),
+            name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"remove_{ev.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -3488,9 +3464,9 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitEventRaiseAccessor(StructSymbol structSym, EventSymbol ev, bool isStatic)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
-            if (ev.RaiseMethodSymbol != null && this.program.Functions.TryGetValue(ev.RaiseMethodSymbol, out var raiseBody))
+            if (ev.RaiseMethodSymbol != null && this.emitCtx.Program.Functions.TryGetValue(ev.RaiseMethodSymbol, out var raiseBody))
             {
                 var handle = this.EmitFunction(ev.RaiseMethodSymbol, raiseBody, isEntryPoint: false);
                 return handle;
@@ -3503,7 +3479,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Newobj);
                 il.Token(nieCtor);
                 il.OpCode(ILOpCode.Throw);
-                bodyOffset = this.methodBodyStream.AddMethodBody(il);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
             }
         }
 
@@ -3544,17 +3520,17 @@ internal sealed class ReflectionMetadataEmitter
         var firstParamHandle = this.NextParameterHandle();
         for (int i = 0; i < paramCount; i++)
         {
-            this.metadata.AddParameter(
+            this.emitCtx.Metadata.AddParameter(
                 attributes: ParameterAttributes.None,
-                name: this.metadata.GetOrAddString($"arg{i}"),
+                name: this.emitCtx.Metadata.GetOrAddString($"arg{i}"),
                 sequenceNumber: i + 1);
         }
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString($"raise_{ev.Name}"),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString($"raise_{ev.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
     }
@@ -3578,10 +3554,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
                 });
 
-        this.delegateCombineRef = this.metadata.AddMemberReference(
+        this.delegateCombineRef = this.emitCtx.Metadata.AddMemberReference(
             delegateTypeRef,
-            this.metadata.GetOrAddString("Combine"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("Combine"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.delegateCombineRef.Value;
     }
 
@@ -3604,10 +3580,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().Type(delegateTypeRef, isValueType: false);
                 });
 
-        this.delegateRemoveRef = this.metadata.AddMemberReference(
+        this.delegateRemoveRef = this.emitCtx.Metadata.AddMemberReference(
             delegateTypeRef,
-            this.metadata.GetOrAddString("Remove"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("Remove"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.delegateRemoveRef.Value;
     }
 
@@ -3636,10 +3612,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().GenericMethodTypeParameter(0);
                 });
 
-        this.interlockedCompareExchangeOpenRef = this.metadata.AddMemberReference(
+        this.interlockedCompareExchangeOpenRef = this.emitCtx.Metadata.AddMemberReference(
             interlockedTypeRef,
-            this.metadata.GetOrAddString("CompareExchange"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("CompareExchange"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.interlockedCompareExchangeOpenRef.Value;
     }
 
@@ -3653,7 +3629,7 @@ internal sealed class ReflectionMetadataEmitter
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         var typeEncoder = argsEncoder.AddArgument();
         this.EncodeTypeSymbol(typeEncoder, eventType);
-        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
@@ -3776,10 +3752,10 @@ internal sealed class ReflectionMetadataEmitter
                 attrs |= FieldAttributes.InitOnly;
             }
 
-            var handle = this.metadata.AddFieldDefinition(
+            var handle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: attrs,
-                name: this.metadata.GetOrAddString(field.Name),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(field.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {
                 firstField = handle;
@@ -3835,10 +3811,10 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // Nested types have no namespace in ECMA-335 metadata.
-        var handle2 = this.metadata.AddTypeDefinition(
+        var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: default(StringHandle),
-            name: this.metadata.GetOrAddString(structSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(structSym.Name),
             baseType: baseType,
             fieldList: firstField,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
@@ -3864,7 +3840,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitEnumTypeDef(EnumSymbol enumSym, int firstFieldRow, int methodListRow)
     {
-        var enumTypeRef = this.GetTypeReference(this.coreEnumType);
+        var enumTypeRef = this.GetTypeReference(this.emitCtx.CoreEnumType);
 
         // P3-8 (#420): emit the TypeDef row *before* its FieldDef rows so the
         // literal-field signatures can refer to the enum's actual TypeDef
@@ -3874,16 +3850,16 @@ internal sealed class ReflectionMetadataEmitter
         // FieldDef row that will belong to this enum, which is the next row
         // about to be added — we capture it via GetRowCount + 1 here and
         // assert below that the first AddFieldDefinition call matches.
-        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.metadata.GetRowCount(TableIndex.Field) + 1);
+        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Field) + 1);
 
         var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
             | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
             | MapTypeAccessibility(enumSym.Accessibility);
 
-        var enumTypeDef = this.metadata.AddTypeDefinition(
+        var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
-            name: this.metadata.GetOrAddString(enumSym.Name),
+            @namespace: this.emitCtx.Metadata.GetOrAddString(enumSym.PackageName ?? string.Empty),
+            name: this.emitCtx.Metadata.GetOrAddString(enumSym.Name),
             baseType: enumTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
@@ -3892,10 +3868,10 @@ internal sealed class ReflectionMetadataEmitter
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
         var valueFieldSigBlob = new BlobBuilder();
         new BlobEncoder(valueFieldSigBlob).FieldSignature().Int32();
-        var valueFieldHandle = this.metadata.AddFieldDefinition(
+        var valueFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
             attributes: FieldAttributes.Public | FieldAttributes.SpecialName | FieldAttributes.RTSpecialName,
-            name: this.metadata.GetOrAddString("value__"),
-            signature: this.metadata.GetOrAddBlob(valueFieldSigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("value__"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(valueFieldSigBlob));
         if (valueFieldHandle != firstFieldHandle)
         {
             throw new InvalidOperationException(
@@ -3911,10 +3887,10 @@ internal sealed class ReflectionMetadataEmitter
         {
             var memberSigBlob = new BlobBuilder();
             new BlobEncoder(memberSigBlob).FieldSignature().Type(enumTypeDef, isValueType: true);
-            var memberFieldHandle = this.metadata.AddFieldDefinition(
+            var memberFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
-                name: this.metadata.GetOrAddString(member.Name),
-                signature: this.metadata.GetOrAddBlob(memberSigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(member.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(memberSigBlob));
             memberFieldHandles.Add(memberFieldHandle);
             this.enumMemberFieldDefs[member] = memberFieldHandle;
         }
@@ -3924,7 +3900,7 @@ internal sealed class ReflectionMetadataEmitter
         // satisfies this since AddFieldDefinition is monotone.
         for (int i = 0; i < enumSym.Members.Length; i++)
         {
-            this.metadata.AddConstant(parent: memberFieldHandles[i], value: enumSym.Members[i].Value);
+            this.emitCtx.Metadata.AddConstant(parent: memberFieldHandles[i], value: enumSym.Members[i].Value);
         }
 
         // Issue #188 (step 3): route any user annotations attached to the
@@ -3960,10 +3936,10 @@ internal sealed class ReflectionMetadataEmitter
 
             var attrs = MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
 
-            var handle = this.metadata.AddFieldDefinition(
+            var handle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: attrs,
-                name: this.metadata.GetOrAddString(g.Name),
-                signature: this.metadata.GetOrAddBlob(sigBlob));
+                name: this.emitCtx.Metadata.GetOrAddString(g.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
 
             this.globalFieldDefs[g] = handle;
 
@@ -4046,10 +4022,10 @@ internal sealed class ReflectionMetadataEmitter
         valueBlob.WriteUInt16(0x0001);
         valueBlob.WriteUInt16(0);
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: typeHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -4066,10 +4042,10 @@ internal sealed class ReflectionMetadataEmitter
         valueBlob.WriteUInt16(0x0001);
         valueBlob.WriteUInt16(0);
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: paramHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -4080,7 +4056,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <returns>The TypeRef entity handle, or <see langword="default"/> if the type can't be resolved.</returns>
     private EntityHandle GetIsReadOnlyAttributeTypeRef()
     {
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
         return this.GetTypeReference(attrType);
@@ -4093,7 +4069,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.isReadOnlyAttributeCtorRef.Value;
         }
 
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
         var attrTypeRef = this.GetTypeReference(attrType);
@@ -4102,10 +4078,10 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        this.isReadOnlyAttributeCtorRef = this.metadata.AddMemberReference(
+        this.isReadOnlyAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.isReadOnlyAttributeCtorRef.Value;
     }
 
@@ -4131,10 +4107,10 @@ internal sealed class ReflectionMetadataEmitter
         valueBlob.WriteUInt16(0x0001);
         valueBlob.WriteUInt16(0);
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: typeHandle,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
 
         var obsoleteCtorRef = this.GetObsoleteAttributeStringBoolCtorRef();
 
@@ -4144,10 +4120,10 @@ internal sealed class ReflectionMetadataEmitter
         obsoleteBlob.WriteByte(1);
         obsoleteBlob.WriteUInt16(0);
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: typeHandle,
             constructor: obsoleteCtorRef,
-            value: this.metadata.GetOrAddBlob(obsoleteBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(obsoleteBlob));
     }
 
     private MemberReferenceHandle GetIsByRefLikeAttributeCtorRef()
@@ -4157,7 +4133,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.isByRefLikeAttributeCtorRef.Value;
         }
 
-        var attrType = this.references.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
         var attrTypeRef = this.GetTypeReference(attrType);
@@ -4166,10 +4142,10 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        this.isByRefLikeAttributeCtorRef = this.metadata.AddMemberReference(
+        this.isByRefLikeAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.isByRefLikeAttributeCtorRef.Value;
     }
 
@@ -4180,7 +4156,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.obsoleteAttributeStringBoolCtorRef.Value;
         }
 
-        var obsoleteType = this.references.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
+        var obsoleteType = this.emitCtx.References.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
             ? obsoleteResolved
             : typeof(System.ObsoleteAttribute);
         var obsoleteTypeRef = this.GetTypeReference(obsoleteType);
@@ -4193,10 +4169,10 @@ internal sealed class ReflectionMetadataEmitter
                 p.AddParameter().Type().Boolean();
             });
 
-        this.obsoleteAttributeStringBoolCtorRef = this.metadata.AddMemberReference(
+        this.obsoleteAttributeStringBoolCtorRef = this.emitCtx.Metadata.AddMemberReference(
             obsoleteTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(obsoleteCtorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(obsoleteCtorSig));
         return this.obsoleteAttributeStringBoolCtorRef.Value;
     }
 
@@ -4241,7 +4217,7 @@ internal sealed class ReflectionMetadataEmitter
     /// "next" handle, and methods that emit N rows anchor the run that follows.
     /// </summary>
     private ParameterHandle NextParameterHandle()
-        => MetadataTokens.ParameterHandle(this.metadata.GetRowCount(TableIndex.Param) + 1);
+        => MetadataTokens.ParameterHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Param) + 1);
 
     private void EmitBoundAttribute(EntityHandle parent, BoundAttribute attr)
     {
@@ -4251,7 +4227,7 @@ internal sealed class ReflectionMetadataEmitter
             return;
         }
 
-        if (!this.references.TryResolveType(clrType.FullName, out var resolved))
+        if (!this.emitCtx.References.TryResolveType(clrType.FullName, out var resolved))
         {
             resolved = clrType;
         }
@@ -4278,10 +4254,10 @@ internal sealed class ReflectionMetadataEmitter
                 });
 
         var attrTypeRef = this.GetTypeReference(resolved);
-        var ctorRef = this.metadata.AddMemberReference(
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
             attrTypeRef,
-            this.metadata.GetOrAddString(".ctor"),
-            this.metadata.GetOrAddBlob(ctorSig));
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
         // Map the supplied positional arguments onto the constructor parameters,
         // collapsing a trailing params-array (e.g. InlineData(params object[]))
@@ -4306,10 +4282,10 @@ internal sealed class ReflectionMetadataEmitter
             WriteCustomAttributeNamedArg(valueBlob, resolved, arg);
         }
 
-        this.metadata.AddCustomAttribute(
+        this.emitCtx.Metadata.AddCustomAttribute(
             parent: parent,
             constructor: ctorRef,
-            value: this.metadata.GetOrAddBlob(valueBlob));
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
@@ -4870,10 +4846,10 @@ internal sealed class ReflectionMetadataEmitter
         var typeAttrs = TypeAttributes.Interface | TypeAttributes.Abstract
             | TypeAttributes.AutoLayout | TypeAttributes.AnsiClass
             | MapTypeAccessibility(ifaceSym.Accessibility);
-        var handle = this.metadata.AddTypeDefinition(
+        var handle = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
-            name: this.metadata.GetOrAddString(ifaceSym.Name),
+            @namespace: this.emitCtx.Metadata.GetOrAddString(ifaceSym.PackageName ?? string.Empty),
+            name: this.emitCtx.Metadata.GetOrAddString(ifaceSym.Name),
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(firstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
@@ -4905,22 +4881,22 @@ internal sealed class ReflectionMetadataEmitter
     /// <c>Invoke</c>).</param>
     private void EmitDelegateTypeDef(DelegateTypeSymbol delegateSym, int firstMethodRow)
     {
-        var multicastTypeRef = this.GetTypeReference(this.coreMulticastDelegateType);
+        var multicastTypeRef = this.GetTypeReference(this.emitCtx.CoreMulticastDelegateType);
 
         // Delegates own no fields; their fieldList points at the next
         // FieldDef row, which is the first field of whatever TypeDef follows
         // in row order. We mirror the EmitEnumTypeDef pattern of capturing
         // the *next* row from the current FieldDef table count.
-        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.metadata.GetRowCount(TableIndex.Field) + 1);
+        var firstFieldHandle = MetadataTokens.FieldDefinitionHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Field) + 1);
 
         var typeAttrs = TypeAttributes.Class | TypeAttributes.Sealed
             | TypeAttributes.AnsiClass | TypeAttributes.AutoLayout
             | MapTypeAccessibility(delegateSym.Accessibility);
 
-        var delegateTypeDef = this.metadata.AddTypeDefinition(
+        var delegateTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
-            @namespace: this.metadata.GetOrAddString(delegateSym.PackageName ?? string.Empty),
-            name: this.metadata.GetOrAddString(delegateSym.Name),
+            @namespace: this.emitCtx.Metadata.GetOrAddString(delegateSym.PackageName ?? string.Empty),
+            name: this.emitCtx.Metadata.GetOrAddString(delegateSym.Name),
             baseType: multicastTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(firstMethodRow));
@@ -4936,23 +4912,23 @@ internal sealed class ReflectionMetadataEmitter
             });
 
         var ctorFirstParamHandle = this.NextParameterHandle();
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("object"),
+            name: this.emitCtx.Metadata.GetOrAddString("object"),
             sequenceNumber: 1);
-        this.metadata.AddParameter(
+        this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
-            name: this.metadata.GetOrAddString("method"),
+            name: this.emitCtx.Metadata.GetOrAddString("method"),
             sequenceNumber: 2);
 
         var ctorAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName;
 
-        var ctorHandle = this.metadata.AddMethodDefinition(
+        var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: ctorAttrs,
             implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSigBlob),
             bodyOffset: -1,
             parameterList: ctorFirstParamHandle);
         this.delegateCtorHandles[delegateSym] = ctorHandle;
@@ -5011,9 +4987,9 @@ internal sealed class ReflectionMetadataEmitter
                 paramAttributes |= ParameterAttributes.In;
             }
 
-            var paramHandle = this.metadata.AddParameter(
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: paramAttributes,
-                name: this.metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
                 sequenceNumber: (ushort)(i + 1));
 
             if (p.RefKind == RefKind.In)
@@ -5029,11 +5005,11 @@ internal sealed class ReflectionMetadataEmitter
             ? invokeFirstParamHandle
             : this.NextParameterHandle();
 
-        var invokeHandle = this.metadata.AddMethodDefinition(
+        var invokeHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: invokeAttrs,
             implAttributes: MethodImplAttributes.Runtime | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("Invoke"),
-            signature: this.metadata.GetOrAddBlob(invokeSigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(invokeSigBlob),
             bodyOffset: -1,
             parameterList: invokeParamList);
         this.delegateInvokeHandles[delegateSym] = invokeHandle;
@@ -5078,11 +5054,11 @@ internal sealed class ReflectionMetadataEmitter
                 var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                     | MethodAttributes.Virtual | MethodAttributes.Abstract
                     | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                emittedGetter = this.metadata.AddMethodDefinition(
+                emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
                     attributes: attrs,
                     implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                    name: this.metadata.GetOrAddString($"get_{prop.Name}"),
-                    signature: this.metadata.GetOrAddBlob(sigBlob),
+                    name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
                     bodyOffset: -1,
                     parameterList: this.NextParameterHandle());
             }
@@ -5101,11 +5077,11 @@ internal sealed class ReflectionMetadataEmitter
                 var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                     | MethodAttributes.Virtual | MethodAttributes.Abstract
                     | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                emittedSetter = this.metadata.AddMethodDefinition(
+                emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
                     attributes: attrs,
                     implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                    name: this.metadata.GetOrAddString($"set_{prop.Name}"),
-                    signature: this.metadata.GetOrAddBlob(sigBlob),
+                    name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
                     bodyOffset: -1,
                     parameterList: this.NextParameterHandle());
             }
@@ -5116,10 +5092,10 @@ internal sealed class ReflectionMetadataEmitter
                 .PropertySignature(isInstanceProperty: true)
                 .Parameters(0, returnType => this.EncodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
 
-            var propDef = this.metadata.AddProperty(
+            var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.metadata.GetOrAddString(prop.Name),
-                signature: this.metadata.GetOrAddBlob(propertySignature));
+                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
             if (firstPropDef.IsNil)
             {
@@ -5129,19 +5105,19 @@ internal sealed class ReflectionMetadataEmitter
             // MethodSemantics rows linking accessor MethodDefs to the PropertyDef.
             if (emittedGetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Getter, emittedGetter.Value);
             }
 
             if (emittedSetter.HasValue)
             {
-                this.metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
+                this.emitCtx.Metadata.AddMethodSemantics(propDef, MethodSemanticsAttributes.Setter, emittedSetter.Value);
             }
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
         if (!firstPropDef.IsNil)
         {
-            this.metadata.AddPropertyMap(typeDefHandle, firstPropDef);
+            this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
             this.typesWithPropertyMap.Add(typeDefHandle);
         }
     }
@@ -5178,11 +5154,11 @@ internal sealed class ReflectionMetadataEmitter
             var addAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
                 | MethodAttributes.Virtual | MethodAttributes.Abstract
                 | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-            var emittedAdd = this.metadata.AddMethodDefinition(
+            var emittedAdd = this.emitCtx.Metadata.AddMethodDefinition(
                 attributes: addAttrs,
                 implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                name: this.metadata.GetOrAddString($"add_{ev.Name}"),
-                signature: this.metadata.GetOrAddBlob(addSigBlob),
+                name: this.emitCtx.Metadata.GetOrAddString($"add_{ev.Name}"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(addSigBlob),
                 bodyOffset: -1,
                 parameterList: this.NextParameterHandle());
 
@@ -5194,20 +5170,20 @@ internal sealed class ReflectionMetadataEmitter
             var removeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
                 | MethodAttributes.Virtual | MethodAttributes.Abstract
                 | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-            var emittedRemove = this.metadata.AddMethodDefinition(
+            var emittedRemove = this.emitCtx.Metadata.AddMethodDefinition(
                 attributes: removeAttrs,
                 implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                name: this.metadata.GetOrAddString($"remove_{ev.Name}"),
-                signature: this.metadata.GetOrAddBlob(removeSigBlob),
+                name: this.emitCtx.Metadata.GetOrAddString($"remove_{ev.Name}"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(removeSigBlob),
                 bodyOffset: -1,
                 parameterList: this.NextParameterHandle());
 
             // Emit EventDef row.
             var eventTypeHandle = this.GetEventTypeHandle(ev.Type);
 
-            var eventDef = this.metadata.AddEvent(
+            var eventDef = this.emitCtx.Metadata.AddEvent(
                 attributes: EventAttributes.None,
-                name: this.metadata.GetOrAddString(ev.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
 
             if (firstEventDef.IsNil)
@@ -5216,8 +5192,8 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // MethodSemantics rows linking accessor MethodDefs to the EventDef.
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, emittedAdd);
-            this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, emittedRemove);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Adder, emittedAdd);
+            this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Remover, emittedRemove);
 
             // Issue #257: emit abstract raise_X MethodDef if present.
             if (ev.RaiseMethodSymbol != null)
@@ -5244,22 +5220,22 @@ internal sealed class ReflectionMetadataEmitter
                 var raiseAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
                     | MethodAttributes.Virtual | MethodAttributes.Abstract
                     | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                var emittedRaise = this.metadata.AddMethodDefinition(
+                var emittedRaise = this.emitCtx.Metadata.AddMethodDefinition(
                     attributes: raiseAttrs,
                     implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                    name: this.metadata.GetOrAddString($"raise_{ev.Name}"),
-                    signature: this.metadata.GetOrAddBlob(raiseSigBlob),
+                    name: this.emitCtx.Metadata.GetOrAddString($"raise_{ev.Name}"),
+                    signature: this.emitCtx.Metadata.GetOrAddBlob(raiseSigBlob),
                     bodyOffset: -1,
                     parameterList: this.NextParameterHandle());
 
-                this.metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, emittedRaise);
+                this.emitCtx.Metadata.AddMethodSemantics(eventDef, MethodSemanticsAttributes.Raiser, emittedRaise);
             }
         }
 
         // EventMap row: links the TypeDef to its first EventDef.
         if (!firstEventDef.IsNil)
         {
-            this.metadata.AddEventMap(typeDefHandle, firstEventDef);
+            this.emitCtx.Metadata.AddEventMap(typeDefHandle, firstEventDef);
         }
     }
 
@@ -5287,11 +5263,11 @@ internal sealed class ReflectionMetadataEmitter
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Virtual | MethodAttributes.Abstract
             | MethodAttributes.NewSlot;
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: attrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(method.Name),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: -1,
             parameterList: this.NextParameterHandle());
     }
@@ -5306,26 +5282,26 @@ internal sealed class ReflectionMetadataEmitter
     {
         var baseCtorToken = this.GetBaseCtorToken(classSym);
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Call);
             il.Token(baseCtorToken);
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
 
         var ctorSig = new BlobBuilder();
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -5338,7 +5314,7 @@ internal sealed class ReflectionMetadataEmitter
     private void EmitStaticConstructor(StructSymbol typeSym)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             // Build a synthetic body: for each field with an initializer,
             // emit the expression + stsfld.
@@ -5407,7 +5383,7 @@ internal sealed class ReflectionMetadataEmitter
                     EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
-                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
             }
 
             var emitter = new BodyEmitter(
@@ -5433,19 +5409,19 @@ internal sealed class ReflectionMetadataEmitter
             emitter.EmitBlock(body);
             il.OpCode(ILOpCode.Ret);
 
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
 
         var cctorSig = new BlobBuilder();
         new BlobEncoder(cctorSig).MethodSignature(isInstanceMethod: false)
             .Parameters(0, r => r.Void(), _ => { });
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName | MethodAttributes.Static,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".cctor"),
-            signature: this.metadata.GetOrAddBlob(cctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".cctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(cctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -5511,17 +5487,17 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
-        return this.metadata.AddMemberReference(
+        return this.emitCtx.Metadata.AddMemberReference(
             parent: this.GetTypeReference(importedBaseClr),
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     private EntityHandle GetSystemAttributeTypeRef()
     {
         if (!this.systemAttributeTypeRef.HasValue)
         {
-            var t = this.references.TryResolveType("System.Attribute", out var resolved)
+            var t = this.emitCtx.References.TryResolveType("System.Attribute", out var resolved)
                 ? resolved
                 : typeof(System.Attribute);
             this.systemAttributeTypeRef = this.GetTypeReference(t);
@@ -5539,10 +5515,10 @@ internal sealed class ReflectionMetadataEmitter
             new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
                 .Parameters(0, r => r.Void(), _ => { });
 
-            this.systemAttributeCtorRef = this.metadata.AddMemberReference(
+            this.systemAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
                 attrTypeRef,
-                this.metadata.GetOrAddString(".ctor"),
-                this.metadata.GetOrAddBlob(ctorSig));
+                this.emitCtx.Metadata.GetOrAddString(".ctor"),
+                this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         }
 
         return this.systemAttributeCtorRef.Value;
@@ -5561,7 +5537,7 @@ internal sealed class ReflectionMetadataEmitter
         var baseCtorToken = this.GetBaseCtorToken(classSym);
 
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
@@ -5590,7 +5566,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
 
         var ctorSig = new BlobBuilder();
@@ -5606,12 +5582,12 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -5632,7 +5608,7 @@ internal sealed class ReflectionMetadataEmitter
         var baseCtorToken = this.GetBaseInitializerCtorToken(classSym, init);
 
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
@@ -5702,7 +5678,7 @@ internal sealed class ReflectionMetadataEmitter
                     EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
-                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
             }
 
             var emitter = new BodyEmitter(
@@ -5760,7 +5736,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
 
         var ctorSig = new BlobBuilder();
@@ -5776,12 +5752,12 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -5800,14 +5776,14 @@ internal sealed class ReflectionMetadataEmitter
     {
         ctor ??= classSym.ExplicitConstructor;
         var function = ctor.Function;
-        var body = this.program.Functions[function];
+        var body = this.emitCtx.Program.Functions[function];
         var init = ctor.BaseInitializer;
         var baseCtorToken = init != null
             ? this.GetBaseInitializerCtorToken(classSym, init)
             : this.GetBaseCtorToken(classSym);
 
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
@@ -5903,7 +5879,7 @@ internal sealed class ReflectionMetadataEmitter
                     EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
-                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
             }
 
             var emitter = new BodyEmitter(
@@ -5941,7 +5917,7 @@ internal sealed class ReflectionMetadataEmitter
             emitter.EmitBlock(body);
 
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
 
         var ctorSig = new BlobBuilder();
@@ -5986,9 +5962,9 @@ internal sealed class ReflectionMetadataEmitter
                 paramAttributes |= ParameterAttributes.In;
             }
 
-            var paramHandle = this.metadata.AddParameter(
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: paramAttributes,
-                name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: pi + 1);
 
             if (p.RefKind == RefKind.In)
@@ -5997,12 +5973,12 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: firstCtorParamHandle);
     }
@@ -6082,7 +6058,7 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitInlineStructConstructor(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
@@ -6090,7 +6066,7 @@ internal sealed class ReflectionMetadataEmitter
             il.OpCode(ILOpCode.Stfld);
             il.Token(fieldHandle);
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
 
         var sig = new BlobBuilder();
@@ -6100,11 +6076,11 @@ internal sealed class ReflectionMetadataEmitter
                 r => r.Void(),
                 ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), field.Type));
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -6120,7 +6096,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private int FinishInlineBody(InstructionEncoder il)
     {
-        return this.metadataOnly ? -1 : this.methodBodyStream.AddMethodBody(il);
+        return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il);
     }
 
     private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, TypeDefinitionHandle typeDef)
@@ -6137,7 +6113,7 @@ internal sealed class ReflectionMetadataEmitter
             "Equals(object) emit assumes value-type struct; reference-type records require castclass instead of unbox");
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var hasValue = il.DefineLabel();
             il.LoadArgument(1);
@@ -6166,7 +6142,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
@@ -6184,7 +6160,7 @@ internal sealed class ReflectionMetadataEmitter
             "EmitInlineEqualsTyped precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
 
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
@@ -6200,13 +6176,13 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Equals"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
@@ -6219,15 +6195,15 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().Int32(), _ => { });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("GetHashCode"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("GetHashCode"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
-            il.LoadString(this.metadata.GetOrAddUserString(structSym.Name + "(" + field.Name + "="));
+            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "(" + field.Name + "="));
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Ldfld);
             il.Token(fieldHandle);
@@ -6235,14 +6211,14 @@ internal sealed class ReflectionMetadataEmitter
             il.OpCode(ILOpCode.Callvirt);
             il.Token(this.GetObjectInstanceToStringReference());
             il.Call(this.GetStringConcatReference());
-            il.LoadString(this.metadata.GetOrAddUserString(")"));
+            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(")"));
             il.Call(this.GetStringConcatReference());
             il.OpCode(ILOpCode.Ret);
         }
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().String(), _ => { });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("ToString"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("ToString"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
@@ -6258,7 +6234,7 @@ internal sealed class ReflectionMetadataEmitter
             "EmitInlineEqualityOperator precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
 
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             il.LoadArgumentAddress(0);
             il.OpCode(ILOpCode.Ldfld);
@@ -6288,13 +6264,13 @@ internal sealed class ReflectionMetadataEmitter
                     this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
                     this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
                 });
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
     {
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             il.LoadArgument(1);
             il.LoadArgument(0);
@@ -6307,7 +6283,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type));
-        this.metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.metadata.GetOrAddString("Deconstruct"), this.metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
+        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Deconstruct"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
     }
 
     /// <summary>
@@ -6353,7 +6329,7 @@ internal sealed class ReflectionMetadataEmitter
             "EmitDataStructEqualsObject precondition violated: data struct must be a value type.");
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
             il.LoadArgument(1);
@@ -6376,11 +6352,11 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("Equals"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.NextParameterHandle());
     }
@@ -6401,7 +6377,7 @@ internal sealed class ReflectionMetadataEmitter
             "EmitDataStructEqualsTyped precondition violated: data struct must be a value type.");
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
@@ -6430,11 +6406,11 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("Equals"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.NextParameterHandle());
     }
@@ -6460,7 +6436,7 @@ internal sealed class ReflectionMetadataEmitter
         StandaloneSignatureHandle localsSignature = default;
         int bodyOffset = -1;
 
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (!useFold)
             {
@@ -6504,18 +6480,18 @@ internal sealed class ReflectionMetadataEmitter
                 localsSignature = this.GetHashCodeLocalSignature();
             }
 
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
         }
 
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Type().Int32(), _ => { });
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("GetHashCode"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -6540,9 +6516,9 @@ internal sealed class ReflectionMetadataEmitter
         int pieceCount = (2 * fields.Length) + 1;
 
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
-            var stringTypeRef = this.GetTypeReference(this.coreStringType);
+            var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
 
             il.LoadConstantI4(pieceCount);
             il.OpCode(ILOpCode.Newarr);
@@ -6551,7 +6527,7 @@ internal sealed class ReflectionMetadataEmitter
             // Piece 0: "Name(F1="
             il.OpCode(ILOpCode.Dup);
             il.LoadConstantI4(0);
-            il.LoadString(this.metadata.GetOrAddUserString(structSym.Name + "(" + fields[0].Name + "="));
+            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "(" + fields[0].Name + "="));
             il.OpCode(ILOpCode.Stelem_ref);
 
             for (int i = 0; i < fields.Length; i++)
@@ -6576,7 +6552,7 @@ internal sealed class ReflectionMetadataEmitter
                 string separator = i + 1 < fields.Length
                     ? ", " + fields[i + 1].Name + "="
                     : ")";
-                il.LoadString(this.metadata.GetOrAddUserString(separator));
+                il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(separator));
                 il.OpCode(ILOpCode.Stelem_ref);
             }
 
@@ -6588,11 +6564,11 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Type().String(), _ => { });
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("ToString"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("ToString"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.NextParameterHandle());
     }
@@ -6614,7 +6590,7 @@ internal sealed class ReflectionMetadataEmitter
             "EmitDataStructEqualityOperator precondition violated: data struct must be a value type.");
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
             foreach (var field in structSym.Fields)
@@ -6650,11 +6626,11 @@ internal sealed class ReflectionMetadataEmitter
                     this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
                 });
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.NextParameterHandle());
     }
@@ -6670,7 +6646,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         var fields = structSym.Fields;
         var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             for (int i = 0; i < fields.Length; i++)
             {
@@ -6717,11 +6693,11 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("Deconstruct"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("Deconstruct"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: this.FinishInlineBody(il),
             parameterList: this.NextParameterHandle());
     }
@@ -6740,7 +6716,7 @@ internal sealed class ReflectionMetadataEmitter
         IReadOnlyList<LocalConstantInfo> capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var moveNextBody = MoveNextBodyRewriter.Build(plan);
             var body = moveNextBody.Body;
@@ -6806,7 +6782,7 @@ internal sealed class ReflectionMetadataEmitter
                     EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
-                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
             }
 
             var emitter = new BodyEmitter(
@@ -6834,7 +6810,7 @@ internal sealed class ReflectionMetadataEmitter
                 asyncPlan: plan);
             emitter.EmitBlock(body);
 
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
             capturedLocals = CollectLocalInfo(locals);
             capturedConstants = CollectLocalConstantInfo(constValues);
@@ -6847,12 +6823,12 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        var moveNextHandle = this.metadata.AddMethodDefinition(
+        var moveNextHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
                 | MethodAttributes.NewSlot | MethodAttributes.Final,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("MoveNext"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("MoveNext"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
 
@@ -6860,7 +6836,7 @@ internal sealed class ReflectionMetadataEmitter
         // method post-lowering; sequence points and locals captured here surface
         // in debugger stack traces, locals window, and `step` commands across
         // `await` points.
-        this.pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, plan.KickoffMethod?.Declaration?.SyntaxTree);
+        this.emitCtx.Pdb?.RecordMethod(moveNextHandle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, plan.KickoffMethod?.Declaration?.SyntaxTree);
     }
 
     /// <summary>
@@ -6870,11 +6846,11 @@ internal sealed class ReflectionMetadataEmitter
     private void EmitStateMachineSetStateMachine(AsyncStateMachinePlan plan)
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
 
         var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
@@ -6885,12 +6861,12 @@ internal sealed class ReflectionMetadataEmitter
                 this.EncodeClrType(ps.AddParameter().Type(), iAsyncSmType);
             });
 
-        this.metadata.AddMethodDefinition(
+        this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig
                 | MethodAttributes.NewSlot | MethodAttributes.Final,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString("SetStateMachine"),
-            signature: this.metadata.GetOrAddBlob(sig),
+            name: this.emitCtx.Metadata.GetOrAddString("SetStateMachine"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -7033,9 +7009,9 @@ internal sealed class ReflectionMetadataEmitter
         var localsSigBlob = new BlobBuilder();
         var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(1);
         localsEncoder.AddVariable().Type().Type(smTypeDef, isValueType: true);
-        var localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+        var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
-        return this.methodBodyStream.AddMethodBody(
+        return this.emitCtx.MethodBodyStream.AddMethodBody(
             il,
             maxStack: 3,
             localVariablesSignature: localsSignature);
@@ -7060,7 +7036,7 @@ internal sealed class ReflectionMetadataEmitter
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         argsEncoder.AddArgument().Type(smTypeDef, isValueType: true);
 
-        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
@@ -7160,7 +7136,7 @@ internal sealed class ReflectionMetadataEmitter
         // Second type arg: TStateMachine (the SM TypeDef)
         argsEncoder.AddArgument().Type(smTypeDef, isValueType: smIsValueType);
 
-        var methodSpec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        var methodSpec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         il.OpCode(ILOpCode.Call);
         il.Token(methodSpec);
     }
@@ -7191,25 +7167,25 @@ internal sealed class ReflectionMetadataEmitter
     private MethodDefinitionHandle EmitDefaultConstructor()
     {
         int bodyOffset = -1;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
             il.Call(this.objectCtorRef);
             il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.methodBodyStream.AddMethodBody(il);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
         }
 
         var ctorSig = new BlobBuilder();
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
-        return this.metadata.AddMethodDefinition(
+        return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(ctorSig),
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: this.NextParameterHandle());
     }
@@ -7249,7 +7225,7 @@ internal sealed class ReflectionMetadataEmitter
         IReadOnlyList<LocalConstantInfo> capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
-        if (!this.metadataOnly)
+        if (!this.emitCtx.MetadataOnly)
         {
             if (asyncPlan != null)
             {
@@ -7335,7 +7311,7 @@ internal sealed class ReflectionMetadataEmitter
                     EncodeLocalVariableType(encoder.AddVariable(), t);
                 }
 
-                localsSignature = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(localsSigBlob));
+                localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
             }
 
             // Detect async iterator MoveNext and thread emit context.
@@ -7388,7 +7364,7 @@ internal sealed class ReflectionMetadataEmitter
                 il.OpCode(ILOpCode.Ret);
             }
 
-            bodyOffset = this.methodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
             capturedLocals = CollectLocalInfo(locals);
             capturedConstants = CollectLocalConstantInfo(constValues);
@@ -7515,7 +7491,7 @@ internal sealed class ReflectionMetadataEmitter
         ParameterHandle? returnParamHandle = null;
         if (hasReturnAttributes)
         {
-            returnParamHandle = this.metadata.AddParameter(
+            returnParamHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: ParameterAttributes.None,
                 name: default(StringHandle),
                 sequenceNumber: 0);
@@ -7551,9 +7527,9 @@ internal sealed class ReflectionMetadataEmitter
                 paramAttributes |= ParameterAttributes.Optional | ParameterAttributes.HasDefault;
             }
 
-            var paramHandle = this.metadata.AddParameter(
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: paramAttributes,
-                name: this.metadata.GetOrAddString(p.Name ?? string.Empty),
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: sequenceNumber++);
 
             if (p.RefKind == RefKind.In)
@@ -7564,17 +7540,17 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0063 §10: emit the Constant row carrying the default value.
             if (p.HasExplicitDefaultValue)
             {
-                this.metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
+                this.emitCtx.Metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
             }
 
             paramHandles.Add((p, paramHandle));
         }
 
-        var handle = this.metadata.AddMethodDefinition(
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.metadata.GetOrAddString(methodName),
-            signature: this.metadata.GetOrAddBlob(sigBlob),
+            name: this.emitCtx.Metadata.GetOrAddString(methodName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
 
@@ -7584,7 +7560,7 @@ internal sealed class ReflectionMetadataEmitter
         // async-kickoff path (the kickoff stub is fully synthesised — visible
         // PDB rows for the user's async body land via EmitStateMachineMoveNext
         // below).
-        this.pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, function.Declaration?.SyntaxTree);
+        this.emitCtx.Pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, function.Declaration?.SyntaxTree);
 
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
@@ -8362,7 +8338,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         var sink = new List<BoundFunctionLiteralExpression>();
         var collector = new LambdaCollector(sink);
-        foreach (var kvp in this.program.Functions)
+        foreach (var kvp in this.emitCtx.Program.Functions)
         {
             collector.Visit(kvp.Value);
         }
@@ -8374,7 +8350,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         var sink = new List<BoundGoStatement>();
         var collector = new GoStatementCollector(sink);
-        foreach (var kvp in this.program.Functions)
+        foreach (var kvp in this.emitCtx.Program.Functions)
         {
             collector.Visit(kvp.Value);
         }
@@ -8392,7 +8368,7 @@ internal sealed class ReflectionMetadataEmitter
     private void RegisterConstructedTypeAliases()
     {
         var collector = new ConstructedTypeCollector();
-        foreach (var kvp in this.program.Functions)
+        foreach (var kvp in this.emitCtx.Program.Functions)
         {
             collector.RewriteStatement(kvp.Value);
         }
@@ -8658,11 +8634,11 @@ internal sealed class ReflectionMetadataEmitter
     private void AddIteratorInterfaceImplementations(StructSymbol smClass, IteratorStateMachineInfo info)
     {
         var elementClr = info.Plan.ElementType.ClrType ?? typeof(object);
-        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
-        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
-        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
-        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
-        this.metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
+        this.emitCtx.Metadata.AddInterfaceImplementation(this.structTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
     }
 
     private void SynthesizeAsyncIteratorStateMachines(PackageSymbol hostPackage)
@@ -8853,7 +8829,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // Resolve builder info for async iterator emit context.
             var returnClrType = plan.Function.Type?.ClrType;
-            var aiBuilderInfo = Lowering.Async.AsyncMethodBuilderInfo.Resolve(returnClrType, this.references);
+            var aiBuilderInfo = Lowering.Async.AsyncMethodBuilderInfo.Resolve(returnClrType, this.emitCtx.References);
             this.asyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo);
         }
     }
@@ -9171,26 +9147,26 @@ internal sealed class ReflectionMetadataEmitter
         var typeDef = this.structTypeDefs[smClass];
 
         // IAsyncEnumerator<T>
-        this.metadata.AddInterfaceImplementation(typeDef,
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
             this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr)));
 
         // IAsyncDisposable
-        this.metadata.AddInterfaceImplementation(typeDef,
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
             this.GetTypeHandleForMember(typeof(System.IAsyncDisposable)));
 
         if (plan.IsEnumerable)
         {
             // IAsyncEnumerable<T>
-            this.metadata.AddInterfaceImplementation(typeDef,
+            this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
                 this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr)));
         }
 
         // IValueTaskSource<bool>
-        this.metadata.AddInterfaceImplementation(typeDef,
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
             this.GetTypeHandleForMember(typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>)));
 
         // IAsyncStateMachine (required by AsyncIteratorMethodBuilder.MoveNext<TSM> constraint)
-        this.metadata.AddInterfaceImplementation(typeDef,
+        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
             this.GetTypeHandleForMember(typeof(System.Runtime.CompilerServices.IAsyncStateMachine)));
     }
 
@@ -9202,7 +9178,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void SynthesizeAsyncLambdaStateMachines(List<BoundFunctionLiteralExpression> literals, PackageSymbol hostPackage)
     {
-        var packageName = hostPackage?.Name ?? this.program.PackageName ?? string.Empty;
+        var packageName = hostPackage?.Name ?? this.emitCtx.Program.PackageName ?? string.Empty;
         var plans = this.asyncStateMachinePlans.ToBuilder();
 
         foreach (var literal in literals)
@@ -9240,7 +9216,7 @@ internal sealed class ReflectionMetadataEmitter
             body = (BoundBlockStatement)Lowerer.Lower(body);
 
             var plan = Lowering.Async.AsyncStateMachineRewriter.RewriteSingle(
-                kickoffFunction, body, this.references, packageName);
+                kickoffFunction, body, this.emitCtx.References, packageName);
             if (plan == null)
             {
                 continue;
@@ -9728,17 +9704,17 @@ internal sealed class ReflectionMetadataEmitter
 
         if (element == TypeSymbol.Int32)
         {
-            return this.GetTypeReference(this.coreInt32Type);
+            return this.GetTypeReference(this.emitCtx.CoreInt32Type);
         }
 
         if (element == TypeSymbol.Bool)
         {
-            return this.GetTypeReference(this.coreBooleanType);
+            return this.GetTypeReference(this.emitCtx.CoreBooleanType);
         }
 
         if (element == TypeSymbol.String)
         {
-            return this.GetTypeReference(this.coreStringType);
+            return this.GetTypeReference(this.emitCtx.CoreStringType);
         }
 
         if (element is ArrayTypeSymbol nestedArr)
@@ -9746,7 +9722,7 @@ internal sealed class ReflectionMetadataEmitter
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
             this.EncodeTypeSymbol(encoder, nestedArr);
-            return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
         if (element is SliceTypeSymbol nestedSlice)
@@ -9754,7 +9730,7 @@ internal sealed class ReflectionMetadataEmitter
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
             this.EncodeTypeSymbol(encoder, nestedSlice);
-            return this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
         if (element.ClrType != null)
@@ -9782,7 +9758,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private Type ResolveCoreType(string fullName, Type fallback)
     {
-        if (this.references.TryResolveType(fullName, out var t))
+        if (this.emitCtx.References.TryResolveType(fullName, out var t))
         {
             return t;
         }
@@ -9804,10 +9780,10 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
-        this.nullRefExceptionCtorRef = this.metadata.AddMemberReference(
+        this.nullRefExceptionCtorRef = this.emitCtx.Metadata.AddMemberReference(
             parent: nreTypeRef,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.nullRefExceptionCtorRef;
     }
 
@@ -9852,7 +9828,7 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle GetStringLengthReference()
     {
         // System.String::get_Length() — used to implement len(string).
-        var method = this.coreStringType.GetMethod("get_Length", Type.EmptyTypes)
+        var method = this.emitCtx.CoreStringType.GetMethod("get_Length", Type.EmptyTypes)
             ?? throw new InvalidOperationException("String.get_Length is not resolvable from the supplied references.");
         return this.GetMethodReference(method);
     }
@@ -9860,7 +9836,7 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle GetStringCharsReference()
     {
         // System.String::get_Chars(Int32) — used for string indexing (issue #537).
-        var method = this.coreStringType.GetMethod("get_Chars", new[] { typeof(int) })
+        var method = this.emitCtx.CoreStringType.GetMethod("get_Chars", new[] { typeof(int) })
             ?? throw new InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.");
         return this.GetMethodReference(method);
     }
@@ -9868,9 +9844,9 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle GetTypeFromHandleReference()
     {
         // System.Type::GetTypeFromHandle(RuntimeTypeHandle) — backs `typeof(T)`.
-        var method = this.coreSystemType.GetMethod(
+        var method = this.emitCtx.CoreSystemType.GetMethod(
             "GetTypeFromHandle",
-            new[] { this.coreRuntimeTypeHandleType })
+            new[] { this.emitCtx.CoreRuntimeTypeHandleType })
             ?? throw new InvalidOperationException("Type.GetTypeFromHandle(RuntimeTypeHandle) is not resolvable from the supplied references.");
         return this.GetMethodReference(method);
     }
@@ -9894,9 +9870,9 @@ internal sealed class ReflectionMetadataEmitter
     private MemberReferenceHandle GetArrayCopyReference()
     {
         // System.Array::Copy(Array, Array, Int32) — used to implement append(slice, element).
-        var method = this.coreArrayType.GetMethod(
+        var method = this.emitCtx.CoreArrayType.GetMethod(
             "Copy",
-            new[] { this.coreArrayType, this.coreArrayType, this.coreInt32Type })
+            new[] { this.emitCtx.CoreArrayType, this.emitCtx.CoreArrayType, this.emitCtx.CoreInt32Type })
             ?? throw new InvalidOperationException("Array.Copy(Array, Array, int) is not resolvable from the supplied references.");
         return this.GetMethodReference(method);
     }
@@ -9911,10 +9887,10 @@ internal sealed class ReflectionMetadataEmitter
         var name = assembly.GetName();
         var publicKeyToken = name.GetPublicKeyToken();
         var publicKeyOrTokenBlob = publicKeyToken is { Length: > 0 }
-            ? this.metadata.GetOrAddBlob(publicKeyToken)
+            ? this.emitCtx.Metadata.GetOrAddBlob(publicKeyToken)
             : default(BlobHandle);
-        var handle = this.metadata.AddAssemblyReference(
-            name: this.metadata.GetOrAddString(name.Name ?? string.Empty),
+        var handle = this.emitCtx.Metadata.AddAssemblyReference(
+            name: this.emitCtx.Metadata.GetOrAddString(name.Name ?? string.Empty),
             version: name.Version ?? new Version(0, 0, 0, 0),
             culture: default(StringHandle),
             publicKeyOrToken: publicKeyOrTokenBlob,
@@ -9957,10 +9933,10 @@ internal sealed class ReflectionMetadataEmitter
 
         var publicKeyToken = sysRuntimeName.GetPublicKeyToken();
         var publicKeyOrTokenBlob = publicKeyToken is { Length: > 0 }
-            ? this.metadata.GetOrAddBlob(publicKeyToken)
+            ? this.emitCtx.Metadata.GetOrAddBlob(publicKeyToken)
             : default(BlobHandle);
-        this.systemRuntimeAssemblyRef = this.metadata.AddAssemblyReference(
-            name: this.metadata.GetOrAddString(sysRuntimeName.Name ?? "System.Runtime"),
+        this.systemRuntimeAssemblyRef = this.emitCtx.Metadata.AddAssemblyReference(
+            name: this.emitCtx.Metadata.GetOrAddString(sysRuntimeName.Name ?? "System.Runtime"),
             version: sysRuntimeName.Version ?? new Version(0, 0, 0, 0),
             culture: default(StringHandle),
             publicKeyOrToken: publicKeyOrTokenBlob,
@@ -10019,18 +9995,18 @@ internal sealed class ReflectionMetadataEmitter
             // CoreLib because the runtime resolves them directly and they
             // may not have type-forwarders in System.Runtime.
             resolutionScope = this.GetSystemRuntimeAssemblyReference();
-            @namespace = this.metadata.GetOrAddString(type.Namespace ?? string.Empty);
+            @namespace = this.emitCtx.Metadata.GetOrAddString(type.Namespace ?? string.Empty);
         }
         else
         {
             resolutionScope = this.GetAssemblyReference(type.Assembly);
-            @namespace = this.metadata.GetOrAddString(type.Namespace ?? string.Empty);
+            @namespace = this.emitCtx.Metadata.GetOrAddString(type.Namespace ?? string.Empty);
         }
 
-        var handle = this.metadata.AddTypeReference(
+        var handle = this.emitCtx.Metadata.AddTypeReference(
             resolutionScope: resolutionScope,
             @namespace: @namespace,
-            name: this.metadata.GetOrAddString(type.Name));
+            name: this.emitCtx.Metadata.GetOrAddString(type.Name));
         this.typeRefs[type] = handle;
         return handle;
     }
@@ -10053,7 +10029,7 @@ internal sealed class ReflectionMetadataEmitter
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
             this.EncodeClrType(encoder, type);
-            var spec = this.metadata.AddTypeSpecification(this.metadata.GetOrAddBlob(sigBlob));
+            var spec = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             this.typeSpecs[type] = spec;
             return spec;
         }
@@ -10159,10 +10135,10 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        var handle = this.metadata.AddMemberReference(
+        var handle = this.emitCtx.Metadata.AddMemberReference(
             parent: parent,
-            name: this.metadata.GetOrAddString(method.Name),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.methodRefs[method] = handle;
         return handle;
     }
@@ -10234,7 +10210,7 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        var spec = this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        var spec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         if (!hasSymbolArgs)
         {
             this.methodSpecs[method] = spec;
@@ -10288,10 +10264,10 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        var handle = this.metadata.AddMemberReference(
+        var handle = this.emitCtx.Metadata.AddMemberReference(
             parent: parent,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.ctorRefs[ctor] = handle;
         return handle;
     }
@@ -10322,10 +10298,10 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         this.EncodeClrType(new BlobEncoder(sigBlob).FieldSignature(), openField.FieldType);
 
-        var handle = this.metadata.AddMemberReference(
+        var handle = this.emitCtx.Metadata.AddMemberReference(
             parent: parent,
-            name: this.metadata.GetOrAddString(field.Name),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(field.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.fieldRefs[field] = handle;
         return handle;
     }
@@ -10335,10 +10311,10 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
-        return this.metadata.AddMemberReference(
+        return this.emitCtx.Metadata.AddMemberReference(
             parent: this.objectTypeRef,
-            name: this.metadata.GetOrAddString(".ctor"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     private MemberReferenceHandle GetStringConcatReference()
@@ -10348,7 +10324,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.stringConcatRef;
         }
 
-        var stringTypeRef = this.GetTypeReference(this.coreStringType);
+        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
@@ -10359,10 +10335,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().String();
                     ps.AddParameter().Type().String();
                 });
-        this.stringConcatRef = this.metadata.AddMemberReference(
+        this.stringConcatRef = this.emitCtx.Metadata.AddMemberReference(
             parent: stringTypeRef,
-            name: this.metadata.GetOrAddString("Concat"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("Concat"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.stringConcatRef;
     }
 
@@ -10373,7 +10349,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.stringEqualsRef;
         }
 
-        var stringTypeRef = this.GetTypeReference(this.coreStringType);
+        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(
@@ -10384,10 +10360,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().String();
                     ps.AddParameter().Type().String();
                 });
-        this.stringEqualsRef = this.metadata.AddMemberReference(
+        this.stringEqualsRef = this.emitCtx.Metadata.AddMemberReference(
             parent: stringTypeRef,
-            name: this.metadata.GetOrAddString("Equals"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.stringEqualsRef;
     }
 
@@ -10401,10 +10377,10 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Type().String(), _ => { });
-        this.objectInstanceToStringRef = this.metadata.AddMemberReference(
+        this.objectInstanceToStringRef = this.emitCtx.Metadata.AddMemberReference(
             parent: this.objectTypeRef,
-            name: this.metadata.GetOrAddString("ToString"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("ToString"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.objectInstanceToStringRef;
     }
 
@@ -10418,10 +10394,10 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Type().Int32(), _ => { });
-        this.objectInstanceGetHashCodeRef = this.metadata.AddMemberReference(
+        this.objectInstanceGetHashCodeRef = this.emitCtx.Metadata.AddMemberReference(
             parent: this.objectTypeRef,
-            name: this.metadata.GetOrAddString("GetHashCode"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.objectInstanceGetHashCodeRef;
     }
 
@@ -10452,10 +10428,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().Object();
                     ps.AddParameter().Type().Object();
                 });
-        this.objectStaticEqualsRef = this.metadata.AddMemberReference(
+        this.objectStaticEqualsRef = this.emitCtx.Metadata.AddMemberReference(
             parent: this.objectTypeRef,
-            name: this.metadata.GetOrAddString("Equals"),
-            signature: this.metadata.GetOrAddBlob(sigBlob));
+            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.objectStaticEqualsRef;
     }
 
@@ -10513,10 +10489,10 @@ internal sealed class ReflectionMetadataEmitter
                     }
                 });
 
-        var openRef = this.metadata.AddMemberReference(
+        var openRef = this.emitCtx.Metadata.AddMemberReference(
             hashCodeRef,
-            this.metadata.GetOrAddString("Combine"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("Combine"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         this.hashCodeCombineOpenRefs[arity - 1] = openRef;
         return openRef;
     }
@@ -10539,7 +10515,7 @@ internal sealed class ReflectionMetadataEmitter
             argsEncoder.AddArgument().Object();
         }
 
-        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
@@ -10563,10 +10539,10 @@ internal sealed class ReflectionMetadataEmitter
                 r => r.Void(),
                 ps => ps.AddParameter().Type().GenericMethodTypeParameter(0));
 
-        this.hashCodeAddOpenRef = this.metadata.AddMemberReference(
+        this.hashCodeAddOpenRef = this.emitCtx.Metadata.AddMemberReference(
             hashCodeRef,
-            this.metadata.GetOrAddString("Add"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("Add"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.hashCodeAddOpenRef;
     }
 
@@ -10580,7 +10556,7 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
         argsEncoder.AddArgument().Object();
-        return this.metadata.AddMethodSpecification(openRef, this.metadata.GetOrAddBlob(sigBlob));
+        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
@@ -10600,10 +10576,10 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Type().Int32(), _ => { });
 
-        this.hashCodeToHashCodeRef = this.metadata.AddMemberReference(
+        this.hashCodeToHashCodeRef = this.emitCtx.Metadata.AddMemberReference(
             hashCodeRef,
-            this.metadata.GetOrAddString("ToHashCode"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("ToHashCode"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.hashCodeToHashCodeRef;
     }
 
@@ -10623,7 +10599,7 @@ internal sealed class ReflectionMetadataEmitter
         var sigBlob = new BlobBuilder();
         var encoder = new BlobEncoder(sigBlob).LocalVariableSignature(1);
         encoder.AddVariable().Type().Type(hashCodeRef, isValueType: true);
-        this.hashCodeLocalSig = this.metadata.AddStandaloneSignature(this.metadata.GetOrAddBlob(sigBlob));
+        this.hashCodeLocalSig = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.hashCodeLocalSig;
     }
 
@@ -10654,10 +10630,10 @@ internal sealed class ReflectionMetadataEmitter
                     ps.AddParameter().Type().Type(ifpRef, isValueType: false);
                 });
 
-        this.convertToStringRef = this.metadata.AddMemberReference(
+        this.convertToStringRef = this.emitCtx.Metadata.AddMemberReference(
             convertRef,
-            this.metadata.GetOrAddString("ToString"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("ToString"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.convertToStringRef;
     }
 
@@ -10680,10 +10656,10 @@ internal sealed class ReflectionMetadataEmitter
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
             .Parameters(0, r => r.Type().Type(cultureInfoRef, isValueType: false), _ => { });
 
-        this.cultureInvariantGetterRef = this.metadata.AddMemberReference(
+        this.cultureInvariantGetterRef = this.emitCtx.Metadata.AddMemberReference(
             cultureInfoRef,
-            this.metadata.GetOrAddString("get_InvariantCulture"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("get_InvariantCulture"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.cultureInvariantGetterRef;
     }
 
@@ -10699,7 +10675,7 @@ internal sealed class ReflectionMetadataEmitter
             return this.stringConcatArrayRef;
         }
 
-        var stringTypeRef = this.GetTypeReference(this.coreStringType);
+        var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
         var sig = new BlobBuilder();
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
             .Parameters(
@@ -10707,10 +10683,10 @@ internal sealed class ReflectionMetadataEmitter
                 r => r.Type().String(),
                 ps => ps.AddParameter().Type().SZArray().String());
 
-        this.stringConcatArrayRef = this.metadata.AddMemberReference(
+        this.stringConcatArrayRef = this.emitCtx.Metadata.AddMemberReference(
             stringTypeRef,
-            this.metadata.GetOrAddString("Concat"),
-            this.metadata.GetOrAddBlob(sig));
+            this.emitCtx.Metadata.GetOrAddString("Concat"),
+            this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.stringConcatArrayRef;
     }
 
@@ -11169,7 +11145,7 @@ internal sealed class ReflectionMetadataEmitter
         if (hostDelegate.IsConstructedGenericType)
         {
             var openName = hostDelegate.GetGenericTypeDefinition().FullName;
-            if (openName != null && this.references.TryResolveType(openName, out var openRef))
+            if (openName != null && this.emitCtx.References.TryResolveType(openName, out var openRef))
             {
                 var hostArgs = hostDelegate.GetGenericArguments();
                 var refArgs = new Type[hostArgs.Length];
@@ -11201,13 +11177,13 @@ internal sealed class ReflectionMetadataEmitter
 
         if (isVoid && arity == 0)
         {
-            return this.references.GetCoreType("System.Action");
+            return this.emitCtx.References.GetCoreType("System.Action");
         }
 
         var typeName = isVoid
             ? "System.Action`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var openDef = this.references.GetCoreType(typeName);
+        var openDef = this.emitCtx.References.GetCoreType(typeName);
 
         var args = new Type[arity + (isVoid ? 0 : 1)];
         for (int i = 0; i < arity; i++)
@@ -11234,10 +11210,10 @@ internal sealed class ReflectionMetadataEmitter
     {
         if (type is TypeParameterSymbol)
         {
-            return this.coreObjectType;
+            return this.emitCtx.CoreObjectType;
         }
 
-        return this.MapToReferenceClrType(type.ClrType) ?? this.coreObjectType;
+        return this.MapToReferenceClrType(type.ClrType) ?? this.emitCtx.CoreObjectType;
     }
 
     /// <summary>
@@ -11279,7 +11255,7 @@ internal sealed class ReflectionMetadataEmitter
 
         int arity = fnType.ParameterTypes.Length;
         var typeName = "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var openDef = this.references.GetCoreType(typeName);
+        var openDef = this.emitCtx.References.GetCoreType(typeName);
 
         var args = new Type[arity + 1];
         for (int i = 0; i < arity; i++)
@@ -11303,7 +11279,7 @@ internal sealed class ReflectionMetadataEmitter
             return null;
         }
 
-        if (this.references.TryResolveType(hostType.FullName ?? hostType.Name, out var mapped))
+        if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, out var mapped))
         {
             return mapped;
         }
@@ -12285,7 +12261,7 @@ internal sealed class ReflectionMetadataEmitter
         // synthesised statements with no Syntax map to hidden (0xfeefee).
         private void RecordSequencePointFor(BoundStatement statement)
         {
-            if (this.outer.pdb == null)
+            if (this.outer.emitCtx.Pdb == null)
             {
                 return;
             }
@@ -12322,7 +12298,7 @@ internal sealed class ReflectionMetadataEmitter
                 return;
             }
 
-            var documentHandle = this.outer.pdb.GetOrAddDocument(syntax.SyntaxTree);
+            var documentHandle = this.outer.emitCtx.Pdb.GetOrAddDocument(syntax.SyntaxTree);
             this.sequencePoints.Add(new SequencePoint(
                 ilOffset: ilOffset,
                 document: documentHandle,
@@ -14398,7 +14374,7 @@ internal sealed class ReflectionMetadataEmitter
             switch (literal.Value)
             {
                 case string s:
-                    this.il.LoadString(this.outer.metadata.GetOrAddUserString(s));
+                    this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(s));
                     break;
                 case bool b:
                     this.il.LoadConstantI4(b ? 1 : 0);
@@ -16828,7 +16804,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.il.OpCode(ILOpCode.Stelem_ref);
             }
 
-            var delegateClrType = this.outer.references.GetCoreType("System.Delegate");
+            var delegateClrType = this.outer.emitCtx.References.GetCoreType("System.Delegate");
             var dynamicInvoke = delegateClrType.GetMethod("DynamicInvoke")
                 ?? throw new InvalidOperationException(
                     "System.Delegate has no DynamicInvoke method.");
@@ -17200,7 +17176,7 @@ internal sealed class ReflectionMetadataEmitter
             var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
             argsEncoder.AddArgument().Type(smTypeDef, isValueType: false); // class, not struct
 
-            var methodSpec = this.outer.metadata.AddMethodSpecification(openRef, this.outer.metadata.GetOrAddBlob(sigBlob));
+            var methodSpec = this.outer.emitCtx.Metadata.AddMethodSpecification(openRef, this.outer.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(methodSpec);
         }
