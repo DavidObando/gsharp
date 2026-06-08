@@ -209,7 +209,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStatement(BoundStatement statement)
     {
-        this.currentNode = statement;
+        if (statement.Syntax != null)
+        {
+            this.currentNode = statement;
+        }
+
         this.RecordSequencePointFor(statement);
         switch (statement)
         {

@@ -39,7 +39,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitExpression(BoundExpression expression)
     {
-        this.currentNode = expression;
+        if (expression.Syntax != null)
+        {
+            this.currentNode = expression;
+        }
+
         switch (expression)
         {
             case BoundLiteralExpression literal:
