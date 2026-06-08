@@ -79,9 +79,8 @@ internal sealed class ReflectionMetadataEmitter
     // AddOpenRef/ToHashCodeRef/CombineOpenRefs[], systemAttribute Type/CtorRef)
     // and their paired Get* lazy initializers have moved into
     // WellKnownReferences. The lone StandaloneSignatureHandle hashCodeLocalSig
-    // and its `GetHashCodeLocalSignature()` initializer stay on the emitter:
-    // that's a per-emit StandaloneSignature row (not a Type/MemberRef) and is
-    // squarely in PR-E-6 DataStructSynthesizer scope.
+    // and its `GetHashCodeLocalSignature()` initializer were moved in PR-E-6
+    // onto DataStructSynthesizer, where their sole users now live.
     // Not readonly because instantiation depends on EmitContext.Core* having
     // been resolved first — that happens during EmitCore, not the ctor.
     private WellKnownReferences wellKnown;
@@ -155,7 +154,8 @@ internal sealed class ReflectionMetadataEmitter
     // hashCodeAddOpenRef/ToHashCodeRef, hashCodeCombineOpenRefs[],
     // hashCodeTypeRef, systemAttributeTypeRef/CtorRef moved onto
     // WellKnownReferences.
-    private StandaloneSignatureHandle hashCodeLocalSig;
+    // PR-E-6: hashCodeLocalSig moved onto DataStructSynthesizer alongside
+    // its sole user (GetHashCodeLocalSignature).
 
     // PR-E-4: SlotPlanner owns the slot-allocator BoundTreeWalker collectors
     // (16 of them) and the SelectSlots value object they populate. The slot
@@ -184,6 +184,21 @@ internal sealed class ReflectionMetadataEmitter
     // valid after EmitCore has resolved the BCL core types — mirrors the
     // wellKnown pattern.
     private ConversionEmitter conversionEmitter;
+
+    // PR-E-6: DataStructSynthesizer — sibling of ConversionEmitter — owns
+    // IL emission for ADR-0029 `data struct` synthesized members
+    // (Equals(object)/Equals(T), GetHashCode, ToString, op_Equality/
+    // op_Inequality, Deconstruct) plus the `inline struct` single-field
+    // counterparts and the inline-struct primary constructor. Unlike the
+    // ConversionEmitter case (PR-E-5 Option B), every method moved here
+    // was a top-level private on this emitter — none lived inside the
+    // nested BodyEmitter — so the extraction is a clean Option-A move.
+    // The shared DataStructOpEqualityHandles dictionary stays on
+    // MetadataTokenCache; this component reads/writes it through
+    // `cache.DataStructOpEqualityHandles`.
+    // Not readonly for the same EmitCore-ordering reason as
+    // ConversionEmitter / wellKnown.
+    private DataStructSynthesizer dataStructSynth;
 
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
@@ -358,6 +373,21 @@ internal sealed class ReflectionMetadataEmitter
         // SlotPlanner's needsRvalueReceiverSpill) so the new component does
         // not need a hard back-reference to this emitter.
         this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.GetElementTypeToken);
+
+        // PR-E-6: DataStructSynthesizer wires up after ConversionEmitter
+        // because it needs `conversionEmitter.EmitBoxIfNeeded` for every
+        // field load. Like ConversionEmitter and SlotPlanner, it consumes
+        // the remaining root-emitter helpers it depends on as delegates so
+        // it does not need a hard back-reference to this emitter.
+        this.dataStructSynth = new DataStructSynthesizer(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.conversionEmitter,
+            this.EncodeTypeSymbol,
+            this.GetElementTypeToken,
+            this.GetTypeReference,
+            this.NextParameterHandle);
 
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
@@ -1358,14 +1388,14 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (s.IsInline)
             {
-                this.EmitInlineStructSynthesizedMembers(s);
+                this.dataStructSynth.EmitInlineStructSynthesizedMembers(s);
             }
             else if (s.IsData)
             {
                 // Issue #410 / ADR-0029: emit synthesized members BEFORE
                 // user-declared methods so the MethodDef rows match the
                 // planning order (the first 7 rows reserved by the planner).
-                this.EmitDataStructSynthesizedMembers(s);
+                this.dataStructSynth.EmitDataStructSynthesizedMembers(s);
             }
 
             if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
@@ -5774,664 +5804,6 @@ internal sealed class ReflectionMetadataEmitter
         };
     }
 
-    /// <summary>Emits the ADR-0033 synthesized members for an inline struct.</summary>
-    /// <param name="structSym">The inline struct symbol.</param>
-    private void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
-    {
-        var field = structSym.Fields[0];
-        var fieldHandle = this.cache.StructFieldDefs[field];
-        var typeDef = this.cache.StructTypeDefs[structSym];
-        this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitInlineStructConstructor(structSym, field, fieldHandle);
-        this.EmitInlineEqualsObject(structSym, field, fieldHandle, typeDef);
-        this.EmitInlineEqualsTyped(structSym, field, fieldHandle);
-        this.EmitInlineGetHashCode(structSym, field, fieldHandle);
-        this.EmitInlineToString(structSym, field, fieldHandle);
-        this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: false);
-        this.EmitInlineEqualityOperator(structSym, field, fieldHandle, isInequality: true);
-        this.EmitInlineDeconstruct(structSym, field, fieldHandle);
-    }
-
-    private MethodDefinitionHandle EmitInlineStructConstructor(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
-    {
-        int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Stfld);
-            il.Token(fieldHandle);
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                1,
-                r => r.Void(),
-                ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), field.Type));
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    // PR-E-5: EmitBoxIfNeeded(InstructionEncoder, TypeSymbol) moved to
-    // ConversionEmitter. Internal call sites now route through
-    // this.conversionEmitter.EmitBoxIfNeeded(il, type).
-    private int FinishInlineBody(InstructionEncoder il)
-    {
-        return this.emitCtx.MetadataOnly ? -1 : this.emitCtx.MethodBodyStream.AddMethodBody(il);
-    }
-
-    private void EmitInlineEqualsObject(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, TypeDefinitionHandle typeDef)
-    {
-        // Issue #420 (P3-10): the IL below uses `unbox` to obtain a managed pointer
-        // to the inline struct's field after `isinst`. `unbox` is only legal on
-        // value types; if reference-type structs/records are ever introduced,
-        // this helper must switch to `castclass` (and skip the boxed indirection
-        // entirely). Assert the value-type assumption explicitly so a future
-        // reference-type StructSymbol fails loudly in Debug builds instead of
-        // silently producing invalid IL.
-        Debug.Assert(
-            !structSym.IsClass,
-            "Equals(object) emit assumes value-type struct; reference-type records require castclass instead of unbox");
-
-        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var hasValue = il.DefineLabel();
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Isinst);
-            il.Token(typeDef);
-            il.OpCode(ILOpCode.Dup);
-            il.Branch(ILOpCode.Brtrue, hasValue);
-            il.OpCode(ILOpCode.Pop);
-            il.LoadConstantI4(0);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(hasValue);
-            il.OpCode(ILOpCode.Pop);
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Unbox);
-            il.Token(typeDef);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    private void EmitInlineEqualsTyped(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
-    {
-        // Issue #420 / #455 (P3-10): the emitted IL takes the receiver and the
-        // typed argument by address (`ldarga`) and reads the field directly.
-        // The signature encoded below also passes the typed argument by value
-        // through EncodeTypeSymbol, which assumes a value-type StructSymbol.
-        // If reference-type structs/records are ever introduced the IL and the
-        // signature both need to switch (load by reference, no `ldarga`); make
-        // the value-type precondition explicit so a future change trips loudly
-        // in Debug instead of producing invalid IL.
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitInlineEqualsTyped precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
-
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.LoadArgumentAddress(1);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Equals"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    private void EmitInlineGetHashCode(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
-    {
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.OpCode(ILOpCode.Callvirt);
-            il.Token(this.wellKnown.GetObjectInstanceGetHashCodeReference());
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().Int32(), _ => { });
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("GetHashCode"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    private void EmitInlineToString(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
-    {
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "(" + field.Name + "="));
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.OpCode(ILOpCode.Callvirt);
-            il.Token(this.wellKnown.GetObjectInstanceToStringReference());
-            il.Call(this.wellKnown.GetStringConcatReference());
-            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(")"));
-            il.Call(this.wellKnown.GetStringConcatReference());
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(0, r => r.Type().String(), _ => { });
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("ToString"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    private void EmitInlineEqualityOperator(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle, bool isInequality)
-    {
-        // Issue #420 / #455 (P3-10): the emitted IL uses `ldarga` on both
-        // operands to read fields directly, which requires the operands to be
-        // value-type structs. If reference-type structs/records are ever
-        // introduced this helper must switch to `ldarg` / `ldfld` chains and
-        // re-encode the parameter signature; assert the value-type precondition
-        // explicitly so any future change trips loudly in Debug.
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitInlineEqualityOperator precondition violated: StructSymbol must be a value-type struct — see issue #420 / P3-10.");
-
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadArgumentAddress(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.LoadArgumentAddress(1);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-            if (isInequality)
-            {
-                il.LoadConstantI4(0);
-                il.OpCode(ILOpCode.Ceq);
-            }
-
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().Boolean(),
-                ps =>
-                {
-                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
-                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
-                });
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    private void EmitInlineDeconstruct(StructSymbol structSym, FieldSymbol field, FieldDefinitionHandle fieldHandle)
-    {
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            il.LoadArgument(1);
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Ldfld);
-            il.Token(fieldHandle);
-            il.OpCode(ILOpCode.Stobj);
-            il.Token(this.GetElementTypeToken(field.Type));
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true).Parameters(1, r => r.Void(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type));
-        this.emitCtx.Metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.HideBySig, MethodImplAttributes.IL | MethodImplAttributes.Managed, this.emitCtx.Metadata.GetOrAddString("Deconstruct"), this.emitCtx.Metadata.GetOrAddBlob(sig), this.FinishInlineBody(il), this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits the seven synthesized members for a
-    /// <c>data struct</c> type. The MethodDef rows are added in a fixed
-    /// order so they align 1:1 with the rows reserved by the method-row
-    /// planner: <c>Equals(Name)</c>, <c>Equals(object)</c>,
-    /// <c>GetHashCode</c>, <c>ToString</c>, <c>op_Equality</c>,
-    /// <c>op_Inequality</c>, <c>Deconstruct</c>.
-    /// <c>Equals(Name)</c> is emitted first so its MethodDef handle is
-    /// available when <c>Equals(object)</c> is emitted.
-    /// </summary>
-    /// <param name="structSym">The data-struct symbol to emit members for.</param>
-    private void EmitDataStructSynthesizedMembers(StructSymbol structSym)
-    {
-        // ADR-0029: data structs must have at least one field. This is
-        // enforced by the binder; assert here so the emit IL stays simple.
-        Debug.Assert(
-            !structSym.Fields.IsDefaultOrEmpty,
-            "Data structs must have at least one field; the binder should have rejected an empty data struct.");
-
-        var typeDef = this.cache.StructTypeDefs[structSym];
-        var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
-        this.EmitDataStructGetHashCode(structSym);
-        this.EmitDataStructToString(structSym);
-        this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
-        this.EmitDataStructEqualityOperator(structSym, isInequality: true);
-        this.EmitDataStructDeconstruct(structSym);
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override bool Equals(object other)</c> that performs
-    /// <c>other is Name p &amp;&amp; this.Equals(p)</c>. Sealed because struct
-    /// methods cannot be overridden in user code anyway, but the metadata
-    /// flag communicates intent.
-    /// </summary>
-    private void EmitDataStructEqualsObject(StructSymbol structSym, TypeDefinitionHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
-    {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualsObject precondition violated: data struct must be a value type.");
-
-        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var retFalse = il.DefineLabel();
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Isinst);
-            il.Token(typeDef);
-            il.Branch(ILOpCode.Brfalse, retFalse);
-            il.LoadArgument(0);
-            il.LoadArgument(1);
-            il.OpCode(ILOpCode.Unbox_any);
-            il.Token(typeDef);
-            il.OpCode(ILOpCode.Call);
-            il.Token(equalsTypedHandle);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(retFalse);
-            il.LoadConstantI4(0);
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
-
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public bool Equals(Name other)</c> that compares fields in source
-    /// declaration order via <c>Object.Equals(object, object)</c>, short
-    /// circuiting on first inequality. Value-type fields are boxed; type
-    /// parameters and reference-type fields are passed as objects directly.
-    /// </summary>
-    /// <returns>The MethodDef handle of the emitted method, so callers can
-    /// reference it from other synthesized members.</returns>
-    private MethodDefinitionHandle EmitDataStructEqualsTyped(StructSymbol structSym)
-    {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualsTyped precondition violated: data struct must be a value type.");
-
-        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var retFalse = il.DefineLabel();
-            foreach (var field in structSym.Fields)
-            {
-                var fieldHandle = this.cache.StructFieldDefs[field];
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.LoadArgumentAddress(1);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-                il.Branch(ILOpCode.Brfalse, retFalse);
-            }
-
-            il.LoadConstantI4(1);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(retFalse);
-            il.LoadConstantI4(0);
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Type().Boolean(), ps => this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym));
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("Equals"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override int GetHashCode()</c>. For up to 8 fields the
-    /// implementation calls <c>HashCode.Combine&lt;object,...,object&gt;</c>
-    /// after boxing each field; for &gt;8 fields it folds via a stack-allocated
-    /// <c>HashCode</c> local using <c>HashCode.Add&lt;object&gt;</c> per field
-    /// and finishes with <c>ToHashCode()</c>.
-    /// </summary>
-    private void EmitDataStructGetHashCode(StructSymbol structSym)
-    {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructGetHashCode precondition violated: data struct must be a value type.");
-
-        var fields = structSym.Fields;
-        bool useFold = fields.Length > 8;
-
-        var il = new InstructionEncoder(new BlobBuilder());
-        StandaloneSignatureHandle localsSignature = default;
-        int bodyOffset = -1;
-
-        if (!this.emitCtx.MetadataOnly)
-        {
-            if (!useFold)
-            {
-                foreach (var field in fields)
-                {
-                    var fieldHandle = this.cache.StructFieldDefs[field];
-                    il.LoadArgument(0);
-                    il.OpCode(ILOpCode.Ldfld);
-                    il.Token(fieldHandle);
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                }
-
-                il.OpCode(ILOpCode.Call);
-                il.Token(this.GetHashCodeCombineObjectSpec(fields.Length));
-                il.OpCode(ILOpCode.Ret);
-            }
-            else
-            {
-                // ldloca.s 0; initobj HashCode
-                il.LoadLocalAddress(0);
-                il.OpCode(ILOpCode.Initobj);
-                il.Token(this.wellKnown.GetHashCodeTypeReference());
-
-                var addSpec = this.GetHashCodeAddObjectSpec();
-                foreach (var field in fields)
-                {
-                    var fieldHandle = this.cache.StructFieldDefs[field];
-                    il.LoadLocalAddress(0);
-                    il.LoadArgument(0);
-                    il.OpCode(ILOpCode.Ldfld);
-                    il.Token(fieldHandle);
-                    this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                    il.OpCode(ILOpCode.Call);
-                    il.Token(addSpec);
-                }
-
-                il.LoadLocalAddress(0);
-                il.Call(this.wellKnown.GetHashCodeToHashCodeReference());
-                il.OpCode(ILOpCode.Ret);
-
-                localsSignature = this.GetHashCodeLocalSignature();
-            }
-
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Type().Int32(), _ => { });
-
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: bodyOffset,
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public sealed override string ToString()</c> rendering
-    /// <c>Name(F1=v1, F2=v2, …)</c>. Field values are converted via
-    /// <c>Convert.ToString(object, IFormatProvider)</c> with
-    /// <see cref="System.Globalization.CultureInfo.InvariantCulture"/> so
-    /// null reference fields render as the empty string and value-type
-    /// formatting is locale-independent. Pieces are assembled with
-    /// <c>String.Concat(string[])</c>.
-    /// </summary>
-    private void EmitDataStructToString(StructSymbol structSym)
-    {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructToString precondition violated: data struct must be a value type.");
-
-        var fields = structSym.Fields;
-        int pieceCount = (2 * fields.Length) + 1;
-
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var stringTypeRef = this.GetTypeReference(this.emitCtx.CoreStringType);
-
-            il.LoadConstantI4(pieceCount);
-            il.OpCode(ILOpCode.Newarr);
-            il.Token(stringTypeRef);
-
-            // Piece 0: "Name(F1="
-            il.OpCode(ILOpCode.Dup);
-            il.LoadConstantI4(0);
-            il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "(" + fields[0].Name + "="));
-            il.OpCode(ILOpCode.Stelem_ref);
-
-            for (int i = 0; i < fields.Length; i++)
-            {
-                var field = fields[i];
-                var fieldHandle = this.cache.StructFieldDefs[field];
-
-                // Piece 2*i + 1: Convert.ToString(this.Fi, InvariantCulture)
-                il.OpCode(ILOpCode.Dup);
-                il.LoadConstantI4((2 * i) + 1);
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetCultureInvariantGetterReference());
-                il.Call(this.wellKnown.GetConvertToStringReference());
-                il.OpCode(ILOpCode.Stelem_ref);
-
-                // Piece 2*i + 2: separator (", F{i+1}=" if more fields, else ")")
-                il.OpCode(ILOpCode.Dup);
-                il.LoadConstantI4((2 * i) + 2);
-                string separator = i + 1 < fields.Length
-                    ? ", " + fields[i + 1].Name + "="
-                    : ")";
-                il.LoadString(this.emitCtx.Metadata.GetOrAddUserString(separator));
-                il.OpCode(ILOpCode.Stelem_ref);
-            }
-
-            il.Call(this.wellKnown.GetStringConcatArrayReference());
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Type().String(), _ => { });
-
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("ToString"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public static bool op_Equality(Name left, Name right)</c> (or
-    /// <c>op_Inequality</c> when <paramref name="isInequality"/> is true).
-    /// Both delegate to <see cref="EmitDataStructEqualsTyped"/> via
-    /// <c>Object.Equals(object, object)</c> on every field — equivalent to
-    /// calling <c>left.Equals(right)</c>, but avoids needing the
-    /// MethodDef handle for <c>Equals(Name)</c> ahead of time.
-    /// </summary>
-    /// <returns>The MethodDef handle of the emitted operator.</returns>
-    private MethodDefinitionHandle EmitDataStructEqualityOperator(StructSymbol structSym, bool isInequality)
-    {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualityOperator precondition violated: data struct must be a value type.");
-
-        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            var retFalse = il.DefineLabel();
-            foreach (var field in structSym.Fields)
-            {
-                var fieldHandle = this.cache.StructFieldDefs[field];
-                il.LoadArgumentAddress(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.LoadArgumentAddress(1);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.Call(this.wellKnown.GetObjectStaticEqualsReference());
-                il.Branch(ILOpCode.Brfalse, retFalse);
-            }
-
-            il.LoadConstantI4(isInequality ? 0 : 1);
-            il.OpCode(ILOpCode.Ret);
-            il.MarkLabel(retFalse);
-            il.LoadConstantI4(isInequality ? 1 : 0);
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: false)
-            .Parameters(
-                2,
-                r => r.Type().Boolean(),
-                ps =>
-                {
-                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
-                    this.EncodeTypeSymbol(ps.AddParameter().Type(), structSym);
-                });
-
-        return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString(isInequality ? "op_Inequality" : "op_Equality"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.NextParameterHandle());
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: emits
-    /// <c>public void Deconstruct(out T1 F1, out T2 F2, …)</c> assigning each
-    /// field to the corresponding out parameter. Field names match the
-    /// declaration order so C# users get meaningful tooling hints when
-    /// destructuring positionally.
-    /// </summary>
-    private void EmitDataStructDeconstruct(StructSymbol structSym)
-    {
-        var fields = structSym.Fields;
-        var il = new InstructionEncoder(new BlobBuilder());
-        if (!this.emitCtx.MetadataOnly)
-        {
-            for (int i = 0; i < fields.Length; i++)
-            {
-                var field = fields[i];
-                var fieldHandle = this.cache.StructFieldDefs[field];
-                il.LoadArgument(i + 1);
-                il.LoadArgument(0);
-                il.OpCode(ILOpCode.Ldfld);
-                il.Token(fieldHandle);
-
-                // ADR-0029 Phase 4-erased generics: TypeParameterSymbol
-                // fields are encoded as System.Object (see EncodeTypeSymbol),
-                // so the indirect store must use stind.ref. Concrete value
-                // types use stobj with the value-type token; concrete
-                // reference types use stind.ref.
-                if (field.Type is TypeParameterSymbol)
-                {
-                    il.OpCode(ILOpCode.Stind_ref);
-                }
-                else if (IsValueTypeSymbol(field.Type))
-                {
-                    il.OpCode(ILOpCode.Stobj);
-                    il.Token(this.GetElementTypeToken(field.Type));
-                }
-                else
-                {
-                    il.OpCode(ILOpCode.Stind_ref);
-                }
-            }
-
-            il.OpCode(ILOpCode.Ret);
-        }
-
-        var sig = new BlobBuilder();
-        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                fields.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var field in fields)
-                    {
-                        this.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: true), field.Type);
-                    }
-                });
-
-        this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
-            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("Deconstruct"),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
-            bodyOffset: this.FinishInlineBody(il),
-            parameterList: this.NextParameterHandle());
-    }
-
     /// <summary>
     /// Emits the <c>MoveNext</c> method for an async state machine using the
     /// rewritten bound-tree body produced by <see cref="MoveNextBodyRewriter"/>.
@@ -9451,60 +8823,6 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.cache.FieldRefs[field] = handle;
         return handle;
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: produces a MethodSpec instantiating
-    /// <c>HashCode.Combine&lt;T1,...,Tn&gt;</c> with <see cref="object"/> for
-    /// each generic parameter. The data-struct emitter always boxes field
-    /// values, so a single object-typed instantiation suffices regardless of
-    /// the field types, dramatically reducing the number of unique MethodSpec
-    /// rows the metadata builder has to track.
-    /// </summary>
-    private EntityHandle GetHashCodeCombineObjectSpec(int arity)
-    {
-        var openRef = this.wellKnown.GetHashCodeCombineOpenReference(arity);
-        var sigBlob = new BlobBuilder();
-        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(arity);
-        for (int i = 0; i < arity; i++)
-        {
-            argsEncoder.AddArgument().Object();
-        }
-
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: produces a MethodSpec for
-    /// <c>HashCode.Add&lt;object&gt;(object)</c>.
-    /// </summary>
-    private EntityHandle GetHashCodeAddObjectSpec()
-    {
-        var openRef = this.wellKnown.GetHashCodeAddOpenReference();
-        var sigBlob = new BlobBuilder();
-        var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);
-        argsEncoder.AddArgument().Object();
-        return this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-    }
-
-    /// <summary>
-    /// Issue #410 / ADR-0029: returns a standalone signature with one
-    /// <c>System.HashCode</c> local, used by the &gt;8-field
-    /// <c>GetHashCode</c> fold path.
-    /// </summary>
-    private StandaloneSignatureHandle GetHashCodeLocalSignature()
-    {
-        if (!this.hashCodeLocalSig.IsNil)
-        {
-            return this.hashCodeLocalSig;
-        }
-
-        var hashCodeRef = this.wellKnown.GetHashCodeTypeReference();
-        var sigBlob = new BlobBuilder();
-        var encoder = new BlobEncoder(sigBlob).LocalVariableSignature(1);
-        encoder.AddVariable().Type().Type(hashCodeRef, isValueType: true);
-        this.hashCodeLocalSig = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        return this.hashCodeLocalSig;
     }
 
     /// <summary>
