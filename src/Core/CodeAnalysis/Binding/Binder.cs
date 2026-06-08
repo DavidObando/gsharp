@@ -85,6 +85,12 @@ public sealed class Binder
     // diff in this PR; subsequent extractions will switch to `binderCtx.RootScope`.
     private readonly BinderContext binderCtx;
 
+    // PR-B-2: the pure "given a type T and a name N, return the candidates"
+    // facade. Consumes the BinderContext for the reference resolver / scope
+    // and delegates low-level CLR member walks to ClrTypeUtilities. Composed,
+    // not inherited; MemberLookup never back-references Binder.
+    private readonly MemberLookup memberLookup;
+
     private FunctionSymbol function;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
@@ -110,6 +116,7 @@ public sealed class Binder
     public Binder(BoundScope parent, FunctionSymbol function)
     {
         binderCtx = new BinderContext(parent);
+        memberLookup = new MemberLookup(binderCtx);
         this.function = function;
 
         if (function != null)
@@ -1830,7 +1837,7 @@ public sealed class Binder
                 PropertySymbol overriddenProperty = null;
                 if (isOverride)
                 {
-                    if (structSymbol.BaseClass == null || !TryGetPropertyIncludingInherited(structSymbol.BaseClass, propName, out var baseProp))
+                    if (structSymbol.BaseClass == null || !MemberLookup.TryGetPropertyIncludingInherited(structSymbol.BaseClass, propName, out var baseProp))
                     {
                         Diagnostics.ReportNoBaseMethodToOverride(propSyntax.Identifier.Location, propName);
                     }
@@ -2711,7 +2718,7 @@ public sealed class Binder
                     continue;
                 }
 
-                if (HasMatchingMethodForClrSignature(structSymbol, clrMethod))
+                if (MemberLookup.HasMatchingMethodForClrSignature(structSymbol, clrMethod))
                 {
                     continue;
                 }
@@ -2726,7 +2733,7 @@ public sealed class Binder
             // Properties.
             foreach (var clrProp in clrIface.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
             {
-                var implProp = FindMatchingProperty(structSymbol, clrProp);
+                var implProp = MemberLookup.FindMatchingProperty(structSymbol, clrProp);
                 if (implProp == null)
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -2756,55 +2763,6 @@ public sealed class Binder
                 }
             }
         }
-    }
-
-    private static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, System.Reflection.MethodInfo clrMethod)
-    {
-        var clrParams = clrMethod.GetParameters();
-        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
-        {
-            var callable = GetCallableParameters(candidate);
-            if (callable.Length != clrParams.Length)
-            {
-                continue;
-            }
-
-            if (!ClrTypesEquivalent(candidate.Type?.ClrType, clrMethod.ReturnType))
-            {
-                continue;
-            }
-
-            var allMatch = true;
-            for (var i = 0; i < callable.Length; i++)
-            {
-                if (!ClrTypesEquivalent(callable[i].Type?.ClrType, clrParams[i].ParameterType))
-                {
-                    allMatch = false;
-                    break;
-                }
-            }
-
-            if (allMatch)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static PropertySymbol FindMatchingProperty(StructSymbol structSymbol, System.Reflection.PropertyInfo clrProp)
-    {
-        foreach (var implProp in structSymbol.Properties)
-        {
-            if (implProp.Name == clrProp.Name
-                && ClrTypesEquivalent(implProp.Type?.ClrType, clrProp.PropertyType))
-            {
-                return implProp;
-            }
-        }
-
-        return null;
     }
 
     private static bool ClrTypesEquivalent(System.Type a, System.Type b)
@@ -2847,27 +2805,6 @@ public sealed class Binder
         }
 
         return $"{dotted}[{string.Join(", ", args)}]";
-    }
-
-    private static bool TryGetPropertyIncludingInherited(StructSymbol type, string name, out PropertySymbol property)
-    {
-        var current = type;
-        while (current != null)
-        {
-            foreach (var p in current.Properties)
-            {
-                if (p.Name == name)
-                {
-                    property = p;
-                    return true;
-                }
-            }
-
-            current = current.BaseClass;
-        }
-
-        property = null;
-        return false;
     }
 
     private InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package)
@@ -6208,7 +6145,7 @@ public sealed class Binder
             return new BoundExpressionStatement(syntax, stream);
         }
 
-        if (!TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
+        if (!MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
@@ -6388,38 +6325,6 @@ public sealed class Binder
         return TypeSymbol.FromClrType(typeof(object));
     }
 
-    private static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
-    {
-        elementType = null;
-        var clr = type?.ClrType;
-        if (clr == null)
-        {
-            return false;
-        }
-
-        foreach (var iface in EnumerateSelfAndInterfaces(clr))
-        {
-            if (iface.IsGenericType &&
-                !iface.IsGenericTypeDefinition &&
-                iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
-            {
-                elementType = TypeSymbol.FromClrType(iface.GetGenericArguments()[0]);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static System.Collections.Generic.IEnumerable<System.Type> EnumerateSelfAndInterfaces(System.Type t)
-    {
-        yield return t;
-        foreach (var i in t.GetInterfaces())
-        {
-            yield return i;
-        }
-    }
-
     private TypeSymbol ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
@@ -6496,19 +6401,19 @@ public sealed class Binder
                     keyType = TypeSymbol.Int32;
                     valueType = annotated.GetTypeArgumentSymbolForClrType(annotated.ClrType.GetElementType());
                 }
-                else if (TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
+                else if (MemberLookup.TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
                     keyType = annotated.GetTypeArgumentSymbolForClrType(aDKey);
                     valueType = annotated.GetTypeArgumentSymbolForClrType(aDVal);
                 }
-                else if (TryGetClrEnumerableElementType(annotated.ClrType, out var aElemType))
+                else if (MemberLookup.TryGetClrEnumerableElementType(annotated.ClrType, out var aElemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
                     valueType = annotated.GetTypeArgumentSymbolForClrType(aElemType);
                 }
-                else if (TryGetClrPatternEnumerableElementType(annotated.ClrType, out var aPatternElemType))
+                else if (MemberLookup.TryGetClrPatternEnumerableElementType(annotated.ClrType, out var aPatternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
@@ -6532,19 +6437,19 @@ public sealed class Binder
                     keyType = TypeSymbol.Int32;
                     valueType = TypeSymbol.FromClrType(imp.ClrType.GetElementType());
                 }
-                else if (TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
+                else if (MemberLookup.TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
                     keyType = TypeSymbol.FromClrType(dKey);
                     valueType = TypeSymbol.FromClrType(dVal);
                 }
-                else if (TryGetClrEnumerableElementType(imp.ClrType, out var elemType))
+                else if (MemberLookup.TryGetClrEnumerableElementType(imp.ClrType, out var elemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
                     valueType = TypeSymbol.FromClrType(elemType);
                 }
-                else if (TryGetClrPatternEnumerableElementType(imp.ClrType, out var patternElemType))
+                else if (MemberLookup.TryGetClrPatternEnumerableElementType(imp.ClrType, out var patternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
@@ -6557,7 +6462,7 @@ public sealed class Binder
                 }
 
                 break;
-            case StructSymbol userType when TryGetUserPatternEnumerableElementType(userType, out var userElemType):
+            case StructSymbol userType when MemberLookup.TryGetUserPatternEnumerableElementType(userType, out var userElemType):
                 iterationKind = ForRangeKind.PatternEnumerator;
                 keyType = TypeSymbol.Int32;
                 valueType = userElemType;
@@ -6608,120 +6513,6 @@ public sealed class Binder
         scope = scope.Parent;
 
         return new BoundForRangeStatement(syntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
-    }
-
-    private static bool TryGetClrDictionaryTypes(System.Type clrType, out System.Type keyType, out System.Type valueType)
-    {
-        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
-        {
-            if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IDictionary`2")
-            {
-                var args = iface.GetGenericArguments();
-                keyType = args[0];
-                valueType = args[1];
-                return true;
-            }
-        }
-
-        keyType = null;
-        valueType = null;
-        return false;
-    }
-
-    private static bool TryGetClrEnumerableElementType(System.Type clrType, out System.Type elementType)
-    {
-        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
-        {
-            if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
-            {
-                elementType = iface.GetGenericArguments()[0];
-                return true;
-            }
-        }
-
-        // Non-generic IEnumerable falls back to object.
-        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(clrType))
-        {
-            elementType = typeof(object);
-            return true;
-        }
-
-        elementType = null;
-        return false;
-    }
-
-    private static bool TryGetClrPatternEnumerableElementType(System.Type clrType, out System.Type elementType)
-    {
-        var getEnumerator = clrType.GetMethod(
-            "GetEnumerator",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-            binder: null,
-            types: System.Type.EmptyTypes,
-            modifiers: null);
-        if (getEnumerator == null)
-        {
-            elementType = null;
-            return false;
-        }
-
-        var enumeratorType = getEnumerator.ReturnType;
-        var moveNext = enumeratorType.GetMethod(
-            "MoveNext",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-            binder: null,
-            types: System.Type.EmptyTypes,
-            modifiers: null);
-        if (moveNext?.ReturnType != typeof(bool))
-        {
-            elementType = null;
-            return false;
-        }
-
-        if (TryGetClrCurrentMemberType(enumeratorType, out elementType))
-        {
-            return true;
-        }
-
-        elementType = null;
-        return false;
-    }
-
-    private static bool TryGetClrCurrentMemberType(System.Type enumeratorType, out System.Type elementType)
-    {
-        var currentProperty = ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-        if (currentProperty != null)
-        {
-            elementType = currentProperty.PropertyType;
-            return true;
-        }
-
-        var currentField = ClrTypeUtilities.SafeGetField(enumeratorType, "Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
-        if (currentField != null)
-        {
-            elementType = currentField.FieldType;
-            return true;
-        }
-
-        elementType = null;
-        return false;
-    }
-
-    private static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol elementType)
-    {
-        if (type.TryGetMethodIncludingInherited("GetEnumerator", out var getEnumerator) &&
-            getEnumerator.Parameters.Length == 0 &&
-            getEnumerator.Type is StructSymbol enumeratorType &&
-            enumeratorType.TryGetMethodIncludingInherited("MoveNext", out var moveNext) &&
-            moveNext.Parameters.Length == 0 &&
-            moveNext.Type == TypeSymbol.Bool &&
-            enumeratorType.TryGetField("Current", out var currentField))
-        {
-            elementType = currentField.Type;
-            return true;
-        }
-
-        elementType = null;
-        return false;
     }
 
     private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
@@ -7858,7 +7649,7 @@ public sealed class Binder
                 return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
             }
 
-            if (TryGetPropertyIncludingInherited(structSymbol, propertyName, out var prop))
+            if (MemberLookup.TryGetPropertyIncludingInherited(structSymbol, propertyName, out var prop))
             {
                 if (!prop.HasSetter)
                 {
@@ -8305,7 +8096,7 @@ public sealed class Binder
         if (!structSymbol.TryGetFieldIncludingInherited(syntax.FieldIdentifier.Text, out var field, out _))
         {
             // ADR-0051: check if it's a property.
-            if (TryGetPropertyIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, out var prop))
+            if (MemberLookup.TryGetPropertyIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, out var prop))
             {
                 if (!prop.HasSetter)
                 {
@@ -10920,7 +10711,7 @@ public sealed class Binder
                 continue;
             }
 
-            knownNames ??= CollectClrParameterNames(receiverClrType, methodName, bindingFlags);
+            knownNames ??= MemberLookup.CollectClrParameterNames(receiverClrType, methodName, bindingFlags);
             if (!knownNames.Contains(name))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
@@ -10930,38 +10721,6 @@ public sealed class Binder
         }
 
         return false;
-    }
-
-    private static HashSet<string> CollectClrParameterNames(System.Type receiverClrType, string methodName, System.Reflection.BindingFlags bindingFlags)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        System.Reflection.MethodInfo[] methods;
-        try
-        {
-            methods = receiverClrType.GetMethods(bindingFlags);
-        }
-        catch
-        {
-            return names;
-        }
-
-        foreach (var method in methods)
-        {
-            if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            foreach (var parameter in method.GetParameters())
-            {
-                if (parameter.Name != null)
-                {
-                    names.Add(parameter.Name);
-                }
-            }
-        }
-
-        return names;
     }
 
     /// <summary>
@@ -10989,7 +10748,7 @@ public sealed class Binder
                 continue;
             }
 
-            knownNames ??= CollectClrConstructorParameterNames(clrType);
+            knownNames ??= MemberLookup.CollectClrConstructorParameterNames(clrType);
             if (!knownNames.Contains(name))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
@@ -10999,33 +10758,6 @@ public sealed class Binder
         }
 
         return false;
-    }
-
-    private static HashSet<string> CollectClrConstructorParameterNames(System.Type clrType)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        System.Reflection.ConstructorInfo[] ctors;
-        try
-        {
-            ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
-        }
-        catch
-        {
-            return names;
-        }
-
-        foreach (var ctor in ctors)
-        {
-            foreach (var parameter in ctor.GetParameters())
-            {
-                if (parameter.Name != null)
-                {
-                    names.Add(parameter.Name);
-                }
-            }
-        }
-
-        return names;
     }
 
     private ImmutableArray<BoundExpression> ValidateRefArguments(
@@ -13930,7 +13662,7 @@ public sealed class Binder
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
-                    if (TryGetPropertyIncludingInherited(structSym, ne.IdentifierToken.Text, out var prop))
+                    if (MemberLookup.TryGetPropertyIncludingInherited(structSym, ne.IdentifierToken.Text, out var prop))
                     {
                         if (!prop.HasGetter)
                         {
@@ -13978,7 +13710,7 @@ public sealed class Binder
                 }
                 else if (receiver != null && receiver.Type is NullableTypeSymbol nullableSym
                     && nullableSym.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr
-                    && TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
+                    && this.memberLookup.TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
                 {
                     // Issue #517: a value-type `T?` lowers to `System.Nullable<T>`
                     // at the CLR layer (see `EncodeTypeSymbol`). Resolve `.Value`,
@@ -14394,7 +14126,7 @@ public sealed class Binder
         // actually carries those members.
         var clrType = receiver.Type is NullableTypeSymbol nullableRecv
             && nullableRecv.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerVt
-            && TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
+            && this.memberLookup.TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
             ? nullableConstructed
             : receiver.Type.ClrType;
 
@@ -14549,7 +14281,7 @@ public sealed class Binder
         }
         else if (matchedField.Type?.ClrType is System.Type fieldClrType
             && ClrTypeUtilities.IsDelegateType(fieldClrType)
-            && TryGetDelegateFunctionType(fieldClrType, out var clrFn))
+            && MemberLookup.TryGetDelegateFunctionType(fieldClrType, out var clrFn))
         {
             functionType = clrFn;
         }
@@ -14995,7 +14727,7 @@ public sealed class Binder
             extensionArgumentNames = withReceiver;
         }
 
-        var candidates = CollectImportedExtensionMethods(methodName);
+        var candidates = this.memberLookup.CollectImportedExtensionMethods(methodName);
         if (candidates.Count == 0)
         {
             return false;
@@ -15080,163 +14812,6 @@ public sealed class Binder
         ValidateRefArguments(bound, refKinds, methodName, ce.Location);
         result = new BoundImportedCallExpression(null, function, bound, refKinds, typeArgSymbols);
         return true;
-    }
-
-    /// <summary>
-    /// Issue #294: collects imported CLR static <c>[Extension]</c> methods with
-    /// the given name whose declaring static class lives in an imported
-    /// namespace. Candidates may be open generic method definitions; generic
-    /// inference happens later in overload resolution.
-    /// </summary>
-    /// <param name="methodName">The method name at the call site.</param>
-    /// <returns>The matching candidate methods (possibly empty).</returns>
-    private List<MethodInfo> CollectImportedExtensionMethods(string methodName)
-    {
-        var result = new List<MethodInfo>();
-        foreach (var type in GetImportedExtensionClasses())
-        {
-            MethodInfo[] methods;
-            try
-            {
-                methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static);
-            }
-            catch
-            {
-                continue;
-            }
-
-            foreach (var method in methods)
-            {
-                if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!HasExtensionAttribute(method))
-                {
-                    continue;
-                }
-
-                if (method.GetParameters().Length == 0)
-                {
-                    continue;
-                }
-
-                result.Add(method);
-            }
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Issue #294: enumerates static classes declared in the currently imported
-    /// namespaces that carry <c>[Extension]</c> (i.e. host extension methods).
-    /// The result is cached per binder; the import count acts as a cheap
-    /// invalidation key because imports only grow during binding.
-    /// </summary>
-    /// <returns>The imported static extension-holding classes.</returns>
-    private List<Type> GetImportedExtensionClasses()
-    {
-        var imports = scope.GetDeclaredImports();
-        var importCount = imports.IsDefault ? 0 : imports.Length;
-        if (binderCtx.CachedImportedExtensionClasses != null && binderCtx.CachedImportedExtensionImportCount == importCount)
-        {
-            return binderCtx.CachedImportedExtensionClasses;
-        }
-
-        var namespaces = new HashSet<string>(StringComparer.Ordinal);
-        if (!imports.IsDefault)
-        {
-            foreach (var import in imports)
-            {
-                if (!string.IsNullOrEmpty(import.Target))
-                {
-                    namespaces.Add(import.Target);
-                }
-            }
-        }
-
-        var classes = new List<Type>();
-        if (namespaces.Count > 0)
-        {
-            foreach (var assembly in scope.References.Assemblies)
-            {
-                IEnumerable<Type> types;
-                try
-                {
-                    types = assembly.GetTypes();
-                }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    types = ex.Types.Where(t => t != null);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                foreach (var type in types)
-                {
-                    if (type == null || type.Namespace == null || !namespaces.Contains(type.Namespace))
-                    {
-                        continue;
-                    }
-
-                    if (!IsStaticClass(type) || !HasExtensionAttribute(type))
-                    {
-                        continue;
-                    }
-
-                    classes.Add(type);
-                }
-            }
-        }
-
-        binderCtx.CachedImportedExtensionClasses = classes;
-        binderCtx.CachedImportedExtensionImportCount = importCount;
-        return classes;
-    }
-
-    /// <summary>
-    /// A C# static class is a sealed abstract class. Detected structurally so
-    /// it works under <see cref="System.Reflection.MetadataLoadContext"/>.
-    /// </summary>
-    /// <param name="type">The candidate type.</param>
-    /// <returns>Whether the type is a static class.</returns>
-    private static bool IsStaticClass(Type type)
-        => type.IsClass && type.IsAbstract && type.IsSealed;
-
-    /// <summary>
-    /// Robustly detects <c>[System.Runtime.CompilerServices.ExtensionAttribute]</c>
-    /// via <see cref="CustomAttributeData"/> (never runtime
-    /// <c>GetCustomAttribute</c>, which throws under
-    /// <see cref="System.Reflection.MetadataLoadContext"/>).
-    /// </summary>
-    /// <param name="member">The type or method to inspect.</param>
-    /// <returns>Whether the member carries the extension attribute.</returns>
-    private static bool HasExtensionAttribute(MemberInfo member)
-    {
-        try
-        {
-            foreach (var attribute in member.GetCustomAttributesData())
-            {
-                if (string.Equals(
-                    attribute.AttributeType?.FullName,
-                    "System.Runtime.CompilerServices.ExtensionAttribute",
-                    StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-        }
-        catch
-        {
-            // MetadataLoadContext may throw resolving the attribute type; treat
-            // as "not an extension" rather than failing the whole binding.
-        }
-
-        return false;
     }
 
     private BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default)
@@ -15376,7 +14951,7 @@ public sealed class Binder
                     continue;
                 }
 
-                if (TryGetDelegateFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
+                if (MemberLookup.TryGetDelegateFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
                     && functionLiteralArgument.FunctionType != targetDelegateFunctionType)
                 {
                     convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));
@@ -15547,16 +15122,23 @@ public sealed class Binder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
-        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx && TryResolveClrIndexer(clrAnnotIdx, new[] { indexSyntax }, out var idxPropAnnot, out var idxArgsAnnot))
+        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
         {
-            var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
-            return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
+            var idxArgsAnnot = ImmutableArray.Create(BindExpression(indexSyntax));
+            if (this.memberLookup.TryResolveClrIndexer(clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot))
+            {
+                var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
+                return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
+            }
         }
-
-        if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { indexSyntax }, out var idxProp, out var idxArgs))
+        else if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget)
         {
-            var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
-            return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
+            var idxArgs = ImmutableArray.Create(BindExpression(indexSyntax));
+            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
+            {
+                var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
+                return AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
+            }
         }
 
         if (target.Type != TypeSymbol.Error)
@@ -15909,49 +15491,56 @@ public sealed class Binder
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr && TryResolveClrIndexer(clrAnnotWr, new[] { indexSyntax }, out var idxPropAnnotWr, out var idxArgsAnnotWr))
+        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr)
         {
-            if (!idxPropAnnotWr.CanWrite)
+            var idxArgsAnnotWr = ImmutableArray.Create(BindExpression(indexSyntax));
+            if (this.memberLookup.TryResolveClrIndexer(clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr))
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
-                return new BoundErrorExpression(null);
-            }
-
-            var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
-            var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
-            return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
-        }
-
-        if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget && TryResolveClrIndexer(clrTarget, new[] { indexSyntax }, out var idxProp, out var idxArgs))
-        {
-            // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
-            // indexer is a `ref T`-returning getter and writes go through that
-            // managed pointer. Detect the ref-returning getter and store through
-            // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
-            // hard error (GS0226).
-            if (!idxProp.CanWrite)
-            {
-                var refGetter = idxProp.GetGetMethod(nonPublic: false);
-                if (refGetter != null && refGetter.ReturnType.IsByRef)
+                if (!idxPropAnnotWr.CanWrite)
                 {
-                    if (IsReadOnlyRefReturn(idxProp, refGetter))
-                    {
-                        Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
-                        return new BoundErrorExpression(null);
-                    }
-
-                    var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
-                    var refValue = BindValue(pointeeType);
-                    return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                    return new BoundErrorExpression(null);
                 }
 
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
-                return new BoundErrorExpression(null);
+                var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
+                var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
+                return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
             }
+        }
+        else if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget)
+        {
+            var idxArgs = ImmutableArray.Create(BindExpression(indexSyntax));
+            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
+            {
+                // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
+                // indexer is a `ref T`-returning getter and writes go through that
+                // managed pointer. Detect the ref-returning getter and store through
+                // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
+                // hard error (GS0226).
+                if (!idxProp.CanWrite)
+                {
+                    var refGetter = idxProp.GetGetMethod(nonPublic: false);
+                    if (refGetter != null && refGetter.ReturnType.IsByRef)
+                    {
+                        if (IsReadOnlyRefReturn(idxProp, refGetter))
+                        {
+                            Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
+                            return new BoundErrorExpression(null);
+                        }
 
-            var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
-            var boundValue = BindValue(valueType);
-            return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
+                        var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
+                        var refValue = BindValue(pointeeType);
+                        return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
+                    }
+
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                    return new BoundErrorExpression(null);
+                }
+
+                var valueType = TypeSymbol.FromClrType(idxProp.PropertyType);
+                var boundValue = BindValue(valueType);
+                return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
+            }
         }
 
         if (variable.Type != TypeSymbol.Error)
@@ -16187,47 +15776,6 @@ public sealed class Binder
         }
     }
 
-    private bool TryResolveClrIndexer(System.Type clrTarget, IReadOnlyList<ExpressionSyntax> argSyntaxes, out PropertyInfo indexer, out ImmutableArray<BoundExpression> boundArguments)
-    {
-        indexer = null;
-        boundArguments = ImmutableArray<BoundExpression>.Empty;
-
-        var bound = ImmutableArray.CreateBuilder<BoundExpression>(argSyntaxes.Count);
-        for (var i = 0; i < argSyntaxes.Count; i++)
-        {
-            bound.Add(BindExpression(argSyntaxes[i]));
-        }
-
-        foreach (var prop in ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance))
-        {
-            var ps = prop.GetIndexParameters();
-            if (ps.Length != bound.Count)
-            {
-                continue;
-            }
-
-            var ok = true;
-            for (var i = 0; i < ps.Length; i++)
-            {
-                var argClr = bound[i].Type?.ClrType;
-                if (argClr == null || !ClrTypeUtilities.IsAssignableByName(ps[i].ParameterType, argClr))
-                {
-                    ok = false;
-                    break;
-                }
-            }
-
-            if (ok)
-            {
-                indexer = prop;
-                boundArguments = bound.ToImmutable();
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static TypeSymbol GetIndexElementType(TypeSymbol type)
     {
         return type switch
@@ -16410,7 +15958,7 @@ public sealed class Binder
             var rebound = argument;
             if (paramIndex < parameters.Length
                 && TryGetFunctionLiteral(argument, out var literal)
-                && TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
             {
                 rebound = CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
@@ -16535,41 +16083,6 @@ public sealed class Binder
         }
 
         return from.ClrType != targetParameterType;
-    }
-
-    private static bool TryGetDelegateFunctionType(Type delegateType, out FunctionTypeSymbol functionType)
-    {
-        functionType = null;
-        if (!ClrTypeUtilities.IsDelegateType(delegateType)
-            && !string.Equals(delegateType?.BaseType?.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
-            && !(delegateType?.FullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true)
-            && !(delegateType?.FullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true))
-        {
-            return false;
-        }
-
-        var invoke = delegateType.GetMethod("Invoke");
-        if (invoke == null)
-        {
-            return false;
-        }
-
-        var parameters = invoke.GetParameters();
-        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
-        foreach (var parameter in parameters)
-        {
-            parameterTypes.Add(parameter.ParameterType.ContainsGenericParameters
-                ? TypeSymbol.Object
-                : TypeSymbol.FromClrType(parameter.ParameterType));
-        }
-
-        var returnType = invoke.ReturnType == typeof(void)
-            ? TypeSymbol.Void
-            : invoke.ReturnType.ContainsGenericParameters
-                ? TypeSymbol.Object
-                : TypeSymbol.FromClrType(invoke.ReturnType);
-        functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
-        return true;
     }
 
     private static bool TryGetFunctionLiteral(BoundExpression expression, out BoundFunctionLiteralExpression literal)
@@ -16751,45 +16264,6 @@ public sealed class Binder
         return true;
     }
 
-    // Issue #337: build an (unresolved) CLR member method-group expression for a
-    // member name that resolves to a method on an imported static type or a CLR
-    // instance receiver. Collects every accessible name-matching overload of the
-    // requested static-ness; overload selection happens later in BindConversion
-    // once the target delegate signature is known. Returns false when the type
-    // exposes no method of that name (so the caller surfaces the member
-    // diagnostic).
-    // Issue #517: build the constructed `System.Nullable<T>` type that lives
-    // in the SAME assembly context (live runtime vs MetadataLoadContext) as
-    // <paramref name="underlying"/>. Mixing contexts — e.g. live `Nullable<>`
-    // with an MLC `DateTime` — yields a `TypeBuilderInstantiation` that
-    // throws on `GetMethods` / `GetProperty`. Returns false when the open
-    // `Nullable<>` cannot be resolved against the references in scope.
-    private bool TryGetNullableConstructedType(Type underlying, out Type constructed)
-    {
-        constructed = null;
-        if (underlying == null)
-        {
-            return false;
-        }
-
-        if (!scope.References.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
-        {
-            return false;
-        }
-
-        try
-        {
-            var mappedUnderlying = scope.References.MapClrTypeToReferences(underlying) ?? underlying;
-            constructed = nullableOpen.MakeGenericType(mappedUnderlying);
-            return constructed != null;
-        }
-        catch
-        {
-            constructed = null;
-            return false;
-        }
-    }
-
     /// <summary>
     /// Issue #530: returns the CLR type to use when <paramref name="typeSymbol"/>
     /// appears as a generic type argument (e.g. <c>Task[int32?]</c> or
@@ -16807,7 +16281,7 @@ public sealed class Binder
     {
         if (typeSymbol is NullableTypeSymbol nullable
             && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt
-            && TryGetNullableConstructedType(innerVt, out var nullableClr))
+            && this.memberLookup.TryGetNullableConstructedType(innerVt, out var nullableClr))
         {
             return nullableClr;
         }
@@ -16826,6 +16300,13 @@ public sealed class Binder
         return NullableTypeSymbol.GetEffectiveClrType(typeSymbol);
     }
 
+    // Issue #337: build an (unresolved) CLR member method-group expression for a
+    // member name that resolves to a method on an imported static type or a CLR
+    // instance receiver. Collects every accessible name-matching overload of the
+    // requested static-ness; overload selection happens later in BindConversion
+    // once the target delegate signature is known. Returns false when the type
+    // exposes no method of that name (so the caller surfaces the member
+    // diagnostic).
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
     {
         methodGroup = null;
