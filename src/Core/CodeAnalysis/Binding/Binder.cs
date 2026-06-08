@@ -120,6 +120,20 @@ public sealed class Binder
     // back-references Binder.
     private readonly PatternBinder patterns;
 
+    // PR-B-6: the binder-side facade for function-literal (lambda)
+    // binding. Owns BindFunctionLiteralExpression, the captured-variable
+    // analysis (CapturedVariableCollector), the erased-adapter
+    // synthesizer (CreateErasedFunctionLiteralAdapter +
+    // ErasedFunctionLiteralAdapterRewriter), the async-return-type
+    // widening helper (WrapAsTask), and the TryGetFunctionLiteral
+    // unwrap helper. Composed via narrow Func / Action callbacks;
+    // never back-references Binder. TryGetFunctionLiteral remains
+    // accessible as `LambdaBinder.TryGetFunctionLiteral` so this
+    // constructor can keep forwarding it as the
+    // `OverloadResolver.TryGetFunctionLiteralDelegate` wired into
+    // `OverloadResolver`'s constructor below.
+    private readonly LambdaBinder lambdas;
+
     private FunctionSymbol function;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
@@ -153,7 +167,7 @@ public sealed class Binder
             bindExpressionWithTargetType: (syntax, targetType) => BindExpression(syntax, targetType),
             isFormattableStringTargetType: IsFormattableStringTargetType,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => BindInterpolatedStringAsFormattable(syntax, targetType),
-            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
             isLvalue: IsLvalue,
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString);
@@ -173,10 +187,10 @@ public sealed class Binder
             bindInterpolatedStringAsFormattable: (syntax, targetType) => BindInterpolatedStringAsFormattable(syntax, targetType),
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
-            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
-            wrapAsTask: WrapAsTask,
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            wrapAsTask: t => lambdas.WrapAsTask(t),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
-            tryGetFunctionLiteral: TryGetFunctionLiteral,
+            tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,
             substituteType: SubstituteType,
             satisfiesConstraint: SatisfiesConstraint,
@@ -188,6 +202,16 @@ public sealed class Binder
             bindExpression: syntax => BindExpression(syntax),
             bindTypeClause: BindTypeClause,
             isNilLiteral: IsNilLiteral);
+        lambdas = new LambdaBinder(
+            binderCtx,
+            conversions,
+            bindBlockStatement: BindBlockStatement,
+            bindTypeClause: BindTypeClause,
+            bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
+            isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
+            resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
+            getCurrentFunction: () => this.function,
+            setCurrentFunction: fn => this.function = fn);
         this.function = function;
 
         if (function != null)
@@ -4457,7 +4481,7 @@ public sealed class Binder
                 }
                 else if (!IsAsyncIteratorReturnType(ret))
                 {
-                    ret = WrapAsTask(ret);
+                    ret = lambdas.WrapAsTask(ret);
                 }
             }
 
@@ -6822,7 +6846,7 @@ public sealed class Binder
             case SyntaxKind.TupleLiteralExpression:
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
             case SyntaxKind.FunctionLiteralExpression:
-                return BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
+                return lambdas.BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
             case SyntaxKind.AwaitExpression:
                 return BindAwaitExpression((AwaitExpressionSyntax)syntax);
             case SyntaxKind.SwitchExpression:
@@ -7793,121 +7817,6 @@ public sealed class Binder
 
         var tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable());
         return new BoundTupleLiteralExpression(null, tupleType, bound.MoveToImmutable());
-    }
-
-    private BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax)
-    {
-        // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
-        // Bind parameters, push a new scope chained to the current scope so
-        // outer locals are visible by lexical lookup (closure capture), bind
-        // the body against a synthetic FunctionSymbol whose return type is
-        // the declared return clause (or void), then collect the captured
-        // outer variables by inspecting the bound body.
-        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
-        var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
-        var seen = new HashSet<string>();
-        foreach (var p in syntax.Parameters)
-        {
-            var pname = p.Identifier.Text;
-            var ptype = BindTypeClause(p.Type) ?? TypeSymbol.Error;
-            if (p.IsVariadic)
-            {
-                Diagnostics.ReportVariadicParameterNotSupportedHere(p.Location, pname);
-            }
-
-            if (!seen.Add(pname))
-            {
-                Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
-            }
-
-            var lambdaParam = new ParameterSymbol(pname, ptype, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
-
-            // ADR-0063 §5: function-literal (lambda) parameters can declare a
-            // default value; lambdas can be invoked through their delegate type
-            // which honors the default at the call site.
-            conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
-            parameterSymbols.Add(lambdaParam);
-            parameterTypes.Add(ptype);
-        }
-
-        var returnType = syntax.ReturnTypeClause != null ? BindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
-        returnType ??= TypeSymbol.Void;
-
-        // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
-        // because CLR Func<> delegates cannot carry by-ref type arguments.
-        if (returnType is ByRefTypeSymbol && syntax.ReturnTypeClause != null)
-        {
-            Diagnostics.ReportByRefCannotEscape(
-                syntax.ReturnTypeClause.Location,
-                "a managed pointer (*T) cannot be the return type of a function literal");
-            returnType = TypeSymbol.Error;
-        }
-
-        // For async lambdas, the observable return type (from the caller's
-        // perspective) is Task or Task<T>, matching top-level async functions —
-        // with the iterator carve-out (ADR-0041): an async iterator lambda
-        // returning IAsyncEnumerable[T] does not get a Task wrap.
-        var observableReturnType = returnType;
-        if (syntax.IsAsync && !IsAsyncIteratorReturnType(returnType))
-        {
-            observableReturnType = WrapAsTask(returnType);
-        }
-
-        var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), observableReturnType);
-        var synthetic = new FunctionSymbol(
-            $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
-            parameterSymbols.ToImmutable(),
-            returnType);
-        synthetic.IsAsync = syntax.IsAsync;
-
-        // Snapshot current binder state, then push a child scope and bind
-        // the body as if we were inside this synthetic function.
-        var outerScope = scope;
-        var outerFunction = function;
-        scope = new BoundScope(outerScope);
-        function = synthetic;
-        foreach (var ps in synthetic.Parameters)
-        {
-            scope.TryDeclareVariable(ps);
-        }
-
-        var body = BindBlockStatement(syntax.Body);
-
-        scope = outerScope;
-        function = outerFunction;
-
-        var captured = CollectCapturedVariables(body, synthetic.Parameters);
-
-        // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
-        // closure; the capture would hoist it into a heap-allocated display
-        // class, which the CLR forbids.
-        // ADR-0058 / issue #376: a managed-pointer (*T / ByRefTypeSymbol) local also
-        // cannot be captured — the closure may outlive the pointed-to variable.
-        foreach (var capturedVariable in captured)
-        {
-            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
-            {
-                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
-            }
-            else if (capturedVariable.Type is ByRefTypeSymbol)
-            {
-                Diagnostics.ReportByRefCannotEscape(
-                    syntax.Location,
-                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
-            }
-        }
-
-        return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
-    }
-
-    private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)
-    {
-        var paramSet = new HashSet<VariableSymbol>(parameters);
-        var seen = new HashSet<VariableSymbol>();
-        var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
-        var collector = new CapturedVariableCollector(paramSet, seen, captured);
-        collector.RewriteStatement(body);
-        return captured.ToImmutable();
     }
 
     private BoundExpression BindFieldAssignmentExpression(FieldAssignmentExpressionSyntax syntax)
@@ -9623,49 +9532,6 @@ public sealed class Binder
         return builder.MoveToImmutable();
     }
 
-    private TypeSymbol WrapAsTask(TypeSymbol element)
-    {
-        if (element == TypeSymbol.Error)
-        {
-            return TypeSymbol.Error;
-        }
-
-        if (element == TypeSymbol.Void)
-        {
-            if (scope.References.TryResolveType("System.Threading.Tasks.Task", out var taskType))
-            {
-                return ImportedTypeSymbol.Get(taskType);
-            }
-
-            return element;
-        }
-
-        var clr = element.ClrType;
-        if (clr == null)
-        {
-            // Phase 5.1 limitation (see ADR-0023): wrapping a user-defined
-            // GSharp type as Task[T] requires interop work that is deferred.
-            return element;
-        }
-
-        if (scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var taskOpen))
-        {
-            // Route the element CLR type through the SAME resolver as Task`1.
-            // Under the SDK build path the references are loaded via a
-            // MetadataLoadContext, and MakeGenericType requires the type
-            // argument to originate from that same context (issues #290 and
-            // #291: value-returning async funcs and imported-Task<T> awaits).
-            // Issue #530: use ResolveClrTypeForGenericArg so that a nullable
-            // value type (e.g. `int32?`) correctly wraps as
-            // `Task<Nullable<int>>` rather than `Task<int>`.
-            var elementClr = ResolveClrTypeForGenericArg(element) ?? scope.References.MapClrTypeToReferences(clr);
-            var closed = taskOpen.MakeGenericType(elementClr);
-            return ImportedTypeSymbol.Get(closed);
-        }
-
-        return element;
-    }
-
     private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
     {
         element = null;
@@ -10870,9 +10736,9 @@ public sealed class Binder
 
                 if (substitution != null
                     && paramType is FunctionTypeSymbol openFunctionParameter
-                    && TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
+                    && LambdaBinder.TryGetFunctionLiteral(arguments[i], out var functionLiteralArgument))
                 {
-                    convertedArgs.Add(CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
+                    convertedArgs.Add(lambdas.CreateErasedFunctionLiteralAdapter(functionLiteralArgument, openFunctionParameter));
                     continue;
                 }
 
@@ -10885,7 +10751,7 @@ public sealed class Binder
                 var substitutedReturn = SubstituteType(method.Type, substitution);
                 if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
                 {
-                    substitutedReturn = WrapAsTask(substitutedReturn);
+                    substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
                     return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn);
                 }
 
@@ -10897,7 +10763,7 @@ public sealed class Binder
 
             if (method.IsAsync && !IsAsyncIteratorReturnType(method.Type))
             {
-                var asyncReturn = WrapAsTask(method.Type);
+                var asyncReturn = lambdas.WrapAsTask(method.Type);
                 return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn);
             }
 
@@ -12763,59 +12629,6 @@ public sealed class Binder
         };
     }
 
-    private BoundFunctionLiteralExpression CreateErasedFunctionLiteralAdapter(
-        BoundFunctionLiteralExpression literal,
-        FunctionTypeSymbol targetFunctionType)
-    {
-        var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(literal.Function.Parameters.Length);
-        var replacementMap = new Dictionary<VariableSymbol, BoundExpression>();
-        for (var i = 0; i < literal.Function.Parameters.Length; i++)
-        {
-            var original = literal.Function.Parameters[i];
-            var adapterParameterType = i < targetFunctionType.ParameterTypes.Length
-                ? GetErasedDelegateSlotType(targetFunctionType.ParameterTypes[i])
-                : TypeSymbol.Object;
-            var adapterParameter = new ParameterSymbol(
-                original.Name,
-                adapterParameterType,
-                declaringSyntax: original.DeclaringSyntax,
-                isScoped: original.IsScoped);
-            adapterParameters.Add(adapterParameter);
-            replacementMap[original] = new BoundConversionExpression(
-                null,
-                original.Type,
-                new BoundVariableExpression(null, adapterParameter));
-        }
-
-        var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
-            ? TypeSymbol.Void
-            : GetErasedDelegateSlotType(targetFunctionType.ReturnType);
-        var adapterFunctionType = FunctionTypeSymbol.Get(
-            adapterParameters.Select(p => p.Type).ToImmutableArray(),
-            adapterReturnType);
-        var adapterFunction = new FunctionSymbol(
-            $"<lambda_erased{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
-            adapterParameters.ToImmutable(),
-            adapterReturnType,
-            package: literal.Function.Package);
-        adapterFunction.IsAsync = literal.Function.IsAsync;
-
-        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterReturnType)
-            .RewriteStatement(literal.Body);
-
-        return new BoundFunctionLiteralExpression(
-            literal.Syntax,
-            adapterFunction,
-            adapterFunctionType,
-            body,
-            literal.CapturedVariables);
-    }
-
-    private static TypeSymbol GetErasedDelegateSlotType(TypeSymbol type)
-    {
-        return TypeSymbol.ContainsTypeParameter(type) ? TypeSymbol.Object : type;
-    }
-
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
@@ -12828,11 +12641,11 @@ public sealed class Binder
             var argument = arguments[i];
             var rebound = argument;
             if (paramIndex < parameters.Length
-                && TryGetFunctionLiteral(argument, out var literal)
+                && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
                 && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
             {
-                rebound = CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+                rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
             }
 
             if (rebound != argument && builder == null)
@@ -12858,24 +12671,6 @@ public sealed class Binder
         }
 
         return builder.ToImmutable();
-    }
-
-    private static bool TryGetFunctionLiteral(BoundExpression expression, out BoundFunctionLiteralExpression literal)
-    {
-        if (expression is BoundFunctionLiteralExpression direct)
-        {
-            literal = direct;
-            return true;
-        }
-
-        if (expression is BoundConversionExpression { Expression: BoundFunctionLiteralExpression converted })
-        {
-            literal = converted;
-            return true;
-        }
-
-        literal = null;
-        return false;
     }
 
     private VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
@@ -14444,138 +14239,5 @@ public sealed class Binder
 
         // Numeric / char widening between primitives (e.g. int → long).
         return Convert.ChangeType(value, elementType, System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private sealed class ErasedFunctionLiteralAdapterRewriter : BoundTreeRewriter
-    {
-        private readonly Dictionary<VariableSymbol, BoundExpression> replacementMap;
-        private readonly TypeSymbol adapterReturnType;
-
-        public ErasedFunctionLiteralAdapterRewriter(
-            Dictionary<VariableSymbol, BoundExpression> replacementMap,
-            TypeSymbol adapterReturnType)
-        {
-            this.replacementMap = replacementMap;
-            this.adapterReturnType = adapterReturnType;
-        }
-
-        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
-        {
-            return this.replacementMap.TryGetValue(node.Variable, out var replacement)
-                ? replacement
-                : node;
-        }
-
-        protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
-        {
-            var rewritten = (BoundReturnStatement)base.RewriteReturnStatement(node);
-            if (this.adapterReturnType == TypeSymbol.Void || rewritten.Expression == null)
-            {
-                return rewritten;
-            }
-
-            if (rewritten.Expression.Type == this.adapterReturnType)
-            {
-                return rewritten;
-            }
-
-            return new BoundReturnStatement(
-                null,
-                new BoundConversionExpression(null, this.adapterReturnType, rewritten.Expression));
-        }
-    }
-
-    private sealed class CapturedVariableCollector : BoundTreeRewriter
-    {
-        private readonly HashSet<VariableSymbol> parameters;
-        private readonly HashSet<VariableSymbol> seen;
-        private readonly HashSet<VariableSymbol> declared;
-        private readonly ImmutableArray<VariableSymbol>.Builder captured;
-
-        public CapturedVariableCollector(
-            HashSet<VariableSymbol> parameters,
-            HashSet<VariableSymbol> seen,
-            ImmutableArray<VariableSymbol>.Builder captured)
-        {
-            this.parameters = parameters;
-            this.seen = seen;
-            this.declared = new HashSet<VariableSymbol>();
-            this.captured = captured;
-        }
-
-        protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
-        {
-            this.declared.Add(node.Variable);
-            return base.RewriteVariableDeclaration(node);
-        }
-
-        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
-        {
-            // Issue #523: an assignment LHS is a USE of the variable that
-            // must contribute to the capture set, exactly like a
-            // BoundVariableExpression. The base rewriter intentionally
-            // doesn't visit `node.Variable`, so the binder otherwise
-            // silently treats write-only captures (e.g. `func(x) { n = x }`)
-            // as having no captures — which crashes the emitter when the
-            // body still references the (boxed) target.
-            this.RecordReference(node.Variable);
-            return base.RewriteAssignmentExpression(node);
-        }
-
-        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
-        {
-            // Issue #523 (side fix): globals already live in a static field and
-            // are addressable from any lambda body via ldsfld/stsfld — capturing
-            // them into a closure-class field would re-introduce the snapshot
-            // bug. Skip globals so the lambda reads them directly at every use.
-            this.RecordReference(node.Variable);
-            return node;
-        }
-
-        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
-        {
-            // Issue #503 follow-up: a nested function literal's captures
-            // must transitively contribute to the *outer* literal's capture
-            // set whenever they're satisfied by neither outer parameters
-            // nor outer-body local declarations. Without this, the outer
-            // closure's display class has no field for the inner's free
-            // variable, so the inner-literal construction inside the outer
-            // Invoke body cannot locate the variable to pass to the inner
-            // closure's ctor (the silent-GS9998 failure surfaced by issue
-            // #503 closures inside nested lambdas).
-            foreach (var nestedCapture in node.CapturedVariables)
-            {
-                // Issue #523 (side fix): see RewriteVariableExpression above.
-                if (nestedCapture is GlobalVariableSymbol)
-                {
-                    continue;
-                }
-
-                if (!this.parameters.Contains(nestedCapture)
-                    && !this.declared.Contains(nestedCapture)
-                    && this.seen.Add(nestedCapture))
-                {
-                    this.captured.Add(nestedCapture);
-                }
-            }
-
-            return node;
-        }
-
-        private void RecordReference(VariableSymbol variable)
-        {
-            // Globals are read live (see RewriteVariableExpression).
-            if (variable is GlobalVariableSymbol)
-            {
-                return;
-            }
-
-            if (!this.parameters.Contains(variable)
-                && !this.declared.Contains(variable)
-                && this.seen.Add(variable))
-            {
-                this.captured.Add(variable);
-            }
-        }
     }
 }
