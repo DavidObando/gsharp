@@ -37,7 +37,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 internal sealed class StatementBinder
 {
-    /// <summary>Signature for the root <see cref="Binder.BindExpression(ExpressionSyntax, bool)"/> entry point.</summary>
+    /// <summary>Signature for the root <see cref="ExpressionBinder.BindExpression(ExpressionSyntax, bool)"/> entry point.</summary>
     /// <param name="syntax">The expression syntax to bind.</param>
     /// <param name="canBeVoid">Whether the expression is permitted to have <c>void</c> type.</param>
     /// <returns>The bound expression.</returns>
