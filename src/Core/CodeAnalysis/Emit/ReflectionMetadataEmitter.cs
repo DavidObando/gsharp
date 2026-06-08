@@ -93,6 +93,18 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal WellKnownReferences wellKnown;
 
+    // PR-E-12: CustomAttributeEncoder — owns every helper that writes an
+    // ECMA-335 II.23.3 custom-attribute value blob plus the per-attribute
+    // orchestration (EmitBoundAttribute / EmitUserAttributes /
+    // EmitStringAttribute / EmitIsReadOnlyAttributeOnParameter /
+    // NextParameterHandle). The four assembly-level orchestrators
+    // (EmitReferenceAssemblyAttribute / EmitAssemblyInteropAttributes /
+    // EmitDebuggableAttribute / EmitNullableContextAttribute) stay on the
+    // root and forward into this encoder. Initialised in EmitCore alongside
+    // wellKnown because it depends on GetTypeReference, which closes over
+    // EmitContext.Core* materialised earlier in EmitCore.
+    private CustomAttributeEncoder customAttrEncoder;
+
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
     // Each lambda's synthetic FunctionSymbol is registered alongside user
@@ -154,6 +166,18 @@ internal sealed class ReflectionMetadataEmitter
     // NeedsRvalueReceiverSpill predicate) via constructor injection.
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal readonly SlotPlanner slotPlanner;
+
+    // PR-E-12: MethodBodyPlanner — the per-body planning surface that drives
+    // SlotPlanner's collector classes. Owns CollectLocalsAndLabels /
+    // CollectStatements / CollectPatternSwitchSlots / Walk* /
+    // RegisterConstructedTypeAliases / CollectConstValues /
+    // CollectLocalInfo / CollectLocalConstantInfo / Add{,Async}IteratorInterfaceImplementations /
+    // GetSmPackage / TryGetUserKickoffReceiverHandle. Initialised in EmitCore
+    // alongside the other E-* components so its StateMachineEmitter back-ref
+    // can be wired after stateMachines is constructed. Not readonly for the
+    // same EmitCore-ordering reason as memberDefEmitter / dataStructSynth /
+    // wellKnown.
+    private MethodBodyPlanner methodBodyPlanner;
 
     // PR-E-5: SlotPlanner's sibling — ConversionEmitter — owns conversion-
     // shaped IL emission. In this PR it hosts the two stateless top-level
@@ -221,10 +245,10 @@ internal sealed class ReflectionMetadataEmitter
     // EmitClassConstructorWithBody), the body-emission step is reached via
     // injected Func callbacks bound to the *BodyBytes helpers below; those
     // helpers stay adjacent to BodyEmitter until PR-E-11 promotes the whole
-    // nested class to its own file. The MapTypeAccessibility /
-    // MapFieldAccessibility accessibility-map helpers are duplicated as
-    // private statics inside TypeDefEmitter rather than widened to internal
-    // on this emitter, per the PR-0 visibility-widening risk note.
+    // nested class to its own file. As of PR-E-12 the accessibility-map
+    // helpers (MapTypeAccessibility / MapFieldAccessibility / etc.) live in
+    // AccessibilityMap.cs — both this root and TypeDefEmitter call into that
+    // single canonical home.
     // Not readonly for the same EmitCore-ordering reason as
     // memberDefEmitter / dataStructSynth / wellKnown.
     private TypeDefEmitter typeDefEmitter;
@@ -428,6 +452,26 @@ internal sealed class ReflectionMetadataEmitter
         // lazily materialised on first access via its paired Get* method.
         this.wellKnown = new WellKnownReferences(this.emitCtx, this.GetTypeReference, this.GetMethodReference);
 
+        // PR-E-12: CustomAttributeEncoder depends on GetTypeReference (the
+        // dedup-cached root resolver) and wellKnown's GetIsReadOnlyAttributeCtorRef.
+        // It owns every custom-attribute blob-encoding helper; the assembly-
+        // level orchestrators on this root forward into it.
+        this.customAttrEncoder = new CustomAttributeEncoder(this.emitCtx, this.wellKnown, this.GetTypeReference);
+
+        // PR-E-12: MethodBodyPlanner owns the per-body planning orchestrators
+        // (CollectLocalsAndLabels and friends) that drive SlotPlanner's
+        // collector classes. It needs GetTypeReference / GetTypeHandleForMember
+        // for AddIteratorInterfaceImplementations, so it wires up after
+        // wellKnown is materialised. StateMachineEmitter is back-bound via
+        // SetStateMachines once stateMachines exists below.
+        this.methodBodyPlanner = new MethodBodyPlanner(
+            this.emitCtx,
+            this.cache,
+            this.slotPlanner,
+            this.lambdaBodies,
+            this.GetTypeReference,
+            this.GetTypeHandleForMember);
+
         // PR-E-5: now that wellKnown is materialised, wire ConversionEmitter.
         // GetElementTypeToken is passed as a delegate (same pattern as
         // SlotPlanner's needsRvalueReceiverSpill) so the new component does
@@ -447,7 +491,7 @@ internal sealed class ReflectionMetadataEmitter
             this.EncodeTypeSymbol,
             this.GetElementTypeToken,
             this.GetTypeReference,
-            this.NextParameterHandle);
+            this.customAttrEncoder.NextParameterHandle);
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -462,7 +506,7 @@ internal sealed class ReflectionMetadataEmitter
             this.wellKnown,
             this.EmitFunction,
             this.EncodeTypeSymbol,
-            this.NextParameterHandle,
+            this.customAttrEncoder.NextParameterHandle,
             this.GetTypeReference,
             this.GetTypeHandleForMember);
 
@@ -482,9 +526,9 @@ internal sealed class ReflectionMetadataEmitter
             this.EncodeTypeSymbol,
             this.EncodeReturnSymbol,
             this.GetTypeReference,
-            this.NextParameterHandle,
-            this.EmitUserAttributes,
-            this.EmitIsReadOnlyAttributeOnParameter,
+            this.customAttrEncoder.NextParameterHandle,
+            this.customAttrEncoder.EmitUserAttributes,
+            this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.GetCtorReference,
             this.EmitStaticConstructorBodyBytes,
             this.EmitClassConstructorWithBaseInitializerBodyBytes,
@@ -524,7 +568,7 @@ internal sealed class ReflectionMetadataEmitter
             this.GetTypeHandleForMember,
             this.GetMethodEntityHandle,
             this.GetMethodReference,
-            this.NextParameterHandle,
+            this.customAttrEncoder.NextParameterHandle,
             this.EncodeClrType,
             this.BuildMoveNextBodyBytes);
 
@@ -543,6 +587,10 @@ internal sealed class ReflectionMetadataEmitter
             this.stateMachines.AsyncIteratorPlans = asyncIteratorRewriteResult.Plans;
         }
 
+        // PR-E-12: late-bind stateMachines into the body planner so
+        // TryGetUserKickoffReceiverHandle can consult AsyncStateMachinePlans.
+        this.methodBodyPlanner.SetStateMachines(this.stateMachines);
+
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
         // types so the field/method-row ranges fall out correctly:
@@ -559,8 +607,8 @@ internal sealed class ReflectionMetadataEmitter
         // closure classes that fold into the existing class TypeDef/method/
         // field row planning. The host package for both is the entry-point
         // package (which always exists for compilable programs that run).
-        var lambdaLiterals = this.CollectFunctionLiterals();
-        var goStatements = this.CollectGoStatements();
+        var lambdaLiterals = this.methodBodyPlanner.CollectFunctionLiterals();
+        var goStatements = this.methodBodyPlanner.CollectGoStatements();
         var hostPackageGuess = this.emitCtx.Program.EntryPoint?.Package
             ?? this.emitCtx.Program.EntryPointPackage
             ?? (this.emitCtx.Program.Packages.IsDefaultOrEmpty ? null : this.emitCtx.Program.Packages[0]);
@@ -1361,7 +1409,7 @@ internal sealed class ReflectionMetadataEmitter
             // constructed StructSymbol to its definition's TypeDef. We call
             // RegisterConstructedTypeAliases again later (line 798) to pick
             // up ctor handles populated during the rest of Phase A.
-            this.RegisterConstructedTypeAliases();
+            this.methodBodyPlanner.RegisterConstructedTypeAliases();
             this.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
@@ -1404,12 +1452,12 @@ internal sealed class ReflectionMetadataEmitter
 
             if (this.stateMachines.IteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
             {
-                this.AddIteratorInterfaceImplementations(c, iteratorInfo);
+                this.methodBodyPlanner.AddIteratorInterfaceImplementations(c, iteratorInfo);
             }
 
             if (this.stateMachines.AsyncIteratorInfos.TryGetValue(c, out var asyncIterPlan))
             {
-                this.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
+                this.methodBodyPlanner.AddAsyncIteratorInterfaceImplementations(c, asyncIterPlan);
             }
         }
 
@@ -1605,7 +1653,7 @@ internal sealed class ReflectionMetadataEmitter
         // lookup dictionaries, walk the bound program for constructed
         // StructSymbols (Box[int], Pair[string, int], ...) and alias them
         // to their definitions' rows.
-        this.RegisterConstructedTypeAliases();
+        this.methodBodyPlanner.RegisterConstructedTypeAliases();
 
         // B4. Per-package methods (ctor + user functions + entry).
         foreach (var pkg in packages)
@@ -1677,13 +1725,13 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var c in smClasses)
         {
             var nestedHandle = this.cache.StructTypeDefs[c];
-            if (TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
+            if (this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
                 continue;
             }
 
-            var smPkg = this.GetSmPackage(c, packages, entryPointPackage);
+            var smPkg = this.methodBodyPlanner.GetSmPackage(c, packages, entryPointPackage);
             var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
             this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
         }
@@ -1696,13 +1744,13 @@ internal sealed class ReflectionMetadataEmitter
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, closureHandle);
             }
-            else if (TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing))
+            else if (this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
             }
             else
             {
-                var smPkg = this.GetSmPackage(s, packages, entryPointPackage);
+                var smPkg = this.methodBodyPlanner.GetSmPackage(s, packages, entryPointPackage);
                 var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
             }
@@ -1967,7 +2015,7 @@ internal sealed class ReflectionMetadataEmitter
         // version string including pre-release suffix.
         if (!string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
         {
-            this.EmitStringAttribute(
+            this.customAttrEncoder.EmitStringAttribute(
                 assemblyHandle,
                 "System.Reflection.AssemblyInformationalVersionAttribute",
                 typeof(System.Reflection.AssemblyInformationalVersionAttribute),
@@ -2013,37 +2061,6 @@ internal sealed class ReflectionMetadataEmitter
 
         this.emitCtx.Metadata.AddCustomAttribute(
             parent: assemblyHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// Emits a custom attribute whose sole constructor parameter is a single
-    /// <see cref="string"/> argument.
-    /// </summary>
-    private void EmitStringAttribute(EntityHandle parent, string typeName, Type fallbackType, string value)
-    {
-        var attrType = this.emitCtx.References.TryResolveType(typeName, out var resolved)
-            ? resolved
-            : fallbackType;
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().String());
-
-        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001); // Prolog
-        valueBlob.WriteSerializedString(value);
-        valueBlob.WriteUInt16(0); // NumNamed
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: parent,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
@@ -2101,260 +2118,6 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
-    /// Converts the per-method <c>locals</c> dictionary used during IL emit
-    /// into a stable, slot-ordered list suitable for the Portable PDB
-    /// <c>LocalVariable</c> table. Compiler-generated names (synthesized by
-    /// lowering) are reported with <see cref="LocalInfo.IsCompilerGenerated"/>
-    /// set so debuggers can hide them from the locals window.
-    /// </summary>
-    private static IReadOnlyList<LocalInfo> CollectLocalInfo(Dictionary<VariableSymbol, int> locals)
-    {
-        if (locals == null || locals.Count == 0)
-        {
-            return System.Array.Empty<LocalInfo>();
-        }
-
-        var result = new List<LocalInfo>(locals.Count);
-        foreach (var kvp in locals)
-        {
-            var name = kvp.Key.Name ?? string.Empty;
-            var isGenerated = name.Length == 0
-                || name[0] == '<'
-                || name[0] == '$'
-                || name.Contains('$');
-            if (isGenerated && name.Length == 0)
-            {
-                // Anonymous slot — give it a deterministic placeholder so the
-                // PDB row is still valid (debuggers ignore hidden names).
-                name = "<slot" + kvp.Value + ">";
-            }
-
-            result.Add(new LocalInfo(kvp.Value, name, isGenerated));
-        }
-
-        result.Sort((a, b) => a.SlotIndex.CompareTo(b.SlotIndex));
-        return result;
-    }
-
-    /// <summary>
-    /// Issue #409: determines whether a value-type instance method must keep
-    /// virtual method attributes because it participates in CLR vtable dispatch.
-    /// </summary>
-    private static bool RequiresVirtualOnValueType(FunctionSymbol function, StructSymbol receiverStruct)
-    {
-        if (function.IsOverride || function.OverriddenMethod != null)
-        {
-            return true;
-        }
-
-        return MethodImplicitlyImplementsInterface(receiverStruct, function);
-    }
-
-    /// <summary>
-    /// Determines whether a method on a class/struct implicitly implements an
-    /// interface method (same name, parameters, and return type). Considers
-    /// both G# interfaces (<see cref="StructSymbol.Interfaces"/>) and imported
-    /// CLR interfaces (<see cref="StructSymbol.ImplementedClrInterfaces"/>,
-    /// issue #525).
-    /// </summary>
-    private static bool MethodImplicitlyImplementsInterface(StructSymbol structSym, FunctionSymbol method)
-    {
-        if (!structSym.Interfaces.IsDefaultOrEmpty)
-        {
-            foreach (var iface in structSym.Interfaces)
-            {
-                if (iface.Methods.IsDefaultOrEmpty)
-                {
-                    continue;
-                }
-
-                foreach (var ifaceMethod in iface.Methods)
-                {
-                    if (MethodSignaturesMatch(ifaceMethod, method))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
-        {
-            var callable = CallableParameters(method);
-            var returnClr = method.Type?.ClrType;
-            foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
-            {
-                var clrIface = ifaceSym?.ClrType;
-                if (clrIface == null)
-                {
-                    continue;
-                }
-
-                foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
-                {
-                    if (clrMethod.IsSpecialName || clrMethod.Name != method.Name)
-                    {
-                        continue;
-                    }
-
-                    var clrParams = clrMethod.GetParameters();
-                    if (clrParams.Length != callable.Length)
-                    {
-                        continue;
-                    }
-
-                    if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, clrMethod.ReturnType))
-                    {
-                        continue;
-                    }
-
-                    var allMatch = true;
-                    for (var i = 0; i < clrParams.Length; i++)
-                    {
-                        var paramClr = callable[i].Type?.ClrType;
-                        if (paramClr == null || !ClrTypeUtilities.AreSame(paramClr, clrParams[i].ParameterType))
-                        {
-                            allMatch = false;
-                            break;
-                        }
-                    }
-
-                    if (allMatch)
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static bool MethodSignaturesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
-    {
-        if (interfaceMethod.Name != implementationMethod.Name || interfaceMethod.Type != implementationMethod.Type)
-        {
-            return false;
-        }
-
-        var interfaceParameters = CallableParameters(interfaceMethod);
-        var implementationParameters = CallableParameters(implementationMethod);
-        if (interfaceParameters.Length != implementationParameters.Length)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < interfaceParameters.Length; i++)
-        {
-            if (interfaceParameters[i].Type != implementationParameters[i].Type)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static ImmutableArray<ParameterSymbol> CallableParameters(FunctionSymbol method)
-        => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
-
-    /// <summary>
-    /// Converts the per-method <c>constValues</c> dictionary into a list of
-    /// <see cref="LocalConstantInfo"/> descriptors for the Portable PDB
-    /// <c>LocalConstant</c> table. Each entry corresponds to one compile-time
-    /// <c>const</c> binding that occupied no IL slot.
-    /// </summary>
-    private static IReadOnlyList<LocalConstantInfo> CollectLocalConstantInfo(Dictionary<VariableSymbol, object> constValues)
-    {
-        if (constValues == null || constValues.Count == 0)
-        {
-            return System.Array.Empty<LocalConstantInfo>();
-        }
-
-        var result = new List<LocalConstantInfo>(constValues.Count);
-        foreach (var kvp in constValues)
-        {
-            result.Add(new LocalConstantInfo(kvp.Key.Name ?? string.Empty, kvp.Value));
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Pre-scans <paramref name="body"/> and populates
-    /// <paramref name="constValues"/> with every <c>const</c>-declared local
-    /// that has a compile-time <see cref="BoundVariableDeclaration.ConstantValue"/>.
-    /// Called once before <see cref="CollectLocalsAndLabels"/> so that
-    /// <see cref="MethodBodyEmitter"/> can inline those values instead of loading
-    /// from a slot.
-    /// </summary>
-    private static void CollectConstValues(BoundStatement body, Dictionary<VariableSymbol, object> constValues)
-    {
-        WalkStmtsForConsts(body, constValues);
-    }
-
-    private static void WalkStmtsForConsts(BoundStatement stmt, Dictionary<VariableSymbol, object> result)
-    {
-        switch (stmt)
-        {
-            case BoundVariableDeclaration vd when vd.ConstantValue != null:
-                result[vd.Variable] = vd.ConstantValue;
-                break;
-            case BoundBlockStatement block:
-                foreach (var s in block.Statements)
-                {
-                    WalkStmtsForConsts(s, result);
-                }
-
-                break;
-            case BoundIfStatement ifs:
-                WalkStmtsForConsts(ifs.ThenStatement, result);
-                if (ifs.ElseStatement != null)
-                {
-                    WalkStmtsForConsts(ifs.ElseStatement, result);
-                }
-
-                break;
-            case BoundTryStatement t:
-                WalkStmtsForConsts(t.TryBlock, result);
-                foreach (var clause in t.CatchClauses)
-                {
-                    WalkStmtsForConsts(clause.Body, result);
-                }
-
-                if (t.FinallyBlock != null)
-                {
-                    WalkStmtsForConsts(t.FinallyBlock, result);
-                }
-
-                break;
-            case BoundPatternSwitchStatement ps:
-                foreach (var arm in ps.Arms)
-                {
-                    if (arm.Body != null)
-                    {
-                        WalkStmtsForConsts(arm.Body, result);
-                    }
-                }
-
-                break;
-            case BoundScopeStatement sc:
-                WalkStmtsForConsts(sc.Body, result);
-                break;
-            case BoundSelectStatement sel:
-                foreach (var arm in sel.Cases)
-                {
-                    if (arm.Body != null)
-                    {
-                        WalkStmtsForConsts(arm.Body, result);
-                    }
-                }
-
-                break;
-        }
-    }
-
-    /// <summary>
     /// Issue #191: emits one static <c>FieldDef</c> per user-declared top-level
     /// <c>var</c>/<c>let</c>/<c>const</c> on the entry-point package's
     /// <c>&lt;Program&gt;</c> TypeDef. Initialization stays in the entry-point
@@ -2375,7 +2138,7 @@ internal sealed class ReflectionMetadataEmitter
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), g.Type);
 
-            var attrs = MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
+            var attrs = AccessibilityMap.MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
 
             var handle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: attrs,
@@ -2386,778 +2149,8 @@ internal sealed class ReflectionMetadataEmitter
 
             // Route any @-annotations bound by #187 onto the FieldDef row so
             // attributes like @Obsolete round-trip into CustomAttribute rows.
-            this.EmitUserAttributes(handle, g, AttributeTargetKind.Field);
+            this.customAttrEncoder.EmitUserAttributes(handle, g, AttributeTargetKind.Field);
         }
-    }
-
-    /// <summary>
-    /// Resolves the package that a state-machine type's kickoff belongs to,
-    /// for determining which <c>&lt;Program&gt;</c> TypeDef it nests inside.
-    /// </summary>
-    private PackageSymbol GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol entryPointPackage)
-    {
-        // Try the SM's packageName to find the matching package.
-        if (smSym.PackageName != null)
-        {
-            foreach (var pkg in packages)
-            {
-                if (pkg.Name == smSym.PackageName)
-                {
-                    return pkg;
-                }
-            }
-        }
-
-        return entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
-    }
-
-    /// <summary>
-    /// Issue #502: when an async kickoff method is declared as an instance or
-    /// static member of a user-defined class, its synthesized state-machine
-    /// type must be nested inside that class — not the per-package
-    /// <c>&lt;Program&gt;</c> — so the kickoff method retains CLR access to
-    /// the SM's <c>NestedPrivate</c> fields (most importantly
-    /// <c>&lt;&gt;t__builder</c>). Lambda SMs already nest inside their
-    /// closure class; this helper covers the named-method case.
-    /// </summary>
-    /// <param name="smSym">The synthesized state-machine struct or class.</param>
-    /// <param name="enclosingHandle">Set to the receiver type's TypeDef handle when applicable.</param>
-    /// <returns><see langword="true"/> when the SM should nest under a user receiver type.</returns>
-    private bool TryGetUserKickoffReceiverHandle(StructSymbol smSym, out TypeDefinitionHandle enclosingHandle)
-    {
-        enclosingHandle = default;
-        FunctionSymbol kickoff = null;
-        foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
-        {
-            if (ReferenceEquals(plan.StateMachine.MaterializeAsStructSymbol(), smSym))
-            {
-                kickoff = plan.KickoffMethod;
-                break;
-            }
-        }
-
-        if (kickoff == null)
-        {
-            return false;
-        }
-
-        // Instance methods (ReceiverType set) and shared-block static methods
-        // (StaticOwnerType set) both live on a user-defined class TypeDef.
-        var owner = (kickoff.ReceiverType as StructSymbol)
-            ?? (kickoff.StaticOwnerType as StructSymbol);
-        if (owner == null)
-        {
-            return false;
-        }
-
-        return this.cache.StructTypeDefs.TryGetValue(owner, out enclosingHandle);
-    }
-
-    /// <summary>
-    /// ADR-0060 §6: emits <c>System.Runtime.CompilerServices.IsReadOnlyAttribute</c> on
-    /// an emitted Parameter row so consumers (e.g. the C# compiler) treat the
-    /// corresponding <c>in</c> parameter as a readonly managed pointer.
-    /// </summary>
-    /// <param name="paramHandle">The Parameter row to annotate.</param>
-    private void EmitIsReadOnlyAttributeOnParameter(ParameterHandle paramHandle)
-    {
-        var ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef();
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteUInt16(0);
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: paramHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// Phase 3 of #141 / ADR-0047 §3: emits a <c>CustomAttribute</c> row for
-    /// every bound user annotation on <paramref name="symbol"/> whose target
-    /// matches <paramref name="filter"/>. Resolves the attribute type to a
-    /// CLR <see cref="Type"/>, picks a constructor matching the supplied
-    /// positional argument arity / element types, writes the ECMA-335 II.23.3
-    /// value blob (prolog <c>0x0001</c>, fixed args, named-arg count, named
-    /// args), and attaches it to <paramref name="parent"/>.
-    /// Attributes whose CLR type can't be resolved or whose ctor cannot be
-    /// matched are silently skipped — the binder owns user-facing diagnostics.
-    /// </summary>
-    /// <param name="parent">The metadata entity (TypeDef / MethodDef / ...) to attach the attribute to.</param>
-    /// <param name="symbol">The symbol carrying the bound annotation list.</param>
-    /// <param name="filter">Only attributes whose <see cref="BoundAttribute.Target"/> equals this kind are emitted.</param>
-    private void EmitUserAttributes(EntityHandle parent, Symbol symbol, AttributeTargetKind filter)
-    {
-        if (symbol?.Attributes.IsDefaultOrEmpty != false)
-        {
-            return;
-        }
-
-        foreach (var attr in symbol.Attributes)
-        {
-            if (attr.Target != filter)
-            {
-                continue;
-            }
-
-            this.EmitBoundAttribute(parent, attr);
-        }
-    }
-
-    /// <summary>
-    /// Returns the next <see cref="ParameterHandle"/> that will be assigned by
-    /// the next call to <see cref="MetadataBuilder.AddParameter"/>. Issue #170:
-    /// every <c>AddMethodDefinition</c> call must thread this value into its
-    /// <c>parameterList</c> argument so the Param table's per-method runs stay
-    /// monotone — methods that emit no parameter rows must share the same
-    /// "next" handle, and methods that emit N rows anchor the run that follows.
-    /// </summary>
-    private ParameterHandle NextParameterHandle()
-        => MetadataTokens.ParameterHandle(this.emitCtx.Metadata.GetRowCount(TableIndex.Param) + 1);
-
-    private void EmitBoundAttribute(EntityHandle parent, BoundAttribute attr)
-    {
-        var clrType = attr.AttributeType.ClrType;
-        if (clrType == null)
-        {
-            return;
-        }
-
-        if (!this.emitCtx.References.TryResolveType(clrType.FullName, out var resolved))
-        {
-            resolved = clrType;
-        }
-
-        var positional = attr.PositionalArguments;
-        var ctor = ResolveAttributeConstructor(resolved, positional);
-        if (ctor == null)
-        {
-            return;
-        }
-
-        var ctorParams = ctor.GetParameters();
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                ctorParams.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in ctorParams)
-                    {
-                        this.EncodeClrTypeForCtorSig(ps.AddParameter().Type(), p.ParameterType);
-                    }
-                });
-
-        var attrTypeRef = this.GetTypeReference(resolved);
-        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-
-        // Map the supplied positional arguments onto the constructor parameters,
-        // collapsing a trailing params-array (e.g. InlineData(params object[]))
-        // into a single synthesized array argument.
-        var effective = BuildCtorArgumentValues(ctorParams, positional);
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001);
-        for (int i = 0; i < ctorParams.Length; i++)
-        {
-            // Normalize to the executing runtime's Type so the reference-equality
-            // checks in the value-blob writer succeed even when the attribute was
-            // resolved through a MetadataLoadContext (e.g. third-party packages).
-            var writeType = NormalizeWellKnownType(ctorParams[i].ParameterType);
-            WriteCustomAttributeFixedArg(valueBlob, writeType, effective[i]);
-        }
-
-        var named = attr.NamedArguments;
-        valueBlob.WriteUInt16((ushort)named.Length);
-        foreach (var arg in named)
-        {
-            WriteCustomAttributeNamedArg(valueBlob, resolved, arg);
-        }
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: parent,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
-    {
-        var ctors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-
-        // First pass: exact-arity match (the common case).
-        foreach (var ctor in ctors)
-        {
-            var pars = ctor.GetParameters();
-            if (pars.Length != positional.Length)
-            {
-                continue;
-            }
-
-            if (ParametersMatch(pars, positional, expandLast: false))
-            {
-                return ctor;
-            }
-        }
-
-        // Second pass: params-array expansion. A constructor whose last
-        // parameter is a single-dimensional array can absorb zero or more
-        // trailing positional arguments, each assignable to the element type —
-        // e.g. xUnit's InlineData(params object[] data). The exact-arity pass
-        // above already handles passing the array directly.
-        foreach (var ctor in ctors)
-        {
-            var pars = ctor.GetParameters();
-            if (pars.Length == 0)
-            {
-                continue;
-            }
-
-            var lastType = pars[pars.Length - 1].ParameterType;
-            if (!lastType.IsArray || lastType.GetArrayRank() != 1)
-            {
-                continue;
-            }
-
-            if (positional.Length < pars.Length - 1)
-            {
-                continue;
-            }
-
-            if (ParametersMatch(pars, positional, expandLast: true))
-            {
-                return ctor;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
-    {
-        var fixedCount = expandLast ? pars.Length - 1 : pars.Length;
-        for (int i = 0; i < fixedCount; i++)
-        {
-            if (!ArgAssignable(positional[i].Value, pars[i].ParameterType))
-            {
-                return false;
-            }
-        }
-
-        if (expandLast)
-        {
-            var elementType = pars[pars.Length - 1].ParameterType.GetElementType()!;
-            for (int i = fixedCount; i < positional.Length; i++)
-            {
-                if (!ArgAssignable(positional[i].Value, elementType))
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ArgAssignable(object supplied, Type paramType)
-    {
-        // Everything is assignable to System.Object. Compared by name so the
-        // check holds for attribute types resolved through a MetadataLoadContext.
-        if (paramType.FullName == "System.Object")
-        {
-            return true;
-        }
-
-        if (supplied == null)
-        {
-            return !(paramType.IsValueType && Nullable.GetUnderlyingType(paramType) == null);
-        }
-
-        if (paramType.IsInstanceOfType(supplied))
-        {
-            return true;
-        }
-
-        return IsTriviallyConvertible(supplied.GetType(), paramType);
-    }
-
-    /// <summary>
-    /// Maps the supplied positional arguments onto the constructor parameters,
-    /// collapsing a trailing params-array into a single synthesized
-    /// <see cref="object"/>[] when the call site supplied the elements inline
-    /// (params expansion). Returns one value per constructor parameter.
-    /// </summary>
-    private static object[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
-    {
-        var lastIsArray = ctorParams.Length > 0
-            && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
-            && ctorParams[ctorParams.Length - 1].ParameterType.GetArrayRank() == 1;
-
-        // Direct (non-expanded) form: arity matches and the final argument is
-        // itself assignable to the array parameter (or there is no array tail).
-        var lastSupplied = positional.Length == ctorParams.Length && positional.Length > 0
-            ? positional[positional.Length - 1].Value
-            : null;
-        var direct = !lastIsArray
-            || (positional.Length == ctorParams.Length
-                && (lastSupplied == null
-                    || ctorParams[ctorParams.Length - 1].ParameterType.IsInstanceOfType(lastSupplied)
-                    || lastSupplied.GetType().IsArray));
-
-        if (direct)
-        {
-            var values = new object[ctorParams.Length];
-            for (int i = 0; i < ctorParams.Length; i++)
-            {
-                values[i] = positional[i].Value;
-            }
-
-            return values;
-        }
-
-        var result = new object[ctorParams.Length];
-        for (int i = 0; i < ctorParams.Length - 1; i++)
-        {
-            result[i] = positional[i].Value;
-        }
-
-        var tail = positional.Length - (ctorParams.Length - 1);
-        var array = new object[tail];
-        for (int i = 0; i < tail; i++)
-        {
-            array[i] = positional[ctorParams.Length - 1 + i].Value;
-        }
-
-        result[ctorParams.Length - 1] = array;
-        return result;
-    }
-
-    /// <summary>
-    /// Returns the executing runtime's <see cref="Type"/> for well-known
-    /// core-library types (primitives, string, object, Type, and single-rank
-    /// arrays thereof) so that the reference-equality dispatch in
-    /// <see cref="WriteCustomAttributeFixedArg"/> works even when the attribute
-    /// was resolved through a <see cref="MetadataLoadContext"/>. Unknown types
-    /// are returned unchanged.
-    /// </summary>
-    private static Type NormalizeWellKnownType(Type t)
-    {
-        if (t == null)
-        {
-            return null;
-        }
-
-        if (t.IsArray && t.GetArrayRank() == 1)
-        {
-            var element = NormalizeWellKnownType(t.GetElementType()!);
-            return element.MakeArrayType();
-        }
-
-        var byName = Type.GetType(t.FullName ?? string.Empty);
-        return byName ?? t;
-    }
-
-    private static bool IsTriviallyConvertible(Type from, Type to)
-    {
-        if (from == to)
-        {
-            return true;
-        }
-
-        if (to.IsEnum)
-        {
-            return from == GetEnumUnderlyingTypeSafe(to);
-        }
-
-        if (from.IsArray && to.IsArray && from.GetArrayRank() == 1 && to.GetArrayRank() == 1)
-        {
-            return IsTriviallyConvertible(from.GetElementType()!, to.GetElementType()!);
-        }
-
-        return false;
-    }
-
-    private void EncodeClrTypeForCtorSig(SignatureTypeEncoder enc, Type t)
-    {
-        if (t == typeof(bool))
-        {
-            enc.Boolean();
-        }
-        else if (t == typeof(char))
-        {
-            enc.Char();
-        }
-        else if (t == typeof(sbyte))
-        {
-            enc.SByte();
-        }
-        else if (t == typeof(byte))
-        {
-            enc.Byte();
-        }
-        else if (t == typeof(short))
-        {
-            enc.Int16();
-        }
-        else if (t == typeof(ushort))
-        {
-            enc.UInt16();
-        }
-        else if (t == typeof(int))
-        {
-            enc.Int32();
-        }
-        else if (t == typeof(uint))
-        {
-            enc.UInt32();
-        }
-        else if (t == typeof(long))
-        {
-            enc.Int64();
-        }
-        else if (t == typeof(ulong))
-        {
-            enc.UInt64();
-        }
-        else if (t == typeof(float))
-        {
-            enc.Single();
-        }
-        else if (t == typeof(double))
-        {
-            enc.Double();
-        }
-        else if (t == typeof(string))
-        {
-            enc.String();
-        }
-        else if (t == typeof(object))
-        {
-            enc.Object();
-        }
-        else if (t.IsEnum)
-        {
-            EncodeClrTypeForCtorSig(enc, GetEnumUnderlyingTypeSafe(t));
-        }
-        else if (t.IsArray && t.GetArrayRank() == 1)
-        {
-            // ECMA-335 II.23.2.12: SZARRAY element-type for a single-dimensional array parameter.
-            this.EncodeClrTypeForCtorSig(enc.SZArray(), t.GetElementType()!);
-        }
-        else if (typeof(Type).IsAssignableFrom(t))
-        {
-            // System.Type parameter: encoded as a CLASS type reference in the ctor signature.
-            enc.Type(this.GetTypeReference(t), isValueType: false);
-        }
-        else
-        {
-            // Fallback: encode as object so the signature is still well-formed.
-            enc.Object();
-        }
-    }
-
-    private static void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object value)
-    {
-        if (paramType.IsEnum)
-        {
-            WriteCustomAttributeFixedArg(bb, GetEnumUnderlyingTypeSafe(paramType), value);
-            return;
-        }
-
-        if (paramType == typeof(bool))
-        {
-            bb.WriteBoolean((bool)value);
-        }
-        else if (paramType == typeof(char))
-        {
-            bb.WriteUInt16((char)value);
-        }
-        else if (paramType == typeof(sbyte))
-        {
-            bb.WriteSByte(Convert.ToSByte(value));
-        }
-        else if (paramType == typeof(byte))
-        {
-            bb.WriteByte(Convert.ToByte(value));
-        }
-        else if (paramType == typeof(short))
-        {
-            bb.WriteInt16(Convert.ToInt16(value));
-        }
-        else if (paramType == typeof(ushort))
-        {
-            bb.WriteUInt16(Convert.ToUInt16(value));
-        }
-        else if (paramType == typeof(int))
-        {
-            bb.WriteInt32(Convert.ToInt32(value));
-        }
-        else if (paramType == typeof(uint))
-        {
-            bb.WriteUInt32(Convert.ToUInt32(value));
-        }
-        else if (paramType == typeof(long))
-        {
-            bb.WriteInt64(Convert.ToInt64(value));
-        }
-        else if (paramType == typeof(ulong))
-        {
-            bb.WriteUInt64(Convert.ToUInt64(value));
-        }
-        else if (paramType == typeof(float))
-        {
-            bb.WriteSingle(Convert.ToSingle(value));
-        }
-        else if (paramType == typeof(double))
-        {
-            bb.WriteDouble(Convert.ToDouble(value));
-        }
-        else if (paramType == typeof(string))
-        {
-            bb.WriteSerializedString((string)value);
-        }
-        else if (typeof(Type).IsAssignableFrom(paramType))
-        {
-            // ECMA-335 II.23.3: a System.Type argument is encoded as a
-            // SerString carrying the canonical type-name. A null Type
-            // serialises as the SerString null marker (0xFF).
-            bb.WriteSerializedString(value is Type t ? GetSerializedTypeName(t) : null);
-        }
-        else if (paramType.IsArray && paramType.GetArrayRank() == 1)
-        {
-            WriteCustomAttributeArrayArg(bb, paramType.GetElementType()!, value);
-        }
-        else if (paramType == typeof(object))
-        {
-            // ECMA-335 II.23.3: boxed object argument carries the
-            // FieldOrPropType tag of the runtime type then the value.
-            if (value == null)
-            {
-                // Null object: encode as STRING null marker per common practice.
-                WriteCustomAttributeFieldOrPropertyType(bb, typeof(string));
-                bb.WriteSerializedString(null);
-            }
-            else
-            {
-                var runtimeType = value.GetType();
-                WriteCustomAttributeFieldOrPropertyType(bb, runtimeType);
-                WriteCustomAttributeFixedArg(bb, runtimeType, value);
-            }
-        }
-        else
-        {
-            // Fallback: serialise as string round-trip (best-effort).
-            bb.WriteSerializedString(value?.ToString());
-        }
-    }
-
-    private static void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object value)
-    {
-        // ECMA-335 II.23.3: an SZARRAY argument is encoded as an Int32 length
-        // (or 0xFFFFFFFF for a null array) followed by length elements of
-        // FixedArg(elementType).
-        if (value == null)
-        {
-            bb.WriteUInt32(0xFFFFFFFFu);
-            return;
-        }
-
-        var array = (Array)value;
-        bb.WriteInt32(array.Length);
-        for (int i = 0; i < array.Length; i++)
-        {
-            WriteCustomAttributeFixedArg(bb, elementType, array.GetValue(i));
-        }
-    }
-
-    private static string GetSerializedTypeName(Type t)
-    {
-        // ECMA-335 II.23.3 + I.8.5.2: the canonical serialised form is the
-        // assembly-qualified name; types from mscorlib / System.Private.CoreLib
-        // may omit the assembly portion. We always emit the assembly-qualified
-        // form so the consumer can unambiguously rebind the type.
-        return t.AssemblyQualifiedName ?? t.FullName ?? t.Name;
-    }
-
-    /// <summary>
-    /// Returns the underlying primitive type of an enum in a way that works for
-    /// types loaded through a <see cref="MetadataLoadContext"/>. The BCL helper
-    /// <see cref="Enum.GetUnderlyingType(Type)"/> requires a runtime
-    /// <see cref="Type"/> and throws <see cref="NotSupportedException"/> for
-    /// metadata-loaded types (issue #418 / P1-8), which surfaces as an emit-time
-    /// crash in the custom-attribute blob writer whenever an attribute argument
-    /// is an enum defined in a referenced (non-BCL) package.
-    /// </summary>
-    /// <remarks>
-    /// Per ECMA-335 II.14.3 every enum is laid out as a class containing a
-    /// single instance field named <c>value__</c> whose type is the underlying
-    /// primitive (e.g. <see cref="int"/>). Reading that field's type works
-    /// uniformly for runtime and metadata-loaded types. The result is then
-    /// normalized to the executing runtime's <see cref="Type"/> so that the
-    /// reference-equality dispatch in the blob writers matches.
-    /// </remarks>
-    private static Type GetEnumUnderlyingTypeSafe(Type enumType)
-    {
-        var valueField = enumType.GetField("value__", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        var fieldType = valueField?.FieldType;
-        if (fieldType == null)
-        {
-            // Defensive fallback: a malformed enum without value__ would be
-            // invalid metadata, but treating it as int32 keeps the writer
-            // robust rather than crashing during emit.
-            return typeof(int);
-        }
-
-        return NormalizeWellKnownType(fieldType);
-    }
-
-    private static void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
-    {
-        var prop = attributeType.GetProperty(arg.Name, BindingFlags.Public | BindingFlags.Instance);
-        var field = prop == null
-            ? attributeType.GetField(arg.Name, BindingFlags.Public | BindingFlags.Instance)
-            : null;
-        Type memberType;
-        byte kindTag;
-        if (prop != null)
-        {
-            kindTag = 0x54;
-            memberType = prop.PropertyType;
-        }
-        else if (field != null)
-        {
-            kindTag = 0x53;
-            memberType = field.FieldType;
-        }
-        else
-        {
-            // Unknown member — skip silently; binder owns user diagnostics.
-            return;
-        }
-
-        bb.WriteByte(kindTag);
-        WriteCustomAttributeFieldOrPropertyType(bb, memberType);
-        bb.WriteSerializedString(arg.Name);
-        WriteCustomAttributeFixedArg(bb, memberType, arg.Value);
-    }
-
-    private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)
-    {
-        // ECMA-335 II.23.3 — element-type byte for a FIELD/PROPERTY tag.
-        if (t == typeof(bool))
-        {
-            bb.WriteByte(0x02);
-        }
-        else if (t == typeof(char))
-        {
-            bb.WriteByte(0x03);
-        }
-        else if (t == typeof(sbyte))
-        {
-            bb.WriteByte(0x04);
-        }
-        else if (t == typeof(byte))
-        {
-            bb.WriteByte(0x05);
-        }
-        else if (t == typeof(short))
-        {
-            bb.WriteByte(0x06);
-        }
-        else if (t == typeof(ushort))
-        {
-            bb.WriteByte(0x07);
-        }
-        else if (t == typeof(int))
-        {
-            bb.WriteByte(0x08);
-        }
-        else if (t == typeof(uint))
-        {
-            bb.WriteByte(0x09);
-        }
-        else if (t == typeof(long))
-        {
-            bb.WriteByte(0x0A);
-        }
-        else if (t == typeof(ulong))
-        {
-            bb.WriteByte(0x0B);
-        }
-        else if (t == typeof(float))
-        {
-            bb.WriteByte(0x0C);
-        }
-        else if (t == typeof(double))
-        {
-            bb.WriteByte(0x0D);
-        }
-        else if (t == typeof(string))
-        {
-            bb.WriteByte(0x0E);
-        }
-        else if (typeof(Type).IsAssignableFrom(t))
-        {
-            // 0x50 — System.Type (no payload byte; the FixedArg holds the SerString).
-            bb.WriteByte(0x50);
-        }
-        else if (t == typeof(object))
-        {
-            // 0x51 — boxed object. The FixedArg writer prefixes the runtime
-            // type tag and value when emitting the argument body.
-            bb.WriteByte(0x51);
-        }
-        else if (t.IsArray && t.GetArrayRank() == 1)
-        {
-            // 0x1D SZARRAY followed by the element type's FieldOrPropType byte.
-            bb.WriteByte(0x1D);
-            WriteCustomAttributeFieldOrPropertyType(bb, t.GetElementType()!);
-        }
-        else if (t.IsEnum)
-        {
-            // 0x55 then serialised type name (assembly-qualified).
-            bb.WriteByte(0x55);
-            bb.WriteSerializedString(GetSerializedTypeName(t));
-        }
-        else
-        {
-            // Fallback to STRING.
-            bb.WriteByte(0x0E);
-        }
-    }
-
-    private static TypeAttributes MapTypeAccessibility(Accessibility accessibility)
-    {
-        return accessibility switch
-        {
-            Accessibility.Internal => TypeAttributes.NotPublic,
-            Accessibility.Private => TypeAttributes.NotPublic,
-            _ => TypeAttributes.Public,
-        };
-    }
-
-    private static TypeAttributes MapNestedTypeAccessibility(Accessibility accessibility)
-    {
-        return accessibility switch
-        {
-            Accessibility.Internal => TypeAttributes.NestedAssembly,
-            Accessibility.Private => TypeAttributes.NestedPrivate,
-            _ => TypeAttributes.NestedPublic,
-        };
-    }
-
-    private static FieldAttributes MapFieldAccessibility(Accessibility accessibility)
-    {
-        return accessibility switch
-        {
-            Accessibility.Internal => FieldAttributes.Assembly,
-            Accessibility.Private => FieldAttributes.Private,
-            _ => FieldAttributes.Public,
-        };
     }
 
     /// <summary>
@@ -3207,9 +2200,9 @@ internal sealed class ReflectionMetadataEmitter
 
             // Issue #216: collect compile-time const bindings before slot allocation.
             var constValues = new Dictionary<VariableSymbol, object>();
-            CollectConstValues(body, constValues);
+            MethodBodyPlanner.CollectConstValues(body, constValues);
 
-            CollectLocalsAndLabels(
+            this.methodBodyPlanner.CollectLocalsAndLabels(
                 body,
                 null,
                 locals,
@@ -3276,8 +2269,8 @@ internal sealed class ReflectionMetadataEmitter
 
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
             capturedSequencePoints = emitter.SequencePoints;
-            capturedLocals = CollectLocalInfo(locals);
-            capturedConstants = CollectLocalConstantInfo(constValues);
+            capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
+            capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
         }
@@ -3369,7 +2362,7 @@ internal sealed class ReflectionMetadataEmitter
         var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
         var constValues = new Dictionary<VariableSymbol, object>();
 
-        CollectLocalsAndLabels(
+        this.methodBodyPlanner.CollectLocalsAndLabels(
             body,
             null,
             locals,
@@ -3473,7 +2466,7 @@ internal sealed class ReflectionMetadataEmitter
                 synth.Add(new BoundExpressionStatement(null, arg));
             }
 
-            CollectLocalsAndLabels(
+            this.methodBodyPlanner.CollectLocalsAndLabels(
                 new BoundBlockStatement(null, synth.ToImmutable()),
                 null,
                 locals,
@@ -3619,7 +2612,7 @@ internal sealed class ReflectionMetadataEmitter
                 synth.Add(new BoundExpressionStatement(null, arg));
             }
 
-            CollectLocalsAndLabels(
+            this.methodBodyPlanner.CollectLocalsAndLabels(
                 new BoundBlockStatement(null, synth.ToImmutable()),
                 null,
                 locals,
@@ -3641,8 +2634,8 @@ internal sealed class ReflectionMetadataEmitter
                 il);
         }
 
-        CollectConstValues(body, constValues);
-        CollectLocalsAndLabels(
+        MethodBodyPlanner.CollectConstValues(body, constValues);
+        this.methodBodyPlanner.CollectLocalsAndLabels(
             body,
             function,
             locals,
@@ -3789,9 +2782,9 @@ internal sealed class ReflectionMetadataEmitter
 
                 // Issue #216: collect compile-time const bindings before slot allocation.
                 var constValues = new Dictionary<VariableSymbol, object>();
-                CollectConstValues(body, constValues);
+                MethodBodyPlanner.CollectConstValues(body, constValues);
 
-                CollectLocalsAndLabels(
+                this.methodBodyPlanner.CollectLocalsAndLabels(
                     body,
                     function,
                     locals,
@@ -3900,8 +2893,8 @@ internal sealed class ReflectionMetadataEmitter
 
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
                 capturedSequencePoints = emitter.SequencePoints;
-                capturedLocals = CollectLocalInfo(locals);
-                capturedConstants = CollectLocalConstantInfo(constValues);
+                capturedLocals = MethodBodyPlanner.CollectLocalInfo(locals);
+                capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(constValues);
                 capturedCodeSize = il.Offset;
                 capturedLocalsSignature = localsSignature;
             } // end else (non-async path)
@@ -3958,7 +2951,7 @@ internal sealed class ReflectionMetadataEmitter
         // The synthesized entry point must remain Public so the runtime can find it.
         var visibility = isEntryPoint && function.Declaration is null
             ? MethodAttributes.Public
-            : ToMethodVisibility(function.Accessibility);
+            : AccessibilityMap.ToMethodVisibility(function.Accessibility);
 
         // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
         // models open/override per ADR-0017 for classes:
@@ -3991,7 +2984,7 @@ internal sealed class ReflectionMetadataEmitter
         {
             var receiverStruct = function.ReceiverType as StructSymbol;
             var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
-            if (!receiverIsValueType || RequiresVirtualOnValueType(function, receiverStruct))
+            if (!receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
                 if (!function.IsOverride)
@@ -4019,7 +3012,7 @@ internal sealed class ReflectionMetadataEmitter
         // emit a Parameter row with sequence number 0 (ECMA-335 II.22.33) in
         // front of the source-parameter rows so we can attach return-target
         // CustomAttribute rows to it.
-        var firstParamHandle = this.NextParameterHandle();
+        var firstParamHandle = this.customAttrEncoder.NextParameterHandle();
         var hasReturnAttributes = !function.Attributes.IsDefaultOrEmpty
             && function.Attributes.Any(a => a.Target == AttributeTargetKind.Return);
         ParameterHandle? returnParamHandle = null;
@@ -4068,7 +3061,7 @@ internal sealed class ReflectionMetadataEmitter
 
             if (p.RefKind == RefKind.In)
             {
-                this.EmitIsReadOnlyAttributeOnParameter(paramHandle);
+                this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(paramHandle);
             }
 
             // ADR-0063 §10: emit the Constant row carrying the default value.
@@ -4100,754 +3093,18 @@ internal sealed class ReflectionMetadataEmitter
         // MethodDef. Issue #170: per-parameter annotations attach to each
         // emitted Parameter row. Issue #172: return-target annotations attach
         // to the synthesised sequence-0 Parameter row.
-        this.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
+        this.customAttrEncoder.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
         if (returnParamHandle is { } retHandle)
         {
-            this.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return);
+            this.customAttrEncoder.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return);
         }
 
         foreach (var (paramSym, paramHandle) in paramHandles)
         {
-            this.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
+            this.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
         }
 
         return handle;
-    }
-
-    private static MethodAttributes ToMethodVisibility(Accessibility accessibility)
-    {
-        switch (accessibility)
-        {
-            case Accessibility.Public:
-                return MethodAttributes.Public;
-            case Accessibility.Internal:
-                return MethodAttributes.Assembly;
-            case Accessibility.Private:
-                return MethodAttributes.Private;
-            default:
-                return MethodAttributes.Public;
-        }
-    }
-
-    private void CollectLocalsAndLabels(
-        BoundBlockStatement body,
-        FunctionSymbol function,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
-        Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
-        Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
-        Dictionary<BoundIndexExpression, int> mapIndexSlots,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundExpression, int> receiverSpillSlots,
-        Dictionary<BoundExpression, int> indexAssignmentValueSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        InstructionEncoder il)
-    {
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
-        CollectBlockExpressionLocals(body, locals, localTypes);
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
-
-        // Phase B: pattern switch statements bring three classes of locals
-        // into the host method:
-        //   * one discriminant temp per switch (typed as the discriminant
-        //     expression's type),
-        //   * one object-typed scratch per type pattern (holds the isinst
-        //     result before the brfalse to the next-arm label),
-        //   * any locals declared by arm bodies and by the type-pattern
-        //     arm-local bindings — these need pre-allocation because the
-        //     pre-scan above does not descend into pattern-switch arms.
-        CollectPatternSwitchSlots(
-            body.Statements,
-            locals,
-            localTypes,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes);
-
-        // Phase 3.C.3b: each `?.` access introduces a synthetic capture
-        // local in the bound tree; pre-allocate a slot for it.
-        foreach (var nc in CollectNullConditionalCaptures(body))
-        {
-            if (!locals.ContainsKey(nc.Capture))
-            {
-                locals[nc.Capture] = localTypes.Count;
-                localTypes.Add(nc.Capture.Type);
-            }
-
-            // P2-7 / Issue #421: value-type access results need a
-            // Nullable<T> result slot so the nil branch can emit
-            // `ldloca; initobj Nullable<T>; ldloc` and so the not-null
-            // branch can wrap the raw T via `newobj Nullable<T>::.ctor(!0)`.
-            if (nc.ResultSlot != null && !locals.ContainsKey(nc.ResultSlot))
-            {
-                locals[nc.ResultSlot] = localTypes.Count;
-                localTypes.Add(nc.ResultSlot.Type);
-            }
-        }
-
-        foreach (var append in CollectAppends(body))
-        {
-            var srcSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            var dstSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            appendSlots[append] = (srcSlot, dstSlot);
-        }
-
-        foreach (var literal in CollectStructLiterals(body))
-        {
-            // Class literals do not need a pre-allocated local slot — they
-            // use newobj rather than initobj-into-a-slot.
-            if (literal.StructType.IsClass)
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(literal.StructType);
-            Debug.Assert(!structLiteralSlots.ContainsKey(literal), "Bound struct literal node aliased across emit positions; rekey structLiteralSlots by (node, parentContext) if lowering ever shares nodes.");
-            structLiteralSlots[literal] = slot;
-        }
-
-        // Phase 3.A.4 emit: each map index READ lowers to a Dictionary.TryGetValue
-        // pattern that needs a V-typed scratch local for the out parameter so that
-        // missing keys yield the Go zero value (matching the interpreter).
-        foreach (var idx in CollectMapIndexReads(body))
-        {
-            var slot = localTypes.Count;
-            localTypes.Add(idx.Type);
-            Debug.Assert(!mapIndexSlots.ContainsKey(idx), "Bound map index expression aliased across emit positions; rekey mapIndexSlots by (node, parentContext) if lowering ever shares nodes.");
-            mapIndexSlots[idx] = slot;
-        }
-
-        // BoundDefaultExpression for non-primitive value types needs a temp local
-        // for the ldloca/initobj/ldloc pattern (push-as-value path).
-        foreach (var def in CollectDefaultExpressions(body))
-        {
-            if (!IsValueTypeSymbol(def.Type))
-            {
-                continue;
-            }
-
-            // Primitive value types (int, bool) are handled with ldc.i4.0 — no slot needed.
-            if (def.Type == TypeSymbol.Int32 || def.Type == TypeSymbol.Bool)
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(def.Type);
-            Debug.Assert(!defaultExpressionSlots.ContainsKey(def), "Bound default expression aliased across emit positions; rekey defaultExpressionSlots by (node, parentContext) if lowering ever shares nodes.");
-            defaultExpressionSlots[def] = slot;
-        }
-
-        foreach (var receiver in this.CollectReceiverSpills(body, function, locals))
-        {
-            if (receiverSpillSlots.ContainsKey(receiver))
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(receiver.Type);
-            receiverSpillSlots[receiver] = slot;
-        }
-
-        // Issue #418 (P1-1): each index-assignment expression needs a scratch
-        // local typed as the value's type. The emit sites use dup + stloc tmp
-        // + store + ldloc tmp so the index/argument expressions are evaluated
-        // exactly once even though the assignment expression's result is the
-        // assigned value.
-        foreach (var ixa in CollectIndexAssignmentValueSpills(body))
-        {
-            if (indexAssignmentValueSlots.ContainsKey(ixa))
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(ixa.Type);
-            indexAssignmentValueSlots[ixa] = slot;
-        }
-
-        // Issue #418 (P1-2): property and CLR-property assignments yield the
-        // assigned value as their expression result. Previously the emitter
-        // re-evaluated the receiver and called the getter to produce that
-        // result, evaluating any side-effecting receiver expression twice
-        // (e.g. `Make().P = v` invoked `Make()` for the setter, then again
-        // for the getter). Pre-allocate a value-typed local for each such
-        // assignment so the emitter can `dup; stloc tmp; call set_X; ldloc
-        // tmp` instead. The slot is keyed by the assignment expression so it
-        // does not collide with receiver-spill entries (which are keyed by
-        // the receiver subexpression).
-        foreach (var assn in CollectAssignmentValueSpills(body))
-        {
-            if (receiverSpillSlots.ContainsKey(assn))
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(assn.Type);
-            receiverSpillSlots[assn] = slot;
-        }
-
-        // Issue #504: `!!` on a value-type `Nullable<T>` lowers to a
-        // `stloc tmp; ldloca tmp; call Nullable<T>::get_Value` sequence; the
-        // temp must be typed as `Nullable<T>` (not the unwrapped T). Reuse
-        // receiverSpillSlots — the dictionary already aggregates several
-        // distinct-by-node-identity scratch-slot kinds (receiver spills and
-        // assignment-value spills) and BoundUnaryExpression keys cannot
-        // collide with either. The slot is typed as the operand's
-        // NullableTypeSymbol, which `EncodeTypeSymbol` lowers to
-        // `System.Nullable<T>` in the local-sig blob.
-        foreach (var unwrap in CollectNullableValueTypeUnwraps(body))
-        {
-            if (receiverSpillSlots.ContainsKey(unwrap))
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(unwrap.Operand.Type);
-            receiverSpillSlots[unwrap] = slot;
-        }
-
-        // Issue #519: `?:` whose LHS is a value-type `Nullable<T>` lowers at
-        // emit time to a HasValue/Value sequence that needs a `Nullable<T>`-
-        // typed temp slot (it cannot use `dup; brtrue`, which is invalid IL
-        // for value-type stack shapes). The slot is keyed by the binary
-        // expression node and typed as the LHS's NullableTypeSymbol so
-        // EncodeTypeSymbol emits the proper `System.Nullable<T>` token.
-        foreach (var coalesce in CollectNullableValueTypeCoalesces(body))
-        {
-            if (receiverSpillSlots.ContainsKey(coalesce))
-            {
-                continue;
-            }
-
-            var slot = localTypes.Count;
-            localTypes.Add(coalesce.Left.Type);
-            receiverSpillSlots[coalesce] = slot;
-        }
-    }
-
-    // Phase B: walks the bound body to find every BoundPatternSwitchStatement
-    // (including those nested inside arm bodies, if/for branches, try/catch
-    // blocks, and BoundBlockExpression statement lists). For each switch,
-    // pre-allocates:
-    //   * one local slot for the discriminant temp,
-    //   * one object-typed scratch slot per TypePattern under any arm,
-    //   * arm-local TypePattern.Variable slots, and
-    //   * any locals declared inside arm body BoundBlockStatements.
-    private void CollectPatternSwitchSlots(
-        ImmutableArray<BoundStatement> statements,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes)
-    {
-        foreach (var s in statements)
-        {
-            WalkForPatternSwitches(
-                s,
-                locals,
-                localTypes,
-                patternSwitchSlots,
-                typePatternScratchSlots,
-                switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                goEnclosingScopes,
-                currentScope: null);
-        }
-    }
-
-    private void WalkForPatternSwitches(
-        BoundStatement statement,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
-    {
-        // Issue #418 (P1-3): the legacy bespoke switch missed many expression
-        // kinds (tuple/map literals, ?., CLR calls/indexers/properties,
-        // indirect calls, nested switch expressions, etc.). Use a default-
-        // recurse walker so every BoundExpression kind is visited and any
-        // nested pattern switch / switch expression / channel op / scope /
-        // select gets its slot pre-allocated.
-        this.slotPlanner.RunPatternSwitchAllocator(
-            statement,
-            locals,
-            localTypes,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
-    }
-
-    private void WalkExpressionForSwitches(
-        BoundExpression expression,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
-    {
-        if (expression == null)
-        {
-            return;
-        }
-
-        // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale —
-        // delegate to the comprehensive walker.
-        this.slotPlanner.RunPatternSwitchAllocator(
-            expression,
-            locals,
-            localTypes,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
-    }
-
-    private void WalkPatternForSwitchExpressions(
-        BoundPattern pattern,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
-        Dictionary<BoundTypePattern, int> typePatternScratchSlots,
-        Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
-    {
-        if (pattern == null)
-        {
-            return;
-        }
-
-        // Issue #418 (P1-3): see WalkForPatternSwitches for the rationale.
-        this.slotPlanner.RunPatternSwitchAllocator(
-            pattern,
-            locals,
-            localTypes,
-            patternSwitchSlots,
-            typePatternScratchSlots,
-            switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
-    }
-
-    private void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
-    {
-        var collected = new List<VariableSymbol>();
-        this.slotPlanner.CollectBlockExpressionLocals(body, collected);
-        foreach (var variable in collected)
-        {
-            if (!locals.ContainsKey(variable))
-            {
-                locals[variable] = localTypes.Count;
-                localTypes.Add(variable.Type);
-            }
-        }
-    }
-
-    private IEnumerable<BoundStructLiteralExpression> CollectStructLiterals(BoundBlockStatement body)
-    {
-        var list = new List<BoundStructLiteralExpression>();
-        foreach (var s in body.Statements)
-        {
-            this.slotPlanner.CollectStructLiterals(s, list);
-        }
-
-        return list;
-    }
-
-    // Phase 4 emit parity (E1): walk every user function body to collect all
-    // BoundFunctionLiteralExpression nodes. Class instance method bodies are
-    // included too. The collector uses BoundTreeRewriter so it reaches every
-    // expression position; the base rewriter does not descend into the lambda's
-    // body (separate lexical scope), so we recurse on Body explicitly to find
-    // nested lambdas.
-    private List<BoundFunctionLiteralExpression> CollectFunctionLiterals()
-        => this.slotPlanner.CollectFunctionLiterals();
-
-    private List<BoundGoStatement> CollectGoStatements()
-        => this.slotPlanner.CollectGoStatements();
-
-    // Phase 4 emit parity (F2, type-erased generic user types): discover
-    // every constructed StructSymbol referenced in the bound program
-    // (function bodies, class methods, and lambda bodies) and alias it to
-    // its definition's TypeDef, ctor, primary-ctor, and per-field FieldDef
-    // rows. Emission sites can then do plain dictionary lookups regardless
-    // of whether the type is open, constructed, or already a non-generic
-    // symbol.
-    private void RegisterConstructedTypeAliases()
-    {
-        var collector = new ClosureEmitter.ConstructedTypeCollector();
-        foreach (var kvp in this.emitCtx.Program.Functions)
-        {
-            collector.RewriteStatement(kvp.Value);
-        }
-
-        foreach (var body in this.lambdaBodies.Values)
-        {
-            collector.RewriteStatement(body);
-        }
-
-        foreach (var constructed in collector.Constructed)
-        {
-            var def = constructed.Definition;
-            if (def == null || def == constructed)
-            {
-                continue;
-            }
-
-            if (this.cache.StructTypeDefs.TryGetValue(def, out var td))
-            {
-                this.cache.StructTypeDefs[constructed] = td;
-            }
-
-            if (this.cache.ClassCtorHandles.TryGetValue(def, out var cc))
-            {
-                this.cache.ClassCtorHandles[constructed] = cc;
-            }
-
-            if (this.cache.ClassPrimaryCtorHandles.TryGetValue(def, out var pc))
-            {
-                this.cache.ClassPrimaryCtorHandles[constructed] = pc;
-            }
-
-            foreach (var cf in constructed.Fields)
-            {
-                FieldSymbol df = null;
-                foreach (var candidate in def.Fields)
-                {
-                    if (candidate.Name == cf.Name)
-                    {
-                        df = candidate;
-                        break;
-                    }
-                }
-
-                if (df != null && this.cache.StructFieldDefs.TryGetValue(df, out var fd))
-                {
-                    this.cache.StructFieldDefs[cf] = fd;
-                }
-            }
-        }
-    }
-
-    private void AddIteratorInterfaceImplementations(StructSymbol smClass, StateMachineEmitter.IteratorStateMachineInfo info)
-    {
-        var elementClr = info.Plan.ElementType.ClrType ?? typeof(object);
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.IDisposable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerable)));
-        this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[smClass], this.GetTypeReference(typeof(System.Collections.IEnumerator)));
-    }
-
-    private void AddAsyncIteratorInterfaceImplementations(StructSymbol smClass, Lowering.Iterators.AsyncIteratorPlan plan)
-    {
-        var elementClr = plan.ElementType.ClrType ?? typeof(object);
-        var typeDef = this.cache.StructTypeDefs[smClass];
-
-        // IAsyncEnumerator<T>
-        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-            this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr)));
-
-        // IAsyncDisposable
-        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-            this.GetTypeHandleForMember(typeof(System.IAsyncDisposable)));
-
-        if (plan.IsEnumerable)
-        {
-            // IAsyncEnumerable<T>
-            this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-                this.GetTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr)));
-        }
-
-        // IValueTaskSource<bool>
-        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-            this.GetTypeHandleForMember(typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>)));
-
-        // IAsyncStateMachine (required by AsyncIteratorMethodBuilder.MoveNext<TSM> constraint)
-        this.emitCtx.Metadata.AddInterfaceImplementation(typeDef,
-            this.GetTypeHandleForMember(typeof(System.Runtime.CompilerServices.IAsyncStateMachine)));
-    }
-
-    private void CollectStatements(
-        ImmutableArray<BoundStatement> statements,
-        FunctionSymbol function,
-        Dictionary<VariableSymbol, int> locals,
-        List<TypeSymbol> localTypes,
-        Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
-        InstructionEncoder il,
-        int pass)
-    {
-        foreach (var s in statements)
-        {
-            if (pass == 1)
-            {
-                switch (s)
-                {
-                    case BoundVariableDeclaration decl:
-                        // Issue #191: a GlobalVariableSymbol with a registered
-                        // FieldDef stores into <Program>'s static field via
-                        // stsfld; do not also allocate a local slot for it.
-                        if (decl.Variable is GlobalVariableSymbol gv && this.cache.GlobalFieldDefs.ContainsKey(gv))
-                        {
-                            break;
-                        }
-
-                        // Issue #216: compile-time const bindings are inlined at
-                        // every read site — no IL slot is needed.
-                        if (decl.ConstantValue != null)
-                        {
-                            break;
-                        }
-
-                        if (!locals.ContainsKey(decl.Variable))
-                        {
-                            locals[decl.Variable] = localTypes.Count;
-
-                            // Issue #491 (ADR-0060 follow-up): a ref-aliasing local's IL
-                            // slot is a managed pointer `T&`, not the pointee `T`.
-                            // Recording the slot type as ByRefTypeSymbol routes encoding
-                            // through the byref local-sig path (EncodeLocalVariableType).
-                            if (decl.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None)
-                            {
-                                localTypes.Add(ByRefTypeSymbol.Get(lvs.Type));
-                            }
-                            else
-                            {
-                                localTypes.Add(decl.Variable.Type);
-                            }
-                        }
-
-                        break;
-                    case BoundLabelStatement lbl:
-                        if (!labels.ContainsKey(lbl.Label))
-                        {
-                            labels[lbl.Label] = il.DefineLabel();
-                        }
-
-                        break;
-                    case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
-                        this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Variable != null && !locals.ContainsKey(arm.Variable))
-                            {
-                                locals[arm.Variable] = localTypes.Count;
-                                localTypes.Add(arm.Variable.Type);
-                            }
-
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                            }
-                        }
-
-                        break;
-                    case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        foreach (var clause in t.CatchClauses)
-                        {
-                            // Issue #420 (P3-6): tolerate an elided catch variable
-                            // in the local-slot pre-pass (the corresponding emit-
-                            // time path in EmitCatchClauses emits a defensive
-                            // `pop` to maintain stack balance).
-                            if (clause.Variable != null && !locals.ContainsKey(clause.Variable))
-                            {
-                                locals[clause.Variable] = localTypes.Count;
-                                localTypes.Add(clause.Variable.Type);
-                            }
-
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        if (t.FinallyBlock != null)
-                        {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
-                    case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        break;
-                }
-            }
-            else
-            {
-                switch (s)
-                {
-                    case BoundGotoStatement g:
-                        if (!labels.ContainsKey(g.Label))
-                        {
-                            labels[g.Label] = il.DefineLabel();
-                        }
-
-                        break;
-                    case BoundConditionalGotoStatement cg:
-                        if (!labels.ContainsKey(cg.Label))
-                        {
-                            labels[cg.Label] = il.DefineLabel();
-                        }
-
-                        break;
-                    case BoundScopeStatement sc when sc.Body is BoundBlockStatement scBlock:
-                        this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                            }
-                        }
-
-                        break;
-                    case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        foreach (var clause in t.CatchClauses)
-                        {
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        if (t.FinallyBlock != null)
-                        {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
-                    case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        break;
-                }
-            }
-        }
-    }
-
-    private IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
-    {
-        var list = new List<BoundAppendExpression>();
-        this.slotPlanner.CollectAppends(node, list);
-        return list;
-    }
-
-    private IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)
-    {
-        var sink = new List<BoundIndexExpression>();
-        this.slotPlanner.CollectMapIndexReads((BoundStatement)root, sink);
-        return sink;
-    }
-
-    private IEnumerable<BoundExpression> CollectIndexAssignmentValueSpills(BoundNode root)
-    {
-        var sink = new List<BoundExpression>();
-        this.slotPlanner.CollectIndexAssignmentValueSpills((BoundStatement)root, sink);
-        return sink;
-    }
-
-    private IEnumerable<BoundDefaultExpression> CollectDefaultExpressions(BoundNode root)
-    {
-        var sink = new List<BoundDefaultExpression>();
-        this.slotPlanner.CollectDefaultExpressions((BoundStatement)root, sink);
-        return sink;
-    }
-
-    private IEnumerable<BoundExpression> CollectReceiverSpills(
-        BoundNode root,
-        FunctionSymbol function,
-        IReadOnlyDictionary<VariableSymbol, int> locals)
-    {
-        var sink = new List<BoundExpression>();
-        this.slotPlanner.CollectReceiverSpills((BoundStatement)root, function, locals, sink);
-        return sink;
-    }
-
-    // Issue #418 (P1-2): collect every property and CLR-property assignment
-    // expression in the body. The slot allocator pairs each with a temp local
-    // so the emitter can spill the assigned value (`dup; stloc tmp; setter;
-    // ldloc tmp`) instead of re-evaluating the receiver and calling the
-    // getter to recover the expression result.
-    private IEnumerable<BoundExpression> CollectAssignmentValueSpills(BoundNode root)
-    {
-        var sink = new List<BoundExpression>();
-        this.slotPlanner.CollectAssignmentValueSpills((BoundStatement)root, sink);
-        return sink;
-    }
-
-    // Issue #504: each `!!` applied to a value-type `Nullable<T>` lowers at
-    // emit time to `stloc tmp; ldloca tmp; call Nullable<T>::get_Value`. The
-    // temp slot must be typed as `Nullable<T>` (so the local-sig blob encodes
-    // the struct) and pre-allocated alongside the other body-emit scratch
-    // locals so it appears in the locals signature.
-    private IEnumerable<BoundUnaryExpression> CollectNullableValueTypeUnwraps(BoundNode root)
-    {
-        var sink = new List<BoundUnaryExpression>();
-        this.slotPlanner.CollectNullableValueTypeUnwraps((BoundStatement)root, sink);
-        return sink;
-    }
-
-    // Issue #519: each `?:` whose LHS is a value-type `Nullable<T>` lowers at
-    // emit time to a HasValue branch that needs a `Nullable<T>`-typed temp
-    // slot. The slot is keyed by the binary expression node and typed as the
-    // LHS's NullableTypeSymbol so `EncodeTypeSymbol` emits the proper
-    // `System.Nullable<T>` token in the local-sig blob.
-    private IEnumerable<BoundBinaryExpression> CollectNullableValueTypeCoalesces(BoundNode root)
-    {
-        var sink = new List<BoundBinaryExpression>();
-        this.slotPlanner.CollectNullableValueTypeCoalesces((BoundStatement)root, sink);
-        return sink;
     }
 
     private bool NeedsRvalueReceiverSpill(
@@ -4934,13 +3191,6 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return false;
-    }
-
-    private IEnumerable<BoundNullConditionalAccessExpression> CollectNullConditionalCaptures(BoundNode node)
-    {
-        var list = new List<BoundNullConditionalAccessExpression>();
-        this.slotPlanner.CollectNullConditional(node, list);
-        return list;
     }
 
     internal EntityHandle GetElementTypeToken(TypeSymbol element)
