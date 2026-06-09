@@ -5,6 +5,7 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 
@@ -87,12 +88,10 @@ public sealed class AwaitableShape
             return null;
         }
 
-        var getAwaiter = awaitableType.GetMethod(
+        var getAwaiter = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+            awaitableType,
             "GetAwaiter",
-            BindingFlags.Public | BindingFlags.Instance,
-            binder: null,
-            types: Type.EmptyTypes,
-            modifiers: null);
+            Type.EmptyTypes);
 
         if (getAwaiter == null || getAwaiter.ReturnType == null || getAwaiter.ReturnType == typeof(void))
         {
@@ -100,21 +99,19 @@ public sealed class AwaitableShape
         }
 
         var awaiterType = getAwaiter.ReturnType;
-        var isCompleted = awaiterType.GetProperty(
-            "IsCompleted",
-            BindingFlags.Public | BindingFlags.Instance);
+        var isCompleted = MemberLookup.SafeGetPropertyIncludingSelfAndInterfaces(
+            awaiterType,
+            "IsCompleted");
 
         if (isCompleted == null || isCompleted.PropertyType.FullName != "System.Boolean" || isCompleted.GetMethod == null)
         {
             return null;
         }
 
-        var getResult = awaiterType.GetMethod(
+        var getResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+            awaiterType,
             "GetResult",
-            BindingFlags.Public | BindingFlags.Instance,
-            binder: null,
-            types: Type.EmptyTypes,
-            modifiers: null);
+            Type.EmptyTypes);
 
         if (getResult == null)
         {
