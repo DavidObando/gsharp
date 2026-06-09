@@ -485,6 +485,29 @@ internal static class ClrTypeUtilities
         return all.ToArray();
     }
 
+    /// <summary>
+    /// Issue #529: tolerantly retrieves the transitive interface set
+    /// for a type, guarding against metadata-load failures.
+    /// </summary>
+    /// <param name="type">The type whose interfaces to retrieve.</param>
+    /// <returns>The transitive interface set, or empty on failure.</returns>
+    internal static Type[] SafeGetInterfaces(Type type)
+    {
+        if (type is null)
+        {
+            return Array.Empty<Type>();
+        }
+
+        try
+        {
+            return type.GetInterfaces();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return Array.Empty<Type>();
+        }
+    }
+
     private static TMember[] SafeEnumerate<TMember>(Type type, Func<Type, TMember[]> getAll)
         where TMember : MemberInfo
     {
@@ -547,29 +570,6 @@ internal static class ClrTypeUtilities
             }
 
             return null;
-        }
-    }
-
-    /// <summary>
-    /// Issue #529: tolerantly retrieves the transitive interface set
-    /// for a type, guarding against metadata-load failures.
-    /// </summary>
-    /// <param name="type">The type whose interfaces to retrieve.</param>
-    /// <returns>The transitive interface set, or empty on failure.</returns>
-    private static Type[] SafeGetInterfaces(Type type)
-    {
-        if (type is null)
-        {
-            return Array.Empty<Type>();
-        }
-
-        try
-        {
-            return type.GetInterfaces();
-        }
-        catch (Exception ex) when (IsMetadataLoadFailure(ex))
-        {
-            return Array.Empty<Type>();
         }
     }
 

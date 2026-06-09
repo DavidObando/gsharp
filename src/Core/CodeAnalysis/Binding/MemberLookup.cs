@@ -73,6 +73,167 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Walks <paramref name="clrType"/> and its transitive implemented interfaces
+    /// looking for a public instance method whose name matches <paramref name="name"/>.
+    /// Closes the post-#529 gap for *concrete* receivers — <c>*IncludingInterfaces</c>
+    /// in <see cref="ClrTypeUtilities"/> only walks interfaces when the receiver is itself
+    /// an interface; this helper extends the walk to concrete classes for the
+    /// #568 / #572 family.
+    /// </summary>
+    /// <param name="clrType">The CLR type (concrete class or interface) to probe.</param>
+    /// <param name="name">The method name to match.</param>
+    /// <param name="parameterTypes">Optional parameter types for exact-match filtering.
+    /// Pass <c>null</c> to match by name only (first hit).</param>
+    /// <returns>The matching <see cref="MethodInfo"/>, or <c>null</c> when none is found.</returns>
+    public static MethodInfo SafeGetMethodIncludingSelfAndInterfaces(Type clrType, string name, Type[] parameterTypes = null)
+    {
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        foreach (var type in EnumerateSelfAndInterfaces(clrType))
+        {
+            MethodInfo method;
+            try
+            {
+                method = parameterTypes != null
+                    ? type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, binder: null, types: parameterTypes, modifiers: null)
+                    : type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (method != null)
+            {
+                return method;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Enumerates every public instance method on <paramref name="clrType"/>
+    /// and its transitive implemented interfaces with the given <paramref name="name"/>.
+    /// The overload-resolution-facing variant, used by call sites that need to
+    /// pass a candidate set into <see cref="OverloadResolution.Resolve"/>.
+    /// Hides base-method-with-same-signature shadowing the same way C# does
+    /// (via the existing <c>IsHiddenByExisting</c> helper in <see cref="ClrTypeUtilities"/>).
+    /// </summary>
+    /// <param name="clrType">The CLR type (concrete class or interface) to probe.</param>
+    /// <param name="name">The method name to match.</param>
+    /// <returns>The candidate list with self-slot methods first.</returns>
+    public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(Type clrType, string name)
+    {
+        if (clrType == null)
+        {
+            return Array.Empty<MethodInfo>();
+        }
+
+        var selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance);
+        var result = new List<MethodInfo>();
+        foreach (var m in selfMethods)
+        {
+            if (string.Equals(m.Name, name, StringComparison.Ordinal))
+            {
+                result.Add(m);
+            }
+        }
+
+        // Walk transitive interfaces for DIMs not surfaced by the concrete type.
+        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
+        {
+            foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!string.Equals(m.Name, name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!IsMethodHiddenByExisting(result, m))
+                {
+                    result.Add(m);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Walks <paramref name="clrType"/> and its transitive implemented interfaces
+    /// looking for a public instance property whose name matches <paramref name="name"/>.
+    /// The concrete-receiver companion to <see cref="ClrTypeUtilities.SafeGetPropertyIncludingInterfaces"/>
+    /// (which only walks interfaces when the receiver is itself an interface).
+    /// </summary>
+    /// <param name="clrType">The CLR type to probe.</param>
+    /// <param name="name">The property name to match.</param>
+    /// <returns>The matching <see cref="PropertyInfo"/>, or <c>null</c> when none is found.</returns>
+    public static PropertyInfo SafeGetPropertyIncludingSelfAndInterfaces(Type clrType, string name)
+    {
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        var direct = ClrTypeUtilities.SafeGetProperty(clrType, name, BindingFlags.Public | BindingFlags.Instance);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
+        {
+            var prop = ClrTypeUtilities.SafeGetProperty(iface, name, BindingFlags.Public | BindingFlags.Instance);
+            if (prop != null)
+            {
+                return prop;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the G# field on <paramref name="structSymbol"/> that satisfies
+    /// the getter-only contract of <paramref name="clrProp"/>: same name, the
+    /// field's type's CLR projection matches the property's PropertyType, and
+    /// the field is publicly accessible. Returns <c>null</c> when no such
+    /// field exists or when the contract requires a setter.
+    /// </summary>
+    /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="clrProp">The CLR property whose contract to check.</param>
+    /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
+    public static FieldSymbol FindMatchingFieldForGetterOnlyProperty(StructSymbol structSymbol, PropertyInfo clrProp)
+    {
+        // Only getter-only contracts are satisfied by fields in this PR.
+        if (clrProp.SetMethod != null)
+        {
+            return null;
+        }
+
+        if (!structSymbol.TryGetField(clrProp.Name, out var field))
+        {
+            return null;
+        }
+
+        if (field.Accessibility != Accessibility.Public)
+        {
+            return null;
+        }
+
+        if (!ClrTypeUtilities.AreSame(field.Type?.ClrType, clrProp.PropertyType))
+        {
+            return null;
+        }
+
+        return field;
+    }
+
+    /// <summary>
     /// Probes <paramref name="type"/> for an
     /// <c>IAsyncEnumerable&lt;T&gt;</c> implementation and returns its
     /// element type when present.
@@ -710,4 +871,44 @@ internal sealed class MemberLookup
     /// <returns>The parameters visible to a non-extension caller.</returns>
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Returns whether <paramref name="candidate"/> is hidden by any method
+    /// already in <paramref name="existing"/>. Same-name-and-parameter-types
+    /// hiding mirrors C# semantics.
+    /// </summary>
+    private static bool IsMethodHiddenByExisting(List<MethodInfo> existing, MethodInfo candidate)
+    {
+        foreach (var m in existing)
+        {
+            if (!string.Equals(m.Name, candidate.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var existingParams = m.GetParameters();
+            var candidateParams = candidate.GetParameters();
+            if (existingParams.Length != candidateParams.Length)
+            {
+                continue;
+            }
+
+            var match = true;
+            for (var i = 0; i < existingParams.Length; i++)
+            {
+                if (!ClrTypeUtilities.AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType))
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
