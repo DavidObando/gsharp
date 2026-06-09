@@ -12,8 +12,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
 /// Writes a field on a struct held in a variable: <c>variable.Field = value</c>
-/// (Phase 3.B.1). For Phase 3.B.1 the receiver must be a simple variable
-/// reference (no nested field paths yet).
+/// (Phase 3.B.1). The receiver is either a simple variable reference or, after
+/// closure-boxing lowering, an arbitrary expression (e.g. <c>boxLocal.Value</c>
+/// for a boxed reference-type captured variable — issue #567).
 /// </summary>
 public sealed class BoundFieldAssignmentExpression : BoundExpression
 {
@@ -26,7 +27,24 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
         Value = value;
     }
 
+    private BoundFieldAssignmentExpression(SyntaxNode syntax, BoundExpression receiverExpression, StructSymbol structType, FieldSymbol field, BoundExpression value)
+        : base(syntax)
+    {
+        ReceiverExpression = receiverExpression;
+        StructType = structType;
+        Field = field;
+        Value = value;
+    }
+
     public VariableSymbol Receiver { get; }
+
+    /// <summary>
+    /// Gets the expression-based receiver, or <c>null</c> when the simple
+    /// <see cref="Receiver"/> variable form is used. When non-null, the
+    /// emitter evaluates this expression to produce the instance reference
+    /// instead of loading <see cref="Receiver"/>.
+    /// </summary>
+    public BoundExpression ReceiverExpression { get; }
 
     public StructSymbol StructType { get; }
 
@@ -37,4 +55,25 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     public override TypeSymbol Type => Field.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.FieldAssignmentExpression;
+
+    /// <summary>
+    /// Creates a field assignment with an expression-based receiver. Used
+    /// after closure-boxing lowering when the original receiver local has
+    /// been replaced by a field access through a box (issue #567).
+    /// </summary>
+    /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
+    /// <param name="receiverExpression">The expression that produces the instance reference.</param>
+    /// <param name="structType">The declaring struct/class type.</param>
+    /// <param name="field">The field to write.</param>
+    /// <param name="value">The value to assign.</param>
+    /// <returns>A new <see cref="BoundFieldAssignmentExpression"/> with an expression receiver.</returns>
+    public static BoundFieldAssignmentExpression WithExpressionReceiver(
+        SyntaxNode syntax,
+        BoundExpression receiverExpression,
+        StructSymbol structType,
+        FieldSymbol field,
+        BoundExpression value)
+    {
+        return new BoundFieldAssignmentExpression(syntax, receiverExpression, structType, field, value);
+    }
 }
