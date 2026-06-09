@@ -967,6 +967,11 @@ public static class BoundNodePrinter
     private static void WriteArrayCreationExpression(BoundArrayCreationExpression node, IndentedTextWriter writer)
     {
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+
+        // #611 intentional asymmetry: only ArrayTypeSymbol carries a Length
+        // to print inside the brackets. SliceTypeSymbol renders as `[]T`
+        // (no number) because slices are variable-length. This is correct
+        // GSharp syntax — NOT a missing SliceTypeSymbol case.
         if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol arr)
         {
             writer.WriteNumber(arr.Length.ToString());
