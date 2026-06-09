@@ -435,6 +435,17 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Slice invariance guard: if the source is a slice and the target
+        // is an interface that the #570 arm above did NOT match (e.g.
+        // IEnumerable<object> when the slice is []string), do NOT fall
+        // through to the general #521 upcast — that path would incorrectly
+        // accept it via CLR array covariance (IsAssignableFrom returns true
+        // across covariant interfaces). G# slices are invariant per spec.
+        if (from is SliceTypeSymbol && to?.ClrType != null && to.ClrType.IsInterface)
+        {
+            return Conversion.None;
+        }
+
         // Issue #521: standard CLR identity / reference upcast — a
         // reference-typed expression of CLR type `from` widens implicitly
         // to any base class or implemented interface `to`. The CLR
