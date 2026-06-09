@@ -59,6 +59,10 @@ public sealed class BoundUnaryOperator
         // Phase 3.C.3 / ADR-0001: postfix `!!` is dynamically typed by the
         // operand: it returns the underlying type when applied to T?, and is
         // a no-op on already-non-nullable values (binder will diagnose).
+        //
+        // Issue #614 audit: intentionally a single arm — there is only ONE
+        // null-assertion operator token, and the result type is computed from
+        // the operand type at runtime. No combinatorial dimension to tabulate.
         if (syntaxKind == SyntaxKind.BangBangToken)
         {
             var underlying = operandType is NullableTypeSymbol n ? n.UnderlyingType : operandType;

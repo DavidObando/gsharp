@@ -94,6 +94,10 @@ public sealed class BoundBinaryOperator
         // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
         // Allowed only when both operands are the SAME type-parameter symbol whose
         // constraint is `Comparable`. (`any` falls through to "operator undefined".)
+        //
+        // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+        // gated by a narrow type-parameter predicate. No combinatorial growth risk;
+        // a table would add indirection without reducing duplication.
         if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
             && leftType is TypeParameterSymbol ltp && ltp == rightType
             && ltp.Constraint == TypeParameterConstraint.Comparable)
@@ -115,6 +119,10 @@ public sealed class BoundBinaryOperator
         }
 
         // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
+        //
+        // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+        // restricted to user-declared struct types with IsData or IsInline. The type
+        // test (`is StructSymbol`) is structural, not table-friendly.
         if (leftType is StructSymbol ls && rightType is StructSymbol rs && ls == rs && (ls.IsData || ls.IsInline))
         {
             if (syntaxKind == SyntaxKind.EqualsEqualsToken)
@@ -129,6 +137,10 @@ public sealed class BoundBinaryOperator
         }
 
         // Phase 3.C.2 / ADR-0001: == and != against nil for any nullable type.
+        //
+        // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)
+        // with a symmetric null-sentinel predicate. No growth dimension; the nil
+        // comparison semantic is fixed.
         if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken) &&
             (IsNullCompare(leftType, rightType) || IsNullCompare(rightType, leftType)))
         {
@@ -140,6 +152,9 @@ public sealed class BoundBinaryOperator
         // non-nil, otherwise the right. Type is the underlying of the left
         // side (when the right is the same underlying or is itself nullable
         // with that underlying).
+        //
+        // Issue #614 audit: intentionally a single arm — there is only ONE
+        // null-coalescing operator token; no combinatorial dimension to tabulate.
         if (syntaxKind == SyntaxKind.QuestionColonToken)
         {
             TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
@@ -166,6 +181,12 @@ public sealed class BoundBinaryOperator
         // they take a non-matching int rhs and are rarely used on
         // nullables; falling through here leaves them as a non-fatal
         // "operator undefined" diagnostic at user-source level.
+        //
+        // Issue #614 audit: intentionally a single arm — this is a generic
+        // lifting meta-algorithm that already handles ALL liftable operator
+        // kinds uniformly via IsLiftableKind(). It delegates to the main Bind
+        // for the underlying form, so it has no per-operator duplication to
+        // tabulate.
         if (leftType is NullableTypeSymbol lN
             && rightType is NullableTypeSymbol rN
             && lN == rN
@@ -189,6 +210,9 @@ public sealed class BoundBinaryOperator
         // The same-type arm above handles enum? == enum? and enum? | enum?;
         // this arm handles the §11.10 arithmetic rules where both sides
         // are nullable but wrap DIFFERENT underlying types.
+        //
+        // Issue #614 audit: same rationale as the homogeneous nullable arm
+        // above — a generic lifting meta-algorithm, not per-operator duplication.
         if (leftType is NullableTypeSymbol lHet
             && rightType is NullableTypeSymbol rHet
             && lHet != rHet
