@@ -87,6 +87,7 @@ public enum SyntaxKind
     IdentifierToken,
 
     // Reserved keywords
+    AsKeyword,
     AsyncKeyword,
     AwaitKeyword,
     BreakKeyword,
@@ -288,6 +289,11 @@ public enum SyntaxKind
     // local, assigns each property, and yields the local.
     ObjectCreationExpression,
     PropertyInitializer,
+
+    // Issue #575: expression-level type-test and safe-cast operators.
+    // `expr is T` → bool; `expr as T` → T (or T?).
+    IsExpression,
+    AsExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

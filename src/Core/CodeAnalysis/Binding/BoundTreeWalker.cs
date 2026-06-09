@@ -313,6 +313,12 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.SpillSequenceExpression:
                 VisitSpillSequenceExpression((BoundSpillSequenceExpression)node);
                 break;
+            case BoundNodeKind.IsExpression:
+                VisitIsExpression((BoundIsExpression)node);
+                break;
+            case BoundNodeKind.AsExpression:
+                VisitAsExpression((BoundAsExpression)node);
+                break;
             default:
                 throw new InvalidOperationException(
                     $"BoundTreeWalker: unexpected expression kind '{node.Kind}'.");
@@ -889,6 +895,16 @@ public abstract class BoundTreeWalker
         {
             VisitExpression(item);
         }
+    }
+
+    private void VisitIsExpression(BoundIsExpression node)
+    {
+        VisitExpression(node.Expression);
+    }
+
+    private void VisitAsExpression(BoundAsExpression node)
+    {
+        VisitExpression(node.Expression);
     }
 }
 

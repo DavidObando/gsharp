@@ -407,6 +407,12 @@ internal sealed partial class MethodBodyEmitter
             case BoundDefaultExpression defaultExpr:
                 this.EmitDefault(defaultExpr);
                 break;
+            case BoundIsExpression isExpr:
+                this.EmitIsExpression(isExpr);
+                break;
+            case BoundAsExpression asExpr:
+                this.EmitAsExpression(asExpr);
+                break;
             case BoundErrorExpression:
                 // GS0268: a BoundErrorExpression leaked from lowering into emit.
                 // This typically means the lowerer could not resolve a required
@@ -1060,5 +1066,83 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Operand);
         var pointeeType = ((ByRefTypeSymbol)node.Operand.Type).PointeeType;
         this.EmitLoadIndirect(pointeeType);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  Issue #575: expression-level `is` / `as` operators.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Emits <c>expr is T</c> → <c>bool</c>:
+    /// <code>
+    ///   [expr]
+    ///   box (if value type)
+    ///   isinst T
+    ///   ldnull
+    ///   cgt.un
+    /// </code>
+    /// </summary>
+    private void EmitIsExpression(BoundIsExpression node)
+    {
+        this.EmitExpression(node.Expression);
+
+        // Box value-type operands so that `isinst` can operate on them.
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(node.Expression.Type))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(node.Expression.Type));
+        }
+
+        // Determine the isinst target. For nullable targets, test against the underlying type.
+        var isinstTarget = node.TargetType is NullableTypeSymbol nts ? nts.UnderlyingType : node.TargetType;
+
+        this.il.OpCode(ILOpCode.Isinst);
+        this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
+
+        // Convert the object-or-null result to bool.
+        this.il.OpCode(ILOpCode.Ldnull);
+        this.il.OpCode(ILOpCode.Cgt_un);
+    }
+
+    /// <summary>
+    /// Emits <c>expr as T</c> → <c>T</c> (reference type) or <c>T?</c> (nullable value type):
+    /// <code>
+    ///   [expr]
+    ///   box (if value type source)
+    ///   isinst T
+    ///   unbox.any T (if T is value type — produces Nullable&lt;T&gt;)
+    /// </code>
+    /// For reference-type targets, <c>isinst</c> alone suffices (yields the
+    /// cast reference or null).
+    /// </summary>
+    private void EmitAsExpression(BoundAsExpression node)
+    {
+        this.EmitExpression(node.Expression);
+
+        // Box value-type operands.
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(node.Expression.Type))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(node.Expression.Type));
+        }
+
+        // Determine the isinst target type. For `as T?` where T is a value type,
+        // `isinst` targets T (not Nullable<T>), and then we unbox.any to Nullable<T>.
+        var isNullableValueTarget = node.TargetType is NullableTypeSymbol nts2
+            && nts2.UnderlyingType?.ClrType is { IsValueType: true };
+
+        var isinstTarget = isNullableValueTarget
+            ? ((NullableTypeSymbol)node.TargetType).UnderlyingType
+            : node.TargetType;
+
+        this.il.OpCode(ILOpCode.Isinst);
+        this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
+
+        if (isNullableValueTarget)
+        {
+            // Unbox to Nullable<T> — converts the boxed T (or null) to a Nullable<T> value.
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(node.TargetType));
+        }
     }
 }

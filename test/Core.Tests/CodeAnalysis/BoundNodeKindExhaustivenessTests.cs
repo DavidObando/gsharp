@@ -155,6 +155,8 @@ public class BoundNodeKindExhaustivenessTests
         "MakeChannelExpression",
         "ChannelReceiveExpression",
         "ChannelCloseExpression",
+        "IsExpression",
+        "AsExpression",
 
         // Pattern kinds.
         "ConstantPattern",
@@ -293,6 +295,8 @@ public class BoundNodeKindExhaustivenessTests
         "MakeChannelExpression",
         "ChannelReceiveExpression",
         "ChannelCloseExpression",
+        "IsExpression",
+        "AsExpression",
 
         // Pattern kinds.
         "ConstantPattern",

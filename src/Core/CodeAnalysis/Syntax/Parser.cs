@@ -3589,6 +3589,26 @@ public class Parser
             var precedence = Current.Kind.GetBinaryOperatorPrecedence();
             if (precedence == 0 || precedence <= parentPrecedence)
             {
+                // Issue #575: expression-level `is`/`as` operators bind at the
+                // relational tier (precedence 3, same as <, <=, >, >=). They have
+                // a Type RHS instead of an Expression RHS, so they're parsed
+                // separately from the standard binary-operator path.
+                if (parentPrecedence < 3 && (Current.Kind == SyntaxKind.IsKeyword || Current.Kind == SyntaxKind.AsKeyword))
+                {
+                    var keyword = NextToken();
+                    var typeClause = ParseTypeClause();
+                    if (keyword.Kind == SyntaxKind.IsKeyword)
+                    {
+                        left = new IsExpressionSyntax(syntaxTree, left, keyword, typeClause);
+                    }
+                    else
+                    {
+                        left = new AsExpressionSyntax(syntaxTree, left, keyword, typeClause);
+                    }
+
+                    continue;
+                }
+
                 break;
             }
 

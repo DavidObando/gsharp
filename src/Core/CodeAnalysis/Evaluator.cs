@@ -539,6 +539,8 @@ public sealed class Evaluator
                 BoundNodeKind.DereferenceExpression => EvaluateDereferenceExpression((BoundDereferenceExpression)node),
                 BoundNodeKind.DefaultExpression => EvaluateDefaultExpression((BoundDefaultExpression)node),
                 BoundNodeKind.InterpolatedStringExpression => EvaluateInterpolatedStringExpression((BoundInterpolatedStringExpression)node),
+                BoundNodeKind.IsExpression => EvaluateIsExpression((BoundIsExpression)node),
+                BoundNodeKind.AsExpression => EvaluateAsExpression((BoundAsExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -3316,6 +3318,49 @@ public sealed class Evaluator
                 WriteBackToOperand(deref.Operand, value);
                 break;
         }
+    }
+
+    private object EvaluateIsExpression(BoundIsExpression node)
+    {
+        var value = EvaluateExpression(node.Expression);
+        if (value == null)
+        {
+            return false;
+        }
+
+        var targetClr = node.TargetType is NullableTypeSymbol nts
+            ? nts.UnderlyingType?.ClrType
+            : node.TargetType?.ClrType;
+        if (targetClr == null)
+        {
+            return false;
+        }
+
+        return targetClr.IsInstanceOfType(value);
+    }
+
+    private object EvaluateAsExpression(BoundAsExpression node)
+    {
+        var value = EvaluateExpression(node.Expression);
+        if (value == null)
+        {
+            return null;
+        }
+
+        var targetClr = node.TargetType is NullableTypeSymbol nts
+            ? nts.UnderlyingType?.ClrType
+            : node.TargetType?.ClrType;
+        if (targetClr == null)
+        {
+            return null;
+        }
+
+        if (targetClr.IsInstanceOfType(value))
+        {
+            return value;
+        }
+
+        return null;
     }
 
     private sealed class YieldFinder : Binding.BoundTreeRewriter

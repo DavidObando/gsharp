@@ -283,6 +283,12 @@ public static class BoundNodePrinter
             case BoundNodeKind.DefaultExpression:
                 WriteDefaultExpression((BoundDefaultExpression)node, writer);
                 break;
+            case BoundNodeKind.IsExpression:
+                WriteIsExpression((BoundIsExpression)node, writer);
+                break;
+            case BoundNodeKind.AsExpression:
+                WriteAsExpression((BoundAsExpression)node, writer);
+                break;
             default:
                 throw new Exception($"Unexpected node {node.Kind}");
         }
@@ -1599,5 +1605,19 @@ public static class BoundNodePrinter
         var label = node.Kind == BoundNodeKind.AwaitYieldPoint ? "AwaitYieldPoint" : "AwaitResumePoint";
         writer.WriteKeyword($"/* {label}(state={node.State}) */");
         writer.WriteLine();
+    }
+
+    private static void WriteIsExpression(BoundIsExpression node, IndentedTextWriter writer)
+    {
+        node.Expression.WriteTo(writer);
+        writer.Write(" is ");
+        writer.Write(node.TargetType?.Name ?? "?");
+    }
+
+    private static void WriteAsExpression(BoundAsExpression node, IndentedTextWriter writer)
+    {
+        node.Expression.WriteTo(writer);
+        writer.Write(" as ");
+        writer.Write(node.TargetType?.Name ?? "?");
     }
 }

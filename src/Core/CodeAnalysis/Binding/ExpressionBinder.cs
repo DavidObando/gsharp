@@ -231,6 +231,10 @@ internal sealed partial class ExpressionBinder
                 return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.IsExpression:
+                return BindIsExpression((IsExpressionSyntax)syntax);
+            case SyntaxKind.AsExpression:
+                return BindAsExpression((AsExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -646,5 +650,71 @@ internal sealed partial class ExpressionBinder
 
         methodGroup = new BoundClrMethodGroupExpression(null, receiver, declaringType, name, candidates.ToImmutable());
         return true;
+    }
+
+    private BoundExpression BindIsExpression(IsExpressionSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+        var targetType = bindTypeClause(syntax.TypeClause);
+        if (targetType == null || targetType == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        // Unwrap nullable for the purpose of isinst — `is T?` checks against T.
+        var checkType = targetType is NullableTypeSymbol nts ? nts.UnderlyingType : targetType;
+        _ = checkType; // future: could validate compatibility
+
+        return new BoundIsExpression(syntax, expression, targetType);
+    }
+
+    private BoundExpression BindAsExpression(AsExpressionSyntax syntax)
+    {
+        var expression = BindExpression(syntax.Expression);
+        var targetType = bindTypeClause(syntax.TypeClause);
+        if (targetType == null || targetType == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        // Per C# §11.11.10: the `as` operator requires that the target type be
+        // either a reference type or a nullable value type. A non-nullable value
+        // type target is illegal because `as` must be able to yield null on failure.
+        if (targetType is not NullableTypeSymbol && IsNonNullableValueType(targetType))
+        {
+            Diagnostics.ReportAsRequiresReferenceOrNullableType(syntax.Location, targetType.Name);
+            return new BoundErrorExpression(syntax);
+        }
+
+        return new BoundAsExpression(syntax, expression, targetType);
+    }
+
+    private static bool IsNonNullableValueType(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        // G# built-in value types.
+        if (type == TypeSymbol.Int32 || type == TypeSymbol.Int64 ||
+            type == TypeSymbol.Float32 || type == TypeSymbol.Float64 ||
+            type == TypeSymbol.Bool || type == TypeSymbol.UInt8 ||
+            type == TypeSymbol.Int8 || type == TypeSymbol.Int16 ||
+            type == TypeSymbol.UInt16 || type == TypeSymbol.UInt32 ||
+            type == TypeSymbol.UInt64 || type == TypeSymbol.Decimal ||
+            type == TypeSymbol.Char || type == TypeSymbol.NInt ||
+            type == TypeSymbol.NUInt)
+        {
+            return true;
+        }
+
+        // CLR value types resolved via imports.
+        if (type.ClrType is { IsValueType: true })
+        {
+            return true;
+        }
+
+        return false;
     }
 }

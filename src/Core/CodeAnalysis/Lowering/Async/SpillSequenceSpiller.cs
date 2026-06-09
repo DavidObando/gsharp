@@ -339,6 +339,8 @@ public static class SpillSequenceSpiller
                 case BoundSpillSequenceExpression:
                 case BoundStateMachineAwaitOnCompleted:
                 case BoundStateMachineBuilderMoveNext:
+                case BoundIsExpression:
+                case BoundAsExpression:
                     return Trivial(expression);
 
                 default:

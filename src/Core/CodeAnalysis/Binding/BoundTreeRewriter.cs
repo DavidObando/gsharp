@@ -442,6 +442,10 @@ public abstract class BoundTreeRewriter
                 return RewriteDefaultExpression((BoundDefaultExpression)node);
             case BoundNodeKind.TypeOfExpression:
                 return node;
+            case BoundNodeKind.IsExpression:
+                return RewriteIsExpression((BoundIsExpression)node);
+            case BoundNodeKind.AsExpression:
+                return RewriteAsExpression((BoundAsExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -1835,5 +1839,33 @@ public abstract class BoundTreeRewriter
         }
 
         return node.Update(builder?.ToImmutable() ?? node.Parts, handler);
+    }
+
+    /// <summary>Rewrites an expression-level <c>is</c> type-test.</summary>
+    /// <param name="node">The bound is-expression.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteIsExpression(BoundIsExpression node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundIsExpression(node.Syntax, expression, node.TargetType);
+    }
+
+    /// <summary>Rewrites an expression-level <c>as</c> safe-cast.</summary>
+    /// <param name="node">The bound as-expression.</param>
+    /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteAsExpression(BoundAsExpression node)
+    {
+        var expression = RewriteExpression(node.Expression);
+        if (expression == node.Expression)
+        {
+            return node;
+        }
+
+        return new BoundAsExpression(node.Syntax, expression, node.TargetType);
     }
 }
