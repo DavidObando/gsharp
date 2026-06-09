@@ -96,6 +96,8 @@ internal sealed class TypeDefEmitter
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
+    private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
+    private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
     private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
 
@@ -111,6 +113,8 @@ internal sealed class TypeDefEmitter
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
+        Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
+        Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
         Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes)
     {
@@ -125,6 +129,8 @@ internal sealed class TypeDefEmitter
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
         this.emitStaticConstructorBodyBytes = emitStaticConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitStaticConstructorBodyBytes));
+        this.emitClassDefaultConstructorBodyBytes = emitClassDefaultConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassDefaultConstructorBodyBytes));
+        this.emitClassPrimaryConstructorBodyBytes = emitClassPrimaryConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassPrimaryConstructorBodyBytes));
         this.emitClassConstructorWithBaseInitializerBodyBytes = emitClassConstructorWithBaseInitializerBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBaseInitializerBodyBytes));
         this.emitClassConstructorWithBodyBodyBytes = emitClassConstructorWithBodyBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBodyBodyBytes));
     }
@@ -811,12 +817,22 @@ internal sealed class TypeDefEmitter
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            // Issue #640: when the class declares instance field initializers,
+            // delegate to the body-emitter callback so expressions are evaluated
+            // and stored into fields after the base ctor call.
+            if (!classSym.InstanceFieldInitializers.IsEmpty)
+            {
+                bodyOffset = this.emitClassDefaultConstructorBodyBytes(classSym, baseCtorToken);
+            }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Call);
+                il.Token(baseCtorToken);
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            }
         }
 
         var ctorSig = new BlobBuilder();
@@ -877,34 +893,45 @@ internal sealed class TypeDefEmitter
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
-            var il = new InstructionEncoder(new BlobBuilder());
-            il.LoadArgument(0);
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
-
-            // For each ctor param: this.<field> = arg; positional 1:1 with
-            // fields of the same name.
-            for (var i = 0; i < parameters.Length; i++)
+            // Issue #640: when the class declares instance field initializers,
+            // delegate to the body-emitter callback so expressions are evaluated
+            // and stored into fields after the base ctor call and primary ctor
+            // parameter assignments.
+            if (!classSym.InstanceFieldInitializers.IsEmpty)
             {
-                var param = parameters[i];
-                if (!classSym.TryGetField(param.Name, out var field))
-                {
-                    throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
-                }
-
-                if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
-                {
-                    throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
-                }
-
-                il.LoadArgument(0);
-                il.LoadArgument(i + 1);
-                il.OpCode(ILOpCode.Stfld);
-                il.Token(fieldHandle);
+                bodyOffset = this.emitClassPrimaryConstructorBodyBytes(classSym, baseCtorToken);
             }
+            else
+            {
+                var il = new InstructionEncoder(new BlobBuilder());
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Call);
+                il.Token(baseCtorToken);
 
-            il.OpCode(ILOpCode.Ret);
-            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+                // For each ctor param: this.<field> = arg; positional 1:1 with
+                // fields of the same name.
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    var param = parameters[i];
+                    if (!classSym.TryGetField(param.Name, out var field))
+                    {
+                        throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+                    }
+
+                    if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+                    {
+                        throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
+                    }
+
+                    il.LoadArgument(0);
+                    il.LoadArgument(i + 1);
+                    il.OpCode(ILOpCode.Stfld);
+                    il.Token(fieldHandle);
+                }
+
+                il.OpCode(ILOpCode.Ret);
+                bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il);
+            }
         }
 
         var ctorSig = new BlobBuilder();
