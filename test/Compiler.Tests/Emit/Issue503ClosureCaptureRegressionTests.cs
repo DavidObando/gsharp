@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -509,6 +511,226 @@ public class Issue503ClosureCaptureRegressionTests
     }
 
     // -----------------------------------------------------------------------
+    // CLR delegate parameter shapes — closure → Action / Func / EventHandler
+    // passed directly to a CLR method/event declared in a sibling C# assembly.
+    // These are the shapes from issue #503's second comment (closure-capturing
+    // lambda → CLR delegate conversion via static method parameter).
+    // -----------------------------------------------------------------------
+
+    private const string SiblingCsSource = """
+        using System;
+
+        namespace Probe.CSharp
+        {
+            public static class CliEnvironment
+            {
+                private static Action _restoreCallback;
+                private static Func<int> _provider;
+
+                public static void RegisterRestore(Action callback)
+                {
+                    _restoreCallback = callback;
+                }
+
+                public static void FireRestore()
+                {
+                    _restoreCallback?.Invoke();
+                }
+
+                public static void RegisterProvider(Func<int> provider)
+                {
+                    _provider = provider;
+                }
+
+                public static int GetProvidedValue()
+                {
+                    return _provider != null ? _provider() : -1;
+                }
+            }
+
+            public class ClrSource
+            {
+                public event EventHandler Changed;
+
+                public void OnChanged()
+                {
+                    Changed?.Invoke(this, EventArgs.Empty);
+                }
+            }
+        }
+        """;
+
+    [Fact]
+    public void ClosureCapturingLocal_BoundToClrEvent_CompilesAndRuns()
+    {
+        var gSource = """
+            package MyLib
+            import System
+            import Probe.CSharp
+
+            var counter = 0
+            var src = ClrSource()
+            src.Changed += func(sender object, e EventArgs) {
+                counter = counter + 1
+            }
+            src.OnChanged()
+            src.OnChanged()
+            System.Console.WriteLine(counter)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
+        Assert.Equal("2\n", output);
+    }
+
+    [Fact]
+    public void ClosureCapturingLocal_PassedAsClrActionParameter_CompilesAndRuns()
+    {
+        var gSource = """
+            package MyLib
+            import Probe.CSharp
+
+            var x = 0
+            CliEnvironment.RegisterRestore(func() {
+                x = x + 1
+            })
+            CliEnvironment.FireRestore()
+            CliEnvironment.FireRestore()
+            CliEnvironment.FireRestore()
+            System.Console.WriteLine(x)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
+        Assert.Equal("3\n", output);
+    }
+
+    [Fact]
+    public void ClosureCapturingLocal_PassedAsClrFuncParameter_CompilesAndRuns()
+    {
+        var gSource = """
+            package MyLib
+            import Probe.CSharp
+
+            var x = 10
+            CliEnvironment.RegisterProvider(func() int32 {
+                x = x + 5
+                return x
+            })
+            var a = CliEnvironment.GetProvidedValue()
+            var b = CliEnvironment.GetProvidedValue()
+            System.Console.WriteLine(a)
+            System.Console.WriteLine(b)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
+        Assert.Equal("15\n20\n", output);
+    }
+
+    [Fact]
+    public void ClosureCapturingMutableLocal_ObservesMutationsThroughDelegate()
+    {
+        var gSource = """
+            package MyLib
+            import Probe.CSharp
+
+            var x = 0
+            CliEnvironment.RegisterRestore(func() {
+                x = x + 1
+            })
+            System.Console.WriteLine(x)
+            CliEnvironment.FireRestore()
+            System.Console.WriteLine(x)
+            x = 100
+            CliEnvironment.FireRestore()
+            System.Console.WriteLine(x)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
+        Assert.Equal("0\n1\n101\n", output);
+    }
+
+    [Fact]
+    public void NonExistentDelegateTarget_ProducesGSDiagnostic()
+    {
+        // Calling a method that doesn't exist should produce a precise GS####
+        // diagnostic, not a silent MSB4181 or unhandled exception.
+        var gSource = """
+            package MyLib
+            import Probe.CSharp
+
+            var x = 0
+            CliEnvironment.NoSuchMethod(func() {
+                x = x + 1
+            })
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_503_neg2_").FullName;
+        try
+        {
+            var csDir = Path.Combine(tempDir, "csref");
+            Directory.CreateDirectory(csDir);
+            File.WriteAllText(Path.Combine(csDir, "Lib.cs"), SiblingCsSource);
+            File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <OutputType>Library</OutputType>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <AssemblyName>Probe.CSharp</AssemblyName>
+                    <RootNamespace>Probe.CSharp</RootNamespace>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+            var siblingDll = BuildCsProject(csDir, "Probe.CSharp");
+
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var outPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, gSource);
+
+            var gscArgs = new List<string>
+            {
+                "/out:" + outPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/reference:" + siblingDll,
+            };
+
+            foreach (var reference in TrustedPlatformAssemblies())
+            {
+                gscArgs.Add("/reference:" + reference);
+            }
+
+            gscArgs.Add("/nowarn:GS9100");
+            gscArgs.Add(srcPath);
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(gscArgs.ToArray());
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.NotEqual(0, compileExit);
+            var combined = compileOut.ToString() + compileErr.ToString();
+            // Must surface as a GS#### code, not a silent abort.
+            Assert.Matches(@"GS\d{4}", combined);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Negative guard — a type error inside a capturing lambda must produce a
     // precise GS#### diagnostic, never a silent MSB4181-style abort.
     // -----------------------------------------------------------------------
@@ -626,5 +848,154 @@ public class Issue503ClosureCaptureRegressionTests
         IlVerifier.Verify(outPath);
         var bytes = File.ReadAllBytes(outPath);
         return Assembly.Load(bytes);
+    }
+
+    private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_503_sib_").FullName;
+        try
+        {
+            var csDir = Path.Combine(tempDir, "csref");
+            Directory.CreateDirectory(csDir);
+            File.WriteAllText(Path.Combine(csDir, "Lib.cs"), csSource);
+            File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <OutputType>Library</OutputType>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <AssemblyName>{siblingName}</AssemblyName>
+                    <RootNamespace>{siblingName}</RootNamespace>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+            var siblingDll = BuildCsProject(csDir, siblingName);
+
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var outPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, gSource);
+
+            var gscArgs = new List<string>
+            {
+                "/out:" + outPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/reference:" + siblingDll,
+            };
+
+            foreach (var reference in TrustedPlatformAssemblies())
+            {
+                gscArgs.Add("/reference:" + reference);
+            }
+
+            gscArgs.Add("/nowarn:GS9100");
+            gscArgs.Add(srcPath);
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(gscArgs.ToArray());
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.True(
+                compileExit == 0,
+                $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+
+            File.Copy(siblingDll, Path.Combine(tempDir, Path.GetFileName(siblingDll)), overwrite: true);
+
+            IlVerifier.Verify(outPath, additionalReferences: new[] { siblingDll });
+
+            var psi = new ProcessStartInfo("dotnet")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = tempDir,
+            };
+            psi.ArgumentList.Add("exec");
+            psi.ArgumentList.Add("--runtimeconfig");
+            psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"));
+            psi.ArgumentList.Add(outPath);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start dotnet exec");
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
+            Assert.True(
+                proc.ExitCode == 0,
+                $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+
+            return stdout.Replace("\r\n", "\n");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static string BuildCsProject(string csDir, string siblingName)
+    {
+        RunDotnet(csDir, "restore");
+
+        var stdout = RunDotnet(csDir, "build", "-c", "Release", "--nologo", "--no-restore");
+        _ = stdout;
+
+        var dll = Path.Combine(csDir, "bin", "Release", "net10.0", siblingName + ".dll");
+        Assert.True(File.Exists(dll), $"sibling assembly not found at {dll}");
+        return dll;
+    }
+
+    private static string RunDotnet(string workingDir, params string[] args)
+    {
+        var psi = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = workingDir,
+        };
+        foreach (var a in args)
+        {
+            psi.ArgumentList.Add(a);
+        }
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException($"failed to start dotnet {string.Join(" ", args)}");
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        Assert.True(proc.WaitForExit(120_000), $"dotnet {args[0]} timed out");
+        Assert.True(
+            proc.ExitCode == 0,
+            $"dotnet {string.Join(" ", args)} failed (exit {proc.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        return stdout;
+    }
+
+    private static IEnumerable<string> TrustedPlatformAssemblies()
+    {
+        var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+        if (string.IsNullOrEmpty(tpa))
+        {
+            yield break;
+        }
+
+        foreach (var path in tpa.Split(Path.PathSeparator))
+        {
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                yield return path;
+            }
+        }
     }
 }
