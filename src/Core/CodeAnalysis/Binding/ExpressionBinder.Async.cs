@@ -124,6 +124,20 @@ internal sealed partial class ExpressionBinder
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {
+                // Issue #648: compound assignment fallback for chained member access
+                // on user-defined struct/class types (e.g. `a.B.C += 1`). The parser
+                // routes all `lhs.member +=/-=` through EventSubscriptionExpression;
+                // when the member is not an event we fall back to compound assignment.
+                if (boundReceiver.Type is StructSymbol compoundStruct)
+                {
+                    var compoundResult = TryBindChainedCompoundAssignment(
+                        compoundStruct, boundReceiver, eventName, eventNameSyntax, syntax, isAdd);
+                    if (compoundResult != null)
+                    {
+                        return compoundResult;
+                    }
+                }
+
                 Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
                 return new BoundErrorExpression(null);
             }
@@ -134,6 +148,18 @@ internal sealed partial class ExpressionBinder
         var eventInfo = ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags);
         if (eventInfo == null)
         {
+            // Issue #648: compound assignment fallback for chained CLR member access
+            // (e.g. `obj.Prop += 1` where Prop is a field/property, not an event).
+            if (boundReceiver != null)
+            {
+                var clrCompound = TryBindChainedClrCompoundAssignment(
+                    boundReceiver, receiverClrType, eventName, eventNameSyntax, syntax, isAdd);
+                if (clrCompound != null)
+                {
+                    return clrCompound;
+                }
+            }
+
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
             return new BoundErrorExpression(null);
         }

@@ -181,6 +181,8 @@ internal sealed partial class ExpressionBinder
                 return BindIndexAssignmentExpression((IndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.MemberIndexAssignmentExpression:
                 return BindMemberIndexAssignmentExpression((MemberIndexAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.MemberFieldAssignmentExpression:
+                return BindMemberFieldAssignmentExpression((MemberFieldAssignmentExpressionSyntax)syntax);
             case SyntaxKind.CompoundIndexAssignmentExpression:
                 return BindCompoundIndexAssignmentExpression((CompoundIndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.StructLiteralExpression:
