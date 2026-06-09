@@ -241,6 +241,140 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #569: the dotted prefix may name an outer type (not a namespace),
+        // with the terminal identifier being a nested type. Try resolving the
+        // prefix as a type and then walking the terminal name as a nested type.
+        // This covers `Outer.Inner()`, `Ns.Outer.Inner()`, and deeply-nested
+        // chains like `Outer.Middle.Inner()` where the prefix segments include
+        // both namespace and outer-type components.
+        if (TryResolveAsNestedTypeChain(namespacePrefix, typeSimpleName, arity, terminalCall, out clrType))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #569: resolves a dotted prefix + terminal name as an outer type
+    /// containing a nested type. The prefix is split at each dot position to
+    /// find the outer type, then remaining segments and the terminal name are
+    /// walked as nested types via <see cref="ReferenceResolver.TryResolveNestedType"/>.
+    /// </summary>
+    private bool TryResolveAsNestedTypeChain(string namespacePrefix, string typeSimpleName, int arity, CallExpressionSyntax terminalCall, out System.Type clrType)
+    {
+        clrType = null;
+        if (string.IsNullOrEmpty(namespacePrefix))
+        {
+            return false;
+        }
+
+        var prefixSegments = namespacePrefix.Split('.');
+
+        // Try each split point: first N segments are a type name, remaining
+        // segments + terminal name are nested types. Start from the longest
+        // outer prefix (most specific) first.
+        for (var outerLen = prefixSegments.Length; outerLen >= 1; outerLen--)
+        {
+            var outerName = string.Join(".", prefixSegments, 0, outerLen);
+            System.Type outerType = null;
+
+            // Try resolving the outer name directly.
+            if (!scope.References.TryResolveType(outerName, out outerType))
+            {
+                // Try with each import prefix.
+                foreach (var import in scope.GetDeclaredImports())
+                {
+                    var qualified = import.Target + "." + outerName;
+                    if (scope.References.TryResolveType(qualified, out outerType))
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (outerType == null)
+            {
+                continue;
+            }
+
+            // Walk remaining prefix segments as nested types.
+            var current = outerType;
+            var walkFailed = false;
+            for (var i = outerLen; i < prefixSegments.Length; i++)
+            {
+                if (!scope.References.TryResolveNestedType(current, prefixSegments[i], out var next))
+                {
+                    walkFailed = true;
+                    break;
+                }
+
+                current = next;
+            }
+
+            if (walkFailed)
+            {
+                continue;
+            }
+
+            // Now resolve the terminal name as a nested type of `current`.
+            System.Type nestedType = null;
+            if (arity > 0)
+            {
+                scope.References.TryResolveNestedType(current, typeSimpleName + "`" + arity, out nestedType);
+            }
+
+            if (nestedType == null)
+            {
+                scope.References.TryResolveNestedType(current, typeSimpleName, out nestedType);
+            }
+
+            if (nestedType == null)
+            {
+                continue;
+            }
+
+            // Close the generic if type arguments are supplied.
+            if (arity > 0 && nestedType.IsGenericTypeDefinition)
+            {
+                var clrArgs = new System.Type[arity];
+                var argsResolved = true;
+                for (var i = 0; i < arity; i++)
+                {
+                    var ta = bindTypeClause(terminalCall.TypeArgumentList.Arguments[i]);
+                    if (ta?.ClrType == null)
+                    {
+                        argsResolved = false;
+                        break;
+                    }
+
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+                }
+
+                if (!argsResolved)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    clrType = nestedType.MakeGenericType(clrArgs);
+                    return true;
+                }
+                catch (System.ArgumentException)
+                {
+                    continue;
+                }
+            }
+            else if (nestedType.IsGenericTypeDefinition)
+            {
+                continue;
+            }
+
+            clrType = nestedType;
+            return true;
+        }
+
         return false;
     }
 
@@ -745,6 +879,22 @@ internal sealed partial class ExpressionBinder
 
             case CallExpressionSyntax ce:
                 return BindAccessorCall(receiver, classSymbol, ce);
+
+            // Issue #569: an object-initializer suffix on a nested-type
+            // constructor (`Outer.Inner() { Prop = val }`) parses as
+            // ObjectCreationExpressionSyntax wrapping the call. Bind the
+            // inner call through the accessor path (which resolves the
+            // nested type constructor), then apply the initializer
+            // assignments against the constructed instance.
+            case ObjectCreationExpressionSyntax objCreate
+                when objCreate.Target is CallExpressionSyntax innerCall:
+                var ctorResult = BindAccessorCall(receiver, classSymbol, innerCall);
+                if (ctorResult is BoundErrorExpression)
+                {
+                    return ctorResult;
+                }
+
+                return BindObjectInitializerSuffix(objCreate, ctorResult);
 
             // Issue #507 follow-up: support indexer reads through a member chain
             // (`obj.Member[k]`, `obj.A.B[k]`, `obj?.Member[k]`). ParsePostfixChain

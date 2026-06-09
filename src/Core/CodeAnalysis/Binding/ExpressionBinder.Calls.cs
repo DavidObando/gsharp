@@ -91,10 +91,19 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)
     {
         var target = BindExpression(syntax.Target);
+        return BindObjectInitializerSuffix(syntax, target);
+    }
+
+    /// <summary>
+    /// Issue #569: applies the object-initializer suffix to an already-bound
+    /// constructor call. Shared by <see cref="BindObjectCreationExpression"/>
+    /// (general path) and the accessor-step path for nested-type constructors
+    /// with initializer suffixes (<c>Outer.Inner() { Prop = val }</c>).
+    /// </summary>
+    private BoundExpression BindObjectInitializerSuffix(ObjectCreationExpressionSyntax syntax, BoundExpression target)
+    {
         if (target.Type == TypeSymbol.Error || target.Type == null)
         {
-            // Still drain the initializer values so they report their own
-            // diagnostics (e.g. unresolved names inside the RHS expressions).
             foreach (var init in syntax.Initializers)
             {
                 _ = BindExpression(init.Value);
@@ -541,6 +550,78 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #569: resolves a nested type constructor call when the call
+    /// identifier names a nested type within a containing CLR type.
+    /// For example, <c>Outer.Inner()</c> where <c>Inner</c> is a nested class
+    /// inside <c>Outer</c>. Supports generic nested types via
+    /// <c>Outer.Inner[T]()</c> and deeply-nested types via recursive accessor
+    /// chains (<c>Outer.Middle.Inner()</c> is handled by the accessor step
+    /// resolving <c>Outer.Middle</c> as a nested type that becomes the new
+    /// classSymbol for the terminal call). This unifies the call-expression
+    /// path with the type-clause resolution that #526 added.
+    /// </summary>
+    /// <param name="containingType">The CLR type of the outer class (e.g. <c>Outer</c>).</param>
+    /// <param name="syntax">The call expression (identifier = nested type name, args = ctor args).</param>
+    /// <param name="result">The bound constructor call on success.</param>
+    /// <returns>Whether a nested type was found and a constructor was bound.</returns>
+    private bool TryBindNestedTypeConstructorCall(System.Type containingType, CallExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var nestedName = syntax.Identifier.Text;
+        var arity = syntax.TypeArgumentList?.Arguments.Count ?? 0;
+
+        System.Type nestedType = null;
+
+        // Try arity-mangled name first for generic nested types (e.g. Inner`1).
+        if (arity > 0)
+        {
+            scope.References.TryResolveNestedType(containingType, nestedName + "`" + arity, out nestedType);
+        }
+
+        if (nestedType == null)
+        {
+            scope.References.TryResolveNestedType(containingType, nestedName, out nestedType);
+        }
+
+        if (nestedType == null)
+        {
+            return false;
+        }
+
+        // Close generic nested type if type arguments were provided.
+        if (arity > 0 && nestedType.IsGenericTypeDefinition)
+        {
+            var clrArgs = new System.Type[arity];
+            for (var i = 0; i < arity; i++)
+            {
+                var ta = bindTypeClause(syntax.TypeArgumentList.Arguments[i]);
+                if (ta?.ClrType == null)
+                {
+                    return false;
+                }
+
+                clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+            }
+
+            try
+            {
+                nestedType = nestedType.MakeGenericType(clrArgs);
+            }
+            catch (System.ArgumentException)
+            {
+                return false;
+            }
+        }
+        else if (nestedType.IsGenericTypeDefinition)
+        {
+            // Nested type is generic but no type arguments supplied — cannot construct.
+            return false;
+        }
+
+        return TryBindClrConstructorFromType(nestedType, syntax, out result);
+    }
+
+    /// <summary>
     /// Issue #311: resolves the explicit <c>[T1, T2]</c> type-argument list on a
     /// generic-method call site into CLR types projected onto the reference load
     /// context, ready for <see cref="System.Reflection.MethodInfo.MakeGenericMethod"/>.
@@ -720,6 +801,15 @@ internal sealed partial class ExpressionBinder
             if (!argumentNames.IsDefault && overloads.TryReportUnknownNamedArgumentForClr(classSymbol.ClassType, methodName, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
             {
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #569: when no static/instance method matches, check whether
+            // the call identifier names a nested type of the outer class. If so,
+            // bind as a constructor invocation — this unifies the call-expression
+            // path with the type-clause path that #526 already fixed.
+            if (TryBindNestedTypeConstructorCall(classSymbol.ClassType, ce, out var nestedCtorResult))
+            {
+                return nestedCtorResult;
             }
 
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
