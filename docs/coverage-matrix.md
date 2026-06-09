@@ -12,12 +12,15 @@ AmpersandToken
 Annotation
 AnnotationTarget
 ArrayCreationExpression
+AsExpression
+AsKeyword
 AssignmentExpression
 AsyncKeyword
 AtToken
 AwaitExpression
 AwaitForRangeStatement
 AwaitKeyword
+AwaitUsingStatement
 BadToken
 BangBangToken
 BangEqualsToken
@@ -109,6 +112,7 @@ InterfaceKeyword
 InternalKeyword
 InterpolatedStringExpression
 InterpolatedStringToken
+IsExpression
 IsKeyword
 LeftArrowToken
 LessOrEqualsToken
@@ -175,11 +179,11 @@ SelectKeyword
 SelectStatement
 SemicolonToken
 SequenceKeyword
+SharedBlock
 ShiftLeftEqualsToken
 ShiftLeftToken
 ShiftRightEqualsToken
 ShiftRightToken
-SharedBlock
 SlashEqualsToken
 SlashToken
 StarEqualsToken
@@ -221,6 +225,7 @@ YieldStatement
 AddressOfExpression
 AppendExpression
 ArrayCreationExpression
+AsExpression
 AssignmentExpression
 Attribute
 AwaitExpression
@@ -256,6 +261,7 @@ DefaultExpression
 DereferenceExpression
 DiscardPattern
 ErrorExpression
+EventSubscriptionExpression
 ExpressionStatement
 FieldAccessExpression
 FieldAssignmentExpression
@@ -273,6 +279,7 @@ IndexExpression
 IndirectAssignmentExpression
 IndirectCallExpression
 InterpolatedStringExpression
+IsExpression
 LabelStatement
 LenExpression
 ListPattern

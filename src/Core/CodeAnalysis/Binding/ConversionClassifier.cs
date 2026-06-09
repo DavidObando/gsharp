@@ -975,6 +975,52 @@ internal sealed class ConversionClassifier
         return new BoundImportedInstanceCallExpression(null, receiver2, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
     }
 
+    /// <summary>
+    /// Issue #605: builds a bound <c>await receiver.DisposeAsync()</c> expression.
+    /// Probes for a public parameterless <c>DisposeAsync()</c> returning
+    /// <see cref="System.Threading.Tasks.ValueTask"/> on user-defined G# classes
+    /// and CLR types (via <c>IAsyncDisposable</c>).
+    /// Reports <see cref="DiagnosticBag.ReportTypeNotAsyncDisposable"/> on failure.
+    /// </summary>
+    /// <param name="variable">The variable to async-dispose.</param>
+    /// <param name="location">The diagnostic location.</param>
+    /// <returns>A <see cref="BoundAwaitExpression"/> wrapping the DisposeAsync call, or <c>null</c> on failure.</returns>
+    public BoundExpression TryBuildDisposeAsyncCall(VariableSymbol variable, TextLocation location)
+    {
+        var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+
+        // User-defined G# class path: probe for DisposeAsync() returning ValueTask.
+        if (variable.Type is StructSymbol userType
+            && userType.TryGetMethodIncludingInherited("DisposeAsync", out var userDisposeAsync)
+            && userDisposeAsync.Parameters.Length == 0
+            && userDisposeAsync.Accessibility == Accessibility.Public)
+        {
+            var receiver = new BoundVariableExpression(null, variable);
+            var call = new BoundUserInstanceCallExpression(null, receiver, userDisposeAsync, ImmutableArray<BoundExpression>.Empty);
+            return new BoundAwaitExpression(null, call, TypeSymbol.Void);
+        }
+
+        // CLR-type path: walk self + transitive interfaces for DisposeAsync.
+        var clrType = variable.Type?.ClrType;
+        if (clrType == null)
+        {
+            Diagnostics.ReportTypeNotAsyncDisposable(location, variable.Type ?? TypeSymbol.Error);
+            return null;
+        }
+
+        var disposeAsyncMethod = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(clrType, "DisposeAsync", Type.EmptyTypes);
+        if (disposeAsyncMethod == null ||
+            disposeAsyncMethod.ReturnType.FullName != "System.Threading.Tasks.ValueTask")
+        {
+            Diagnostics.ReportTypeNotAsyncDisposable(location, variable.Type);
+            return null;
+        }
+
+        var receiver2 = new BoundVariableExpression(null, variable);
+        var clrCall = new BoundImportedInstanceCallExpression(null, receiver2, disposeAsyncMethod, valueTaskType, ImmutableArray<BoundExpression>.Empty);
+        return new BoundAwaitExpression(null, clrCall, TypeSymbol.Void);
+    }
+
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
 
     /// <summary>

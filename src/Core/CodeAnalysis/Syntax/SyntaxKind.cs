@@ -223,6 +223,7 @@ public enum SyntaxKind
     SelectCase,
     ScopeStatement,
     AwaitForRangeStatement,
+    AwaitUsingStatement,
     EventSubscriptionExpression,
     YieldStatement,
 
