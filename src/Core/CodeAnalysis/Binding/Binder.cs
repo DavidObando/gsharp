@@ -2031,6 +2031,13 @@ public sealed class Binder
         else if (parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa)
         {
             InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
+
+            // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
+            // against a slice parameter `[]T` (or vice versa). In Go, explicit
+            // slicing is required to produce a slice from a fixed-length array.
+            // The CLR-level inference path (OverloadResolution.UnifyForInference)
+            // handles this differently because both map to CLR T[], but at the
+            // GSharp semantic level they are distinct types.
         }
         else if (parameterType is FunctionTypeSymbol pf && argumentType is FunctionTypeSymbol af
             && pf.ParameterTypes.Length == af.ParameterTypes.Length)
@@ -2057,6 +2064,31 @@ public sealed class Binder
                 for (var i = 0; i < pit.TypeArguments.Length; i++)
                 {
                     InferTypeArguments(pit.TypeArguments[i], argClrArgs[i], substitution);
+                }
+            }
+            else if (argClrArgs.IsDefaultOrEmpty)
+            {
+                // #611: slice/array → interface inference. A slice `[]T` or
+                // fixed-array `[N]T` is backed by CLR `T[]` which is not
+                // generic itself but implements generic interfaces
+                // (IEnumerable<T>, IReadOnlyList<T>, IList<T>, etc.). Walk
+                // the array's interface set to find a match for the
+                // parameter's open definition and extract its arguments.
+                var argClr = argumentType?.ClrType;
+                if (argClr != null && argClr.IsArray && pit.OpenDefinition != null)
+                {
+                    var matched = FindMatchingInterface(argClr, pit.OpenDefinition);
+                    if (matched != null)
+                    {
+                        var matchedArgs = matched.GetGenericArguments();
+                        if (matchedArgs.Length == pit.TypeArguments.Length)
+                        {
+                            for (var i = 0; i < pit.TypeArguments.Length; i++)
+                            {
+                                InferTypeArguments(pit.TypeArguments[i], TypeSymbol.FromClrType(matchedArgs[i]), substitution);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2087,6 +2119,34 @@ public sealed class Binder
         }
 
         return builder.MoveToImmutable();
+    }
+
+    // #611: find the closed generic interface on a CLR type that matches
+    // the given open generic definition (e.g. find `IEnumerable<int>` on
+    // `int[]` given `IEnumerable<>` as the open definition).
+    private static Type FindMatchingInterface(Type clrType, Type openDefinition)
+    {
+        if (clrType == null || openDefinition == null || !openDefinition.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        try
+        {
+            foreach (var iface in clrType.GetInterfaces())
+            {
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition() == openDefinition)
+                {
+                    return iface;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // MLC cross-context or other reflection failure — treat as no match.
+        }
+
+        return null;
     }
 
     internal static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
