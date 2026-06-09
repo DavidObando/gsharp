@@ -102,8 +102,9 @@ public static class MoveNextBodyRewriter
             var builderInfo = plan.StateMachine.BuilderInfo;
             if (builderInfo.ResultType != null && builderInfo.ResultType != typeof(void))
             {
+                var resultType = plan.StateMachine.ResultTypeSymbol ?? TypeSymbol.FromClrType(builderInfo.ResultType);
                 this.retValLocal = new LocalVariableSymbol(
-                    "<>retVal", isReadOnly: false, TypeSymbol.FromClrType(builderInfo.ResultType));
+                    "<>retVal", isReadOnly: false, resultType);
                 allLocals.Add(retValLocal);
             }
         }
@@ -636,7 +637,7 @@ public static class MoveNextBodyRewriter
                 }
 
                 var awaiterClrType = shape.AwaiterType;
-                var awaiterTypeSymbol = TypeSymbol.FromClrType(awaiterClrType);
+                var awaiterTypeSymbol = awaitExpr.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType);
                 var awaiterLocal = new LocalVariableSymbol(
                     "<>awaiter_" + resumePoint.State, isReadOnly: false, awaiterTypeSymbol);
                 ctx.allLocals.Add(awaiterLocal);
@@ -728,6 +729,7 @@ public static class MoveNextBodyRewriter
                     null,
                     awaiterLocal,
                     awaiterClrType,
+                    awaiterTypeSymbol,
                     shape.ImplementsCriticalNotifyCompletion);
                 stmts.Add(Stmt(awaitOnCompletedMarker));
 

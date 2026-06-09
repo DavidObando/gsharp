@@ -496,7 +496,10 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 // builder.AwaitUnsafe/OnCompleted(ref awaiter, ref this);
                 var awaitOnCompletedMarker = new BoundStateMachineAwaitOnCompleted(
                     null,
-                    awaiterLocal, awaiterClrType, shape.ImplementsCriticalNotifyCompletion);
+                    awaiterLocal,
+                    awaiterClrType,
+                    TypeSymbol.FromClrType(awaiterClrType),
+                    shape.ImplementsCriticalNotifyCompletion);
                 stmts.Add(Stmt(awaitOnCompletedMarker));
 
                 // goto exit;

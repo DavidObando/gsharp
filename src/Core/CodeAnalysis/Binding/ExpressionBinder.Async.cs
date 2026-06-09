@@ -380,6 +380,30 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return new BoundAwaitExpression(null, operand, element);
+        return new BoundAwaitExpression(null, operand, element, TryGetAwaiterTypeSymbol(operand.Type));
+    }
+
+    private static TypeSymbol TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
+    {
+        if (awaitableType is not ImportedTypeSymbol importedAwaitable
+            || importedAwaitable.OpenDefinition == null
+            || importedAwaitable.TypeArguments.IsDefaultOrEmpty
+            || importedAwaitable.HasTypeParameterArgument
+            || !importedAwaitable.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+        {
+            return null;
+        }
+
+        var shape = AwaitableShape.Resolve(importedAwaitable.ClrType);
+        if (shape?.AwaiterType == null || !shape.AwaiterType.IsConstructedGenericType)
+        {
+            return null;
+        }
+
+        var awaiterOpen = shape.AwaiterType.GetGenericTypeDefinition();
+        return ImportedTypeSymbol.GetConstructed(
+            shape.AwaiterType,
+            awaiterOpen,
+            importedAwaitable.TypeArguments);
     }
 }

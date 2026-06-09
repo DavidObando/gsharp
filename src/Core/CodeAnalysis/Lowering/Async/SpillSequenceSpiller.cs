@@ -390,7 +390,7 @@ public static class SpillSequenceSpiller
 
             // Create a spill temp for the await result.
             var spillLocal = MakeSpillTemp(awaitExpr.Type);
-            var awaitNode = new BoundAwaitExpression(null, innerExpr, awaitExpr.Type);
+            var awaitNode = new BoundAwaitExpression(null, innerExpr, awaitExpr.Type, awaitExpr.AwaiterTypeSymbol);
             var assignStmt = new BoundVariableDeclaration(null, spillLocal, awaitNode);
 
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();

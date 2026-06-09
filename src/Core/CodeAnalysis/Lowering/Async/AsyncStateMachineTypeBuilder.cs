@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -107,14 +108,25 @@ public static class AsyncStateMachineTypeBuilder
 
         var typeName = GeneratedNames.StateMachineTypeName(kickoff.Name, ordinal);
         var sm = new SynthesizedStateMachineType(typeName, containerKind, kickoff, builderInfo);
+        sm.ResultTypeSymbol = kickoff.Type;
 
         var stateField = new FieldSymbol(GeneratedNames.StateField, TypeSymbol.Int32, Accessibility.Public);
         sm.AddField(stateField);
         sm.StateField = stateField;
 
+        var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
+        if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
+            && builderInfo.BuilderType is { IsConstructedGenericType: true } builderClrType)
+        {
+            builderFieldType = ImportedTypeSymbol.GetConstructed(
+                builderClrType,
+                builderClrType.GetGenericTypeDefinition(),
+                ImmutableArray.Create(kickoff.Type));
+        }
+
         var builderField = new FieldSymbol(
             GeneratedNames.BuilderField,
-            TypeSymbol.FromClrType(builderInfo.BuilderType),
+            builderFieldType,
             Accessibility.Public);
         sm.AddField(builderField);
         sm.BuilderField = builderField;
@@ -164,13 +176,13 @@ public static class AsyncStateMachineTypeBuilder
         var seen = new HashSet<Type>();
         bool hasReferenceAwaiter = false;
 
-        foreach (var awaiterClrType in collector.AwaiterTypes)
+        foreach (var (awaiterClrType, awaiterTypeSymbol) in collector.AwaiterTypes)
         {
             if (awaiterClrType.IsValueType)
             {
                 if (seen.Add(awaiterClrType))
                 {
-                    result.Add((awaiterClrType, TypeSymbol.FromClrType(awaiterClrType)));
+                    result.Add((awaiterClrType, awaiterTypeSymbol));
                 }
             }
             else
@@ -178,7 +190,7 @@ public static class AsyncStateMachineTypeBuilder
                 if (!hasReferenceAwaiter)
                 {
                     hasReferenceAwaiter = true;
-                    result.Add((typeof(object), TypeSymbol.FromClrType(typeof(object))));
+                    result.Add((typeof(object), awaiterTypeSymbol));
                 }
             }
         }
@@ -218,14 +230,23 @@ public static class AsyncStateMachineTypeBuilder
             inner = kickoff.Type?.ClrType;
             if (inner == null)
             {
-                return null;
+                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol)
+                {
+                    inner = references.MapClrTypeToReferences(typeof(object));
+                }
+                else
+                {
+                    return null;
+                }
             }
-
-            // Project the element CLR type onto the resolver's reference set before
-            // constructing Task`1. Under the SDK build path Task`1 is loaded via a
-            // MetadataLoadContext, and MakeGenericType requires the type argument to
-            // come from that same context (issues #290 and #291).
-            inner = references.MapClrTypeToReferences(inner);
+            else
+            {
+                // Project the element CLR type onto the resolver's reference set before
+                // constructing Task`1. Under the SDK build path Task`1 is loaded via a
+                // MetadataLoadContext, and MakeGenericType requires the type argument to
+                // come from that same context (issues #290 and #291).
+                inner = references.MapClrTypeToReferences(inner);
+            }
         }
 
         return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
@@ -235,7 +256,7 @@ public static class AsyncStateMachineTypeBuilder
 
     private sealed class AwaiterTypeCollector : BoundTreeWalker
     {
-        public List<Type> AwaiterTypes { get; } = new List<Type>();
+        public List<(Type ClrType, TypeSymbol TypeSymbol)> AwaiterTypes { get; } = new List<(Type ClrType, TypeSymbol TypeSymbol)>();
 
         public void Walk(BoundStatement body)
         {
@@ -250,7 +271,7 @@ public static class AsyncStateMachineTypeBuilder
                 var shape = AwaitableShape.Resolve(awaitableClrType);
                 if (shape != null)
                 {
-                    AwaiterTypes.Add(shape.AwaiterType);
+                    AwaiterTypes.Add((shape.AwaiterType, node.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(shape.AwaiterType)));
                 }
             }
 

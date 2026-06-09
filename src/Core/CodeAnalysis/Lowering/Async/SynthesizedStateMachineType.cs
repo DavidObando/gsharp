@@ -72,6 +72,12 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
     /// method's return type.</summary>
     public AsyncMethodBuilderInfo BuilderInfo { get; }
 
+    /// <summary>
+    /// Gets or sets the symbolic async result type declared on the kickoff
+    /// method before it was widened to <c>Task&lt;T&gt;</c>.
+    /// </summary>
+    public TypeSymbol ResultTypeSymbol { get; set; }
+
     /// <summary>Gets or sets the <c>&lt;&gt;1__state</c> field. Always
     /// present; populated by the state-machine rewriter.</summary>
     public FieldSymbol StateField { get; set; }

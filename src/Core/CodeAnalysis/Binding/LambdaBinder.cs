@@ -402,8 +402,20 @@ internal sealed class LambdaBinder
         var clr = element.ClrType;
         if (clr == null)
         {
-            // Phase 5.1 limitation (see ADR-0023): wrapping a user-defined
-            // GSharp type as Task[T] requires interop work that is deferred.
+            if (element is StructSymbol or InterfaceSymbol or EnumSymbol
+                && Scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var symbolicTaskOpen))
+            {
+                // Issue #502 / #320: a user-defined async result type has no CLR
+                // Type yet, so close Task<T> over an object placeholder for
+                // reflection/member lookup while preserving the symbolic result
+                // type for emit-time metadata encoding.
+                var erasedTask = symbolicTaskOpen.MakeGenericType(Scope.References.MapClrTypeToReferences(typeof(object)));
+                return ImportedTypeSymbol.GetConstructed(
+                    erasedTask,
+                    symbolicTaskOpen,
+                    ImmutableArray.Create(element));
+            }
+
             return element;
         }
 
