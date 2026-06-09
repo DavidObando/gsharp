@@ -2139,6 +2139,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0270", $"The 'as' operator requires the target type to be a reference type or a nullable value type, but '{typeName}' is a non-nullable value type. Use 'as {typeName}?' instead.");
     }
 
+    /// <summary>
+    /// Reports that <c>await using let</c> appears outside an <c>async</c> function.
+    /// </summary>
+    /// <param name="location">The text location of the <c>await</c> keyword.</param>
+    public void ReportAwaitUsingOutsideAsyncFunction(TextLocation location)
+    {
+        Report(location, "GS0271", "'await using let' can only be used inside an 'async func'.");
+    }
+
+    /// <summary>
+    /// Reports that a type used in an <c>await using</c> declaration does not implement IAsyncDisposable.
+    /// </summary>
+    /// <param name="location">The text location of the await using keyword.</param>
+    /// <param name="type">The non-async-disposable type.</param>
+    public void ReportTypeNotAsyncDisposable(TextLocation location, TypeSymbol type)
+    {
+        Report(location, "GS0272", $"Type '{type.Name}' cannot be used in an 'await using' statement because it does not provide a public DisposeAsync() method returning ValueTask.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

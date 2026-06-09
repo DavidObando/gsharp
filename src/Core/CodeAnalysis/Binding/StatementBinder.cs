@@ -195,6 +195,8 @@ internal sealed class StatementBinder
                 return BindScopeStatement((ScopeStatementSyntax)syntax);
             case SyntaxKind.AwaitForRangeStatement:
                 return BindAwaitForRangeStatement((AwaitForRangeStatementSyntax)syntax);
+            case SyntaxKind.AwaitUsingStatement:
+                return BindAwaitUsingStatement((AwaitUsingStatementSyntax)syntax);
             case SyntaxKind.YieldStatement:
                 return BindYieldStatement((YieldStatementSyntax)syntax);
             case SyntaxKind.TupleDeconstructionStatement:
@@ -269,6 +271,28 @@ internal sealed class StatementBinder
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
+                    return;
+                }
+
+                if (statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax)
+                {
+                    var awaitUsingLowering = BindAwaitUsingStatementInBlock(awaitUsingSyntax);
+                    if (awaitUsingLowering.Declaration != null)
+                    {
+                        statements.Add(awaitUsingLowering.Declaration);
+                    }
+
+                    if (awaitUsingLowering.Cleanup == null)
+                    {
+                        statements.Add(awaitUsingLowering.ErrorStatement);
+                        InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                        continue;
+                    }
+
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                    var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), awaitUsingLowering.Cleanup));
                     return;
                 }
 
@@ -1344,6 +1368,37 @@ internal sealed class StatementBinder
         }
 
         return (declaration, disposeCall, null);
+    }
+
+    private BoundStatement BindAwaitUsingStatement(AwaitUsingStatementSyntax syntax)
+    {
+        var awaitUsingLowering = BindAwaitUsingStatementInBlock(syntax);
+        if (awaitUsingLowering.Cleanup == null)
+        {
+            return awaitUsingLowering.ErrorStatement;
+        }
+
+        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, awaitUsingLowering.Cleanup);
+        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(awaitUsingLowering.Declaration, tryStmt));
+    }
+
+    private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
+    {
+        // Gate: await using let requires an async context.
+        if (function == null || !function.IsAsync)
+        {
+            Diagnostics.ReportAwaitUsingOutsideAsyncFunction(syntax.AwaitKeyword.Location);
+            return (null, null, BindErrorStatement());
+        }
+
+        var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
+        var disposeAsyncCall = conversions.TryBuildDisposeAsyncCall(declaration.Variable, syntax.AwaitKeyword.Location);
+        if (disposeAsyncCall == null)
+        {
+            return (declaration, null, BindErrorStatement());
+        }
+
+        return (declaration, disposeAsyncCall, null);
     }
 
     private BoundStatement BindDeferStatement(DeferStatementSyntax syntax)
