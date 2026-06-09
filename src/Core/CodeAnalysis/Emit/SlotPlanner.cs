@@ -1101,8 +1101,19 @@ internal sealed class SlotPlanner
                     or BoundBinaryOperatorKind.NotEquals;
             }
 
-            if (node.Right.Type is not NullableTypeSymbol rightNullable
-                || (NullableTypeSymbol)node.Left.Type! != rightNullable)
+            if (node.Right.Type is not NullableTypeSymbol rightNullable)
+            {
+                return false;
+            }
+
+            // Same-type nullable (e.g. int32? + int32?, enum? | enum?) or
+            // heterogeneous nullable for §11.10 enum arithmetic (e.g.
+            // enum? + int32?, enum? - enum? → int32?). Both sides must be
+            // value-type nullable; heterogeneous pairs are allowed because
+            // the EnumOperatorTable permits different-typed operands.
+            var leftNullable = (NullableTypeSymbol)node.Left.Type!;
+            if (leftNullable != rightNullable
+                && !(rightNullable.UnderlyingType?.ClrType is { IsValueType: true }))
             {
                 return false;
             }

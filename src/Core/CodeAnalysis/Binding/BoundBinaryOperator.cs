@@ -104,49 +104,14 @@ public sealed class BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, cmpKind, ltp, ltp, TypeSymbol.Bool);
         }
 
-        // Issue #574 (closes the "same family as #534" enum operator gap):
-        // == / != / < / <= / > / >= on same-type enum values. Both
-        // user-defined enums (EnumSymbol) and imported CLR enums
-        // (ImportedTypeSymbol whose ClrType.IsEnum) are supported via the
-        // shared IsEnumType helper — mirroring the bitwise arm below.
-        // Enums sit on the eval stack as their underlying integer so the
-        // existing Ceq / Clt / Cgt emit paths work transparently; signed
-        // vs unsigned dispatch is handled by IsUnsignedOrChar reading
-        // through to the enum's underlying type at emit time.
-        if (leftType != null && leftType == rightType && IsEnumType(leftType))
+        // Issues #534, #574, and 6.6 unification: all C# §11.10 enum
+        // operators (==, !=, <, <=, >, >=, |, &, ^, + underlying,
+        // - underlying, - enum) drive through the single EnumOperatorTable.
+        // Adding a new enum-supported operator group is a one-row change in
+        // that table — no new arm here.
+        if (EnumOperatorTable.TryBindBinary(syntaxKind, leftType, rightType, out var enumKind, out var enumResultType))
         {
-            var cmpKind = syntaxKind switch
-            {
-                SyntaxKind.EqualsEqualsToken => (BoundBinaryOperatorKind?)BoundBinaryOperatorKind.Equals,
-                SyntaxKind.BangEqualsToken => BoundBinaryOperatorKind.NotEquals,
-                SyntaxKind.LessToken => BoundBinaryOperatorKind.Less,
-                SyntaxKind.LessOrEqualsToken => BoundBinaryOperatorKind.LessOrEquals,
-                SyntaxKind.GreaterToken => BoundBinaryOperatorKind.Greater,
-                SyntaxKind.GreaterOrEqualsToken => BoundBinaryOperatorKind.GreaterOrEquals,
-                _ => null,
-            };
-            if (cmpKind != null)
-            {
-                return new BoundBinaryOperator(syntaxKind, cmpKind.Value, leftType, rightType, TypeSymbol.Bool);
-            }
-        }
-
-        // Issue #534: bitwise |, &, ^ on same-type enum values.
-        // Both user-defined (EnumSymbol) and imported CLR enum types are
-        // supported. The result type is the enum type itself (matching C#
-        // §11.10.5). The IL is the same as for the underlying integer —
-        // enums are represented as their underlying int on the eval stack.
-        if ((syntaxKind == SyntaxKind.PipeToken || syntaxKind == SyntaxKind.AmpersandToken || syntaxKind == SyntaxKind.HatToken)
-            && leftType != null && leftType == rightType
-            && IsEnumType(leftType))
-        {
-            var bitwiseKind = syntaxKind switch
-            {
-                SyntaxKind.PipeToken => BoundBinaryOperatorKind.BitwiseOr,
-                SyntaxKind.AmpersandToken => BoundBinaryOperatorKind.BitwiseAnd,
-                _ => BoundBinaryOperatorKind.BitwiseXor,
-            };
-            return new BoundBinaryOperator(syntaxKind, bitwiseKind, leftType, rightType, leftType);
+            return new BoundBinaryOperator(syntaxKind, enumKind, leftType, rightType, enumResultType);
         }
 
         // Phase 3.B.2 / ADR-0029 + ADR-0033: structural == / != on data and inline struct values.
@@ -210,6 +175,27 @@ public sealed class BoundBinaryOperator
             // (e.g. the user wrote `+` on `bool?`, which has no underlying
             // form), there is no lifted form either.
             var underlyingOp = Bind(syntaxKind, lN.UnderlyingType, rN.UnderlyingType);
+            if (underlyingOp != null && IsLiftableKind(underlyingOp.Kind))
+            {
+                TypeSymbol liftedResult = IsLiftedToBoolKind(underlyingOp.Kind)
+                    ? (TypeSymbol)TypeSymbol.Bool
+                    : NullableTypeSymbol.Get(underlyingOp.Type);
+                return new BoundBinaryOperator(syntaxKind, underlyingOp.Kind, leftType, rightType, liftedResult);
+            }
+        }
+
+        // 6.6 / §6.1: lifted binary for heterogeneous nullable operands
+        // (enum? + underlying?, underlying? + enum?, enum? - enum?→underlying?).
+        // The same-type arm above handles enum? == enum? and enum? | enum?;
+        // this arm handles the §11.10 arithmetic rules where both sides
+        // are nullable but wrap DIFFERENT underlying types.
+        if (leftType is NullableTypeSymbol lHet
+            && rightType is NullableTypeSymbol rHet
+            && lHet != rHet
+            && lHet.UnderlyingType?.ClrType is { IsValueType: true }
+            && rHet.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            var underlyingOp = Bind(syntaxKind, lHet.UnderlyingType, rHet.UnderlyingType);
             if (underlyingOp != null && IsLiftableKind(underlyingOp.Kind))
             {
                 TypeSymbol liftedResult = IsLiftedToBoolKind(underlyingOp.Kind)
@@ -366,21 +352,5 @@ public sealed class BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.LessOrEqualsToken, BoundBinaryOperatorKind.LessOrEquals, t, t, TypeSymbol.Bool));
         list.Add(new BoundBinaryOperator(SyntaxKind.GreaterToken, BoundBinaryOperatorKind.Greater, t, t, TypeSymbol.Bool));
         list.Add(new BoundBinaryOperator(SyntaxKind.GreaterOrEqualsToken, BoundBinaryOperatorKind.GreaterOrEquals, t, t, TypeSymbol.Bool));
-    }
-
-    /// <summary>
-    /// Returns <c>true</c> when <paramref name="type"/> represents an enum
-    /// type — either a user-defined <see cref="EnumSymbol"/> or an imported
-    /// CLR enum (<see cref="ImportedTypeSymbol"/> whose <see cref="TypeSymbol.ClrType"/>
-    /// is an enum).
-    /// </summary>
-    private static bool IsEnumType(TypeSymbol type)
-    {
-        if (type is EnumSymbol)
-        {
-            return true;
-        }
-
-        return type?.ClrType != null && type.ClrType.IsEnum;
     }
 }

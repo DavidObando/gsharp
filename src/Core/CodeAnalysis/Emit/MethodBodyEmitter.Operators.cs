@@ -650,10 +650,13 @@ internal sealed partial class MethodBodyEmitter
     private void EmitLiftedNullableBinary(BoundBinaryExpression b, LiftedBinarySlots slots)
     {
         var leftNullable = (NullableTypeSymbol)b.Left.Type;
-        var underlying = leftNullable.UnderlyingType;
-        var underlyingClr = underlying.ClrType
+        var rightNullable = b.Right.Type == TypeSymbol.Null ? null : (NullableTypeSymbol)b.Right.Type;
+        var leftUnderlying = leftNullable.UnderlyingType;
+        var leftUnderlyingClr = leftUnderlying.ClrType
             ?? throw new InvalidOperationException(
-                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{underlying.Name}>: underlying has no CLR type.");
+                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{leftUnderlying.Name}>: underlying has no CLR type.");
+        var rightUnderlying = rightNullable?.UnderlyingType;
+        var rightUnderlyingClr = rightUnderlying?.ClrType;
 
         var lhsSlot = slots.LhsSlot;
         var rhsSlot = slots.RhsSlot;
@@ -665,7 +668,7 @@ internal sealed partial class MethodBodyEmitter
         // `HasValue`.
         if (b.Right.Type == TypeSymbol.Null)
         {
-            var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
+            var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
 
             this.EmitExpression(b.Left);
             this.il.StoreLocal(lhsSlot);
@@ -698,13 +701,13 @@ internal sealed partial class MethodBodyEmitter
 
         if (isEquality)
         {
-            this.EmitLiftedEquality(b.Op.Kind, lhsSlot, rhsSlot, underlying, underlyingClr);
+            this.EmitLiftedEquality(b.Op.Kind, lhsSlot, rhsSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr);
             return;
         }
 
         if (isOrdering)
         {
-            this.EmitLiftedOrdering(b.Op.Kind, lhsSlot, rhsSlot, underlying, underlyingClr);
+            this.EmitLiftedOrdering(b.Op.Kind, lhsSlot, rhsSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr);
             return;
         }
 
@@ -718,7 +721,16 @@ internal sealed partial class MethodBodyEmitter
                 + "check LiftedBinaryOperatorCollector and the prepass in CollectLocalsAndLabels.");
         }
 
-        this.EmitLiftedArithmetic(b.Op.Kind, lhsSlot, rhsSlot, slots.ResultSlot, underlying, underlyingClr);
+        // For heterogeneous enum arithmetic (enum? + int32? → enum?), the
+        // result type may differ from the left underlying. Use the
+        // operator's result type to determine the Nullable<R> wrapper.
+        var resultNullable = (NullableTypeSymbol)b.Type;
+        var resultUnderlying = resultNullable.UnderlyingType;
+        var resultUnderlyingClr = resultUnderlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted binary result Nullable<{resultUnderlying.Name}>: underlying has no CLR type.");
+
+        this.EmitLiftedArithmetic(b.Op.Kind, lhsSlot, rhsSlot, slots.ResultSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr, resultUnderlyingClr);
     }
 
     private void EmitLiftedEquality(
@@ -726,10 +738,13 @@ internal sealed partial class MethodBodyEmitter
         int lhsSlot,
         int rhsSlot,
         TypeSymbol underlying,
-        Type underlyingClr)
+        Type leftUnderlyingClr,
+        Type rightUnderlyingClr)
     {
-        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
-        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+        var getHasValueLhs = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
+        var getHasValueRhs = this.outer.wellKnown.GetNullableGetHasValueReference(rightUnderlyingClr);
+        var getValueLhs = this.outer.wellKnown.GetNullableGetValueReference(leftUnderlyingClr);
+        var getValueRhs = this.outer.wellKnown.GetNullableGetValueReference(rightUnderlyingClr);
 
         var bothEmptyLabel = this.il.DefineLabel();
         var flagsAgreeLabel = this.il.DefineLabel();
@@ -738,10 +753,10 @@ internal sealed partial class MethodBodyEmitter
         // Compare HasValue flags. If they differ, result is false.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueRhs);
         this.il.Branch(ILOpCode.Beq, flagsAgreeLabel);
 
         // Mismatched HasValue → false.
@@ -752,16 +767,16 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(flagsAgreeLabel);
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueLhs);
         this.il.Branch(ILOpCode.Brfalse, bothEmptyLabel);
 
         // Both present: load values and compare.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueRhs);
         this.EmitUnderlyingEqualityCeq(underlying);
         this.il.Branch(ILOpCode.Br, end);
 
@@ -783,10 +798,13 @@ internal sealed partial class MethodBodyEmitter
         int lhsSlot,
         int rhsSlot,
         TypeSymbol underlying,
-        Type underlyingClr)
+        Type leftUnderlyingClr,
+        Type rightUnderlyingClr)
     {
-        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
-        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+        var getHasValueLhs = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
+        var getHasValueRhs = this.outer.wellKnown.GetNullableGetHasValueReference(rightUnderlyingClr);
+        var getValueLhs = this.outer.wellKnown.GetNullableGetValueReference(leftUnderlyingClr);
+        var getValueRhs = this.outer.wellKnown.GetNullableGetValueReference(rightUnderlyingClr);
 
         var falseLabel = this.il.DefineLabel();
         var end = this.il.DefineLabel();
@@ -794,20 +812,20 @@ internal sealed partial class MethodBodyEmitter
         // (lhs.HasValue & rhs.HasValue) — if any is absent, result is false.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueRhs);
         this.il.OpCode(ILOpCode.And);
         this.il.Branch(ILOpCode.Brfalse, falseLabel);
 
         // Both present: load underlying values and compare.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueRhs);
         this.EmitUnderlyingOrdering(kind, underlying);
         this.il.Branch(ILOpCode.Br, end);
 
@@ -823,17 +841,20 @@ internal sealed partial class MethodBodyEmitter
         int rhsSlot,
         int resultSlot,
         TypeSymbol underlying,
-        Type underlyingClr)
+        Type leftUnderlyingClr,
+        Type rightUnderlyingClr,
+        Type resultUnderlyingClr)
     {
-        var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(underlyingClr);
-        var getValue = this.outer.wellKnown.GetNullableGetValueReference(underlyingClr);
+        var getHasValueLhs = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
+        var getHasValueRhs = this.outer.wellKnown.GetNullableGetHasValueReference(rightUnderlyingClr);
+        var getValueLhs = this.outer.wellKnown.GetNullableGetValueReference(leftUnderlyingClr);
+        var getValueRhs = this.outer.wellKnown.GetNullableGetValueReference(rightUnderlyingClr);
 
         // Resolve Nullable<R> ctor / type tokens for the result.
-        // R == underlying for arithmetic / bitwise.
-        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, underlyingClr, out var nullableClr))
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, resultUnderlyingClr, out var nullableClr))
         {
             throw new InvalidOperationException(
-                $"Cannot construct Nullable<{underlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+                $"Cannot construct Nullable<{resultUnderlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
         }
 
         var nullableInnerArg = nullableClr.GetGenericArguments()[0];
@@ -848,20 +869,20 @@ internal sealed partial class MethodBodyEmitter
         // Both present? If yes, fall through to compute; otherwise jump to null branch.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getHasValue);
+        this.il.Token(getHasValueRhs);
         this.il.OpCode(ILOpCode.And);
         this.il.Branch(ILOpCode.Brfalse, nullBranch);
 
         // Compute underlying op and wrap as Nullable<R>.
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueLhs);
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(getValue);
+        this.il.Token(getValueRhs);
         this.EmitUnderlyingArithmetic(kind, underlying);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.GetCtorReference(ctor));

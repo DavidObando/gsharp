@@ -442,6 +442,38 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // 6.6 / §6.1: mixed-mode lift for heterogeneous nullable operands.
+        // Handles enum? + int32 → lift int32 to int32?, then re-bind as
+        // (enum?, int32?) which the heterogeneous lifted arm resolves.
+        // Also handles int32 + enum? → lift int32 to int32?.
+        if (boundOperator == null)
+        {
+            if (boundLeft.Type is NullableTypeSymbol leftN2
+                && boundRight.Type is not NullableTypeSymbol
+                && boundRight.Type?.ClrType is { IsValueType: true })
+            {
+                var rightLifted = NullableTypeSymbol.Get(boundRight.Type);
+                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftN2, rightLifted);
+                if (lifted != null)
+                {
+                    boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, rightLifted);
+                    boundOperator = lifted;
+                }
+            }
+            else if (boundRight.Type is NullableTypeSymbol rightN2
+                && boundLeft.Type is not NullableTypeSymbol
+                && boundLeft.Type?.ClrType is { IsValueType: true })
+            {
+                var leftLifted = NullableTypeSymbol.Get(boundLeft.Type);
+                var lifted = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, leftLifted, rightN2);
+                if (lifted != null)
+                {
+                    boundLeft = conversions.BindConversion(syntax.Left.Location, boundLeft, leftLifted);
+                    boundOperator = lifted;
+                }
+            }
+        }
+
         if (boundOperator == null)
         {
             // Stream D: try user-defined `func (a T) operator <op>(b U) R` on

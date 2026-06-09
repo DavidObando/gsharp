@@ -556,17 +556,13 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        // Issue #574: enum comparisons (< <= > >=) dispatch through the
-        // enum's CLR underlying type. A byte/ushort/uint/ulong-backed
-        // enum needs the unsigned IL comparison opcodes (clt_un / cgt_un);
-        // a sbyte/short/int/long-backed enum needs the signed forms.
-        if (t?.ClrType?.IsEnum == true)
+        // Issue #574 / 6.6: enum comparisons and arithmetic dispatch through
+        // the enum's CLR underlying type. Unsigned-backed enums need the
+        // unsigned IL opcodes (clt_un / cgt_un). Delegates to the single
+        // source of truth in EnumOperatorTable.
+        if (Binding.EnumOperatorTable.IsUnsignedEnumUnderlying(t))
         {
-            var underlyingName = System.Enum.GetUnderlyingType(t.ClrType).FullName;
-            return underlyingName == "System.Byte"
-                || underlyingName == "System.UInt16"
-                || underlyingName == "System.UInt32"
-                || underlyingName == "System.UInt64";
+            return true;
         }
 
         return false;
