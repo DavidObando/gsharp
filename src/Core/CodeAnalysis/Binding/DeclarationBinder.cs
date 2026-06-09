@@ -426,6 +426,11 @@ internal sealed class DeclarationBinder
             primaryCtorParameters = ctorBuilder.ToImmutable();
         }
 
+        // Issue #640: collect instance-field initializer expressions alongside
+        // the field declarations so we can bind them later (after the struct
+        // symbol exists) and emit them into every constructor body.
+        var pendingInstanceInitializers = new List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)>();
+
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.Identifier.Text;
@@ -476,6 +481,14 @@ internal sealed class DeclarationBinder
                     Binder.FieldDeclarationAllowedTargets,
                     "a field declaration",
                     System.AttributeTargets.Field));
+            }
+
+            // Issue #640: remember the initializer syntax for binding after
+            // the struct symbol is created (we need the struct in scope for
+            // type-correct binding, and the field symbol is needed for keying).
+            if (fieldSyntax.Initializer != null)
+            {
+                pendingInstanceInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
             }
 
             fields.Add(fieldSymbol);
@@ -708,6 +721,21 @@ internal sealed class DeclarationBinder
         // (`: Base(args)`). The arguments are bound in a scope that exposes the
         // primary-constructor parameters so they can be forwarded to the base.
         BindBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+
+        // Issue #640: now that the struct symbol exists, bind the deferred
+        // instance-field initializer expressions and install them on the symbol.
+        if (pendingInstanceInitializers.Count > 0)
+        {
+            var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+            foreach (var (fieldSym, initSyntax, fieldType) in pendingInstanceInitializers)
+            {
+                var boundInit = bindExpression(initSyntax);
+                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                instanceInitBuilder[fieldSym] = convertedInit;
+            }
+
+            structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+        }
 
         if (!scope.TryDeclareTypeAlias(name, structSymbol))
         {

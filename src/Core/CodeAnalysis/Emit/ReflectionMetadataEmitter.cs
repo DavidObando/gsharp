@@ -531,6 +531,8 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.GetCtorReference,
             this.EmitStaticConstructorBodyBytes,
+            this.EmitClassDefaultConstructorBodyBytes,
+            this.EmitClassPrimaryConstructorBodyBytes,
             this.EmitClassConstructorWithBaseInitializerBodyBytes,
             this.EmitClassConstructorWithBodyBodyBytes);
 
@@ -2459,6 +2461,285 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #640: builds the IL body for a default parameterless constructor
+    /// that calls the base ctor and then evaluates instance field initializers
+    /// in declaration order. Returns the resulting body offset.
+    /// </summary>
+    private int EmitClassDefaultConstructorBodyBytes(StructSymbol classSym, EntityHandle baseCtorToken)
+    {
+        // Synthesize a `this` parameter for the field-initializer receiver.
+        var thisParam = new ParameterSymbol("this", classSym);
+
+        // Synthesize field-initializer assignment statements.
+        var statements = BuildInstanceFieldInitializerStatements(classSym, thisParam);
+        var body = new BoundBlockStatement(null, statements);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        this.methodBodyPlanner.CollectLocalsAndLabels(
+            body,
+            null,
+            locals,
+            localTypes,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots,
+            il);
+
+        var parameters = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new MethodBodyEmitter(
+            this,
+            il,
+            locals,
+            parameters,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
+            constValues: constValues);
+
+        // base()
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Call);
+        il.Token(baseCtorToken);
+
+        // Instance field initializers
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        il.OpCode(ILOpCode.Ret);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
+    /// Issue #640: builds the IL body for a primary constructor that calls
+    /// the base ctor, assigns primary-ctor parameters into their same-named
+    /// fields, and then evaluates instance field initializers in declaration
+    /// order. Returns the resulting body offset.
+    /// </summary>
+    private int EmitClassPrimaryConstructorBodyBytes(StructSymbol classSym, EntityHandle baseCtorToken)
+    {
+        var parameters = classSym.PrimaryConstructorParameters;
+
+        // Synthesize a `this` parameter for the field-initializer receiver.
+        var thisParam = new ParameterSymbol("this", classSym);
+
+        // Synthesize field-initializer assignment statements.
+        var statements = BuildInstanceFieldInitializerStatements(classSym, thisParam);
+        var body = new BoundBlockStatement(null, statements);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        this.methodBodyPlanner.CollectLocalsAndLabels(
+            body,
+            null,
+            locals,
+            localTypes,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots,
+            il);
+
+        var paramSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            paramSlots[parameters[i]] = i + 1;
+        }
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new MethodBodyEmitter(
+            this,
+            il,
+            locals,
+            paramSlots,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
+            constValues: constValues);
+
+        // base()
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Call);
+        il.Token(baseCtorToken);
+
+        // Primary ctor parameter → field assignments
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var param = parameters[i];
+            if (!classSym.TryGetField(param.Name, out var field))
+            {
+                throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
+            }
+
+            if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            {
+                throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
+            }
+
+            il.LoadArgument(0);
+            il.LoadArgument(i + 1);
+            il.OpCode(ILOpCode.Stfld);
+            il.Token(fieldHandle);
+        }
+
+        // Instance field initializers
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        il.OpCode(ILOpCode.Ret);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+    }
+
+    /// <summary>
+    /// Issue #640: builds the bound assignment statements for all instance
+    /// field initializers in declaration order. Used by the default, primary,
+    /// forwarding, and explicit constructor body emitters.
+    /// </summary>
+    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol thisParam = null)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var field in classSym.Fields)
+        {
+            if (classSym.InstanceFieldInitializers.TryGetValue(field, out var initExpr))
+            {
+                var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, initExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
+        return statements.ToImmutable();
+    }
+
+    /// <summary>
     /// Issue #306: builds the IL body for a forwarding constructor that
     /// runs <c>base(args)</c> before assigning the primary-constructor
     /// parameters into their same-named fields. Returns the resulting
@@ -2471,6 +2752,9 @@ internal sealed class ReflectionMetadataEmitter
         EntityHandle baseCtorToken)
     {
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+        // Synthesize a `this` parameter for the field-initializer receiver.
+        var thisParam = new ParameterSymbol("this", classSym);
 
         var locals = new Dictionary<VariableSymbol, int>();
         var labels = new Dictionary<BoundLabel, LabelHandle>();
@@ -2524,7 +2808,38 @@ internal sealed class ReflectionMetadataEmitter
                 il);
         }
 
-        var paramSlots = new Dictionary<ParameterSymbol, int>();
+        // Issue #640: pre-scan instance field initializer expressions for locals.
+        BoundBlockStatement fieldInitBody = null;
+        if (!classSym.InstanceFieldInitializers.IsEmpty)
+        {
+            fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, thisParam));
+            this.methodBodyPlanner.CollectLocalsAndLabels(
+                fieldInitBody,
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                receiverSpillSlots,
+                indexAssignmentValueSlots,
+                goEnclosingScopes,
+                liftedBinarySlots,
+                il);
+        }
+
+        var paramSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
         for (var i = 0; i < parameters.Length; i++)
         {
             paramSlots[parameters[i]] = i + 1;
@@ -2598,6 +2913,20 @@ internal sealed class ReflectionMetadataEmitter
             il.Token(fieldHandle);
         }
 
+        // Issue #640: emit instance field initializer assignments.
+        if (fieldInitBody != null)
+        {
+            try
+            {
+                emitter.EmitBlock(fieldInitBody);
+            }
+            catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+            {
+                var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
+                EmitDiagnosticException.Wrap(anchor, ex);
+            }
+        }
+
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
     }
@@ -2652,6 +2981,34 @@ internal sealed class ReflectionMetadataEmitter
 
             this.methodBodyPlanner.CollectLocalsAndLabels(
                 new BoundBlockStatement(null, synth.ToImmutable()),
+                null,
+                locals,
+                localTypes,
+                labels,
+                appendSlots,
+                structLiteralSlots,
+                defaultExpressionSlots,
+                mapIndexSlots,
+                patternSwitchSlots,
+                typePatternScratchSlots,
+                switchExpressionSlots,
+                channelOpSlots,
+                scopeFrameSlots,
+                selectStatementSlots,
+                receiverSpillSlots,
+                indexAssignmentValueSlots,
+                goEnclosingScopes,
+                liftedBinarySlots,
+                il);
+        }
+
+        // Issue #640: pre-scan instance field initializer expressions for locals.
+        BoundBlockStatement fieldInitBody = null;
+        if (!classSym.InstanceFieldInitializers.IsEmpty)
+        {
+            fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
+            this.methodBodyPlanner.CollectLocalsAndLabels(
+                fieldInitBody,
                 null,
                 locals,
                 localTypes,
@@ -2750,6 +3107,21 @@ internal sealed class ReflectionMetadataEmitter
 
         il.OpCode(ILOpCode.Call);
         il.Token(baseCtorToken);
+
+        // Issue #640: emit instance field initializer assignments before
+        // the user-authored constructor body (matching C# semantics).
+        if (fieldInitBody != null)
+        {
+            try
+            {
+                emitter.EmitBlock(fieldInitBody);
+            }
+            catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+            {
+                var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
+                EmitDiagnosticException.Wrap(anchor, ex);
+            }
+        }
 
         // Run the user-authored constructor body.
         try

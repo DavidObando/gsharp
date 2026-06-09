@@ -226,6 +226,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the bound initializer expressions for static fields with non-default values (Issue #262). Keyed by field symbol.</summary>
     public ImmutableDictionary<FieldSymbol, BoundExpression> StaticFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;
 
+    /// <summary>Gets the bound initializer expressions for instance fields with non-default values (Issue #640). Keyed by field symbol; iterated in <see cref="Fields"/> source order at emit time.</summary>
+    public ImmutableDictionary<FieldSymbol, BoundExpression> InstanceFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -400,6 +403,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetStaticFieldInitializers(ImmutableDictionary<FieldSymbol, BoundExpression> initializers)
     {
         StaticFieldInitializers = initializers;
+    }
+
+    /// <summary>Sets <see cref="InstanceFieldInitializers"/> after binding instance-field initializers (Issue #640).</summary>
+    /// <param name="initializers">A mapping from field symbol to its bound initializer expression.</param>
+    public void SetInstanceFieldInitializers(ImmutableDictionary<FieldSymbol, BoundExpression> initializers)
+    {
+        InstanceFieldInitializers = initializers;
     }
 
     /// <summary>Tries to find a static field by name on this type (ADR-0053).</summary>
