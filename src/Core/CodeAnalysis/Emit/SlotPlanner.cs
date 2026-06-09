@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -97,7 +98,13 @@ internal sealed class SlotPlanner
     {
         var sink = new List<BoundFunctionLiteralExpression>();
         var collector = new LambdaCollector(sink);
-        foreach (var kvp in this.emitCtx.Program.Functions)
+
+        // Issue #598: iterate Program.Functions in deterministic order
+        // (source-position, then name) so lambda literals are collected in a
+        // stable sequence regardless of ImmutableDictionary iteration order.
+        foreach (var kvp in this.emitCtx.Program.Functions
+            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
+            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
         {
             collector.Visit(kvp.Value);
         }
@@ -109,7 +116,11 @@ internal sealed class SlotPlanner
     {
         var sink = new List<BoundGoStatement>();
         var collector = new GoStatementCollector(sink);
-        foreach (var kvp in this.emitCtx.Program.Functions)
+
+        // Issue #598: iterate Program.Functions in deterministic order.
+        foreach (var kvp in this.emitCtx.Program.Functions
+            .OrderBy(p => p.Key.Declaration?.Span.Start ?? int.MaxValue)
+            .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
         {
             collector.Visit(kvp.Value);
         }
