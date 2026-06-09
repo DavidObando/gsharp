@@ -14,6 +14,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -64,7 +65,7 @@ public static class IteratorMoveNextBodyBuilder
         var tryDispatch = IteratorTryDispatchPlanner.Plan(plan.Body, plan.YieldStates);
 
         var yieldLabels = new Dictionary<int, BoundLabel>();
-        foreach (var kvp in plan.YieldStates)
+        foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
         {
             var label = tryDispatch.GetResumeLabel(kvp.Value)
                         ?? new BoundLabel($"$iterResume_{kvp.Value}");
@@ -84,7 +85,7 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
-        foreach (var kvp in plan.YieldStates)
+        foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
         {
             // Because we remove the user's try wrappers in MoveNext (see
             // above), the outer dispatch can jump directly to the resume
@@ -312,7 +313,7 @@ public static class IteratorMoveNextBodyBuilder
 
         // Create labels for each yield resume point
         var yieldLabels = new Dictionary<int, BoundLabel>();
-        foreach (var kvp in plan.YieldStates)
+        foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
         {
             var label = new BoundLabel($"$iterResume_{kvp.Value}");
             yieldLabels[kvp.Value] = label;
@@ -332,7 +333,7 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
-        foreach (var kvp in plan.YieldStates)
+        foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
         {
             statements.Add(new BoundConditionalGotoStatement(
                 null,

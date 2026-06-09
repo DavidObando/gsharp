@@ -12,6 +12,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -94,13 +95,13 @@ public static class AsyncIteratorMoveNextBodyBuilder
             this.awaiterPoolFields = awaiterPoolFields;
 
             // Create resume labels for yields (negative states).
-            foreach (var kvp in plan.YieldStates)
+            foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
             {
                 yieldResumeLabels[kvp.Value] = new BoundLabel($"<>ai_yieldResume_{kvp.Value}");
             }
 
             // Create resume labels for awaits (non-negative states).
-            foreach (var kvp in plan.AwaitStates)
+            foreach (var kvp in plan.AwaitStates.OrderBy(p => p.Value))
             {
                 awaitResumeLabels[kvp.Value] = new BoundLabel($"<>ai_awaitResume_{kvp.Value}");
                 awaitResumeAfterLabels[kvp.Value] = new BoundLabel($"<>ai_awaitAfter_{kvp.Value}");
@@ -168,7 +169,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var stateRead = ReadField(stateField);
 
             // For each yield resume state (negative): if state == K goto yieldResumeK
-            foreach (var kvp in plan.YieldStates)
+            foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
             {
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(
@@ -183,7 +184,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             }
 
             // For each await resume state (non-negative): if state == K goto awaitResumeK
-            foreach (var kvp in plan.AwaitStates)
+            foreach (var kvp in plan.AwaitStates.OrderBy(p => p.Value))
             {
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(

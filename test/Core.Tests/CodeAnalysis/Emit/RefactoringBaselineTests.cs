@@ -42,21 +42,6 @@ public class RefactoringBaselineTests
     private const string BaselineFileName = "refactoring-baseline.json";
 
     /// <summary>
-    /// Samples whose emitted IL is currently non-deterministic across compiles
-    /// within the same process (state-machine basic blocks are visited in
-    /// reference-identity-hash order, which differs depending on heap layout).
-    /// These are recorded with a <c>null</c> baseline so the gate can be a
-    /// gate at all; the underlying compiler determinism issue is tracked as
-    /// follow-up work and would let us re-pin these. See
-    /// <c>test/Core.Tests/Baselines/README.md</c> for details.
-    /// </summary>
-    private static readonly HashSet<string> KnownFlakyEmitSamples = new(StringComparer.Ordinal)
-    {
-        "samples/FuncToDelegate.gs",
-        "samples/refactoring-baseline/YieldInTryFinally.gs",
-    };
-
-    /// <summary>
     /// Samples that currently fail to compile on main. Recorded with a
     /// <c>null</c> baseline; documented in
     /// <c>samples/refactoring-baseline/README.md</c>.
@@ -129,7 +114,7 @@ public class RefactoringBaselineTests
 
         foreach (var rel in EnumerateSampleRelativePaths(repoRoot!))
         {
-            if (KnownFlakyEmitSamples.Contains(rel) || KnownCompileFailureSamples.Contains(rel))
+            if (KnownCompileFailureSamples.Contains(rel))
             {
                 entries[rel] = null;
                 continue;
