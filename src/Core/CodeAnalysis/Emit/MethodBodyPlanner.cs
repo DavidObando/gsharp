@@ -274,6 +274,31 @@ internal sealed class MethodBodyPlanner
             }
         }
 
+        // Issue #641: also check sync iterator and async iterator SM classes.
+        if (kickoff == null)
+        {
+            foreach (var kvp in this.stateMachines.IteratorStateMachineInfos)
+            {
+                if (ReferenceEquals(kvp.Key, smSym))
+                {
+                    kickoff = kvp.Value.Plan.Function;
+                    break;
+                }
+            }
+        }
+
+        if (kickoff == null)
+        {
+            foreach (var kvp in this.stateMachines.AsyncIteratorInfos)
+            {
+                if (ReferenceEquals(kvp.Key, smSym))
+                {
+                    kickoff = kvp.Value.Function;
+                    break;
+                }
+            }
+        }
+
         if (kickoff == null)
         {
             return false;

@@ -337,6 +337,17 @@ internal sealed class StateMachineEmitter
                 parameterFields[parameter] = field;
             }
 
+            // Issue #641: hoist `this` (the user-class receiver) into a field
+            // so the MoveNext body can access instance members of the enclosing
+            // class across yield suspension points.
+            FieldSymbol thisProxyField = null;
+            if (plan.Function.ThisParameter != null && plan.Function.ReceiverType != null)
+            {
+                thisProxyField = new FieldSymbol("<>4__this", plan.Function.ReceiverType, Accessibility.Public);
+                fields.Add(thisProxyField);
+                fieldMap[plan.Function.ThisParameter] = thisProxyField;
+            }
+
             var hoistedFields = new Dictionary<VariableSymbol, FieldSymbol>();
             foreach (var local in plan.HoistedLocals)
             {
@@ -390,14 +401,17 @@ internal sealed class StateMachineEmitter
                 new BoundReturnStatement(null, null))));
             this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, parameterFields[p]))))));
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, parameterFields[p]),
+                    thisProxyField, thisProxyField != null ? new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, thisProxyField) : null)))));
             this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, parameterFields[p]))))));
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, parameterFields[p]),
+                    thisProxyField, thisProxyField != null ? new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, thisProxyField) : null)))));
 
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p))))));
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
+                    thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
             this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass);
             this.closures.SynthesizedClosureClasses.Add(smClass);
         }
@@ -408,13 +422,21 @@ internal sealed class StateMachineEmitter
         FieldSymbol stateField,
         Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
         ImmutableArray<ParameterSymbol> parameters,
-        Func<ParameterSymbol, BoundExpression> parameterValueFactory)
+        Func<ParameterSymbol, BoundExpression> parameterValueFactory,
+        FieldSymbol thisProxyField = null,
+        BoundExpression thisProxyValue = null)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
         initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, 0)));
         foreach (var parameter in parameters)
         {
             initializers.Add(new BoundFieldInitializer(parameterFields[parameter], parameterValueFactory(parameter)));
+        }
+
+        // Issue #641: capture or propagate `this` into <>4__this.
+        if (thisProxyField != null && thisProxyValue != null)
+        {
+            initializers.Add(new BoundFieldInitializer(thisProxyField, thisProxyValue));
         }
 
         return new BoundStructLiteralExpression(null, smClass, initializers.ToImmutable());
@@ -460,6 +482,17 @@ internal sealed class StateMachineEmitter
                 fields.Add(field);
                 fieldMap[parameter] = field;
                 parameterFields[parameter] = field;
+            }
+
+            // Issue #641: hoist `this` (the user-class receiver) into a field
+            // so the MoveNext body can access instance members of the enclosing
+            // class across yield/await suspension points.
+            FieldSymbol thisProxyField = null;
+            if (plan.Function.ThisParameter != null && plan.Function.ReceiverType != null)
+            {
+                thisProxyField = new FieldSymbol("<>4__this", plan.Function.ReceiverType, Accessibility.Public);
+                fields.Add(thisProxyField);
+                fieldMap[plan.Function.ThisParameter] = thisProxyField;
             }
 
             foreach (var local in plan.HoistedLocals)
@@ -602,10 +635,10 @@ internal sealed class StateMachineEmitter
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, null))));
 
-            // Kickoff body: new SM { state = -3, params... }
+            // Kickoff body: new SM { state = -3, params..., <>4__this = this }
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters)))));
+                new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(smClass, stateField, builderField, parameterFields, plan.Function.Parameters, thisProxyField, plan.Function)))));
 
             this.AsyncIteratorInfos[smClass] = plan;
             this.closures.SynthesizedClosureClasses.Add(smClass);
@@ -906,7 +939,9 @@ internal sealed class StateMachineEmitter
         FieldSymbol stateField,
         FieldSymbol builderField,
         Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
-        ImmutableArray<ParameterSymbol> parameters)
+        ImmutableArray<ParameterSymbol> parameters,
+        FieldSymbol thisProxyField,
+        FunctionSymbol kickoffFunction)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
         initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, StateMachineStates.InitialAsyncIteratorState)));
@@ -920,6 +955,13 @@ internal sealed class StateMachineEmitter
         foreach (var parameter in parameters)
         {
             initializers.Add(new BoundFieldInitializer(parameterFields[parameter], new BoundVariableExpression(null, parameter)));
+        }
+
+        // Issue #641: capture `this` into <>4__this so MoveNext can access
+        // instance members of the enclosing class.
+        if (thisProxyField != null && kickoffFunction.ThisParameter != null)
+        {
+            initializers.Add(new BoundFieldInitializer(thisProxyField, new BoundVariableExpression(null, kickoffFunction.ThisParameter)));
         }
 
         return new BoundStructLiteralExpression(null, smClass, initializers.ToImmutable());

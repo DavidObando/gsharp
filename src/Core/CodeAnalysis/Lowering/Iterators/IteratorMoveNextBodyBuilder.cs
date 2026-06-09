@@ -280,6 +280,38 @@ public static class IteratorMoveNextBodyBuilder
             return base.RewriteAssignmentExpression(node);
         }
 
+        // Issue #641: rewrite field assignments whose receiver is the
+        // user-class `this` (hoisted as <>4__this) to use an expression
+        // receiver so the emitter loads the proxy field.
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            var value = this.RewriteExpression(node.Value);
+            if (node.Receiver != null && this.fieldMap.TryGetValue(node.Receiver, out var proxyField))
+            {
+                var receiverExpr = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, this.thisParameter),
+                    this.smClass,
+                    proxyField);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+            }
+
+            if (node.ReceiverExpression != null)
+            {
+                var receiverExpr = this.RewriteExpression(node.ReceiverExpression);
+                if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
+                {
+                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                }
+            }
+            else if (!ReferenceEquals(value, node.Value))
+            {
+                return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+            }
+
+            return node;
+        }
+
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.fieldMap.TryGetValue(node.Variable, out var field))
@@ -436,6 +468,34 @@ public static class IteratorMoveNextBodyBuilder
             }
 
             return base.RewriteAssignmentExpression(node);
+        }
+
+        // Issue #641: rewrite field assignments whose receiver is the
+        // user-class `this` (hoisted as <>4__this) to use an expression
+        // receiver so the emitter loads the proxy field.
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            var value = this.RewriteExpression(node.Value);
+            if (node.Receiver != null && this.fieldMap.TryGetValue(node.Receiver, out var proxyField))
+            {
+                var receiverExpr = this.FieldRead(proxyField);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+            }
+
+            if (node.ReceiverExpression != null)
+            {
+                var receiverExpr = this.RewriteExpression(node.ReceiverExpression);
+                if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
+                {
+                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                }
+            }
+            else if (!ReferenceEquals(value, node.Value))
+            {
+                return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+            }
+
+            return node;
         }
 
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
