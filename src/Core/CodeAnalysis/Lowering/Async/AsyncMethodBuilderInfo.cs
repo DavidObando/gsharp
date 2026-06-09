@@ -5,6 +5,7 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -373,21 +374,18 @@ public sealed class AsyncMethodBuilderInfo
             // (todo: iterator-rewriter); here we resolve only the members
             // that are common with the Task path, so the kind+builder type
             // are already discoverable by callers.
-            var moveNext = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            var moveNext = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "MoveNext")
                 .FirstOrDefault(m =>
-                    m.Name == "MoveNext"
-                    && m.IsGenericMethodDefinition
+                    m.IsGenericMethodDefinition
                     && m.GetParameters().Length == 1);
-            var awaitOnCompletedIter = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            var awaitOnCompletedIter = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitOnCompleted")
                 .FirstOrDefault(m =>
-                    m.Name == "AwaitOnCompleted"
-                    && m.IsGenericMethodDefinition
+                    m.IsGenericMethodDefinition
                     && m.GetGenericArguments().Length == 2
                     && m.GetParameters().Length == 2);
-            var awaitUnsafeOnCompletedIter = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            var awaitUnsafeOnCompletedIter = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitUnsafeOnCompleted")
                 .FirstOrDefault(m =>
-                    m.Name == "AwaitUnsafeOnCompleted"
-                    && m.IsGenericMethodDefinition
+                    m.IsGenericMethodDefinition
                     && m.GetGenericArguments().Length == 2
                     && m.GetParameters().Length == 2);
 
@@ -405,51 +403,48 @@ public sealed class AsyncMethodBuilderInfo
                 awaitUnsafeOnCompletedMethod: awaitUnsafeOnCompletedIter);
         }
 
-        var task = builderType.GetProperty(
-            "Task",
-            BindingFlags.Public | BindingFlags.Instance);
+        var task = MemberLookup.SafeGetPropertyIncludingSelfAndInterfaces(
+            builderType,
+            "Task");
 
         // SetResult: no-arg for void / Task, single-arg for generic.
         MethodInfo setResult;
         if (kind == AsyncMethodBuilderKind.GenericTask
             || (kind == AsyncMethodBuilderKind.Custom && resultType != null && resultType != typeof(void)))
         {
-            setResult = builderType.GetMethod("SetResult", new[] { resultType });
+            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                builderType, "SetResult", new[] { resultType });
         }
         else
         {
-            setResult = builderType.GetMethod("SetResult", Type.EmptyTypes);
+            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                builderType, "SetResult", Type.EmptyTypes);
         }
 
-        var setException = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var setException = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetException")
             .FirstOrDefault(m =>
-                m.Name == "SetException"
-                && m.GetParameters().Length == 1
+                m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType.FullName == "System.Exception");
 
-        var setStateMachine = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var setStateMachine = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetStateMachine")
             .FirstOrDefault(m =>
-                m.Name == "SetStateMachine"
-                && m.GetParameters().Length == 1
+                m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType.FullName == "System.Runtime.CompilerServices.IAsyncStateMachine");
 
-        var start = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var start = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "Start")
             .FirstOrDefault(m =>
-                m.Name == "Start"
-                && m.IsGenericMethodDefinition
+                m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 1);
 
-        var awaitOnCompleted = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var awaitOnCompleted = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitOnCompleted")
             .FirstOrDefault(m =>
-                m.Name == "AwaitOnCompleted"
-                && m.IsGenericMethodDefinition
+                m.IsGenericMethodDefinition
                 && m.GetGenericArguments().Length == 2
                 && m.GetParameters().Length == 2);
 
-        var awaitUnsafeOnCompleted = builderType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var awaitUnsafeOnCompleted = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitUnsafeOnCompleted")
             .FirstOrDefault(m =>
-                m.Name == "AwaitUnsafeOnCompleted"
-                && m.IsGenericMethodDefinition
+                m.IsGenericMethodDefinition
                 && m.GetGenericArguments().Length == 2
                 && m.GetParameters().Length == 2);
 

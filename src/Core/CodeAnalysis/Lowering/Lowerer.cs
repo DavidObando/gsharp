@@ -977,16 +977,11 @@ public sealed class Lowerer : BoundTreeRewriter
         var enumeratorClr = enumeratorType.ClrType;
         if (enumeratorClr != null)
         {
-            var moveNext = enumeratorClr.GetMethod(
-                "MoveNext",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
-                binder: null,
-                types: System.Type.EmptyTypes,
-                modifiers: null)
+            var moveNext = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                    enumeratorClr, "MoveNext", System.Type.EmptyTypes)
                 ?? typeof(System.Collections.IEnumerator).GetMethod("MoveNext", System.Type.EmptyTypes);
-            var currentMember = (System.Reflection.MemberInfo)enumeratorClr.GetProperty(
-                    "Current",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            var currentMember = (System.Reflection.MemberInfo)MemberLookup.SafeGetPropertyIncludingSelfAndInterfaces(
+                    enumeratorClr, "Current")
                 ?? (System.Reflection.MemberInfo)enumeratorClr.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
                 ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
             if (moveNext != null && currentMember != null)
