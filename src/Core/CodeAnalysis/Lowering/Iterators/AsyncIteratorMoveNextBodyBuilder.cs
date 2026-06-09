@@ -292,6 +292,35 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return node;
             }
 
+            // Issue #641: rewrite field assignments whose receiver is the
+            // user-class `this` (hoisted as <>4__this) to use an expression
+            // receiver so the emitter loads the proxy field, not the
+            // non-existent MoveNext `this` parameter.
+            protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+            {
+                var value = RewriteExpression(node.Value);
+                if (node.Receiver != null && ctx.fieldMap.TryGetValue(node.Receiver, out var proxyField))
+                {
+                    var receiverExpr = ctx.ReadField(proxyField);
+                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                }
+
+                if (node.ReceiverExpression != null)
+                {
+                    var receiverExpr = RewriteExpression(node.ReceiverExpression);
+                    if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
+                    {
+                        return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                    }
+                }
+                else if (!ReferenceEquals(value, node.Value))
+                {
+                    return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+                }
+
+                return node;
+            }
+
             protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
             {
                 if (node.Initializer is BoundAwaitExpression awaitExpr)
