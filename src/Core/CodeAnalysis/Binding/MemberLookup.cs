@@ -220,7 +220,7 @@ internal sealed class MemberLookup
             return null;
         }
 
-        if (!ClrTypeUtilities.AreSame(field.Type?.ClrType, clrProp.PropertyType))
+        if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field.Type), clrProp.PropertyType))
         {
             return null;
         }
@@ -568,7 +568,7 @@ internal sealed class MemberLookup
                 continue;
             }
 
-            if (!ClrTypeUtilities.AreSame(candidate.Type?.ClrType, clrMethod.ReturnType))
+            if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate.Type), clrMethod.ReturnType))
             {
                 continue;
             }
@@ -576,7 +576,7 @@ internal sealed class MemberLookup
             var allMatch = true;
             for (var i = 0; i < callable.Length; i++)
             {
-                if (!ClrTypeUtilities.AreSame(callable[i].Type?.ClrType, clrParams[i].ParameterType))
+                if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(callable[i].Type), clrParams[i].ParameterType))
                 {
                     allMatch = false;
                     break;
@@ -605,7 +605,7 @@ internal sealed class MemberLookup
         foreach (var implProp in structSymbol.Properties)
         {
             if (implProp.Name == clrProp.Name
-                && ClrTypeUtilities.AreSame(implProp.Type?.ClrType, clrProp.PropertyType))
+                && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType))
             {
                 return implProp;
             }
