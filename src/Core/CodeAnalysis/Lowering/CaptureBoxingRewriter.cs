@@ -101,6 +101,15 @@ internal static class CaptureBoxingRewriter
         // program.Functions[lambdaSymbol] still points to the original
         // un-rewritten body. The emitter looks lambdas up by FunctionSymbol
         // key, so we must overwrite those entries here. This closes #567.
+        //
+        // Architecture note (issue #617): today lambda symbols are NOT in
+        // program.Functions (they live only as BoundFunctionLiteralExpression
+        // tree nodes, and the emitter discovers them via tree-walking). This
+        // makes the loop below a defensive no-op — the ContainsKey guard is
+        // always false. The loop is retained as a safety net: if a future
+        // refactor ever registers lambda symbols in program.Functions, this
+        // propagation ensures correctness regardless of iteration order,
+        // making topological sorting of the foreach unnecessary.
         foreach (var (lambdaSymbol, rewrittenBody) in allLambdaUpdates)
         {
             if (newFunctions.ContainsKey(lambdaSymbol))
