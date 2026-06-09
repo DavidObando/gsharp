@@ -275,7 +275,8 @@ internal sealed partial class MethodBodyEmitter
 
                 break;
             case BoundIndexAssignmentExpression ixa:
-                if (ixa.Target.Type is MapTypeSymbol)
+                var ixaTargetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+                if (ixaTargetType is MapTypeSymbol)
                 {
                     this.EmitMapIndexAssignment(ixa);
                 }
@@ -287,7 +288,15 @@ internal sealed partial class MethodBodyEmitter
                     // re-evaluating the index expression (which may have side
                     // effects, e.g. a function call).
                     var tmp = this.indexAssignmentValueSlots[ixa];
-                    this.EmitLoadVariable(ixa.Target);
+                    if (ixa.TargetExpression != null)
+                    {
+                        this.EmitExpression(ixa.TargetExpression);
+                    }
+                    else
+                    {
+                        this.EmitLoadVariable(ixa.Target);
+                    }
+
                     this.EmitExpression(ixa.Index);
                     this.EmitExpression(ixa.Value);
                     this.il.OpCode(ILOpCode.Dup);

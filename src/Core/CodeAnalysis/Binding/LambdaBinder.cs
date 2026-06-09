@@ -553,6 +553,32 @@ internal sealed class LambdaBinder
             return base.RewriteFieldAssignmentExpression(node);
         }
 
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            // Issue #618: BoundIndexAssignmentExpression carries its target
+            // as a raw VariableSymbol. Without this override the target
+            // variable is invisible to capture analysis when the lambda body
+            // only does index writes (e.g. `arr[i] = v`) on the variable.
+            if (node.Target != null)
+            {
+                this.RecordReference(node.Target);
+            }
+
+            return base.RewriteIndexAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            // Issue #618: same as above for CLR indexer writes (e.g.
+            // `dict["key"] = v` on a Dictionary).
+            if (node.Target != null)
+            {
+                this.RecordReference(node.Target);
+            }
+
+            return base.RewriteClrIndexAssignmentExpression(node);
+        }
+
         protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
         {
             // Issue #503 follow-up: a nested function literal's captures

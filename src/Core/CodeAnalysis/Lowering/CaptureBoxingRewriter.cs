@@ -459,6 +459,81 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            // Issue #618: when the target of an index assignment is a boxed
+            // variable, the original target no longer has an IL slot. Rewrite
+            // to use an expression-based target: `boxLocal.Value` produces
+            // the array/slice/map reference, then the outer index assignment
+            // targets the element through that expression.
+            if (node.Target != null && this.boxInfo.TryGetValue(node.Target, out var bi))
+            {
+                var targetExpr = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, bi.BoxLocal),
+                    bi.BoxClass,
+                    bi.BoxField);
+                var index = this.RewriteExpression(node.Index);
+                var value = this.RewriteExpression(node.Value);
+                return BoundIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    targetExpr,
+                    index,
+                    value,
+                    node.Type);
+            }
+
+            return base.RewriteIndexAssignmentExpression(node);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            // Issue #618: same pattern for CLR indexer writes (e.g.
+            // `dict["key"] = v` on a Dictionary). When the target is boxed,
+            // rewrite to use an expression-based target.
+            if (node.Target != null && this.boxInfo.TryGetValue(node.Target, out var bi))
+            {
+                var targetExpr = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, bi.BoxLocal),
+                    bi.BoxClass,
+                    bi.BoxField);
+                ImmutableArray<BoundExpression>.Builder argBuilder = null;
+                for (var i = 0; i < node.Arguments.Length; i++)
+                {
+                    var oldArg = node.Arguments[i];
+                    var newArg = this.RewriteExpression(oldArg);
+                    if (newArg != oldArg && argBuilder == null)
+                    {
+                        argBuilder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                        for (var j = 0; j < i; j++)
+                        {
+                            argBuilder.Add(node.Arguments[j]);
+                        }
+                    }
+
+                    if (argBuilder != null)
+                    {
+                        argBuilder.Add(newArg);
+                    }
+                }
+
+                var args = argBuilder?.ToImmutable() ?? node.Arguments;
+                var value = this.RewriteExpression(node.Value);
+                return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    targetExpr,
+                    node.Indexer,
+                    args,
+                    value,
+                    node.Type);
+            }
+
+            return base.RewriteClrIndexAssignmentExpression(node);
+        }
+
+        /// <inheritdoc/>
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi) && bi.Original == node.Variable)

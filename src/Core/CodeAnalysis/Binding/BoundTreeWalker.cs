@@ -563,6 +563,11 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
+        if (node.TargetExpression != null)
+        {
+            VisitExpression(node.TargetExpression);
+        }
+
         VisitExpression(node.Index);
         VisitExpression(node.Value);
     }
@@ -769,6 +774,11 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
+        if (node.TargetExpression != null)
+        {
+            VisitExpression(node.TargetExpression);
+        }
+
         VisitList(node.Arguments);
         VisitExpression(node.Value);
     }

@@ -1182,11 +1182,17 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
+        var targetExpr = node.TargetExpression != null ? RewriteExpression(node.TargetExpression) : null;
         var index = RewriteExpression(node.Index);
         var value = RewriteExpression(node.Value);
-        if (index == node.Index && value == node.Value)
+        if (targetExpr == node.TargetExpression && index == node.Index && value == node.Value)
         {
             return node;
+        }
+
+        if (targetExpr != null)
+        {
+            return BoundIndexAssignmentExpression.WithExpressionTarget(null, targetExpr, index, value, node.Type);
         }
 
         return new BoundIndexAssignmentExpression(null, node.Target, index, value, node.Type);
@@ -1513,6 +1519,7 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
+        var targetExpr = node.TargetExpression != null ? RewriteExpression(node.TargetExpression) : null;
         ImmutableArray<BoundExpression>.Builder builder = null;
         for (var i = 0; i < node.Arguments.Length; i++)
         {
@@ -1534,12 +1541,17 @@ public abstract class BoundTreeRewriter
         }
 
         var value = RewriteExpression(node.Value);
-        if (builder == null && value == node.Value)
+        if (targetExpr == node.TargetExpression && builder == null && value == node.Value)
         {
             return node;
         }
 
         var args = builder?.ToImmutable() ?? node.Arguments;
+        if (targetExpr != null)
+        {
+            return BoundClrIndexAssignmentExpression.WithExpressionTarget(null, targetExpr, node.Indexer, args, value, node.Type);
+        }
+
         return new BoundClrIndexAssignmentExpression(null, node.Target, node.Indexer, args, value, node.Type);
     }
 
