@@ -92,28 +92,35 @@ public class Program
                 ? ReferenceResolver.WithReferences(parsed.References)
                 : null;
 
-            ReportMissingTransitiveReferences(references, parsed);
-
-            var compilation = new Compilation(references, syntaxTrees.ToArray())
+            try
             {
-                ImplicitSystemImport = parsed.ImplicitSystemImport,
-                DebugInformation =
+                ReportMissingTransitiveReferences(references, parsed);
+
+                var compilation = new Compilation(references, syntaxTrees.ToArray())
                 {
-                    Format = parsed.DebugFormat,
-                    PdbFilePath = parsed.PdbPath,
-                    SourceLinkFilePath = parsed.SourceLinkPath,
-                    Deterministic = parsed.Deterministic,
-                    EmbedAllSources = parsed.EmbedAllSources,
-                },
-            };
+                    ImplicitSystemImport = parsed.ImplicitSystemImport,
+                    DebugInformation =
+                    {
+                        Format = parsed.DebugFormat,
+                        PdbFilePath = parsed.PdbPath,
+                        SourceLinkFilePath = parsed.SourceLinkPath,
+                        Deterministic = parsed.Deterministic,
+                        EmbedAllSources = parsed.EmbedAllSources,
+                    },
+                };
 
-            if (parsed.OutputPath is null)
-            {
-                // Legacy / no-output mode: interpret the program (back-compat).
-                return Interpret(compilation, parsed);
+                if (parsed.OutputPath is null)
+                {
+                    // Legacy / no-output mode: interpret the program (back-compat).
+                    return Interpret(compilation, parsed);
+                }
+
+                return Emit(compilation, parsed);
             }
-
-            return Emit(compilation, parsed);
+            finally
+            {
+                references?.Dispose();
+            }
         }
         catch (IOException ex)
         {
