@@ -157,6 +157,37 @@ internal static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Returns whether <paramref name="concrete"/> implements an interface
+    /// equivalent to <paramref name="targetInterface"/> by name and generic-
+    /// argument-name. Generalizes the cross-context (live-runtime vs.
+    /// MetadataLoadContext) interface walk that <see cref="IsAssignableByName"/>'s
+    /// same-context fast path cannot resolve. Used by #570's slice-conversions-
+    /// equal-array-conversions rule and reusable for any future cross-context
+    /// "does X implement Y?" probe.
+    /// </summary>
+    /// <param name="concrete">The candidate concrete type whose interfaces to walk.</param>
+    /// <param name="targetInterface">The interface type to match (live or MLC).</param>
+    /// <returns><see langword="true"/> when the concrete type implements an
+    /// interface whose full-name and generic argument full-names equal the target.</returns>
+    public static bool ImplementsInterfaceByName(Type concrete, Type targetInterface)
+    {
+        if (concrete is null || targetInterface is null)
+        {
+            return false;
+        }
+
+        foreach (var iface in SafeGetInterfaces(concrete))
+        {
+            if (InterfaceMatchesByName(iface, targetInterface))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns whether <paramref name="type"/> is a CLR delegate type, i.e. it
     /// (transitively) derives from <c>System.MulticastDelegate</c> /
     /// <c>System.Delegate</c>. Walks the base-type chain by name so it is safe
@@ -506,6 +537,48 @@ internal static class ClrTypeUtilities
         {
             return Array.Empty<Type>();
         }
+    }
+
+    private static bool InterfaceMatchesByName(Type candidate, Type target)
+    {
+        // Non-generic interfaces: direct FullName comparison.
+        if (!target.IsGenericType)
+        {
+            return string.Equals(candidate.FullName, target.FullName, StringComparison.Ordinal);
+        }
+
+        // Generic interfaces: compare the open definition's FullName (e.g.
+        // `System.Collections.Generic.IEnumerable`1`) then match each
+        // generic argument structurally via AreSame.
+        if (!candidate.IsGenericType)
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                candidate.GetGenericTypeDefinition().FullName,
+                target.GetGenericTypeDefinition().FullName,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var candidateArgs = candidate.GetGenericArguments();
+        var targetArgs = target.GetGenericArguments();
+        if (candidateArgs.Length != targetArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidateArgs.Length; i++)
+        {
+            if (!AreSame(candidateArgs[i], targetArgs[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static TMember[] SafeEnumerate<TMember>(Type type, Func<Type, TMember[]> getAll)

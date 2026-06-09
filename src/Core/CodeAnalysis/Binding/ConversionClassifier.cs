@@ -42,12 +42,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <see cref="Binder"/>.
 /// </para>
 /// <para>
-/// The lifted <c>T → T?</c> conversion (#571), the slice-conversion-
-/// set-equals-array-conversion-set rule (#570), and the related Wave-3
+/// The slice-conversion-set-equals-array-conversion-set rule (#570) landed
+/// in <c>Conversion.Classify</c> (PR 6.5) via a dedicated arm and the
+/// <c>ClrTypeUtilities.ImplementsInterfaceByName</c> cross-context helper.
+/// The lifted <c>T → T?</c> conversion (#571) and the related Wave-3
 /// architectural fixes from <c>~/gsharp-bug-overview.md</c> will land
 /// in this class in a follow-up PR after the full Binder decomposition
-/// is complete. This PR only sets up the structural home for those
-/// fixes; it makes no behavior change.
+/// is complete.
 /// </para>
 /// </remarks>
 internal sealed class ConversionClassifier

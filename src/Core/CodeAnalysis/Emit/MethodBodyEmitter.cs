@@ -516,6 +516,19 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #570: cross-context interface implementation check for the
+        // emitter's reference-compatibility decision. When `a` is a slice
+        // type (backed by T[]) and `b` is an interface, the same-context
+        // IsAssignableByName path above fails because the two types live in
+        // different Type.Assembly instances. Use ImplementsInterfaceByName
+        // to recognise the no-op widening.
+        if (a?.ClrType != null && b?.ClrType != null
+            && b.ClrType.IsInterface
+            && ClrTypeUtilities.ImplementsInterfaceByName(a.ClrType, b.ClrType))
+        {
+            return true;
+        }
+
         return false;
     }
 

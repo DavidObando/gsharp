@@ -403,6 +403,49 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #570: a G# slice `[]T` is backed by a CLR `T[]` at runtime
+        // (the #528 rule above accepts `[]T → T[]`). Extend the slice → CLR-array
+        // reference-conversion family to every interface a CLR `T[]` implements:
+        // IEnumerable<T>, ICollection<T>, IList<T>, IReadOnlyCollection<T>,
+        // IReadOnlyList<T>, plus the non-generic IEnumerable/ICollection/IList,
+        // and the platform interfaces ICloneable/IStructuralComparable/
+        // IStructuralEquatable that arrays implement.
+        //
+        // The general #521 upcast below in principle subsumes this rule, but
+        // `ClrTypeUtilities.IsAssignableByName`'s "same-context fast path"
+        // silently returns false when the target interface is loaded through
+        // the MetadataLoadContext and the slice's `T[]` is constructed from
+        // the live runtime (or vice versa) — the two land in different
+        // `Type.Assembly` instances and `Type.IsAssignableFrom` throws
+        // `InvalidOperationException` across the context boundary. The
+        // dedicated arm here uses the cross-context `ImplementsInterfaceByName`
+        // walk so the rule fires regardless of which side the interface and the
+        // array were loaded from.
+        //
+        // Slice invariance: `[]string` does NOT convert to `IEnumerable<object>`
+        // even though CLR arrays are reference-covariant in the element type.
+        // `ImplementsInterfaceByName` compares generic arguments by name, so
+        // `string`'s element-type-arg only matches `string`-typed interfaces.
+        // This mirrors the explicit invariance note on the #528 rule above.
+        if (from is SliceTypeSymbol sliceForIface
+            && to?.ClrType != null && to.ClrType.IsInterface
+            && sliceForIface.ClrType != null
+            && ClrTypeUtilities.ImplementsInterfaceByName(sliceForIface.ClrType, to.ClrType))
+        {
+            return Conversion.Implicit;
+        }
+
+        // Slice invariance guard: if the source is a slice and the target
+        // is an interface that the #570 arm above did NOT match (e.g.
+        // IEnumerable<object> when the slice is []string), do NOT fall
+        // through to the general #521 upcast — that path would incorrectly
+        // accept it via CLR array covariance (IsAssignableFrom returns true
+        // across covariant interfaces). G# slices are invariant per spec.
+        if (from is SliceTypeSymbol && to?.ClrType != null && to.ClrType.IsInterface)
+        {
+            return Conversion.None;
+        }
+
         // Issue #521: standard CLR identity / reference upcast — a
         // reference-typed expression of CLR type `from` widens implicitly
         // to any base class or implemented interface `to`. The CLR

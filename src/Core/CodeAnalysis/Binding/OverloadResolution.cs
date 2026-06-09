@@ -220,13 +220,40 @@ internal static class OverloadResolution
             {
                 if (target.IsAssignableFrom(source))
                 {
-                    return ImplicitConversionKind.Reference;
+                    // Issue #570: G# slices are invariant. When the source
+                    // is an array type being passed to a generic interface,
+                    // CLR's IsAssignableFrom accepts covariant cases (e.g.
+                    // string[] → IEnumerable<object>). Guard against this
+                    // by cross-checking with ImplementsInterfaceByName which
+                    // matches generic args by name (invariantly).
+                    if (source.IsArray && target.IsInterface && target.IsGenericType
+                        && !ClrTypeUtilities.ImplementsInterfaceByName(source, target))
+                    {
+                        // Covariant match rejected — fall through.
+                    }
+                    else
+                    {
+                        return ImplicitConversionKind.Reference;
+                    }
                 }
             }
             catch (InvalidOperationException)
             {
                 // MLC cross-context paths throw; fall through to user-defined lookup.
             }
+        }
+
+        // Issue #570: cross-context interface implementation check. When
+        // `source` is an array type (e.g. the CLR backing type of a G# slice)
+        // and `target` is an interface, the same-context fast path above fails
+        // because the two types reside in different Type.Assembly instances.
+        // Use the cross-context `ImplementsInterfaceByName` walker to bridge
+        // live-runtime and MetadataLoadContext types. This enables overload
+        // resolution to find methods taking interface parameters (IEnumerable<T>,
+        // IReadOnlyList<T>, etc.) when passed a slice argument.
+        if (target.IsInterface && ClrTypeUtilities.ImplementsInterfaceByName(source, target))
+        {
+            return ImplicitConversionKind.Reference;
         }
 
         var udi = UserDefinedImplicitConversionLookup;
