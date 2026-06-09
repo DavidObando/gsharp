@@ -172,6 +172,36 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #638: numeric-widening + nullable wrapping: T1 → Nullable<T2>
+        // where T1 is numerically convertible to T2 (e.g., int32 → int64?).
+        // The exact-match case (T → Nullable<T>) was handled above; this
+        // covers cross-width conversions that would otherwise be mishandled
+        // by TryEmitNumericConversion below (which sees NullableTypeSymbol.ClrType
+        // as the raw underlying type and emits only the conv.* without wrapping).
+        if (to is NullableTypeSymbol toValueNullableWiden
+            && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableWiden)
+            && from != toValueNullableWiden.UnderlyingType
+            && TryEmitNumericConversion(from, toValueNullableWiden.UnderlyingType, conv.IsChecked))
+        {
+            var widenInnerClr = toValueNullableWiden.UnderlyingType.ClrType
+                ?? throw new InvalidOperationException(
+                    $"Nullable<{toValueNullableWiden.UnderlyingType.Name}> lift has no CLR underlying type.");
+
+            if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, widenInnerClr, out var widenNullableClr))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{widenInnerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
+            var widenNullableInnerArg = widenNullableClr.GetGenericArguments()[0];
+            var widenCtor = widenNullableClr.GetConstructor(new[] { widenNullableInnerArg })
+                ?? throw new InvalidOperationException(
+                    $"Nullable<{widenNullableInnerArg.FullName}> has no single-arg constructor.");
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(widenCtor));
+            return;
+        }
+
         // ADR-0044 numeric conversion lattice. Any pair of numeric CLR
         // primitives (sbyte/byte/short/ushort/int/uint/long/ulong/nint/
         // nuint/float/double/decimal/char) gets a typed IL conversion.

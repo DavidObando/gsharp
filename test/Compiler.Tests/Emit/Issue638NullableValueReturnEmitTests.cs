@@ -125,10 +125,8 @@ public class Issue638NullableValueReturnEmitTests
     }
 
     [Fact]
-    public void NullableLongReturn_Interface_ReturnsNil()
+    public void NullableLongReturn_Interface_ReturnsNilAndRealValue()
     {
-        // Note: int64? return with a non-nil value exposes a pre-existing
-        // emitter limitation for int64 nullable lifting. Test nil path only.
         var sibling = """
             namespace Probe.CSharp
             {
@@ -144,18 +142,26 @@ public class Issue638NullableValueReturnEmitTests
             import System
             import Probe.CSharp
 
-            type MaybeLongImpl class : IMaybeLong {
+            type MaybeLongImplNil class : IMaybeLong {
                 func Big() int64? {
                     return nil
                 }
             }
 
-            var m IMaybeLong = MaybeLongImpl{}
-            Console.WriteLine(m.Big() == nil)
+            type MaybeLongImplValue class : IMaybeLong {
+                func Big() int64? {
+                    return 42
+                }
+            }
+
+            var n IMaybeLong = MaybeLongImplNil{}
+            Console.WriteLine(n.Big() == nil)
+            var v IMaybeLong = MaybeLongImplValue{}
+            Console.WriteLine(v.Big())
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal("True\n42\n", output);
     }
 
     [Fact]
@@ -451,6 +457,170 @@ public class Issue638NullableValueReturnEmitTests
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
         Assert.Equal("True\n", output);
+    }
+
+    [Fact]
+    public void NullableLongReturn_ComputedValue()
+    {
+        var sibling = """
+            namespace Probe.CSharp
+            {
+                public interface ILongAdder
+                {
+                    long? Add(long a, long b);
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import Probe.CSharp
+
+            type LongAdder class : ILongAdder {
+                func Add(a int64, b int64) int64? {
+                    return a + b
+                }
+            }
+
+            var adder ILongAdder = LongAdder{}
+            Console.WriteLine(adder.Add(1000000000, 2000000000))
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource);
+        Assert.Equal("3000000000\n", output);
+    }
+
+    [Fact]
+    public void NullableULongReturn_Interface()
+    {
+        var sibling = """
+            namespace Probe.CSharp
+            {
+                public interface IMaybeULong
+                {
+                    ulong? Value();
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import Probe.CSharp
+
+            type MaybeULongImpl class : IMaybeULong {
+                func Value() uint64? {
+                    return uint64(1024)
+                }
+            }
+
+            var m IMaybeULong = MaybeULongImpl{}
+            var v = m.Value()
+            Console.WriteLine(v)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource);
+        Assert.Equal("1024\n", output);
+    }
+
+    [Fact]
+    public void NullableLongParam_Interface()
+    {
+        var sibling = """
+            namespace Probe.CSharp
+            {
+                public interface ILongEcho
+                {
+                    long? Echo(long? input);
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import Probe.CSharp
+
+            type LongEchoer class : ILongEcho {
+                func Echo(input int64?) int64? {
+                    return input
+                }
+            }
+
+            var e ILongEcho = LongEchoer{}
+            var v = e.Echo(int64(99))
+            Console.WriteLine(v)
+            Console.WriteLine(e.Echo(nil) == nil)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource);
+        Assert.Equal("99\nTrue\n", output);
+    }
+
+    [Fact]
+    public void NullableLongProperty_Interface()
+    {
+        var sibling = """
+            namespace Probe.CSharp
+            {
+                public interface IHasNullableLongProp
+                {
+                    long? Value { get; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import Probe.CSharp
+
+            type HasNullableLongProp class : IHasNullableLongProp {
+                prop Value int64? { get { return 42 } }
+            }
+
+            var p IHasNullableLongProp = HasNullableLongProp{}
+            var v = p.Value
+            Console.WriteLine(v)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource);
+        Assert.Equal("42\n", output);
+    }
+
+    [Fact]
+    public void NullableDoubleReturn_NonNilRoundTrip()
+    {
+        var sibling = """
+            namespace Probe.CSharp
+            {
+                public interface IDoubleRoundTrip
+                {
+                    double? Echo(double? input);
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import Probe.CSharp
+
+            type DoubleRoundTrip class : IDoubleRoundTrip {
+                func Echo(input float64?) float64? {
+                    return input
+                }
+            }
+
+            var d IDoubleRoundTrip = DoubleRoundTrip{}
+            var v = d.Echo(2.718)
+            Console.WriteLine(v)
+            Console.WriteLine(d.Echo(nil) == nil)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource);
+        Assert.Equal("2.718\nTrue\n", output);
     }
 
     // ----- helpers -----
