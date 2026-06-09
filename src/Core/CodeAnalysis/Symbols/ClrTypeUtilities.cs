@@ -434,11 +434,13 @@ internal static class ClrTypeUtilities
         => SafeGetMember(type, name, flags, (t, f) => t.GetEvent(name, f), SafeGetEvents);
 
     /// <summary>
-    /// Issue #529: looks up a property by name, walking the transitive
-    /// interface hierarchy when <paramref name="type"/> is an interface.
+    /// Issues #529 / #572: looks up a property by name, walking the transitive
+    /// interface hierarchy. For interface types this surfaces inherited
+    /// interface members; for concrete classes this surfaces default
+    /// interface properties (DIMs) that the class does not override.
     /// CLR reflection does not include inherited interface members in
-    /// <see cref="Type.GetProperties(BindingFlags)"/> for interface types,
-    /// so this helper explicitly walks <see cref="Type.GetInterfaces()"/>.
+    /// <see cref="Type.GetProperties(BindingFlags)"/>, so this helper
+    /// explicitly walks <see cref="Type.GetInterfaces()"/>.
     /// </summary>
     /// <param name="type">The type to search.</param>
     /// <param name="name">The property name.</param>
@@ -452,7 +454,7 @@ internal static class ClrTypeUtilities
             return direct;
         }
 
-        if (type is null || !type.IsInterface)
+        if (type is null)
         {
             return null;
         }
@@ -503,12 +505,13 @@ internal static class ClrTypeUtilities
     }
 
     /// <summary>
-    /// Issue #529: enumerates methods including those declared on
-    /// transitive base interfaces when <paramref name="type"/> is an
-    /// interface. For non-interface types, this is equivalent to
-    /// <see cref="SafeGetMethods"/>. Methods from base interfaces that
-    /// are hidden by a same-name-and-parameter-types method on a
-    /// more-derived interface are excluded (mirrors C# hiding rules).
+    /// Issues #529 / #572: enumerates methods including those declared on
+    /// transitive base interfaces. For interface types this surfaces
+    /// inherited interface members; for concrete classes this surfaces
+    /// default interface methods (DIMs) that the class does not override.
+    /// Methods from interfaces that are hidden by a same-name-and-parameter-types
+    /// method already present (on the class or a more-derived interface) are
+    /// excluded (mirrors C# hiding rules).
     /// </summary>
     /// <param name="type">The type to enumerate.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
@@ -516,13 +519,19 @@ internal static class ClrTypeUtilities
     public static MethodInfo[] SafeGetMethodsIncludingInterfaces(Type type, BindingFlags flags)
     {
         var direct = SafeGetMethods(type, flags);
-        if (type is null || !type.IsInterface)
+        if (type is null)
+        {
+            return direct;
+        }
+
+        var interfaces = SafeGetInterfaces(type);
+        if (interfaces.Length == 0)
         {
             return direct;
         }
 
         var all = new List<MethodInfo>(direct);
-        foreach (var iface in SafeGetInterfaces(type))
+        foreach (var iface in interfaces)
         {
             foreach (var m in SafeGetMethods(iface, flags))
             {
