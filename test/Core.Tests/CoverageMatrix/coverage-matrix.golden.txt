@@ -12,6 +12,8 @@ AmpersandToken
 Annotation
 AnnotationTarget
 ArrayCreationExpression
+AsExpression
+AsKeyword
 AssignmentExpression
 AsyncKeyword
 AtToken
@@ -109,6 +111,7 @@ InterfaceKeyword
 InternalKeyword
 InterpolatedStringExpression
 InterpolatedStringToken
+IsExpression
 IsKeyword
 LeftArrowToken
 LessOrEqualsToken
@@ -221,6 +224,7 @@ YieldStatement
 AddressOfExpression
 AppendExpression
 ArrayCreationExpression
+AsExpression
 AssignmentExpression
 Attribute
 AwaitExpression
@@ -274,6 +278,7 @@ IndexExpression
 IndirectAssignmentExpression
 IndirectCallExpression
 InterpolatedStringExpression
+IsExpression
 LabelStatement
 LenExpression
 ListPattern

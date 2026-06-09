@@ -48,7 +48,7 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-async await break case catch chan class const continue default defer else enum false fallthrough finally for func go goto if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var
+as async await break case catch chan class const continue default defer else enum false fallthrough finally for func go goto if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var
 ```
 
 Several words are contextual rather than reserved. `record`, `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below.
@@ -361,12 +361,16 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 | 7 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
 | 6 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
 | 5 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
-| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | equality and comparison |
+| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is`, `as` | equality, comparison, type test, safe cast |
 | 3 | `&&` | logical and |
 | 2 | `\|\|`, `?:` | logical or and null coalescing |
 | 1 | `?` … `:` … | conditional (ternary, right-associative) |
 
 The conditional expression `cond ? whenTrue : whenFalse` (ADR-0062) requires `cond` to be `bool` and the two branches to share a common type. Mismatched branches report `GS0263`. The narrow ADR-0061 form `ref cond ? lhs : rhs` (and its `out` / `in` siblings) survives as a payload to a ref-kind argument; diagnostics `GS0260`–`GS0262` apply there.
+
+### Type-test and safe-cast operators
+
+`expr is T` evaluates to `bool` — `true` when the runtime type of `expr` is assignable to `T`, `false` otherwise (including when `expr` is `nil`). `expr as T` performs a safe downcast: it returns the value typed as `T` when the cast succeeds, or `nil` when it fails. For reference types the result type is `T`; for value types, the target must be written as the nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as` with a non-nullable value type target produces diagnostic `GS0269`. Both operators use the CLR `isinst` instruction and sit at precedence level 4 (same as equality and comparison), so `x is String == true` and `a is T && b is U` parse as expected without extra parentheses. The existing pattern-level `identifier is Type` syntax inside `switch`/`case` arms is unaffected.
 
 Postfix `!!`, member access `.`, null-conditional access `?.`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead (see ADR-0054).
 
