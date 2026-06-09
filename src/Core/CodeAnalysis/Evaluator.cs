@@ -1323,6 +1323,17 @@ public sealed class Evaluator
         }
 
         receiver = UnwrapClrReceiver(receiver);
+
+        // Issue #608: when the receiver is a StructValue (a G# class instance)
+        // and the member is from a CLR interface that the class satisfies via a
+        // field (the #573/#606 field-satisfies-property contract), reflection
+        // cannot invoke the interface property on the StructValue. Route the
+        // read through the struct's field dictionary instead.
+        if (receiver is StructValue sv && TryReadStructFieldForClrMember(sv, node.Member, out var fieldValue))
+        {
+            return fieldValue;
+        }
+
         return node.Member switch
         {
             System.Reflection.PropertyInfo p => p.GetValue(receiver),
@@ -1371,11 +1382,50 @@ public sealed class Evaluator
         }
     }
 
+    // Issue #608: when the receiver is a G# StructValue (a class that satisfies a
+    // CLR interface property contract via a field — the #573/#606 shape), reflection
+    // cannot invoke the interface PropertyInfo.GetValue on the StructValue. Detect
+    // this case by matching the CLR member name against the struct's field dictionary.
+    private static bool TryReadStructFieldForClrMember(StructValue sv, System.Reflection.MemberInfo member, out object value)
+    {
+        value = null;
+        var fieldName = member.Name;
+        if (sv.Fields.TryGetValue(fieldName, out var stored))
+        {
+            value = stored;
+            return true;
+        }
+
+        return false;
+    }
+
+    // Issue #608: write counterpart to TryReadStructFieldForClrMember.
+    private static bool TryWriteStructFieldForClrMember(StructValue sv, System.Reflection.MemberInfo member, object value)
+    {
+        var fieldName = member.Name;
+        if (sv.Fields.ContainsKey(fieldName))
+        {
+            sv.Fields[fieldName] = value;
+            return true;
+        }
+
+        return false;
+    }
+
     private object EvaluateClrPropertyAssignmentExpression(BoundClrPropertyAssignmentExpression node)
     {
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
         receiver = UnwrapClrReceiver(receiver);
         var value = EvaluateExpression(node.Value);
+
+        // Issue #608: when the receiver is a StructValue (G# class instance)
+        // and the member is from a CLR interface satisfied by a field, route the
+        // write through the struct's field dictionary.
+        if (receiver is StructValue sv && TryWriteStructFieldForClrMember(sv, node.Member, value))
+        {
+            return value;
+        }
+
         switch (node.Member)
         {
             case System.Reflection.PropertyInfo p:
