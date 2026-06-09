@@ -26,6 +26,14 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// <para>For nested user trys, dispatch chains through each level: outer
 /// dispatch → outermost try's entry → outermost try's internal dispatch →
 /// next-deeper try's entry → ... → resume label.</para>
+///
+/// <para>Implementation note (6.3): the traversal subclasses
+/// <see cref="BoundTreeWalker"/> instead of using a bespoke switch.
+/// The walker's recurse-by-default behavior means every node kind —
+/// including kinds added in the future — is automatically traversed.
+/// Only <see cref="BoundAwaitExpression"/> and <see cref="BoundTryStatement"/>
+/// need custom handling; everything else inherits the walker's depth-first
+/// walk. This eliminates the silent-default-drops-unknown-nodes bug class.</para>
 /// </remarks>
 internal static class TryDispatchPlanner
 {
@@ -39,12 +47,17 @@ internal static class TryDispatchPlanner
         BoundStatement body,
         IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap)
     {
-        var walker = new Walker(awaitResumeMap);
-        walker.Walk(body);
-        return walker.Build();
+        var visitor = new WalkVisitor(awaitResumeMap);
+        visitor.Visit(body);
+        return visitor.Build();
     }
 
-    private sealed class Walker
+    /// <summary>
+    /// <see cref="BoundTreeWalker"/> subclass that records await-to-try
+    /// nesting during a depth-first walk. All node kinds not overridden
+    /// here are traversed automatically by the walker's base implementation.
+    /// </summary>
+    private sealed class WalkVisitor : BoundTreeWalker
     {
         private readonly IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap;
         private readonly Stack<BoundTryStatement> tryStack = new Stack<BoundTryStatement>();
@@ -53,7 +66,7 @@ internal static class TryDispatchPlanner
         private readonly Dictionary<BoundTryStatement, List<TryDispatchEntry>> internalDispatch = new Dictionary<BoundTryStatement, List<TryDispatchEntry>>();
         private int entryOrdinal;
 
-        public Walker(IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap)
+        public WalkVisitor(IReadOnlyDictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap)
         {
             this.awaitResumeMap = awaitResumeMap;
         }
@@ -68,111 +81,36 @@ internal static class TryDispatchPlanner
                     kv => kv.Value.ToImmutableArray()));
         }
 
-        public void Walk(BoundNode node)
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {
-            switch (node)
+            if (awaitResumeMap.TryGetValue(node, out var rp))
             {
-                case null:
-                    return;
-                case BoundAwaitExpression aw:
-                    if (awaitResumeMap.TryGetValue(aw, out var rp))
-                    {
-                        RecordAwait(rp);
-                    }
-
-                    if (aw.Expression != null)
-                    {
-                        Walk(aw.Expression);
-                    }
-
-                    return;
-                case BoundTryStatement t:
-                    tryStack.Push(t);
-                    Walk(t.TryBlock);
-                    foreach (var c in t.CatchClauses)
-                    {
-                        // Catches and finallies should not contain awaits at
-                        // this point (AsyncExceptionHandlerRewriter lifts them
-                        // out). Walk for safety but do not record those awaits
-                        // as needing entry routing for this try.
-                        Walk(c.Body);
-                    }
-
-                    if (t.FinallyBlock != null)
-                    {
-                        Walk(t.FinallyBlock);
-                    }
-
-                    tryStack.Pop();
-                    return;
-                case BoundBlockStatement block:
-                    foreach (var s in block.Statements)
-                    {
-                        Walk(s);
-                    }
-
-                    return;
-                case BoundExpressionStatement es:
-                    Walk(es.Expression);
-                    return;
-                case BoundVariableDeclaration vd:
-                    Walk(vd.Initializer);
-                    return;
-                case BoundReturnStatement ret:
-                    Walk(ret.Expression);
-                    return;
-                case BoundIfStatement ifs:
-                    Walk(ifs.Condition);
-                    Walk(ifs.ThenStatement);
-                    Walk(ifs.ElseStatement);
-                    return;
-                case BoundConditionalGotoStatement cg:
-                    Walk(cg.Condition);
-                    return;
-                case BoundThrowStatement th:
-                    Walk(th.Expression);
-                    return;
-                case BoundScopeStatement sc:
-                    Walk(sc.Body);
-                    return;
-                case BoundAssignmentExpression a:
-                    Walk(a.Expression);
-                    return;
-                case BoundBinaryExpression b:
-                    Walk(b.Left);
-                    Walk(b.Right);
-                    return;
-                case BoundUnaryExpression u:
-                    Walk(u.Operand);
-                    return;
-                case BoundConversionExpression cv:
-                    Walk(cv.Expression);
-                    return;
-                case BoundCallExpression call:
-                    foreach (var arg in call.Arguments)
-                    {
-                        Walk(arg);
-                    }
-
-                    return;
-                case BoundImportedCallExpression ic:
-                    foreach (var arg in ic.Arguments)
-                    {
-                        Walk(arg);
-                    }
-
-                    return;
-                case BoundImportedInstanceCallExpression iic:
-                    Walk(iic.Receiver);
-                    foreach (var arg in iic.Arguments)
-                    {
-                        Walk(arg);
-                    }
-
-                    return;
-                default:
-                    return;
+                RecordAwait(rp);
             }
+
+            // Recurse into the awaited expression (e.g. a nested await).
+            base.VisitAwaitExpression(node);
+        }
+
+        protected override void VisitTryStatement(BoundTryStatement node)
+        {
+            tryStack.Push(node);
+            VisitStatement(node.TryBlock);
+            foreach (var c in node.CatchClauses)
+            {
+                // Catches and finallies should not contain awaits at
+                // this point (AsyncExceptionHandlerRewriter lifts them
+                // out). Walk for safety but do not record those awaits
+                // as needing entry routing for this try.
+                VisitStatement(c.Body);
+            }
+
+            if (node.FinallyBlock != null)
+            {
+                VisitStatement(node.FinallyBlock);
+            }
+
+            tryStack.Pop();
         }
 
         private void RecordAwait(AwaitResumePoint rp)

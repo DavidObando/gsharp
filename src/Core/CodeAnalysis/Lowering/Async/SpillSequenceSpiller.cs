@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -102,9 +103,30 @@ public static class SpillSequenceSpiller
                     builder.Add(rewritten);
                     return rewritten != nested;
 
-                default:
+                // Statements that are await-free leaves at this point in the pipeline.
+                // Each is either structurally unable to contain a BoundExpression child,
+                // or its expressions have been pre-spilled / lowered away by an earlier pass
+                // (AsyncExceptionHandlerRewriter, Lowerer, iterator rewriter).
+                case BoundLabelStatement:
+                case BoundGotoStatement:
+                case BoundConditionalGotoStatement:
+                case BoundThrowStatement:
+                case BoundTryStatement:
+                case BoundScopeStatement:
+                case BoundChannelSendStatement:
+                case BoundGoStatement:
+                case BoundSelectStatement:
+                case BoundPatternSwitchStatement:
+                case BoundAwaitSequencePoint:
+                case BoundYieldStatement:
                     builder.Add(statement);
                     return false;
+
+                default:
+                    EmitDiagnosticException.Throw(
+                        statement.Syntax,
+                        $"SpillSequenceSpiller: unhandled BoundStatement kind '{statement.Kind}'.");
+                    return false; // unreachable
             }
         }
 
@@ -262,9 +284,68 @@ public static class SpillSequenceSpiller
                 case BoundBlockExpression block:
                     return SpillBlockExpression(block);
 
-                default:
-                    // No await in this expression — return trivially.
+                // Expression kinds that are trivial for spilling — they are either
+                // leaf nodes (no BoundExpression children that could contain an await)
+                // or their children are structurally unable to hold an await at this
+                // point in the pipeline. If HasAwait(expression) returned true at the
+                // caller but control reaches here, a spiller blind spot exists for
+                // this kind. The throw in the default arm surfaces it as a GS9998
+                // instead of silently producing invalid IL.
+                case BoundLiteralExpression:
+                case BoundVariableExpression:
+                case BoundDefaultExpression:
+                case BoundTypeOfExpression:
+                case BoundMethodGroupExpression:
+                case BoundClrMethodGroupExpression:
+                case BoundFunctionLiteralExpression:
+                case BoundErrorExpression:
+                case BoundAddressOfExpression:
+                case BoundDereferenceExpression:
+                case BoundIndirectAssignmentExpression:
+                case BoundConditionalAddressExpression:
+                case BoundConditionalExpression:
+                case BoundClrStaticCallExpression:
+                case BoundClrConstructorCallExpression:
+                case BoundClrPropertyAccessExpression:
+                case BoundClrPropertyAssignmentExpression:
+                case BoundClrBinaryOperatorExpression:
+                case BoundClrUnaryOperatorExpression:
+                case BoundClrConversionCallExpression:
+                case BoundClrIndexExpression:
+                case BoundClrIndexAssignmentExpression:
+                case BoundClrEventSubscriptionExpression:
+                case BoundEventSubscriptionExpression:
+                case BoundConstructorCallExpression:
+                case BoundFieldAccessExpression:
+                case BoundPropertyAccessExpression:
+                case BoundPropertyAssignmentExpression:
+                case BoundNullConditionalAccessExpression:
+                case BoundTupleLiteralExpression:
+                case BoundTupleElementAccessExpression:
+                case BoundIndirectCallExpression:
+                case BoundInterpolatedStringExpression:
+                case BoundIndexExpression:
+                case BoundArrayCreationExpression:
+                case BoundLenExpression:
+                case BoundCapExpression:
+                case BoundAppendExpression:
+                case BoundStructLiteralExpression:
+                case BoundSwitchExpression:
+                case BoundMakeChannelExpression:
+                case BoundChannelReceiveExpression:
+                case BoundChannelCloseExpression:
+                case BoundMapLiteralExpression:
+                case BoundMapDeleteExpression:
+                case BoundSpillSequenceExpression:
+                case BoundStateMachineAwaitOnCompleted:
+                case BoundStateMachineBuilderMoveNext:
                     return Trivial(expression);
+
+                default:
+                    EmitDiagnosticException.Throw(
+                        expression.Syntax,
+                        $"SpillSequenceSpiller: unhandled BoundExpression kind '{expression.Kind}'.");
+                    return null; // unreachable
             }
         }
 
