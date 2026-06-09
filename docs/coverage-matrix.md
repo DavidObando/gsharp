@@ -124,6 +124,7 @@ MakeChannelExpression
 MapCreationExpression
 MapEntry
 MapKeyword
+MemberFieldAssignmentExpression
 MemberIndexAssignmentExpression
 MinusEqualsToken
 MinusMinusToken

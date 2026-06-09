@@ -3495,6 +3495,19 @@ public class Parser
             return new MemberIndexAssignmentExpressionSyntax(syntaxTree, indexedLhs, equalsToken, value);
         }
 
+        // Issue #648: chained member-access assignment whose target is an
+        // arbitrary expression (e.g. `a.B.C = v`, `GetObj().Field = v`). The
+        // bare-identifier form `id.field = v` is handled above as
+        // FieldAssignmentExpressionSyntax; this branch handles any deeper chain
+        // where the last segment is a plain member name (NameExpressionSyntax).
+        if (Current.Kind == SyntaxKind.EqualsToken
+            && TryLiftTrailingMemberAccess(expression, out var memberReceiver, out var memberDot, out var memberField))
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new MemberFieldAssignmentExpressionSyntax(syntaxTree, memberReceiver, memberDot, memberField, equalsToken, value);
+        }
+
         // Issue #507 follow-up: compound indexer assignment
         // (`d[k] += v`, `obj.Map[k] -= 1`, ...). Mirrors the bare `=` lift above
         // but routes through CompoundIndexAssignmentExpressionSyntax so the
@@ -3787,6 +3800,52 @@ public class Parser
         }
 
         canonical = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #648: decomposes an <see cref="AccessorExpressionSyntax"/> whose
+    /// trailing segment is a plain <see cref="NameExpressionSyntax"/> into the
+    /// receiver chain, the dot token, and the terminal field identifier. Used to
+    /// parse chained member-access assignment (<c>a.B.C = v</c>).
+    /// </summary>
+    /// <remarks>
+    /// The accessor tree right-nests: <c>a.B.C</c> parses as
+    /// <c>Accessor(a, ., Accessor(B, ., C))</c>. This method recursively peels
+    /// the last <see cref="NameExpressionSyntax"/> off the deepest right-hand
+    /// side and rebuilds the remaining chain as the receiver.
+    /// </remarks>
+    private bool TryLiftTrailingMemberAccess(
+        ExpressionSyntax expression,
+        out ExpressionSyntax receiver,
+        out SyntaxToken dotToken,
+        out SyntaxToken fieldIdentifier)
+    {
+        if (expression is AccessorExpressionSyntax accessor)
+        {
+            if (accessor.RightPart is NameExpressionSyntax name)
+            {
+                receiver = accessor.LeftPart;
+                dotToken = accessor.DotToken;
+                fieldIdentifier = name.IdentifierToken;
+                return true;
+            }
+
+            if (accessor.RightPart is AccessorExpressionSyntax
+                && TryLiftTrailingMemberAccess(accessor.RightPart, out var innerReceiver, out dotToken, out fieldIdentifier))
+            {
+                receiver = new AccessorExpressionSyntax(
+                    syntaxTree,
+                    accessor.LeftPart,
+                    accessor.DotToken,
+                    innerReceiver);
+                return true;
+            }
+        }
+
+        receiver = null;
+        dotToken = default;
+        fieldIdentifier = default;
         return false;
     }
 

@@ -608,6 +608,124 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #648: compound assignment fallback for chained member access on
+    /// user-defined struct/class types (e.g. <c>a.B.C += 1</c>). Synthesizes
+    /// <c>receiver.field = receiver.field op rhs</c>.
+    /// </summary>
+    private BoundExpression TryBindChainedCompoundAssignment(
+        StructSymbol structSym,
+        BoundExpression boundReceiver,
+        string memberName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        bool isAdd)
+    {
+        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        var boundRhs = BindExpression(syntax.Value);
+
+        // Walk base chain to find the field.
+        for (var c = structSym; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetField(memberName, out var field))
+            {
+                if (field.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+                }
+
+                var leftRead = new BoundFieldAccessExpression(null, boundReceiver, c, field);
+                var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, field.Type, boundRhs.Type);
+                if (op == null)
+                {
+                    Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, field.Type, boundRhs.Type);
+                    return new BoundErrorExpression(null);
+                }
+
+                var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+                var converted = conversions.BindConversion(syntax.Value.Location, binary, field.Type);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, boundReceiver, c, field, converted);
+            }
+        }
+
+        // ADR-0051: check properties.
+        if (MemberLookup.TryGetPropertyIncludingInherited(structSym, memberName, out var prop))
+        {
+            if (!prop.HasGetter || !prop.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+                return new BoundErrorExpression(null);
+            }
+
+            var leftRead = new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop);
+            var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, prop.Type, boundRhs.Type);
+            if (op == null)
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, prop.Type, boundRhs.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+            var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
+            return new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
+        }
+
+        // Inherited CLR base member fallback.
+        if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+        {
+            return TryBindChainedClrCompoundAssignment(
+                boundReceiver, inheritedBaseClr, memberName, memberNameSyntax, syntax, isAdd);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #648: compound assignment fallback for chained CLR member access
+    /// (e.g. <c>obj.Prop += 1</c> where Prop is a property/field on a CLR type).
+    /// </summary>
+    private BoundExpression TryBindChainedClrCompoundAssignment(
+        BoundExpression boundReceiver,
+        Type clrReceiverType,
+        string memberName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        bool isAdd)
+    {
+        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+
+        MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
+        {
+            instanceMember = null;
+        }
+
+        instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (instanceMember == null)
+        {
+            return null;
+        }
+
+        if (!TryGetWritableClrMember(instanceMember, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        var boundRhs = BindExpression(syntax.Value);
+        var leftRead = new BoundClrPropertyAccessExpression(null, boundReceiver, instanceMember, targetSymbol);
+        var op = BoundBinaryOperator.Bind(baseOpSyntaxKind, targetSymbol, boundRhs.Type);
+        if (op == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, targetSymbol, boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var binary = new BoundBinaryExpression(null, leftRead, op, boundRhs);
+        var converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol);
+        return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol);
+    }
+
+    /// <summary>
     /// ADR-0060 §13: binds an indirect assignment <c>*p = expr</c>. The left-hand
     /// side must be a unary dereference of a pointer expression; the result is a
     /// <see cref="BoundIndirectAssignmentExpression"/> whose value type is the
@@ -799,6 +917,124 @@ internal sealed partial class ExpressionBinder
             compoundRhsSyntax: null,
             diagnosticLocation: syntax.Target.Target.Location,
             outerSyntax: syntax);
+    }
+
+    /// <summary>
+    /// Issue #648: binds a chained member-access assignment of the form
+    /// <c>receiver.Field = value</c> where the receiver is an arbitrary
+    /// expression (e.g. <c>a.B.C = v</c>). The receiver is bound to a
+    /// <see cref="BoundExpression"/>, its result type is inspected for the
+    /// named field/property, and the appropriate assignment bound node is
+    /// produced.
+    /// </summary>
+    private BoundExpression BindMemberFieldAssignmentExpression(MemberFieldAssignmentExpressionSyntax syntax)
+    {
+        var receiver = BindExpression(syntax.Receiver);
+        if (receiver is BoundErrorExpression)
+        {
+            return receiver;
+        }
+
+        var value = BindExpression(syntax.Value);
+        var fieldName = syntax.FieldIdentifier.Text;
+        var receiverType = receiver.Type;
+
+        // User-defined struct/class receiver → field or property write.
+        if (receiverType is StructSymbol structSym)
+        {
+            // Walk base chain to find the field.
+            for (var c = structSym; c != null; c = c.BaseClass)
+            {
+                if (c.TryGetField(fieldName, out var field))
+                {
+                    if (field.IsReadOnly)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    }
+
+                    reportObsoleteUseIfApplicable(
+                        syntax.FieldIdentifier.Location,
+                        field,
+                        $"{c.Name}.{field.Name}");
+
+                    var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
+                    return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, c, field, converted);
+                }
+            }
+
+            // ADR-0051: check properties before reporting "unable to find member".
+            if (MemberLookup.TryGetPropertyIncludingInherited(structSym, fieldName, out var prop))
+            {
+                if (!prop.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
+            }
+
+            // Inherited CLR base member fallback.
+            if (structSym.ImportedBaseType?.ClrType is System.Type inheritedBaseClr)
+            {
+                MemberInfo clrMember = ClrTypeUtilities.SafeGetProperty(inheritedBaseClr, fieldName, BindingFlags.Public | BindingFlags.Instance);
+                if (clrMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
+                {
+                    clrMember = null;
+                }
+
+                clrMember ??= ClrTypeUtilities.SafeGetField(inheritedBaseClr, fieldName, BindingFlags.Public | BindingFlags.Instance);
+                if (clrMember != null)
+                {
+                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    _ = inhWritable;
+                    _ = inhTargetType;
+                    var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
+                    return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol);
+                }
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        // CLR receiver → property/field write via reflection.
+        if (receiverType is not NullableTypeSymbol && receiverType?.ClrType != null)
+        {
+            var clrReceiverType = receiverType.ClrType;
+            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
+            {
+                instanceMember = null;
+            }
+
+            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            if (instanceMember == null)
+            {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+                return new BoundErrorExpression(null);
+            }
+
+            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instTargetSymbol, out var instWritable))
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                return new BoundErrorExpression(null);
+            }
+
+            _ = instWritable;
+            _ = instTargetType;
+            var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol);
+        }
+
+        Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+        return new BoundErrorExpression(null);
     }
 
     private BoundExpression BindCompoundIndexAssignmentExpression(CompoundIndexAssignmentExpressionSyntax syntax)

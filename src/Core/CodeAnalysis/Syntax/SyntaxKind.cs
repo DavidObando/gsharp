@@ -155,6 +155,7 @@ public enum SyntaxKind
     IndexAssignmentExpression,
     MemberIndexAssignmentExpression,
     CompoundIndexAssignmentExpression,
+    MemberFieldAssignmentExpression,
     PackageDeclaration,
     ImportDeclaration,
     FunctionDeclaration,
