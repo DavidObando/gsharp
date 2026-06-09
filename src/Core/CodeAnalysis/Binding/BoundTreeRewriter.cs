@@ -1602,6 +1602,17 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
     {
         var value = RewriteExpression(node.Value);
+        if (node.ReceiverExpression != null)
+        {
+            var receiverExpr = RewriteExpression(node.ReceiverExpression);
+            if (ReferenceEquals(value, node.Value) && ReferenceEquals(receiverExpr, node.ReceiverExpression))
+            {
+                return node;
+            }
+
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+        }
+
         return value == node.Value ? node : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
     }
 

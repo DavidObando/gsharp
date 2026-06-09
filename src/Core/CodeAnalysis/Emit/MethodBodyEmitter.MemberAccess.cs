@@ -466,7 +466,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         // ADR-0053: static field assignment — no receiver, use stsfld/ldsfld.
-        if (fas.Receiver == null)
+        if (fas.Receiver == null && fas.ReceiverExpression == null)
         {
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Stsfld);
@@ -474,6 +474,24 @@ internal sealed partial class MethodBodyEmitter
 
             // Leave the assigned value on the stack as the expression result.
             this.il.OpCode(ILOpCode.Ldsfld);
+            this.il.Token(fieldHandle);
+            return;
+        }
+
+        // Issue #567: expression-based receiver (closure boxing lowered
+        // `variable.Field = value` to `boxLocal.Value.Field = value`).
+        // The receiver is an arbitrary BoundExpression that produces the
+        // instance reference on the stack.
+        if (fas.ReceiverExpression != null)
+        {
+            this.EmitExpression(fas.ReceiverExpression);
+            this.EmitExpression(fas.Value);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(fieldHandle);
+
+            // Leave the assigned value on the stack as the expression result.
+            this.EmitExpression(fas.ReceiverExpression);
+            this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             return;
         }

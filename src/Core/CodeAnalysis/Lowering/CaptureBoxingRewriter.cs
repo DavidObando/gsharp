@@ -58,6 +58,18 @@ internal static class CaptureBoxingRewriter
     /// outer scope. Returns the original instance unchanged when no
     /// function body required boxing.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Invariant (issue #567):</b> every lambda whose body is rewritten
+    /// inside an outer function's tree must also have its
+    /// <c>program.Functions[lambdaSymbol]</c> entry updated. The emitter
+    /// looks lambdas up by <see cref="FunctionSymbol"/> key; if the entry
+    /// still points to the original un-rewritten body, the emitter trips on
+    /// unresolved variable references. The propagation pass after the main
+    /// foreach loop closes this gap by overwriting stale entries with the
+    /// rewritten lambda bodies collected during the outer function's rewrite.
+    /// </para>
+    /// </remarks>
     /// <param name="program">The bound program to lower.</param>
     /// <returns>The lowered program (or the original when nothing changed).</returns>
     public static BoundProgram Lower(BoundProgram program)
@@ -66,13 +78,34 @@ internal static class CaptureBoxingRewriter
         var newStructs = new List<StructSymbol>();
         var newFunctions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var changed = false;
+        var allLambdaUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
         foreach (var pair in program.Functions)
         {
-            var newBody = RewriteFunctionBody(pair.Key, pair.Value, program, newStructs, ref counter);
+            var (newBody, lambdaUpdates) = RewriteFunctionBody(pair.Key, pair.Value, program, newStructs, ref counter);
             newFunctions[pair.Key] = newBody;
             if (!ReferenceEquals(newBody, pair.Value))
             {
+                changed = true;
+            }
+
+            foreach (var kv in lambdaUpdates)
+            {
+                allLambdaUpdates[kv.Key] = kv.Value;
+            }
+        }
+
+        // Propagate rewritten lambda bodies to the per-symbol Functions map.
+        // When the outer function's body is rewritten, nested lambdas inside
+        // its tree are rewritten inline (through BoxingRewriter), but
+        // program.Functions[lambdaSymbol] still points to the original
+        // un-rewritten body. The emitter looks lambdas up by FunctionSymbol
+        // key, so we must overwrite those entries here. This closes #567.
+        foreach (var (lambdaSymbol, rewrittenBody) in allLambdaUpdates)
+        {
+            if (newFunctions.ContainsKey(lambdaSymbol))
+            {
+                newFunctions[lambdaSymbol] = rewrittenBody;
                 changed = true;
             }
         }
@@ -103,13 +136,16 @@ internal static class CaptureBoxingRewriter
         return result;
     }
 
-    private static BoundBlockStatement RewriteFunctionBody(
+    private static (BoundBlockStatement Body, Dictionary<FunctionSymbol, BoundBlockStatement> LambdaUpdates)
+        RewriteFunctionBody(
         FunctionSymbol function,
         BoundBlockStatement body,
         BoundProgram program,
         List<StructSymbol> newStructs,
         ref int counter)
     {
+        var emptyUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+
         // Step 1: collect every captured variable touched by any function
         // literal in this body (transitively). This is the union over all
         // BoundFunctionLiteralExpression.CapturedVariables reachable from
@@ -120,7 +156,7 @@ internal static class CaptureBoxingRewriter
 
         if (capturedSet.Count == 0)
         {
-            return body;
+            return (body, emptyUpdates);
         }
 
         // Step 2: classify each captured variable.
@@ -170,7 +206,7 @@ internal static class CaptureBoxingRewriter
 
         if (boxInfo.Count == 0 && dropFromCapture.Count == 0)
         {
-            return body;
+            return (body, emptyUpdates);
         }
 
         // Step 3: rewrite the body — locals, reads, writes, and lambdas.
@@ -217,7 +253,7 @@ internal static class CaptureBoxingRewriter
             rewritten = new BoundBlockStatement(null, prologue.ToImmutable());
         }
 
-        return rewritten;
+        return (rewritten, rewriter.RewrittenLambdaBodies);
     }
 
     private static bool IsBoxable(VariableSymbol variable, FunctionSymbol function)
@@ -345,6 +381,15 @@ internal static class CaptureBoxingRewriter
             this.dropFromCapture = dropFromCapture;
         }
 
+        /// <summary>
+        /// Gets the lambda bodies rewritten during this pass. When the outer function's
+        /// body is rewritten, any nested <see cref="BoundFunctionLiteralExpression"/>
+        /// whose body changes is recorded here so <see cref="Lower"/> can propagate
+        /// the rewritten body back to <c>program.Functions[lambdaSymbol]</c>.
+        /// </summary>
+        public Dictionary<FunctionSymbol, BoundBlockStatement> RewrittenLambdaBodies { get; }
+            = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+
         /// <inheritdoc/>
         protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
         {
@@ -375,6 +420,33 @@ internal static class CaptureBoxingRewriter
             }
 
             return base.RewriteAssignmentExpression(node);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            // Issue #567: when the receiver of a field assignment is a boxed
+            // variable, the original receiver no longer has an IL slot. Rewrite
+            // to use an expression-based receiver: `boxLocal.Value` produces
+            // the reference to the original object, then the outer field
+            // assignment targets the object's field through that expression.
+            if (node.Receiver != null && this.boxInfo.TryGetValue(node.Receiver, out var bi))
+            {
+                var receiverExpr = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, bi.BoxLocal),
+                    bi.BoxClass,
+                    bi.BoxField);
+                var value = this.RewriteExpression(node.Value);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(
+                    null,
+                    receiverExpr,
+                    node.StructType,
+                    node.Field,
+                    value);
+            }
+
+            return base.RewriteFieldAssignmentExpression(node);
         }
 
         /// <inheritdoc/>
@@ -447,6 +519,13 @@ internal static class CaptureBoxingRewriter
             if (ReferenceEquals(newBody, node.Body) && !anyCaptureChange)
             {
                 return node;
+            }
+
+            // Track the rewritten body so Lower can propagate it to
+            // program.Functions[lambdaSymbol], closing #567.
+            if (!ReferenceEquals(newBody, node.Body))
+            {
+                this.RewrittenLambdaBodies[node.Function] = newBody;
             }
 
             return new BoundFunctionLiteralExpression(
