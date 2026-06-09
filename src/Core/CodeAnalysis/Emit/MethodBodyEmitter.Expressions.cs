@@ -218,7 +218,7 @@ internal sealed partial class MethodBodyEmitter
                     }
 
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
-                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols);
+                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, receiverType);
 
                     this.il.OpCode(useCall ? ILOpCode.Call : ILOpCode.Callvirt);
                     this.il.Token(instCallHandle);

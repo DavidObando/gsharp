@@ -21,12 +21,14 @@ public sealed class BoundStateMachineAwaitOnCompleted : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="awaiterLocal">The local variable holding the awaiter.</param>
     /// <param name="awaiterClrType">The CLR type of the awaiter.</param>
+    /// <param name="awaiterTypeSymbol">The symbolic type of the awaiter.</param>
     /// <param name="useCritical">Whether to use <c>AwaitUnsafeOnCompleted</c> (true) or <c>AwaitOnCompleted</c> (false).</param>
-    public BoundStateMachineAwaitOnCompleted(SyntaxNode syntax, VariableSymbol awaiterLocal, Type awaiterClrType, bool useCritical)
+    public BoundStateMachineAwaitOnCompleted(SyntaxNode syntax, VariableSymbol awaiterLocal, Type awaiterClrType, TypeSymbol awaiterTypeSymbol, bool useCritical)
         : base(syntax)
     {
         AwaiterLocal = awaiterLocal ?? throw new ArgumentNullException(nameof(awaiterLocal));
         AwaiterClrType = awaiterClrType ?? throw new ArgumentNullException(nameof(awaiterClrType));
+        AwaiterTypeSymbol = awaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType);
         UseCritical = useCritical;
     }
 
@@ -41,6 +43,9 @@ public sealed class BoundStateMachineAwaitOnCompleted : BoundExpression
 
     /// <summary>Gets the CLR type of the awaiter.</summary>
     public Type AwaiterClrType { get; }
+
+    /// <summary>Gets the symbolic type of the awaiter.</summary>
+    public TypeSymbol AwaiterTypeSymbol { get; }
 
     /// <summary>Gets a value indicating whether to use <c>AwaitUnsafeOnCompleted</c>.</summary>
     public bool UseCritical { get; }

@@ -465,6 +465,49 @@ public class AsyncInstanceMethodEmitTests
         Assert.Equal(13, (int)resultField!.GetValue(null)!);
     }
 
+    [Fact]
+    public void Async_Instance_Method_Returning_User_Class_Is_Awaitable()
+    {
+        var source = """
+            package P
+
+            import System
+            import System.Threading.Tasks
+
+            type AsyncPC class(Value int32) {}
+
+            type Probe class {
+                async func MakePC() AsyncPC {
+                    await Task.Delay(1)
+                    return AsyncPC(7)
+                }
+
+                async func Pc_Roundtrip() {
+                    let r = await this.MakePC()
+                    Console.WriteLine(r.Value)
+                }
+            }
+
+            let p = Probe()
+            p.Pc_Roundtrip().Wait()
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var probe = assembly.GetTypes().Single(t => t.Name == "Probe");
+        var asyncPc = assembly.GetTypes().Single(t => t.Name == "AsyncPC");
+        var makePc = probe.GetMethod("MakePC", BindingFlags.Public | BindingFlags.Instance);
+        var roundtrip = probe.GetMethod("Pc_Roundtrip", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(makePc);
+        Assert.NotNull(roundtrip);
+        Assert.Equal(typeof(Task<>).MakeGenericType(asyncPc), makePc!.ReturnType);
+        Assert.Equal(typeof(Task), roundtrip!.ReturnType);
+
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+
+        InvokeWithHangGuard(entry!);
+    }
+
     // Issue #502 hang-guard: invoke the compiled entry on a worker thread
     // with a hard timeout. A hang in async lowering would otherwise deadlock
     // the test host until xunit's per-collection timeout (or worse, never).

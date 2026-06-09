@@ -126,8 +126,10 @@ internal sealed class StateMachineEmitter
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
     private readonly Func<MethodInfo, EntityHandle> getMethodEntityHandle;
+    private readonly Func<MethodInfo, TypeSymbol, EntityHandle> getMethodEntityHandleForContainingType;
     private readonly Func<MethodInfo, MemberReferenceHandle> getMethodReference;
     private readonly Func<ParameterHandle> nextParameterHandle;
+    private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Action<SignatureTypeEncoder, Type> encodeClrType;
 
     // PR-E-8-style callback: drives the still-private BodyEmitter nested class
@@ -144,8 +146,10 @@ internal sealed class StateMachineEmitter
         Func<Type, TypeReferenceHandle> getTypeReference,
         Func<Type, EntityHandle> getTypeHandleForMember,
         Func<MethodInfo, EntityHandle> getMethodEntityHandle,
+        Func<MethodInfo, TypeSymbol, EntityHandle> getMethodEntityHandleForContainingType,
         Func<MethodInfo, MemberReferenceHandle> getMethodReference,
         Func<ParameterHandle> nextParameterHandle,
+        Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Action<SignatureTypeEncoder, Type> encodeClrType,
         Func<AsyncStateMachinePlan, MoveNextBodyResult> buildMoveNextBodyBytes)
     {
@@ -157,8 +161,10 @@ internal sealed class StateMachineEmitter
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
         this.getMethodEntityHandle = getMethodEntityHandle ?? throw new ArgumentNullException(nameof(getMethodEntityHandle));
+        this.getMethodEntityHandleForContainingType = getMethodEntityHandleForContainingType ?? throw new ArgumentNullException(nameof(getMethodEntityHandleForContainingType));
         this.getMethodReference = getMethodReference ?? throw new ArgumentNullException(nameof(getMethodReference));
         this.nextParameterHandle = nextParameterHandle ?? throw new ArgumentNullException(nameof(nextParameterHandle));
+        this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.encodeClrType = encodeClrType ?? throw new ArgumentNullException(nameof(encodeClrType));
         this.buildMoveNextBodyBytes = buildMoveNextBodyBytes ?? throw new ArgumentNullException(nameof(buildMoveNextBodyBytes));
     }
@@ -1077,7 +1083,7 @@ internal sealed class StateMachineEmitter
 
         // sm.<>t__builder = AsyncTaskMethodBuilder[<T>].Create()
         il.LoadLocalAddress(0);
-        var createRef = this.getMethodEntityHandle(builderInfo.CreateMethod);
+        var createRef = this.getMethodEntityHandleForContainingType(builderInfo.CreateMethod, plan.FieldMap.BuilderField.Type);
         il.OpCode(ILOpCode.Call);
         il.Token(createRef);
         il.OpCode(ILOpCode.Stfld);
@@ -1124,7 +1130,7 @@ internal sealed class StateMachineEmitter
 
         // Start is generic: Start<TStateMachine>(ref TStateMachine).
         // We need a MethodSpec for Start<SM>.
-        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, smStruct);
+        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, smStruct, plan.FieldMap.BuilderField.Type);
         il.OpCode(ILOpCode.Call);
         il.Token(startMethodSpec);
 
@@ -1136,7 +1142,7 @@ internal sealed class StateMachineEmitter
             il.OpCode(ILOpCode.Ldflda);
             il.Token(builderFieldHandle);
             var getTaskMethod = builderInfo.TaskProperty.GetGetMethod();
-            var getTaskRef = this.getMethodEntityHandle(getTaskMethod);
+            var getTaskRef = this.getMethodEntityHandleForContainingType(getTaskMethod, plan.FieldMap.BuilderField.Type);
             il.OpCode(ILOpCode.Call);
             il.Token(getTaskRef);
         }
@@ -1159,14 +1165,16 @@ internal sealed class StateMachineEmitter
     /// Gets a MethodSpec for <c>builder.Start&lt;SM&gt;(ref SM)</c> where SM
     /// is the state-machine struct TypeDef.
     /// </summary>
-    private EntityHandle GetStateMachineStartMethodSpec(MethodInfo startOpenMethod, StructSymbol smStruct)
+    private EntityHandle GetStateMachineStartMethodSpec(MethodInfo startOpenMethod, StructSymbol smStruct, TypeSymbol builderFieldType)
     {
         // Start is an open generic instance method on the builder struct.
         // We need: MemberRef for Start<T>(ref T) on the builder type,
         // then a MethodSpec instantiating it with the SM TypeDef.
-        var openRef = this.getMethodReference(startOpenMethod.IsGenericMethod
-            ? startOpenMethod.GetGenericMethodDefinition()
-            : startOpenMethod);
+        var openRef = this.getMethodEntityHandleForContainingType(
+            startOpenMethod.IsGenericMethod
+                ? startOpenMethod.GetGenericMethodDefinition()
+                : startOpenMethod,
+            builderFieldType);
 
         // Build MethodSpec signature: instantiation with SM struct type.
         var smTypeDef = this.cache.StructTypeDefs[smStruct];
@@ -1260,16 +1268,25 @@ internal sealed class StateMachineEmitter
             ? builderInfo.AwaitUnsafeOnCompletedMethod
             : builderInfo.AwaitOnCompletedMethod;
 
-        var openRef = this.getMethodReference(openMethod.IsGenericMethod
-            ? openMethod.GetGenericMethodDefinition()
-            : openMethod);
+        var openRef = this.getMethodEntityHandleForContainingType(
+            openMethod.IsGenericMethod
+                ? openMethod.GetGenericMethodDefinition()
+                : openMethod,
+            builderField.Type);
 
         var smTypeDef = this.cache.StructTypeDefs[smStruct];
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(2);
 
         // First type arg: TAwaiter
-        this.encodeClrType(argsEncoder.AddArgument(), node.AwaiterClrType);
+        if (node.AwaiterTypeSymbol != null)
+        {
+            this.encodeTypeSymbol(argsEncoder.AddArgument(), node.AwaiterTypeSymbol);
+        }
+        else
+        {
+            this.encodeClrType(argsEncoder.AddArgument(), node.AwaiterClrType);
+        }
 
         // Second type arg: TStateMachine (the SM TypeDef)
         argsEncoder.AddArgument().Type(smTypeDef, isValueType: smIsValueType);
@@ -1277,6 +1294,136 @@ internal sealed class StateMachineEmitter
         var methodSpec = this.emitCtx.Metadata.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         il.OpCode(ILOpCode.Call);
         il.Token(methodSpec);
+    }
+
+    public bool TryGetAsyncBuilderMethodHandle(AsyncStateMachinePlan plan, MethodInfo method, out EntityHandle handle)
+    {
+        handle = default;
+        if (plan?.StateMachine == null)
+        {
+            return false;
+        }
+
+        if (!TryCreateAsyncBuilderMemberReference(plan.StateMachine, method, out var memberRef))
+        {
+            return false;
+        }
+
+        handle = memberRef;
+        return true;
+    }
+
+    public EntityHandle GetAsyncBuilderMethodHandle(AsyncStateMachinePlan plan, MethodInfo method)
+    {
+        return TryGetAsyncBuilderMethodHandle(plan, method, out var handle)
+            ? handle
+            : this.getMethodEntityHandle(method);
+    }
+
+    private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
+        => type is StructSymbol or InterfaceSymbol or EnumSymbol;
+
+    private bool TryCreateAsyncBuilderMemberReference(
+        SynthesizedStateMachineType stateMachine,
+        MethodInfo method,
+        out MemberReferenceHandle handle)
+    {
+        handle = default;
+        if (stateMachine?.ResultTypeSymbol == null
+            || !IsAsyncUserDefinedResultType(stateMachine.ResultTypeSymbol)
+            || method == null
+            || method.IsGenericMethod
+            || method.DeclaringType is not Type declaringType
+            || !declaringType.IsConstructedGenericType)
+        {
+            return false;
+        }
+
+        var openDeclaring = declaringType.GetGenericTypeDefinition();
+        var parent = this.CreateConstructedTypeSpecification(
+            openDeclaring,
+            ImmutableArray.Create(stateMachine.ResultTypeSymbol));
+        var openMethod = GetOpenMethodOnOpenDeclaringType(method);
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !method.IsStatic)
+            .Parameters(
+                openMethod.GetParameters().Length,
+                returnType: r => EncodeMethodReturnType(r, openMethod.ReturnType),
+                parameters: ps =>
+                {
+                    foreach (var parameter in openMethod.GetParameters())
+                    {
+                        var parameterType = parameter.ParameterType;
+                        if (parameterType.IsByRef)
+                        {
+                            this.encodeClrType(ps.AddParameter().Type(isByRef: true), parameterType.GetElementType()!);
+                        }
+                        else
+                        {
+                            this.encodeClrType(ps.AddParameter().Type(), parameterType);
+                        }
+                    }
+                });
+
+        handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return true;
+    }
+
+    private EntityHandle CreateConstructedTypeSpecification(Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var genericInst = encoder.GenericInstantiation(
+            this.getTypeReference(openDefinition),
+            typeArguments.Length,
+            isValueType: openDefinition.IsValueType);
+        foreach (var typeArgument in typeArguments)
+        {
+            this.encodeTypeSymbol(genericInst.AddArgument(), typeArgument);
+        }
+
+        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    private void EncodeMethodReturnType(ReturnTypeEncoder encoder, Type returnType)
+    {
+        if (returnType?.FullName == "System.Void")
+        {
+            encoder.Void();
+            return;
+        }
+
+        if (returnType?.IsByRef == true)
+        {
+            this.encodeClrType(encoder.Type(isByRef: true), returnType.GetElementType()!);
+            return;
+        }
+
+        this.encodeClrType(encoder.Type(), returnType);
+    }
+
+    private static MethodInfo GetOpenMethodOnOpenDeclaringType(MethodInfo method)
+    {
+        var declaring = method.DeclaringType;
+        if (declaring is null || !declaring.IsConstructedGenericType)
+        {
+            return method;
+        }
+
+        var open = declaring.GetGenericTypeDefinition();
+        foreach (var candidate in open.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            {
+                return candidate;
+            }
+        }
+
+        return method;
     }
 
     #endregion

@@ -567,8 +567,10 @@ internal sealed class ReflectionMetadataEmitter
             this.GetTypeReference,
             this.GetTypeHandleForMember,
             this.GetMethodEntityHandle,
+            this.GetMethodEntityHandle,
             this.GetMethodReference,
             this.customAttrEncoder.NextParameterHandle,
+            this.EncodeTypeSymbol,
             this.EncodeClrType,
             this.BuildMoveNextBodyBytes);
 
@@ -2314,9 +2316,16 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (builderInfo.TaskProperty != null)
         {
-            // The Task property's return type IS the kickoff return type.
-            var taskClrType = builderInfo.TaskProperty.PropertyType;
-            this.EncodeClrType(encoder.Type(), taskClrType);
+            if (TryCreateSymbolicAsyncTaskType(plan.StateMachine, out var symbolicTaskType))
+            {
+                this.EncodeTypeSymbol(encoder.Type(), symbolicTaskType);
+            }
+            else
+            {
+                // The Task property's return type IS the kickoff return type.
+                var taskClrType = builderInfo.TaskProperty.PropertyType;
+                this.EncodeClrType(encoder.Type(), taskClrType);
+            }
         }
         else
         {
@@ -3304,6 +3313,16 @@ internal sealed class ReflectionMetadataEmitter
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        if (element is ImportedTypeSymbol symbolicImported
+            && !symbolicImported.TypeArguments.IsDefaultOrEmpty
+            && !symbolicImported.HasTypeParameterArgument
+            && symbolicImported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+        {
+            var sigBlob = new BlobBuilder();
+            this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), symbolicImported);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element.ClrType != null)
         {
             if (element.ClrType.IsConstructedGenericType)
@@ -3629,7 +3648,12 @@ internal sealed class ReflectionMetadataEmitter
     // constructed generic methods in a MethodSpecification per ECMA-335 II.23.2.15.
     internal EntityHandle GetMethodEntityHandle(MethodInfo method)
     {
-        return this.GetMethodEntityHandle(method, default);
+        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>));
+    }
+
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, TypeSymbol containingTypeSymbol)
+    {
+        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>), containingTypeSymbol);
     }
 
     // Issue #320: callable EntityHandle for a constructed generic method whose
@@ -3641,6 +3665,38 @@ internal sealed class ReflectionMetadataEmitter
     // encoded, preserving the BCL-only behavior.
     internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols)
     {
+        return this.GetMethodEntityHandle(method, typeArgSymbols, null);
+    }
+
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols, TypeSymbol containingTypeSymbol)
+    {
+        if (TryCreateMemberReferenceForConstructedSymbolicContainer(method, containingTypeSymbol, out var symbolicRef))
+        {
+            if (!method.IsGenericMethod || method.IsGenericMethodDefinition)
+            {
+                return symbolicRef;
+            }
+
+            var symbolicClosedArgs = method.GetGenericArguments();
+            var symbolicSigBlob = new BlobBuilder();
+            var symbolicArgsEncoder = new BlobEncoder(symbolicSigBlob).MethodSpecificationSignature(symbolicClosedArgs.Length);
+            for (var i = 0; i < symbolicClosedArgs.Length; i++)
+            {
+                if (!typeArgSymbols.IsDefaultOrEmpty
+                    && i < typeArgSymbols.Length
+                    && typeArgSymbols[i] is StructSymbol or InterfaceSymbol or EnumSymbol)
+                {
+                    this.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), typeArgSymbols[i]);
+                }
+                else
+                {
+                    this.EncodeClrType(symbolicArgsEncoder.AddArgument(), symbolicClosedArgs[i]);
+                }
+            }
+
+            return this.emitCtx.Metadata.AddMethodSpecification(symbolicRef, this.emitCtx.Metadata.GetOrAddBlob(symbolicSigBlob));
+        }
+
         if (!method.IsGenericMethod || method.IsGenericMethodDefinition)
         {
             return this.GetMethodReference(method);
@@ -3703,6 +3759,89 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return spec;
+    }
+
+    private bool TryCreateMemberReferenceForConstructedSymbolicContainer(
+        MethodInfo method,
+        TypeSymbol containingTypeSymbol,
+        out MemberReferenceHandle handle)
+    {
+        handle = default;
+        if (method == null
+            || containingTypeSymbol is not ImportedTypeSymbol imported
+            || imported.OpenDefinition == null
+            || imported.TypeArguments.IsDefaultOrEmpty
+            || imported.HasTypeParameterArgument
+            || !imported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+        {
+            return false;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), imported);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+        var openMethod = ResolveMethodOnOpenDefinition(imported.OpenDefinition, method);
+        var openForMethodGenerics = openMethod.IsGenericMethod
+            ? openMethod.GetGenericMethodDefinition()
+            : openMethod;
+
+        var sigBlob = new BlobBuilder();
+        var sigEncoder = new BlobEncoder(sigBlob).MethodSignature(
+            isInstanceMethod: !method.IsStatic,
+            genericParameterCount: openForMethodGenerics.IsGenericMethodDefinition ? openForMethodGenerics.GetGenericArguments().Length : 0);
+        sigEncoder.Parameters(
+            openForMethodGenerics.GetParameters().Length,
+            returnType: r => this.EncodeReturnClr(r, openForMethodGenerics.ReturnParameter, openForMethodGenerics.ReturnType),
+            parameters: ps =>
+            {
+                foreach (var p in openForMethodGenerics.GetParameters())
+                {
+                    var paramType = p.ParameterType;
+                    if (paramType.IsByRef)
+                    {
+                        this.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
+                    }
+                    else
+                    {
+                        this.EncodeClrType(ps.AddParameter().Type(), paramType);
+                    }
+                }
+            });
+
+        handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(method.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return true;
+    }
+
+    private static MethodInfo ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)
+    {
+        if (openDefinition == null)
+        {
+            return method;
+        }
+
+        if (method.DeclaringType == openDefinition)
+        {
+            return method;
+        }
+
+        foreach (var candidate in openDefinition.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+            {
+                return candidate;
+            }
+        }
+
+        var fallback = openDefinition.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(candidate =>
+                candidate.Name == method.Name
+                && candidate.IsStatic == method.IsStatic
+                && candidate.IsGenericMethod == method.IsGenericMethod
+                && candidate.GetParameters().Length == method.GetParameters().Length);
+        return fallback ?? method;
     }
 
     /// <summary>
@@ -3890,6 +4029,21 @@ internal sealed class ReflectionMetadataEmitter
             // a follow-up will add GenericParam rows and MVAR/VAR encoding.
             encoder.Object();
         }
+        else if (type is ImportedTypeSymbol symbolicImported
+            && !symbolicImported.TypeArguments.IsDefaultOrEmpty
+            && !symbolicImported.HasTypeParameterArgument
+            && symbolicImported.OpenDefinition != null
+            && symbolicImported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+        {
+            var genericInst = encoder.GenericInstantiation(
+                this.GetTypeReference(symbolicImported.OpenDefinition),
+                symbolicImported.TypeArguments.Length,
+                isValueType: symbolicImported.OpenDefinition.IsValueType);
+            foreach (var arg in symbolicImported.TypeArguments)
+            {
+                this.EncodeTypeSymbol(genericInst.AddArgument(), arg);
+            }
+        }
         else if (type is ImportedTypeSymbol erasedGeneric && erasedGeneric.HasTypeParameterArgument)
         {
             // #313: a generic type constructed over an in-scope type parameter
@@ -3978,6 +4132,27 @@ internal sealed class ReflectionMetadataEmitter
         {
             throw new NotSupportedException($"Cannot encode signature for type '{type?.Name}' yet.");
         }
+    }
+
+    private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
+        => type is StructSymbol or InterfaceSymbol or EnumSymbol;
+
+    private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, out TypeSymbol taskType)
+    {
+        taskType = null;
+        if (stateMachine?.ResultTypeSymbol == null
+            || !IsAsyncUserDefinedResultType(stateMachine.ResultTypeSymbol)
+            || stateMachine.BuilderInfo?.TaskProperty?.PropertyType is not Type taskClrType
+            || !taskClrType.IsConstructedGenericType)
+        {
+            return false;
+        }
+
+        taskType = ImportedTypeSymbol.GetConstructed(
+            taskClrType,
+            taskClrType.GetGenericTypeDefinition(),
+            ImmutableArray.Create(stateMachine.ResultTypeSymbol));
+        return true;
     }
 
     private void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type)

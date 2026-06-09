@@ -447,6 +447,15 @@ internal sealed partial class ExpressionBinder
     private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
     {
         element = null;
+        if (type is ImportedTypeSymbol importedTask
+            && !importedTask.TypeArguments.IsDefaultOrEmpty
+            && importedTask.TypeArguments.Length == 1
+            && importedTask.OpenDefinition?.FullName == "System.Threading.Tasks.Task`1")
+        {
+            element = importedTask.TypeArguments[0];
+            return true;
+        }
+
         var clr = type?.ClrType;
         if (clr == null)
         {

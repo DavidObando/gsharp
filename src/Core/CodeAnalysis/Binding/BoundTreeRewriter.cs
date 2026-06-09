@@ -603,7 +603,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAwaitExpression(null, expression, node.Type);
+        return new BoundAwaitExpression(null, expression, node.Type, node.AwaiterTypeSymbol);
     }
 
     /// <summary>Rewrites a bound switch expression.</summary>
