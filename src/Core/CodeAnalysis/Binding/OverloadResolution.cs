@@ -243,17 +243,26 @@ internal static class OverloadResolution
             }
         }
 
-        // Issue #570: cross-context interface implementation check. When
-        // `source` is an array type (e.g. the CLR backing type of a G# slice)
-        // and `target` is an interface, the same-context fast path above fails
-        // because the two types reside in different Type.Assembly instances.
-        // Use the cross-context `ImplementsInterfaceByName` walker to bridge
-        // live-runtime and MetadataLoadContext types. This enables overload
-        // resolution to find methods taking interface parameters (IEnumerable<T>,
-        // IReadOnlyList<T>, etc.) when passed a slice argument.
+        // Issue #570/#610: cross-context reference upcast fallback. When the
+        // same-context fast path above cannot fire (live-runtime ↔ MLC boundary),
+        // walk the source's interface set and base-type chain by name.
         if (target.IsInterface && ClrTypeUtilities.ImplementsInterfaceByName(source, target))
         {
             return ImplicitConversionKind.Reference;
+        }
+
+        // Cross-context base-class walk (#610): covers inheritance across
+        // reflection contexts (e.g. an MLC-loaded subclass passed to a
+        // parameter typed as its live-runtime base class or vice versa).
+        if (!source.IsValueType && !target.IsValueType && !target.IsInterface)
+        {
+            for (var baseType = source.BaseType; baseType != null; baseType = baseType.BaseType)
+            {
+                if (ClrTypeUtilities.AreSame(baseType, target))
+                {
+                    return ImplicitConversionKind.Reference;
+                }
+            }
         }
 
         var udi = UserDefinedImplicitConversionLookup;
