@@ -34,6 +34,20 @@ Ship a single coordinated change covering five concerns, in this order, in one P
 
 GSharp-side `operator` keyword (declaring `operator +` on a user type) is **explicitly out of scope** for this PR. It is tracked separately — see ADR-0026 and the Stream-D follow-up note in `docs/coverage-matrix.md`.
 
+## Centralized CLR member lookup (6.4 — closes #568, #572, #573)
+
+`MemberLookup` now exposes a family of helpers that walk a concrete CLR type *plus* its transitive implemented interfaces in a single pass: `SafeGetMethodIncludingSelfAndInterfaces`, `SafeGetMethodsIncludingSelfAndInterfaces`, and `SafeGetPropertyIncludingSelfAndInterfaces`. These are the concrete-receiver companions to the post-#529 `*IncludingInterfaces` helpers in `ClrTypeUtilities` (which only walk interfaces when the receiver type is itself an interface). Three binder call-sites that previously asked "does this type provide member M?" with independent (incomplete) walks are now routed through the centralized helpers.
+
+Additionally, `FindMatchingFieldForGetterOnlyProperty` enables a public field on a G# class to satisfy a getter-only CLR interface property contract. When a class declares `Name string` and implements an interface requiring `string Name { get; }`, the binder synthesizes a `PropertySymbol` at binding time with `BackingField` pointing to the existing field. The emit machinery handles it via the existing auto-property path — no duplicate backing field is emitted. Fields only satisfy getter-only contracts; a `{ get; set; }` interface property still requires an explicit property declaration. Example:
+
+```
+type Impl class : IHasName {
+    Name string
+}
+```
+
+where `IHasName` declares `string Name { get; }` — this now compiles and dispatches correctly through the interface.
+
 ## Consequences
 
 - Programs that previously diagnosed "operator is not defined for types" against imported types now bind cleanly — `TimeSpan + TimeSpan`, `DateTime - TimeSpan`, `Guid == Guid`, `BigInteger * BigInteger`, etc. The interpreter and the emitter both honor the resolved `op_*` method.
