@@ -1795,16 +1795,23 @@ public sealed class Evaluator
     {
         var operand = EvaluateExpression(u.Operand);
 
+        // Issue #615: unwrap enum operands to underlying before arithmetic/bitwise.
+        var rawOperand = UnwrapEnumToUnderlying(operand);
+
+        object result;
         switch (u.Op.Kind)
         {
             case BoundUnaryOperatorKind.Identity:
-                return operand;
+                result = rawOperand;
+                break;
             case BoundUnaryOperatorKind.Negation:
-                return Negate(operand);
+                result = Negate(rawOperand);
+                break;
             case BoundUnaryOperatorKind.LogicalNegation:
                 return !(bool)operand;
             case BoundUnaryOperatorKind.OnesComplement:
-                return OnesComplement(operand);
+                result = OnesComplement(rawOperand);
+                break;
             case BoundUnaryOperatorKind.NullAssertion:
                 if (operand == null)
                 {
@@ -1817,6 +1824,14 @@ public sealed class Evaluator
             default:
                 throw new EvaluatorException($"Unexpected unary operator {u.Op}", u);
         }
+
+        // Issue #615: wrap result back to enum type if the operator's result is enum.
+        if (u.Type?.ClrType != null && u.Type.ClrType.IsEnum)
+        {
+            return Enum.ToObject(u.Type.ClrType, result);
+        }
+
+        return result;
     }
 
     private static object Negate(object v) => v switch
@@ -1896,6 +1911,28 @@ public sealed class Evaluator
 
     private static object EvaluateNumericBinary(BoundBinaryExpression b, object left, object right)
     {
+        // Issue #615: enum operands arrive as boxed enum values (e.g. DayOfWeek)
+        // which do not match the primitive pattern arms in NumericAdd/Sub/etc.
+        // Unwrap to the underlying integral type before arithmetic/comparison.
+        left = UnwrapEnumToUnderlying(left);
+        right = UnwrapEnumToUnderlying(right);
+
+        // §6.1 lifted nullable: if either operand is null, arithmetic/bitwise
+        // yields null and ordering yields false.
+        if (left == null || right == null)
+        {
+            switch (b.Op.Kind)
+            {
+                case BoundBinaryOperatorKind.Less:
+                case BoundBinaryOperatorKind.LessOrEquals:
+                case BoundBinaryOperatorKind.Greater:
+                case BoundBinaryOperatorKind.GreaterOrEquals:
+                    return false;
+                default:
+                    return null;
+            }
+        }
+
         var resultType = b.Type;
         switch (b.Op.Kind)
         {
@@ -2182,6 +2219,30 @@ public sealed class Evaluator
         if (resultType == TypeSymbol.Char)
         {
             return unchecked((char)Convert.ToInt32(value));
+        }
+
+        // Issue #615: when the result type is an enum, produce a properly-typed
+        // boxed enum value via Enum.ToObject. The arithmetic helpers return a
+        // raw underlying integer; this converts it back to the declared enum type.
+        if (resultType?.ClrType != null && resultType.ClrType.IsEnum)
+        {
+            return Enum.ToObject(resultType.ClrType, value);
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// Issue #615: converts a boxed CLR enum value to its underlying primitive
+    /// (e.g. DayOfWeek.Monday → int 1) so that the pattern-matching arms in
+    /// NumericAdd/Sub/Compare/OnesComplement etc. can match the value. Non-enum
+    /// values pass through unchanged.
+    /// </summary>
+    private static object UnwrapEnumToUnderlying(object value)
+    {
+        if (value != null && value.GetType().IsEnum)
+        {
+            return Convert.ChangeType(value, Enum.GetUnderlyingType(value.GetType()));
         }
 
         return value;
