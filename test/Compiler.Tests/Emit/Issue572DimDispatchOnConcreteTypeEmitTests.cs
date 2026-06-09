@@ -14,14 +14,56 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #572: calling a default interface method (DIM) on a concrete CLR
 /// class that does not override the DIM was rejected with GS0159 because
-/// <c>ExpressionBinder.TryBindInheritedClrInstanceCall</c> used
-/// <c>Type.GetMethods()</c> which does not surface DIMs from interfaces.
-/// The fix routes through <c>MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces</c>.
+/// <c>ClrTypeUtilities.SafeGetMethodsIncludingInterfaces</c> only walked
+/// interfaces when the receiver was itself an interface type. The fix
+/// removes the <c>!type.IsInterface</c> guard so interface methods (DIMs)
+/// are surfaced on concrete class receivers as well.
 /// </summary>
 public class Issue572DimDispatchOnConcreteTypeEmitTests
 {
+    // ---------------------------------------------------------------
+    // Core DIM resolution on concrete type
+    // ---------------------------------------------------------------
+
     [Fact]
-    public void DimDispatch_ConcreteType_ReturnsExpectedValue()
+    public void DimDispatch_ConcreteType_NoArgMethod()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IWithDIM
+                {
+                    string Name { get; }
+                    string Greeting() => "Hello, " + Name + "!";
+                }
+
+                public class WithDIMImpl : IWithDIM
+                {
+                    public string Name { get; }
+                    public WithDIMImpl(string name) { Name = name; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var obj = WithDIMImpl("world")
+            Console.WriteLine(obj.Greeting())
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("Hello, world!\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // Regression: through-interface still works
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_ThroughInterface_StillWorks()
     {
         var sibling = """
             namespace ProbeRef
@@ -53,6 +95,76 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
         Assert.Equal("Hello, world!\n", output);
     }
+
+    // ---------------------------------------------------------------
+    // DIM with parameters
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_WithParameters()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IGreeter
+                {
+                    string Greet(string name, int times) => name + "x" + times.ToString();
+                }
+
+                public class SimpleGreeter : IGreeter { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var g = SimpleGreeter()
+            Console.WriteLine(g.Greet("hi", 3))
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("hix3\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // DIM with overloads: M() and M(int)
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_Overloaded()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IOverloaded
+                {
+                    string M() => "noarg";
+                    string M(int n) => "arg:" + n.ToString();
+                }
+
+                public class OverloadedImpl : IOverloaded { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var o = OverloadedImpl()
+            Console.WriteLine(o.M())
+            Console.WriteLine(o.M(42))
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("noarg\narg:42\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // Class explicitly overrides DIM — class version wins
+    // ---------------------------------------------------------------
 
     [Fact]
     public void DimDispatch_OverriddenDim_PrefersConcrete()
@@ -86,6 +198,175 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
         Assert.Equal("Overridden: world\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // DIM inherited from grandparent interface (I3 : I2, I2 : I1, DIM on I1)
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_TransitiveInheritance()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IGrandparent
+                {
+                    string Deep() => "deep-dim";
+                }
+
+                public interface IParent : IGrandparent { }
+                public interface IChild : IParent { }
+
+                public class DeepImpl : IChild { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var d = DeepImpl()
+            Console.WriteLine(d.Deep())
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("deep-dim\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // DIM on a sealed class
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_SealedClass()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface ISealable
+                {
+                    string Tag() => "sealed-dim";
+                }
+
+                public sealed class SealedImpl : ISealable { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var s = SealedImpl()
+            Console.WriteLine(s.Tag())
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("sealed-dim\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // DIM property (default interface property with body)
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_Property()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IHasDefaultProp
+                {
+                    string Label => "default-label";
+                }
+
+                public class PropImpl : IHasDefaultProp { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var p = PropImpl()
+            Console.WriteLine(p.Label)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("default-label\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // Multiple interfaces each with a DIM — both resolvable
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_MultipleInterfaces()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IFoo
+                {
+                    string Foo() => "foo-dim";
+                }
+
+                public interface IBar
+                {
+                    string Bar() => "bar-dim";
+                }
+
+                public class MultImpl : IFoo, IBar { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var m = MultImpl()
+            Console.WriteLine(m.Foo())
+            Console.WriteLine(m.Bar())
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("foo-dim\nbar-dim\n", output);
+    }
+
+    // ---------------------------------------------------------------
+    // Generic interface with DIM
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void DimDispatch_GenericInterface()
+    {
+        var sibling = """
+            namespace ProbeRef
+            {
+                public interface IGen<T>
+                {
+                    string Describe() => typeof(T).Name;
+                }
+
+                public class GenImpl : IGen<int> { }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef
+
+            var g = GenImpl()
+            Console.WriteLine(g.Describe())
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        Assert.Equal("Int32\n", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
