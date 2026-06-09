@@ -21,6 +21,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// (<see cref="IsUnsignedEnumUnderlying"/>) is also co-located here so the
 /// connection between "binder accepted enum1 &lt; enum2" and "emitter chose
 /// clt_un" lives in one place.
+///
+/// <para><strong>Why this pattern is NOT extended to user-defined operators
+/// (issue #613 investigation):</strong> The <c>EnumOperatorTable</c> is a
+/// closed-world static ruleset — all enums share the same §11.10 operator set,
+/// so a declarative dictionary is ideal. User-defined operators (Streams C
+/// and D) are open-world dynamic dispatch: each type declares its own operator
+/// set via CLR <c>op_*</c> methods or GSharp receiver-form <c>operator</c>
+/// declarations. They resolve through method lookup (reflection for imported
+/// CLR types in <see cref="ClrOperatorResolution"/>; symbol-table lookup for
+/// GSharp types via <c>StructSymbol.TryGetMethodIncludingInherited</c>), not
+/// through type-shape predicate matching. Both paths are already centralized
+/// at single call sites in <c>ExpressionBinder.Operators.cs</c> and produce
+/// different bound node types (<c>BoundCallExpression</c> /
+/// <c>BoundClrBinaryOperatorExpression</c>) than the built-in operators this
+/// table feeds. A shared base class or generic <c>OperatorLiftTable</c> would
+/// add abstraction without reducing duplication, since no duplication exists
+/// to consolidate.</para>
 /// </remarks>
 internal static class EnumOperatorTable
 {
