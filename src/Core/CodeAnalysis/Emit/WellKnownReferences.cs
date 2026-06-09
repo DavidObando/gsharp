@@ -478,7 +478,7 @@ internal sealed class WellKnownReferences
     public MemberReferenceHandle GetStringCharsReference()
     {
         // System.String::get_Chars(Int32) — used for string indexing (issue #537).
-        var method = this.emitCtx.CoreStringType.GetMethod("get_Chars", new[] { typeof(int) })
+        var method = this.emitCtx.CoreStringType.GetMethod("get_Chars", new[] { this.emitCtx.CoreInt32Type })
             ?? throw new InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.");
         return this.getMethodReference(method);
     }
