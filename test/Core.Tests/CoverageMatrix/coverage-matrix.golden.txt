@@ -20,6 +20,7 @@ AtToken
 AwaitExpression
 AwaitForRangeStatement
 AwaitKeyword
+AwaitUsingStatement
 BadToken
 BangBangToken
 BangEqualsToken
