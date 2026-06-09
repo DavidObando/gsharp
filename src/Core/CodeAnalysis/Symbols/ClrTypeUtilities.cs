@@ -153,6 +153,26 @@ internal static class ClrTypeUtilities
             }
         }
 
+        // Cross-context fallback (#610): when the same-context fast path
+        // cannot fire (live-runtime ↔ MetadataLoadContext boundary), walk
+        // the source's interface set and base-type chain by name. This
+        // generalizes the dedicated #570 slice-to-interface arm so ALL CLR
+        // reference upcasts work across reflection contexts.
+        if (target.IsInterface)
+        {
+            return ImplementsInterfaceByName(source, target);
+        }
+
+        // Base-class walk: check if source derives from target by comparing
+        // base type full names up the chain.
+        for (var baseType = source.BaseType; baseType != null; baseType = baseType.BaseType)
+        {
+            if (AreSame(baseType, target))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
