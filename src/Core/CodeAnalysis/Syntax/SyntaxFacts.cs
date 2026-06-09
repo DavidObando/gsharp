@@ -121,6 +121,8 @@ public static class SyntaxFacts
     {
         switch (text)
         {
+            case "as":
+                return SyntaxKind.AsKeyword;
             case "async":
                 return SyntaxKind.AsyncKeyword;
             case "await":
@@ -371,6 +373,8 @@ public static class SyntaxFacts
                 return "@";
 
             // keywords
+            case SyntaxKind.AsKeyword:
+                return "as";
             case SyntaxKind.AsyncKeyword:
                 return "async";
             case SyntaxKind.AwaitKeyword:
