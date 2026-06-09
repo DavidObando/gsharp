@@ -1925,6 +1925,26 @@ internal sealed class DeclarationBinder
                 var implProp = MemberLookup.FindMatchingProperty(structSymbol, clrProp);
                 if (implProp == null)
                 {
+                    // #573: check whether a public field satisfies a getter-only contract.
+                    var matchingField = MemberLookup.FindMatchingFieldForGetterOnlyProperty(structSymbol, clrProp);
+                    if (matchingField != null)
+                    {
+                        // Synthesize a PropertySymbol backed by the field so the emit
+                        // path handles it via the existing auto-property machinery.
+                        var synthesized = new PropertySymbol(
+                            name: clrProp.Name,
+                            type: matchingField.Type,
+                            accessibility: Accessibility.Public,
+                            hasGetter: true,
+                            hasSetter: false,
+                            isAutoProperty: true,
+                            isVirtual: true,
+                            isOverride: false);
+                        synthesized.BackingField = matchingField;
+                        structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
+                        continue;
+                    }
+
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
                         structSymbol.Name,

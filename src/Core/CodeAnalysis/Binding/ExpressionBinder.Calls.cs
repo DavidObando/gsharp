@@ -1172,10 +1172,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        var candidates = importedBaseClr
-            .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
-            .Where(m => m.Name == methodName)
-            .ToList();
+        var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedBaseClr, methodName);
         if (candidates.Count == 0)
         {
             return false;

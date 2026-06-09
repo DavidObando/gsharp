@@ -941,6 +941,21 @@ internal sealed class ConversionClassifier
     /// failure.</returns>
     public BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
     {
+        // #568 primary path: if the variable's type is a user-defined class
+        // that declares a public parameterless Dispose() (including via
+        // IDisposable implementation), route through user-instance-call.
+        if (variable.Type is StructSymbol userType
+            && userType.TryGetMethodIncludingInherited("Dispose", out var userDispose)
+            && userDispose.Parameters.Length == 0
+            && (userDispose.Type == TypeSymbol.Void || userDispose.Type == null)
+            && userDispose.Accessibility == Accessibility.Public)
+        {
+            var receiver = new BoundVariableExpression(null, variable);
+            return new BoundUserInstanceCallExpression(null, receiver, userDispose, ImmutableArray<BoundExpression>.Empty);
+        }
+
+        // Extended CLR-type path: walk self + transitive interfaces so a
+        // CLR class inheriting Dispose solely through IDisposable is found.
         var clrType = variable.Type?.ClrType;
         if (clrType == null)
         {
@@ -948,15 +963,15 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var disposeMethod = clrType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance, binder: null, types: Type.EmptyTypes, modifiers: null);
+        var disposeMethod = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(clrType, "Dispose", Type.EmptyTypes);
         if (disposeMethod == null)
         {
             Diagnostics.ReportTypeNotDisposable(location, variable.Type);
             return null;
         }
 
-        var receiver = new BoundVariableExpression(null, variable);
-        return new BoundImportedInstanceCallExpression(null, receiver, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
+        var receiver2 = new BoundVariableExpression(null, variable);
+        return new BoundImportedInstanceCallExpression(null, receiver2, disposeMethod, TypeSymbol.Void, ImmutableArray<BoundExpression>.Empty);
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
