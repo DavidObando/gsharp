@@ -526,6 +526,21 @@ internal sealed class LambdaBinder
             return node;
         }
 
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            // Issue #567: BoundFieldAssignmentExpression carries its receiver
+            // as a raw VariableSymbol, not as a BoundVariableExpression. Without
+            // this override the receiver variable is invisible to capture
+            // analysis when the lambda body only does field writes (not reads)
+            // on the variable.
+            if (node.Receiver != null)
+            {
+                this.RecordReference(node.Receiver);
+            }
+
+            return base.RewriteFieldAssignmentExpression(node);
+        }
+
         protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
         {
             // Issue #503 follow-up: a nested function literal's captures
