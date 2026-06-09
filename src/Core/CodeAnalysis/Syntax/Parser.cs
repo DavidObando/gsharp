@@ -2323,6 +2323,11 @@ public class Parser
                     return ParseAwaitForRangeStatement();
                 }
 
+                if (Peek(1).Kind == SyntaxKind.UsingKeyword)
+                {
+                    return ParseAwaitUsingStatement();
+                }
+
                 goto default;
             default:
                 // ADR-0040: contextual `yield` keyword — parse as yield statement
@@ -3211,6 +3216,21 @@ public class Parser
 
         var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
         return new UsingStatementSyntax(syntaxTree, keyword, decl);
+    }
+
+    private StatementSyntax ParseAwaitUsingStatement()
+    {
+        var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
+        var usingKeyword = MatchToken(SyntaxKind.UsingKeyword);
+        if (Current.Kind != SyntaxKind.LetKeyword &&
+            Current.Kind != SyntaxKind.VarKeyword &&
+            Current.Kind != SyntaxKind.ConstKeyword)
+        {
+            MatchToken(SyntaxKind.LetKeyword);
+        }
+
+        var decl = (VariableDeclarationSyntax)ParseVariableDeclaration();
+        return new AwaitUsingStatementSyntax(syntaxTree, awaitKeyword, usingKeyword, decl);
     }
 
     private StatementSyntax ParseGoStatement()
