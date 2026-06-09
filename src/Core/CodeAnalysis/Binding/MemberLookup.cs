@@ -199,22 +199,17 @@ internal sealed class MemberLookup
 
     /// <summary>
     /// Returns the G# field on <paramref name="structSymbol"/> that satisfies
-    /// the getter-only contract of <paramref name="clrProp"/>: same name, the
+    /// the property contract of <paramref name="clrProp"/>: same name, the
     /// field's type's CLR projection matches the property's PropertyType, and
-    /// the field is publicly accessible. Returns <c>null</c> when no such
-    /// field exists or when the contract requires a setter.
+    /// the field is publicly accessible. For read-write contracts (setter
+    /// present), the field must additionally be mutable (not read-only).
+    /// Returns <c>null</c> when no such field exists.
     /// </summary>
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
     /// <param name="clrProp">The CLR property whose contract to check.</param>
     /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
-    public static FieldSymbol FindMatchingFieldForGetterOnlyProperty(StructSymbol structSymbol, PropertyInfo clrProp)
+    public static FieldSymbol FindMatchingFieldForPropertyContract(StructSymbol structSymbol, PropertyInfo clrProp)
     {
-        // Only getter-only contracts are satisfied by fields in this PR.
-        if (clrProp.SetMethod != null)
-        {
-            return null;
-        }
-
         if (!structSymbol.TryGetField(clrProp.Name, out var field))
         {
             return null;
@@ -226,6 +221,12 @@ internal sealed class MemberLookup
         }
 
         if (!ClrTypeUtilities.AreSame(field.Type?.ClrType, clrProp.PropertyType))
+        {
+            return null;
+        }
+
+        // A read-only field cannot satisfy a read-write property contract.
+        if (clrProp.SetMethod != null && field.IsReadOnly)
         {
             return null;
         }
