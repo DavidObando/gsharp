@@ -196,6 +196,14 @@ internal sealed class TypeDefEmitter
                 continue;
             }
 
+            // #573: when a field-backed synthesized property reuses an existing
+            // user field (which was already emitted above), skip creating a
+            // duplicate backing FieldDef — the mapping already exists.
+            if (this.cache.StructFieldDefs.ContainsKey(prop.BackingField))
+            {
+                continue;
+            }
+
             var sigBlob = new BlobBuilder();
             this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
             var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(

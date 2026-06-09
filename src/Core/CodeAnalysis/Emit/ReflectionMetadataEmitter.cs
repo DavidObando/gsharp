@@ -713,7 +713,7 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0051 Phase 6: backing fields for auto-properties.
             foreach (var p in s.Properties)
             {
-                if (p.IsAutoProperty && p.BackingField != null)
+                if (p.IsAutoProperty && p.BackingField != null && !s.Fields.Contains(p.BackingField))
                 {
                     nextFieldRow++;
                 }
@@ -760,7 +760,7 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0051 Phase 6: backing fields for auto-properties.
             foreach (var p in s.Properties)
             {
-                if (p.IsAutoProperty && p.BackingField != null)
+                if (p.IsAutoProperty && p.BackingField != null && !s.Fields.Contains(p.BackingField))
                 {
                     nextFieldRow++;
                 }
