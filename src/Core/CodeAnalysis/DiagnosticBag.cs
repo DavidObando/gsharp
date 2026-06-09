@@ -2127,6 +2127,18 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0268", message);
     }
 
+    /// <summary>
+    /// Issue #575: the <c>as</c> operator requires the target type to be either a
+    /// reference type or a nullable value type (<c>T?</c>). A non-nullable value
+    /// type is rejected because <c>as</c> must be able to yield <c>null</c> on failure.
+    /// </summary>
+    /// <param name="location">The expression location.</param>
+    /// <param name="typeName">The non-nullable value type name.</param>
+    public void ReportAsRequiresReferenceOrNullableType(TextLocation location, string typeName)
+    {
+        Report(location, "GS0270", $"The 'as' operator requires the target type to be a reference type or a nullable value type, but '{typeName}' is a non-nullable value type. Use 'as {typeName}?' instead.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
