@@ -65,6 +65,37 @@ let seq = Enumerable.Repeat(7, ""three"")
         Assert.NotEmpty(result.Diagnostics);
     }
 
+    [Fact]
+    public void Enumerable_Count_InfersTFromSlice()
+    {
+        // #611: Enumerable.Count<T>(IEnumerable<T>) must infer T from a
+        // []string argument. The CLR-level UnifyForInference walks the
+        // array's interfaces to find IEnumerable<string>.
+        var source = @"
+import System.Linq
+
+var s = []string{""a"", ""b""}
+let n = Enumerable.Count(s)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void Enumerable_Contains_InfersTFromSlice()
+    {
+        // #611: Enumerable.Contains<T>(IEnumerable<T>, T) infers T from a
+        // []int32 slice argument.
+        var source = @"
+import System.Linq
+
+var s = []int32{1, 2, 3}
+let found = Enumerable.Contains(s, 2)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

@@ -149,6 +149,27 @@ public class OverloadResolutionTests
     }
 
     [Fact]
+    public void InferTypeArguments_Enumerable_FromArray_WalksInterface()
+    {
+        // #611: an array `int[]` implements IEnumerable<int>; the inference
+        // should walk interfaces and find T = int.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Enumerable_FromStringArray_WalksInterface()
+    {
+        // #611: string[] → IEnumerable<string> inference.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(string[]) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(string) }, typeArgs);
+    }
+
+    [Fact]
     public void InferTypeArguments_Dictionary_BindsBothKeyAndValue()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_DictionaryFromValues), BindingFlags.Public | BindingFlags.Static);
