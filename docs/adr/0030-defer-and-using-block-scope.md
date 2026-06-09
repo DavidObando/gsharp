@@ -19,6 +19,8 @@ Deferred call arguments are evaluated eagerly when the `defer` statement execute
 
 `using` declarations share the same block cleanup lowering. `using let x = expr` binds the declaration at the point it appears, then wraps the remaining statements in the enclosing block in `try/finally` with `x.Dispose()` in the `finally`. Interleaved `defer` and `using` declarations compose as one LIFO cleanup stack.
 
+`await using let x = expr` (issue #605) is the async sibling: it probes for `DisposeAsync()` returning `ValueTask` (the `IAsyncDisposable` pattern) and lowers to `try/finally` with `await x.DisposeAsync()` in the `finally`. It requires `async func` context and follows the same scope-exit machinery. When a type implements both `IDisposable` and `IAsyncDisposable`, `await using let` calls `DisposeAsync` and plain `using let` calls `Dispose`.
+
 ## Rationale for block scope over function scope
 
 Block scope keeps the Phase 7.1 lowering small and local to block binding. It composes cleanly with `using`, `if`, `for`, `scope`, and ordinary nested blocks because each construct already has a lexical block boundary that can own cleanups. It also matches every other scope-cleanup mechanism in the language rather than introducing a second whole-function post-pass just for `defer`. If a future sample requires Go-exact semantics, GSharp can add a `defer-fn` variant or upgrade to function-scoped semantics without breaking programs that already rely on block-scoped cleanup.

@@ -436,6 +436,13 @@ Cause/fix examples:
 |----|----------|-------------|-----------------|
 | GS0269 | Error | Unrecognised escape sequence `\X` in string literal. | `"\q"` — `\q` is not a valid escape. Use `\\` for a literal backslash. |
 
+## Async disposable diagnostics (GS0271–GS0272)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0271 | Error | `await using let` outside an async function. | `func f() { await using let x = ... }` — `await using let` requires `async func`. |
+| GS0272 | Error | Type is not async-disposable. | `await using let x = Foo()` where `Foo` provides no public `DisposeAsync()` method returning `ValueTask`. |
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
