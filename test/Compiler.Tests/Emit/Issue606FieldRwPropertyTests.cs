@@ -1,4 +1,4 @@
-// <copyright file="Issue573FieldSatisfiesGetterPropertyContractTests.cs" company="GSharp">
+// <copyright file="Issue606FieldRwPropertyTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -12,113 +12,17 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #573: a G# class with a public field whose name and type match a
-/// getter-only CLR interface property should satisfy the interface contract.
-/// Previously rejected with GS0187. The fix synthesizes a PropertySymbol
-/// backed by the field at binding time.
+/// Issue #606: extend field-satisfies-property contract to read-write properties.
+/// A public mutable G# field should satisfy a CLR interface property with both
+/// getter and setter (previously only getter-only was supported per #573).
 /// </summary>
-public class Issue573FieldSatisfiesGetterPropertyContractTests
+public class Issue606FieldRwPropertyTests
 {
     [Fact]
-    public void FieldSatisfiesGetterOnlyProperty_BindsAndRuns()
+    public void MutableField_SatisfiesReadWritePropertyContract_BothAccessorsWork()
     {
         var sibling = """
-            namespace ProbeRef
-            {
-                public interface IHasName
-                {
-                    string Name { get; }
-                }
-            }
-            """;
-
-        var gsource = """
-            package Probe
-            import System
-            import ProbeRef
-
-            type Impl1 class : IHasName {
-                Name string
-            }
-
-            var impl = Impl1{Name: "hello"}
-            var iface IHasName = impl
-            Console.WriteLine(iface.Name)
-            """;
-
-        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("hello\n", output);
-    }
-
-    [Fact]
-    public void FieldMutation_VisibleThroughInterfaceProperty()
-    {
-        var sibling = """
-            namespace ProbeRef
-            {
-                public interface IHasName
-                {
-                    string Name { get; }
-                }
-            }
-            """;
-
-        var gsource = """
-            package Probe
-            import System
-            import ProbeRef
-
-            type Impl1 class : IHasName {
-                Name string
-            }
-
-            var impl = Impl1{Name: "hello"}
-            impl.Name = "world"
-            var iface IHasName = impl
-            Console.WriteLine(iface.Name)
-            """;
-
-        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("world\n", output);
-    }
-
-    [Fact]
-    public void ExplicitPropertyAccessor_StillWorks()
-    {
-        var sibling = """
-            namespace ProbeRef
-            {
-                public interface IHasName
-                {
-                    string Name { get; }
-                }
-            }
-            """;
-
-        var gsource = """
-            package Probe
-            import System
-            import ProbeRef
-
-            type Impl2 class : IHasName {
-                prop Name string { get { return "accessor" } }
-            }
-
-            var impl = Impl2{}
-            var iface IHasName = impl
-            Console.WriteLine(iface.Name)
-            """;
-
-        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("accessor\n", output);
-    }
-
-    [Fact]
-    public void FieldSatisfiesReadWriteProperty_BindsAndRuns()
-    {
-        // #606: a field now satisfies a { get; set; } interface property.
-        var sibling = """
-            namespace ProbeRef
+            namespace ProbeRef606
             {
                 public interface IReadWrite
                 {
@@ -130,30 +34,95 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
         var gsource = """
             package Probe
             import System
-            import ProbeRef
+            import ProbeRef606
 
-            type RWImpl class : IReadWrite {
+            type Impl class : IReadWrite {
                 Value string
             }
 
-            var impl = RWImpl{Value: "initial"}
+            var impl = Impl{Value: "hello"}
             var iface IReadWrite = impl
             Console.WriteLine(iface.Value)
-            iface.Value = "updated"
+            iface.Value = "world"
             Console.WriteLine(iface.Value)
             """;
 
-        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("initial\nupdated\n", output);
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Equal("hello\nworld\n", output);
     }
 
     [Fact]
-    public void ClassOmittingPropertyEntirely_StillReportsGS0187()
+    public void MutableField_SatisfiesReadWritePropertyContract_SetterModifiesField()
     {
         var sibling = """
-            namespace ProbeRef
+            namespace ProbeRef606
             {
-                public interface IHasName
+                public interface ICounter
+                {
+                    int Count { get; set; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef606
+
+            type Counter class : ICounter {
+                Count int32
+            }
+
+            var c = Counter{Count: 0}
+            var iface ICounter = c
+            iface.Count = 42
+            Console.WriteLine(c.Count)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Equal("42\n", output);
+    }
+
+    [Fact]
+    public void MutableField_SatisfiesReadWritePropertyContract_GetterReadsField()
+    {
+        var sibling = """
+            namespace ProbeRef606
+            {
+                public interface IReadWrite
+                {
+                    string Name { get; set; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef606
+
+            type Named class : IReadWrite {
+                Name string
+            }
+
+            var n = Named{Name: "initial"}
+            n.Name = "direct"
+            var iface IReadWrite = n
+            Console.WriteLine(iface.Name)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Equal("direct\n", output);
+    }
+
+    [Fact]
+    public void Field_StillSatisfiesGetterOnlyContract()
+    {
+        // Regression: #573 behavior is preserved.
+        var sibling = """
+            namespace ProbeRef606
+            {
+                public interface IGetOnly
                 {
                     string Name { get; }
                 }
@@ -163,19 +132,106 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
         var gsource = """
             package Probe
             import System
-            import ProbeRef
+            import ProbeRef606
 
-            type NoImpl class : IHasName {
+            type GetImpl class : IGetOnly {
+                Name string
+            }
+
+            var impl = GetImpl{Name: "getter-only"}
+            var iface IGetOnly = impl
+            Console.WriteLine(iface.Name)
+            """;
+
+        var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Equal("getter-only\n", output);
+    }
+
+    [Fact]
+    public void PrivateField_DoesNotSatisfyReadWriteContract_ErrorsGS0187()
+    {
+        // A non-public field cannot satisfy a public interface property contract.
+        var sibling = """
+            namespace ProbeRef606
+            {
+                public interface IReadWrite
+                {
+                    string Value { get; set; }
+                }
             }
             """;
 
-        var errors = CompileExpectingErrorsWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef606
+
+            type BadImpl class : IReadWrite {
+                private Value string
+            }
+            """;
+
+        var errors = CompileExpectingErrorsWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Contains(errors, e => e.Contains("GS0187"));
+    }
+
+    [Fact]
+    public void WrongTypeField_DoesNotSatisfyReadWriteContract_ErrorsGS0187()
+    {
+        // A field with mismatched type cannot satisfy the property contract.
+        var sibling = """
+            namespace ProbeRef606
+            {
+                public interface IReadWrite
+                {
+                    string Value { get; set; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef606
+
+            type BadImpl class : IReadWrite {
+                Value int32
+            }
+            """;
+
+        var errors = CompileExpectingErrorsWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
+        Assert.Contains(errors, e => e.Contains("GS0187"));
+    }
+
+    [Fact]
+    public void ClassOmittingFieldEntirely_StillReportsGS0187()
+    {
+        var sibling = """
+            namespace ProbeRef606
+            {
+                public interface IReadWrite
+                {
+                    string Value { get; set; }
+                }
+            }
+            """;
+
+        var gsource = """
+            package Probe
+            import System
+            import ProbeRef606
+
+            type Empty class : IReadWrite {
+            }
+            """;
+
+        var errors = CompileExpectingErrorsWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
         Assert.Contains(errors, e => e.Contains("GS0187"));
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue573_sib_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue606_sib_").FullName;
         try
         {
             var csDir = Path.Combine(tempDir, "csref");
@@ -269,7 +325,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
 
     private static List<string> CompileExpectingErrorsWithSiblingCs(string csSource, string gSource, string siblingName)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue573_err_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue606_err_").FullName;
         try
         {
             var csDir = Path.Combine(tempDir, "csref");
