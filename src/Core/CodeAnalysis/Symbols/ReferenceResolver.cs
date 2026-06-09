@@ -41,7 +41,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// suite where cross-targeting is not relevant.
 /// </para>
 /// </remarks>
-public sealed class ReferenceResolver
+public sealed class ReferenceResolver : IDisposable
 {
     private static readonly string[] WellKnownBclAssemblyNames =
     {
@@ -90,6 +90,37 @@ public sealed class ReferenceResolver
 
     private sealed class NotFoundSentinel
     {
+    }
+
+    /// <summary>
+    /// Releases the underlying <see cref="MetadataLoadContext"/> (if any),
+    /// closing all file handles it holds to referenced assemblies. Also
+    /// evicts stale entries from the process-wide type-symbol caches so
+    /// that the disposed context's <see cref="Type"/> objects can be
+    /// garbage-collected.
+    /// </summary>
+    /// <remarks>
+    /// Callers that create a resolver via <see cref="WithReferences"/> must
+    /// dispose it when the compilation session is complete. Failing to do so
+    /// leaks one file handle per loaded assembly per resolver instance.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (metadataContext is null)
+        {
+            return;
+        }
+
+        metadataContext.Dispose();
+
+        // The static ImportedTypeSymbol cache may hold Type instances that
+        // originated from the now-disposed MetadataLoadContext. Those entries
+        // are unreachable from future compilations and pin the disposed
+        // context's managed object graph. Clearing the cache allows them to
+        // be collected. This is safe because each compilation rebuilds the
+        // cache organically; the only cost is a cold cache on the next
+        // compilation that reuses the same process.
+        ImportedTypeSymbol.ClearCache();
     }
 
     /// <summary>
