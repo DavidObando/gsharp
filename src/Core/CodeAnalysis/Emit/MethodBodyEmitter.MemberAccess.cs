@@ -358,14 +358,23 @@ internal sealed partial class MethodBodyEmitter
         // re-evaluation of k or a get_Item re-read. set_Item is void, so we
         // dup the value just before the call, save the dup to a scratch
         // local, then push it back as the expression result.
-        var mapType = (MapTypeSymbol)ixa.Target.Type;
+        var targetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+        var mapType = (MapTypeSymbol)targetType;
         var dictType = mapType.ClrType;
         var setItem = dictType.GetMethod("set_Item")
             ?? throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no set_Item method.");
 
         var tmp = this.indexAssignmentValueSlots[ixa];
-        this.EmitLoadVariable(ixa.Target);
+        if (ixa.TargetExpression != null)
+        {
+            this.EmitExpression(ixa.TargetExpression);
+        }
+        else
+        {
+            this.EmitLoadVariable(ixa.Target);
+        }
+
         this.EmitExpression(ixa.Index);
         this.EmitExpression(ixa.Value);
         this.il.OpCode(ILOpCode.Dup);
@@ -846,7 +855,7 @@ internal sealed partial class MethodBodyEmitter
             var refGetter = ixa.Indexer.GetGetMethod(nonPublic: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
-            var receiver = new BoundVariableExpression(null, ixa.Target);
+            BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);
             var tmp = this.indexAssignmentValueSlots[ixa];
 
             // store: <receiver-addr> <index...> get_Item(ref T) <value> dup stloc tmp stobj/stind
@@ -876,8 +885,9 @@ internal sealed partial class MethodBodyEmitter
         // Issue #418 (P1-1): spill v to a temp before the call so the result
         // is the assigned value without a re-read via get_Item (which would
         // re-evaluate every index argument).
-        var writeReceiver = new BoundVariableExpression(null, ixa.Target);
-        var targetIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(ixa.Target.Type);
+        BoundExpression writeReceiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);
+        var targetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+        var targetIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(targetType);
         var slot = this.indexAssignmentValueSlots[ixa];
 
         this.EmitInstanceReceiver(writeReceiver);

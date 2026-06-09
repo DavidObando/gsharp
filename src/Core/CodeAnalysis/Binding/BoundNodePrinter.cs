@@ -1010,7 +1010,15 @@ public static class BoundNodePrinter
 
     private static void WriteIndexAssignmentExpression(BoundIndexAssignmentExpression node, IndentedTextWriter writer)
     {
-        writer.WriteIdentifier(node.Target.Name);
+        if (node.TargetExpression != null)
+        {
+            node.TargetExpression.WriteTo(writer);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.Target.Name);
+        }
+
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
         node.Index.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
@@ -1268,7 +1276,15 @@ public static class BoundNodePrinter
 
     private static void WriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node, IndentedTextWriter writer)
     {
-        writer.WriteIdentifier(node.Target.Name);
+        if (node.TargetExpression != null)
+        {
+            node.TargetExpression.WriteTo(writer);
+        }
+        else
+        {
+            writer.WriteIdentifier(node.Target.Name);
+        }
+
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
         for (var i = 0; i < node.Arguments.Length; i++)
         {
