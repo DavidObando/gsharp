@@ -4300,6 +4300,220 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// Issue #649: Gets a MemberRef for a field on a constructed generic type without
+    /// calling <c>.GetField()</c> on the closed generic (which throws
+    /// <see cref="NotSupportedException"/> when type arguments are MLC-loaded or
+    /// TypeBuilder-backed). Resolves the field from the open generic type definition.
+    /// </summary>
+    internal MemberReferenceHandle GetFieldReferenceOnConstructedGeneric(Type closedGenericType, string fieldName)
+    {
+        var openType = closedGenericType.GetGenericTypeDefinition();
+        var openField = openType.GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                $"Open generic type '{openType.FullName}' has no field '{fieldName}'.");
+
+        var parent = this.GetTypeHandleForMember(closedGenericType);
+
+        var sigBlob = new BlobBuilder();
+        this.EncodeClrType(new BlobEncoder(sigBlob).FieldSignature(), openField.FieldType);
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(fieldName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return handle;
+    }
+
+    /// <summary>
+    /// Issue #649: Gets a MemberRef for a constructor on a constructed generic type without
+    /// calling <c>.GetConstructors()</c> on the closed generic (which throws
+    /// <see cref="NotSupportedException"/> when type arguments are MLC-loaded or
+    /// TypeBuilder-backed). Resolves the constructor from the open generic type definition.
+    /// </summary>
+    internal MemberReferenceHandle GetCtorReferenceOnConstructedGeneric(Type closedGenericType, int paramCount)
+    {
+        var openType = closedGenericType.GetGenericTypeDefinition();
+        ConstructorInfo openCtor = null;
+        foreach (var c in openType.GetConstructors())
+        {
+            if (c.GetParameters().Length == paramCount)
+            {
+                openCtor = c;
+                break;
+            }
+        }
+
+        if (openCtor == null)
+        {
+            throw new InvalidOperationException(
+                $"Open generic type '{openType.FullName}' has no constructor of arity {paramCount}.");
+        }
+
+        var parent = this.GetTypeHandleForMember(closedGenericType);
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                openCtor.GetParameters().Length,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    foreach (var p in openCtor.GetParameters())
+                    {
+                        var paramType = p.ParameterType;
+                        if (paramType.IsByRef)
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
+                        }
+                        else
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(), paramType);
+                        }
+                    }
+                });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return handle;
+    }
+
+    /// <summary>
+    /// Issue #649: Gets the TypeSpec handle for a <c>ValueTuple&lt;...&gt;</c> whose element
+    /// types include G#-defined types (StructSymbol) that lack a CLR backing type.
+    /// Encodes each element type via <see cref="EncodeTypeSymbol"/> so user-defined types
+    /// are correctly referenced by their TypeDef handles.
+    /// </summary>
+    private EntityHandle GetTupleTypeSpec(TupleTypeSymbol tupleType)
+    {
+        var arity = tupleType.Arity;
+        var openType = arity switch
+        {
+            2 => typeof(ValueTuple<,>),
+            3 => typeof(ValueTuple<,,>),
+            4 => typeof(ValueTuple<,,,>),
+            5 => typeof(ValueTuple<,,,,>),
+            6 => typeof(ValueTuple<,,,,,>),
+            7 => typeof(ValueTuple<,,,,,,>),
+            _ => throw new NotSupportedException(
+                $"Symbolic tuple TypeSpec not supported for arity {arity}."),
+        };
+
+        var sigBlob = new BlobBuilder();
+        var genInst = new BlobEncoder(sigBlob).TypeSpecificationSignature()
+            .GenericInstantiation(
+                this.GetTypeReference(openType),
+                arity,
+                isValueType: true);
+        foreach (var elemType in tupleType.ElementTypes)
+        {
+            this.EncodeTypeSymbol(genInst.AddArgument(), elemType);
+        }
+
+        return this.emitCtx.Metadata.AddTypeSpecification(
+            this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #649: Gets a MemberRef for a tuple field (<c>Item1</c>...<c>Item7</c>) when
+    /// the tuple's <see cref="TypeSymbol.ClrType"/> is null (element types include
+    /// G#-defined types). Builds the field MemberRef against the symbolically-constructed
+    /// <c>ValueTuple</c> TypeSpec.
+    /// </summary>
+    internal MemberReferenceHandle GetTupleFieldReference(TupleTypeSymbol tupleType, string fieldName)
+    {
+        var parent = this.GetTupleTypeSpec(tupleType);
+
+        // Get the open field from the BCL ValueTuple generic definition for signature encoding.
+        var openType = tupleType.Arity switch
+        {
+            2 => typeof(ValueTuple<,>),
+            3 => typeof(ValueTuple<,,>),
+            4 => typeof(ValueTuple<,,,>),
+            5 => typeof(ValueTuple<,,,,>),
+            6 => typeof(ValueTuple<,,,,,>),
+            7 => typeof(ValueTuple<,,,,,,>),
+            _ => throw new NotSupportedException(
+                $"Symbolic tuple field ref not supported for arity {tupleType.Arity}."),
+        };
+
+        var openField = openType.GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException(
+                $"Open ValueTuple type has no field '{fieldName}'.");
+
+        var sigBlob = new BlobBuilder();
+        this.EncodeClrType(new BlobEncoder(sigBlob).FieldSignature(), openField.FieldType);
+
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(fieldName),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #649: Gets a MemberRef for a tuple constructor when the tuple's
+    /// <see cref="TypeSymbol.ClrType"/> is null (element types include G#-defined
+    /// types). Builds the ctor MemberRef against the symbolically-constructed
+    /// <c>ValueTuple</c> TypeSpec.
+    /// </summary>
+    internal MemberReferenceHandle GetTupleCtorReference(TupleTypeSymbol tupleType)
+    {
+        var parent = this.GetTupleTypeSpec(tupleType);
+        var arity = tupleType.Arity;
+
+        var openType = arity switch
+        {
+            2 => typeof(ValueTuple<,>),
+            3 => typeof(ValueTuple<,,>),
+            4 => typeof(ValueTuple<,,,>),
+            5 => typeof(ValueTuple<,,,,>),
+            6 => typeof(ValueTuple<,,,,,>),
+            7 => typeof(ValueTuple<,,,,,,>),
+            _ => throw new NotSupportedException(
+                $"Symbolic tuple ctor ref not supported for arity {arity}."),
+        };
+
+        ConstructorInfo openCtor = null;
+        foreach (var c in openType.GetConstructors())
+        {
+            if (c.GetParameters().Length == arity)
+            {
+                openCtor = c;
+                break;
+            }
+        }
+
+        if (openCtor == null)
+        {
+            throw new InvalidOperationException(
+                $"Open ValueTuple type of arity {arity} has no matching constructor.");
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                openCtor.GetParameters().Length,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    foreach (var p in openCtor.GetParameters())
+                    {
+                        this.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                    }
+                });
+
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
     /// Issue #491 (ADR-0060 follow-up): encodes a single local-variable signature slot.
     /// A <see cref="ByRefTypeSymbol"/> entry signals a ref-aliasing local (<c>let ref</c> /
     /// <c>var ref</c>) whose slot must carry <c>ELEMENT_TYPE_BYREF</c> wrapping the pointee
@@ -4486,6 +4700,32 @@ internal sealed class ReflectionMetadataEmitter
             var elementClr = chType.ElementType.ClrType ?? typeof(object);
             var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
             this.EncodeClrType(encoder, channelClr);
+        }
+        else if (type is TupleTypeSymbol tupleWithNullClr && tupleWithNullClr.ClrType == null
+            && tupleWithNullClr.Arity >= 2 && tupleWithNullClr.Arity <= 7)
+        {
+            // Issue #649: Tuple containing G#-defined types whose ClrType is null.
+            // Encode as ValueTuple<...> generic instantiation using EncodeTypeSymbol
+            // for each element so user-defined types reference their TypeDef handles.
+            var openType = tupleWithNullClr.Arity switch
+            {
+                2 => typeof(ValueTuple<,>),
+                3 => typeof(ValueTuple<,,>),
+                4 => typeof(ValueTuple<,,,>),
+                5 => typeof(ValueTuple<,,,,>),
+                6 => typeof(ValueTuple<,,,,,>),
+                7 => typeof(ValueTuple<,,,,,,>),
+                _ => throw new NotSupportedException("unreachable"),
+            };
+
+            var genericInst = encoder.GenericInstantiation(
+                this.GetTypeReference(openType),
+                tupleWithNullClr.Arity,
+                isValueType: true);
+            foreach (var elemType in tupleWithNullClr.ElementTypes)
+            {
+                this.EncodeTypeSymbol(genericInst.AddArgument(), elemType);
+            }
         }
         else if (type?.ClrType != null)
         {

@@ -47,7 +47,23 @@ public sealed class TupleTypeSymbol : TypeSymbol
         }
 
         var key = BuildName(elementTypes);
-        return Cache.GetOrAdd(key, _ => new TupleTypeSymbol(elementTypes));
+
+        // Issue #649: The cache is keyed by name alone (e.g. "(Holder, string)").
+        // Across compilations in the same process (common in tests), different
+        // TypeSymbol instances with the same name may appear (loaded from
+        // different MetadataLoadContext instances). Validate that the cached
+        // entry's element types still match by reference; if not, replace it.
+        if (Cache.TryGetValue(key, out var existing))
+        {
+            if (existing.ElementTypes.SequenceEqual(elementTypes))
+            {
+                return existing;
+            }
+        }
+
+        var result = new TupleTypeSymbol(elementTypes);
+        Cache[key] = result;
+        return result;
     }
 
     private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
