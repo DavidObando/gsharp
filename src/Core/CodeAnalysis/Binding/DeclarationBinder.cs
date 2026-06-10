@@ -1935,6 +1935,15 @@ internal sealed class DeclarationBinder
                     continue;
                 }
 
+                // Skip Default Interface Methods (non-abstract virtual methods).
+                // G# does not yet support DIMs (ADR-0018, Phase 6+); a class is
+                // not required to implement them — the runtime dispatches to the
+                // default body when no explicit override is present.
+                if (!clrMethod.IsAbstract)
+                {
+                    continue;
+                }
+
                 if (MemberLookup.HasMatchingMethodForClrSignature(structSymbol, clrMethod))
                 {
                     continue;

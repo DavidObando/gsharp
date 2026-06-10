@@ -576,10 +576,41 @@ internal sealed class MemberLookup
             var allMatch = true;
             for (var i = 0; i < callable.Length; i++)
             {
-                if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(callable[i].Type), clrParams[i].ParameterType))
+                var clrParamType = clrParams[i].ParameterType;
+                var gsParam = callable[i];
+
+                if (clrParamType.IsByRef)
                 {
-                    allMatch = false;
-                    break;
+                    // The CLR parameter is by-ref (out/ref/in) — compare the
+                    // element type and require the G# parameter's RefKind to be
+                    // non-None (Out, Ref, or In).
+                    if (gsParam.RefKind == RefKind.None)
+                    {
+                        allMatch = false;
+                        break;
+                    }
+
+                    var elementType = clrParamType.GetElementType();
+                    if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(gsParam.Type), elementType))
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+                else
+                {
+                    // Non-by-ref CLR parameter — the G# side must also be pass-by-value.
+                    if (gsParam.RefKind != RefKind.None)
+                    {
+                        allMatch = false;
+                        break;
+                    }
+
+                    if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(gsParam.Type), clrParamType))
+                    {
+                        allMatch = false;
+                        break;
+                    }
                 }
             }
 
