@@ -1837,6 +1837,30 @@ internal static class OverloadResolution
                     return true;
                 }
 
+                // Issue #661: when one bound is T and the other is Nullable<T>
+                // (where T is any value type, including enums), promote to
+                // Nullable<T> — mirroring C#'s inference rule that picks the
+                // nullable form when both T and T? are lower bounds.
+                if (NullableLifting.IsValueTypeNullableClr(argumentType))
+                {
+                    var underlying = argumentType.GetGenericArguments()[0];
+                    if (ClrTypeUtilities.AreSame(underlying, existing))
+                    {
+                        bounds[parameterType.Name] = argumentType;
+                        return true;
+                    }
+                }
+
+                if (NullableLifting.IsValueTypeNullableClr(existing))
+                {
+                    var underlying = existing.GetGenericArguments()[0];
+                    if (ClrTypeUtilities.AreSame(underlying, argumentType))
+                    {
+                        // existing is already Nullable<T>; keep it.
+                        return true;
+                    }
+                }
+
                 // Promote toward the common base: keep the more general type
                 // when one is assignable from the other. Otherwise the bounds
                 // genuinely conflict and inference fails.
