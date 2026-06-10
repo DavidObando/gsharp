@@ -3182,6 +3182,16 @@ internal sealed class DeclarationBinder
         StructSymbol baseClassSymbol,
         TypeSymbol importedBaseType)
     {
+        // ADR-0065 §5: a class with a primary-constructor parameter list and
+        // no explicit `init(...)` body still needs ExplicitConstructors set up
+        // for the convenience-init self-delegation lookup, but the emitter
+        // already handles the primary-ctor-only case via its existing
+        // ClassPrimaryCtorHandles path. We only need to materialize a
+        // synthesized designated ConstructorSymbol when there are also
+        // explicit init(...) bodies (so that primary becomes a peer in the
+        // overload set), or when a class needs an init(...) overload for
+        // diagnostics or chaining purposes. For pure primary-ctor classes we
+        // leave the existing path unchanged.
         if (syntax.Constructors.IsDefaultOrEmpty)
         {
             return;
@@ -3192,12 +3202,16 @@ internal sealed class DeclarationBinder
             return;
         }
 
-        // A class uses EITHER the Kotlin-style primary constructor sugar OR
-        // explicit `init(...)` constructors — mixing the two is ambiguous.
+        // ADR-0065 §5: when both a primary-constructor parameter list and
+        // explicit `init(...)` bodies are declared, the primary constructor
+        // becomes a synthesized designated initializer that participates in
+        // the overload set alongside the explicit bodies. Duplicate signatures
+        // are diagnosed below by the same overload-equality check that catches
+        // collisions between two user-declared init overloads.
+        ConstructorSymbol synthesizedPrimary = null;
         if (structSymbol.HasPrimaryConstructor)
         {
-            Diagnostics.ReportPrimaryAndExplicitConstructors(syntax.Constructors[0].InitKeyword.Location, structSymbol.Name);
-            return;
+            synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, package);
         }
 
         // ADR-0063 §9: bind every declared init(...) constructor. Duplicate
@@ -3205,12 +3219,23 @@ internal sealed class DeclarationBinder
         // overloads, so each surviving ConstructorSymbol carries a unique
         // signature within the overload family.
         var ctorBuilder = ImmutableArray.CreateBuilder<ConstructorSymbol>();
+        if (synthesizedPrimary != null)
+        {
+            ctorBuilder.Add(synthesizedPrimary);
+        }
+
         foreach (var ctorSyntax in syntax.Constructors)
         {
             var ctor = BindSingleConstructorDeclaration(ctorSyntax, structSymbol, package, baseClassSymbol, importedBaseType);
             if (ctor == null)
             {
                 continue;
+            }
+
+            // ADR-0065 §2: enforce constraints on convenience initializers.
+            if (ctor.IsConvenience && ctor.BaseInitializer != null)
+            {
+                Diagnostics.ReportConvenienceInitMayNotCallBase(ctorSyntax.BaseKeyword.Location, structSymbol.Name);
             }
 
             var duplicate = false;
@@ -3225,10 +3250,25 @@ internal sealed class DeclarationBinder
 
             if (duplicate)
             {
-                Diagnostics.ReportDuplicateOverloadSignature(
-                    ctorSyntax.InitKeyword.Location,
-                    "init",
-                    Binder.FormatOverloadSignature(ctor.Function));
+                // ADR-0065 §5: distinguish duplication against the synthesized
+                // primary ctor from duplication between two user inits so users
+                // get an actionable message.
+                if (synthesizedPrimary != null
+                    && BoundScope.FunctionSignaturesEqual(synthesizedPrimary.Function, ctor.Function))
+                {
+                    Diagnostics.ReportInitDuplicatesPrimaryCtor(
+                        ctorSyntax.InitKeyword.Location,
+                        structSymbol.Name,
+                        Binder.FormatOverloadSignature(ctor.Function));
+                }
+                else
+                {
+                    Diagnostics.ReportDuplicateOverloadSignature(
+                        ctorSyntax.InitKeyword.Location,
+                        "init",
+                        Binder.FormatOverloadSignature(ctor.Function));
+                }
+
                 continue;
             }
 
@@ -3236,6 +3276,38 @@ internal sealed class DeclarationBinder
         }
 
         structSymbol.SetExplicitConstructors(ctorBuilder.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0065 §5: synthesizes a designated <see cref="ConstructorSymbol"/>
+    /// whose signature matches the class's primary-constructor parameter list.
+    /// The emitter produces its body (field assignments per parameter) directly
+    /// rather than reading from <c>BoundProgram.Functions</c>; we leave the
+    /// function's body unbound here. The synthesized ctor is marked with
+    /// <see cref="ConstructorSymbol.IsSynthesizedFromPrimaryConstructor"/> so
+    /// emit and overload-resolution paths can detect it.
+    /// </summary>
+    private ConstructorSymbol SynthesizePrimaryConstructor(StructSymbol structSymbol, PackageSymbol package)
+    {
+        // Reuse the primary-ctor parameter symbols verbatim — they already
+        // carry the right names, types, ref-kinds and any defaults. The
+        // emitter looks up the matching same-named field for each parameter.
+        var parameters = structSymbol.PrimaryConstructorParameters;
+        var ctorFunction = new FunctionSymbol(
+            ".ctor",
+            parameters,
+            TypeSymbol.Void,
+            declaration: null,
+            package,
+            Accessibility.Public,
+            receiverType: structSymbol)
+        {
+            IsSpecialName = true,
+        };
+
+        var ctorSymbol = new ConstructorSymbol(ctorFunction, declaration: null);
+        ctorSymbol.MarkSynthesizedFromPrimaryConstructor();
+        return ctorSymbol;
     }
 
     /// <summary>
@@ -3296,6 +3368,14 @@ internal sealed class DeclarationBinder
 
         var constructorSymbol = new ConstructorSymbol(ctorFunction, ctorSyntax);
         Binder.AttachDocumentation(ctorFunction, ctorSyntax);
+
+        // ADR-0065 §2: propagate the contextual `convenience` modifier from
+        // syntax onto the symbol so the binder/emitter can apply the §2
+        // rules (delegation-first, no `: base()`, this(args) chaining).
+        if (ctorSyntax.IsConvenience)
+        {
+            constructorSymbol.MarkConvenience();
+        }
 
         // Resolve the optional `: base(args)` initializer, with the constructor
         // parameters in scope so they can be forwarded to the base.

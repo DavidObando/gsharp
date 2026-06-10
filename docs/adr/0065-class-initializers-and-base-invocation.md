@@ -1,6 +1,6 @@
 # ADR-0065: Class multiple initializers and base-class invocation
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-10
 - **Phase**: Phase 9 — language depth / class initialization
 - **Related**: ADR-0003 (OO surface), ADR-0017 (method virtuality / `open`), ADR-0063 (method overloading — §9 multiple `init` overloads), issue [#646](https://github.com/DavidObando/gsharp/issues/646), issue [#656](https://github.com/DavidObando/gsharp/issues/656)
@@ -296,17 +296,28 @@ type HttpClient open class {
 
 ### New diagnostics
 
-The following diagnostic codes are placeholders; live codes will be assigned at implementation time.
+The diagnostic codes below are the live codes assigned at implementation time
+(see `src/Core/CodeAnalysis/DiagnosticBag.cs`).
+
+| Code | Description |
+|---|---|
+| `GS0278` | Convenience initializer body must begin with `init(args)` self-delegation. |
+| `GS0279` | Convenience initializer may not declare an explicit `: base(args)` clause. |
+| `GS0280` | `init(args)` self-delegation is only valid inside a class constructor body. |
+| `GS0281` | Designated initializer may not delegate to a sibling `init(args)` overload; use `: base(args)` instead. |
+| `GS0282` | Convenience initializer may not delegate to itself (recursive). |
+| `GS0283` | No applicable `init(...)` overload on this class matches the self-delegation arguments. |
+| `GS0284` | A user-declared `init(...)` overload duplicates the signature synthesized from the primary constructor. |
+
+Future diagnostics — to be added when the deferred two-phase enforcement
+work (see Implementation notes) lands:
 
 | Placeholder | Description |
 |---|---|
 | `GSxxxx` | Designated initializer does not assign stored property `'P'` before invoking base initializer. |
 | `GSxxxx` | Designated initializer must invoke base-class initializer before accessing inherited member `'M'`. |
-| `GSxxxx` | Convenience initializer must delegate to another initializer before accessing `'this'`. |
-| `GSxxxx` | Convenience initializer must delegate to an initializer in the same class (not base). |
 | `GSxxxx` | Instance may not be used as a value until phase-1 initialization is complete. |
 | `GSxxxx` | Convenience initializer may not directly assign stored properties; delegate first. |
-| `GSxxxx` | Duplicate initializer signature conflicts with synthesised primary constructor. |
 
 ### Migration
 
@@ -336,10 +347,32 @@ Go has no constructors. Types are always zero-initialized; factory functions (`N
 
 ## Open questions
 
-1. **Phase-1 enforcement strictness for field initializers.** If a field has a default-value expression (`Active bool = false`), does the designated init still need to "assign" it before calling `base`? Proposed default: no — fields with default values are considered pre-initialised at the start of the init body. Maintainer should confirm.
-2. **`override init` syntax.** Swift allows `override init(...)` when a subclass re-declares a base designated init. Should G# require `override` on such inits, matching the `override func` precedent (ADR-0017)? Proposed default: yes, `override init(...)` is required and diagnosed if missing.
+1. **Phase-1 enforcement strictness for field initializers.** If a field has a default-value expression (`Active bool = false`), does the designated init still need to "assign" it before calling `base`? **Resolved**: No — fields with default values are considered pre-initialised at the start of the init body. This matches the implementation's existing instance-field-initializer emission, which runs before the user-authored body.
+2. **`override init` syntax.** Swift allows `override init(...)` when a subclass re-declares a base designated init. Should G# require `override` on such inits, matching the `override func` precedent (ADR-0017)? **Deferred** to a follow-up issue alongside the initializer-inheritance Rule B implementation.
 3. **Interaction with `required` fields.** If G# introduces a `required` field modifier (analogous to C# 11's `required` members), how does it interact with designated-init obligations? Deferred to a future ADR.
-4. **Initializer access control.** May a designated init be `private`? Swift allows this (used to prevent external subclassing). Proposed default: yes, all visibility modifiers apply to `init` as they do to `func`.
+4. **Initializer access control.** May a designated init be `private`? Swift allows this (used to prevent external subclassing). **Resolved**: Yes — all visibility modifiers (`public`/`internal`/`private`) apply to `init` exactly as they do to `func`. The existing accessibility-resolution path already covers this.
+
+## Implementation notes
+
+The first implementation (this PR) covers §1, §2, §5, §8, parts of §3 and §4, and the
+diagnostic surface above. The following pieces are tracked as follow-up work:
+
+- **§3 strict ordering**: the implementation emits the base call as the first
+  instruction of a designated init body (matching the CLR convention) rather
+  than reordering the body to delay the base call to the "after all own fields
+  assigned" point. This is observationally indistinguishable for well-formed
+  programs unless the base initializer calls a virtual method that depends on
+  derived-class state — that scenario is covered by the deferred §4 Rule 2 and
+  Rule 4 diagnostics described below.
+- **§4 Rules 1, 2, 4**: full two-phase definite-assignment diagnostics
+  (all-own-properties-before-super, no-inherited-access-before-super,
+  no-self-as-value-during-phase-1). Rule 3 (convenience must delegate first)
+  is enforced via `GS0278`.
+- **§6 Rule A & Rule B initializer inheritance**: derived classes that
+  declare no `init(...)` bodies do not yet inherit the base class's
+  designated initializers as overload candidates of the derived type. Both
+  rules will be added in a follow-up PR alongside the `override init`
+  machinery noted in open question #2.
 
 ## Out of scope
 

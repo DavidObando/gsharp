@@ -932,7 +932,12 @@ public class Parser
                 if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event") ||
-                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken))
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken) ||
+                    (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "convenience"
+                        && ((Peek(ahead + 1).Kind == SyntaxKind.IdentifierToken && Peek(ahead + 1).Text == "init" && Peek(ahead + 2).Kind == SyntaxKind.OpenParenthesisToken)
+                            || (Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword
+                                && Peek(ahead + 2).Kind == SyntaxKind.IdentifierToken && Peek(ahead + 2).Text == "init"
+                                && Peek(ahead + 3).Kind == SyntaxKind.OpenParenthesisToken))))
                 {
                     memberAccessibility = NextToken();
                 }
@@ -971,6 +976,19 @@ public class Parser
                 memberAsyncModifier = NextToken();
             }
 
+            // ADR-0065 §2: optional `convenience` contextual keyword may
+            // precede `init` (or `func init`) on a class constructor.
+            SyntaxToken memberConvenienceModifier = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && Current.Text == "convenience"
+                && ((Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "init" && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
+                    || (Peek(1).Kind == SyntaxKind.FuncKeyword
+                        && Peek(2).Kind == SyntaxKind.IdentifierToken && Peek(2).Text == "init"
+                        && Peek(3).Kind == SyntaxKind.OpenParenthesisToken)))
+            {
+                memberConvenienceModifier = NextToken();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
             {
                 // Issue #306: standalone user-defined constructor
@@ -991,7 +1009,7 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
                 }
 
-                var constructor = ParseConstructorDeclaration(memberAccessibility);
+                var constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier);
                 constructor.WithAnnotations(memberAnnotations);
                 constructors.Add(constructor);
             }
@@ -1068,7 +1086,7 @@ public class Parser
                         Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
                     }
 
-                    var constructor = ParseConstructorDeclaration(memberAccessibility);
+                    var constructor = ParseConstructorDeclaration(memberAccessibility, memberConvenienceModifier);
                     constructor.WithAnnotations(memberAnnotations);
                     constructors.Add(constructor);
                 }
@@ -1141,8 +1159,10 @@ public class Parser
     /// <summary>
     /// Issue #306: parses a standalone user-defined constructor
     /// <c>init(params) [: base(args)] { body }</c> inside a class body.
+    /// ADR-0065 §2: accepts an optional leading <c>convenience</c> contextual
+    /// modifier passed in by the caller.
     /// </summary>
-    private ConstructorDeclarationSyntax ParseConstructorDeclaration(SyntaxToken accessibilityModifier)
+    private ConstructorDeclarationSyntax ParseConstructorDeclaration(SyntaxToken accessibilityModifier, SyntaxToken convenienceModifier = null)
     {
         var initKeyword = NextToken(); // consume the contextual "init" identifier
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -1168,6 +1188,7 @@ public class Parser
         return new ConstructorDeclarationSyntax(
             syntaxTree,
             accessibilityModifier,
+            convenienceModifier,
             initKeyword,
             openParen,
             parameters,

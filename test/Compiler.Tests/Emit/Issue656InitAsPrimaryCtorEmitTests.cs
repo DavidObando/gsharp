@@ -230,16 +230,16 @@ public class Issue656InitAsPrimaryCtorEmitTests
 
     // ====================================================================
     // ADR-0065 §5: class with primary-ctor parameter list AND explicit
-    // init(args) — this is a compile-time error per current binder rule
-    // ("A class uses EITHER primary ctor OR explicit init, not both").
+    // init(args) — both coexist; primary becomes one designated init.
     // ====================================================================
 
     [Fact]
-    public void PrimaryCtorAndExplicitInit_ReportsError()
+    public void PrimaryCtorAndExplicitInit_Coexist()
     {
-        // ADR-0065 §5 says primary ctor is one designated init among others.
-        // However the current binder (per pre-existing rule) rejects mixing
-        // primary-ctor syntax with explicit init bodies. Verify the error.
+        // ADR-0065 §5: a class may declare both a primary-constructor parameter
+        // list and additional explicit `init(...)` bodies. The synthesized
+        // primary ctor is one designated initializer; user-declared inits are
+        // additional overloads, picked by overload resolution.
         var source = """
             package Probe
             import System
@@ -251,12 +251,36 @@ public class Issue656InitAsPrimaryCtorEmitTests
                 }
             }
 
-            var d = Dual("x")
-            Console.WriteLine(d.Name)
+            var byName = Dual("Alice")
+            var byAge = Dual(42)
+            Console.WriteLine(byName.Name)
+            Console.WriteLine(byAge.Age)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("Alice\n42\n", output);
+    }
+
+    [Fact]
+    public void PrimaryCtorAndExplicitInit_DuplicateSignatureReportsError()
+    {
+        // ADR-0065 §5: a user-written init with the same signature as the
+        // synthesized primary-ctor init is a compile-time error.
+        var source = """
+            package Probe
+            import System
+
+            type Dup class(Name string) {
+                func init(other string) {
+                    Name = other
+                }
+            }
             """;
 
         var errors = CompileExpectingErrors(source);
-        Assert.True(errors.Any(e => e.Contains("init")), $"Expected an error about init: {string.Join("\n", errors)}");
+        Assert.True(
+            errors.Any(e => e.Contains("GS0284") || (e.Contains("primary") && e.Contains("init"))),
+            $"Expected GS0284 (duplicates primary ctor): {string.Join("\n", errors)}");
     }
 
     // ====================================================================

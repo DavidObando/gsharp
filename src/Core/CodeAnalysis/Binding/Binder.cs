@@ -752,8 +752,23 @@ public sealed class Binder
 
             foreach (var ctor in structSym.ExplicitConstructors)
             {
+                // ADR-0065 §5: skip synthesized primary-ctor symbols; the
+                // emitter materializes their field-assignment body directly.
+                if (ctor.IsSynthesizedFromPrimaryConstructor || ctor.Declaration == null)
+                {
+                    continue;
+                }
+
                 var ctorBinder = new Binder(parentScope, ctor.Function);
                 var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
+
+                // ADR-0065 §2 Rule 3: a `convenience init` body must begin
+                // with a `init(args)` self-delegation expression-statement.
+                if (ctor.IsConvenience)
+                {
+                    VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
+                }
+
                 var ctorLoweredBody = Lowerer.Lower(ctorBody, structSym);
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
                 diagnostics.AddRange(ctorBinder.Diagnostics);
@@ -1996,6 +2011,58 @@ public sealed class Binder
 
         sb.Append(')');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// ADR-0065 §2 Rule 3: ensures the body of a <c>convenience init</c>
+    /// begins with a <c>init(args)</c> self-delegation. Reports
+    /// <c>GS0278</c> when violated. Empty bodies and bodies whose first
+    /// statement is anything other than a chaining expression-statement are
+    /// rejected.
+    /// </summary>
+    private static void VerifyConvenienceInitDelegatesFirst(ConstructorSymbol ctor, BoundStatement boundBody, DiagnosticBag diagnostics)
+    {
+        if (ctor.Declaration == null)
+        {
+            return;
+        }
+
+        var location = ctor.Declaration.InitKeyword.Location;
+
+        var firstNonNoOp = FindFirstSignificantStatement(boundBody);
+        if (firstNonNoOp is BoundExpressionStatement exprStmt
+            && exprStmt.Expression is BoundConstructorChainingExpression)
+        {
+            return;
+        }
+
+        diagnostics.ReportConvenienceInitMustDelegate(location, ctor.DeclaringType?.Name ?? "?");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: recursively descends into a single-statement block to find
+    /// the first effective top-level statement. Used by
+    /// <see cref="VerifyConvenienceInitDelegatesFirst"/> to allow trivial
+    /// pre-pass wrapping (e.g. statements injected by lowering passes added
+    /// at a later date) without giving up on the chaining check.
+    /// </summary>
+    private static BoundStatement FindFirstSignificantStatement(BoundStatement statement)
+    {
+        if (statement is BoundBlockStatement block)
+        {
+            for (var i = 0; i < block.Statements.Length; i++)
+            {
+                var inner = FindFirstSignificantStatement(block.Statements[i]);
+                if (inner != null)
+                {
+                    return inner;
+                }
+            }
+
+            return null;
+        }
+
+        return statement;
     }
 
     /// <summary>

@@ -141,9 +141,10 @@ var cfg = Config()
     }
 
     [Fact]
-    public void PrimaryCtorAndFuncInit_ReportsError()
+    public void PrimaryCtorAndFuncInit_BothInitializersAvailable()
     {
-        // Mixing primary-ctor param list with explicit init is an error
+        // ADR-0065 §5: primary ctor + explicit `func init(age int32)` with
+        // distinct signatures coexist; both are designated initializers.
         var source = @"
 type Dual class(Name string) {
     Age int32
@@ -154,8 +155,14 @@ type Dual class(Name string) {
 
 var d = Dual(""x"")
 ";
-        var (result, _) = EvaluateAndGetStructs(source);
-        Assert.NotEmpty(result.Diagnostics);
+        var (result, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(result.Diagnostics);
+
+        var dual = structs.Single(s => s.Name == "Dual");
+        Assert.True(dual.HasPrimaryConstructor);
+        Assert.Equal(2, dual.ExplicitConstructors.Length);
+        Assert.True(dual.ExplicitConstructors[0].IsSynthesizedFromPrimaryConstructor);
+        Assert.False(dual.ExplicitConstructors[1].IsSynthesizedFromPrimaryConstructor);
     }
 
     [Fact]

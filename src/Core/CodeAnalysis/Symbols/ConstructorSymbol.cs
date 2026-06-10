@@ -23,7 +23,7 @@ public sealed class ConstructorSymbol
 {
     /// <summary>Initializes a new instance of the <see cref="ConstructorSymbol"/> class.</summary>
     /// <param name="function">The underlying instance-method-shaped function symbol used as the bind/emit/interpret key.</param>
-    /// <param name="declaration">The declaring syntax.</param>
+    /// <param name="declaration">The declaring syntax. May be <see langword="null"/> for compiler-synthesized constructors (e.g. ADR-0065 §5 primary-ctor synthesis).</param>
     public ConstructorSymbol(FunctionSymbol function, ConstructorDeclarationSyntax declaration)
     {
         Function = function;
@@ -33,7 +33,7 @@ public sealed class ConstructorSymbol
     /// <summary>Gets the underlying function symbol (receiver = the owning class) keyed in <c>BoundProgram.Functions</c>.</summary>
     public FunctionSymbol Function { get; }
 
-    /// <summary>Gets the declaring syntax node.</summary>
+    /// <summary>Gets the declaring syntax node, or <see langword="null"/> when this is a compiler-synthesized constructor (ADR-0065 §5).</summary>
     public ConstructorDeclarationSyntax Declaration { get; }
 
     /// <summary>Gets the constructor parameters (excluding the implicit <c>this</c>).</summary>
@@ -45,10 +45,37 @@ public sealed class ConstructorSymbol
     /// <summary>Gets the resolved explicit base-constructor initializer (<c>: base(args)</c>), or <c>null</c> when the constructor chains to a parameterless base constructor.</summary>
     public BaseConstructorInitializer BaseInitializer { get; private set; }
 
+    /// <summary>
+    /// Gets a value indicating whether this constructor is a
+    /// <c>convenience init</c> (ADR-0065 §2) that must delegate to another
+    /// initializer in the same class before performing any other work.
+    /// </summary>
+    public bool IsConvenience { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this constructor was compiler-synthesized
+    /// from a primary-constructor parameter list (ADR-0065 §5). The emitter
+    /// materializes the field-assignment body for these constructors rather
+    /// than reading it from the program's function bodies.
+    /// </summary>
+    public bool IsSynthesizedFromPrimaryConstructor { get; private set; }
+
     /// <summary>Sets <see cref="BaseInitializer"/> after the binder resolves the base-constructor argument list.</summary>
     /// <param name="initializer">The resolved base-constructor initializer.</param>
     public void SetBaseInitializer(BaseConstructorInitializer initializer)
     {
         BaseInitializer = initializer;
+    }
+
+    /// <summary>ADR-0065 §2: marks this constructor as <c>convenience</c>.</summary>
+    public void MarkConvenience()
+    {
+        IsConvenience = true;
+    }
+
+    /// <summary>ADR-0065 §5: marks this constructor as synthesized from the primary-constructor parameter list.</summary>
+    public void MarkSynthesizedFromPrimaryConstructor()
+    {
+        IsSynthesizedFromPrimaryConstructor = true;
     }
 }

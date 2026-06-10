@@ -91,6 +91,36 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(ctorHandle);
     }
 
+    /// <summary>
+    /// ADR-0065 §2: emits the CIL for a <c>init(args)</c> self-delegation
+    /// statement that appears inside a <c>convenience init(...)</c> body.
+    /// Lowered to <c>ldarg.0; &lt;args&gt;; call &lt;ctor&gt;</c> chaining to a
+    /// sibling constructor on the same class.
+    /// </summary>
+    /// <param name="call">The bound chaining expression to emit.</param>
+    private void EmitConstructorChaining(BoundConstructorChainingExpression call)
+    {
+        if (call.SelectedConstructor == null
+            || !this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var ctorHandle))
+        {
+            throw new InvalidOperationException(
+                $"Constructor chaining target on '{call.SelectedConstructor?.DeclaringType?.Name}' has no emitted handle.");
+        }
+
+        // Load `this` then evaluate each argument in order. Parameters of a
+        // user-authored init can never be type parameters today, so the
+        // value-type-to-System.Object boxing dance that EmitConstructorCall
+        // performs is unnecessary here.
+        this.il.LoadArgument(0);
+        foreach (var arg in call.Arguments)
+        {
+            this.EmitExpression(arg);
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(ctorHandle);
+    }
+
     private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
     {
         if (!this.outer.cache.MethodHandles.TryGetValue(call.Method, out var methodHandle))

@@ -922,7 +922,11 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #306: a class with an explicit base-constructor initializer
             // emits a single forwarding constructor (no separate parameterless
             // ctor), so reserve only one ctor row in that case.
-            if (c.HasPrimaryConstructor && c.BaseConstructorInitializer == null)
+            // ADR-0065 §5: when the class also declares explicit `init(...)`
+            // bodies, the synthesized primary ctor is allocated as one of the
+            // ExplicitConstructors rows above — do not reserve an additional
+            // primary-ctor row here.
+            if (c.HasPrimaryConstructor && c.BaseConstructorInitializer == null && c.ExplicitConstructor == null)
             {
                 classPrimaryCtorRows[c] = methodRow++;
             }
@@ -1508,11 +1512,39 @@ internal sealed class ReflectionMetadataEmitter
                 // Issue #306 / ADR-0063 §9: a class with explicit `init(...)`
                 // constructors emits one `.ctor` per declared overload. The first
                 // overload also serves as the legacy classCtor/primaryCtor handle.
+                // ADR-0065 §5: when the class also declares a primary-ctor
+                // parameter list, the first overload is a synthesized
+                // designated init whose body is the conventional primary-ctor
+                // field-assignment sequence — route it through
+                // EmitClassPrimaryConstructor instead of the user-body path.
                 MethodDefinitionHandle firstHandle = default;
                 var firstAssigned = false;
                 foreach (var explicitCtor in c.ExplicitConstructors)
                 {
-                    var ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(c, explicitCtor);
+                    MethodDefinitionHandle ctorHandle;
+                    if (explicitCtor.IsSynthesizedFromPrimaryConstructor)
+                    {
+                        // The synthesized primary follows the same emission
+                        // shape as a primary-ctor-only class. If the class
+                        // declaration also carries `: Base(args)`, that base
+                        // initializer must be honored — route through the
+                        // forwarding-ctor emitter; otherwise emit the plain
+                        // primary-ctor shape (default chain to `object::.ctor`
+                        // or the parameterless base).
+                        if (c.BaseConstructorInitializer != null)
+                        {
+                            ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBaseInitializer(c, c.PrimaryConstructorParameters);
+                        }
+                        else
+                        {
+                            ctorHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
+                        }
+                    }
+                    else
+                    {
+                        ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(c, explicitCtor);
+                    }
+
                     this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle;
                     if (!firstAssigned)
                     {
@@ -2978,8 +3010,11 @@ internal sealed class ReflectionMetadataEmitter
         var constValues = new Dictionary<VariableSymbol, object>();
 
         // Pre-scan the base arguments so any scratch slots they require are
-        // allocated and registered in the locals signature.
-        if (init != null && !init.Arguments.IsDefaultOrEmpty)
+        // allocated and registered in the locals signature. ADR-0065 §2:
+        // convenience inits skip the base-call emission so their `init`
+        // syntax-side `: base()` (if present, but rejected at bind time) and
+        // the implicit empty-args case are irrelevant here.
+        if (!ctor.IsConvenience && init != null && !init.Arguments.IsDefaultOrEmpty)
         {
             var synth = ImmutableArray.CreateBuilder<BoundStatement>(init.Arguments.Length);
             foreach (var arg in init.Arguments)
@@ -3011,8 +3046,11 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
+        // ADR-0065 §2: convenience inits skip field-init emission (the
+        // chained-to designated init handles them), so don't reserve scratch
+        // slots for those expressions either.
         BoundBlockStatement fieldInitBody = null;
-        if (!classSym.InstanceFieldInitializers.IsEmpty)
+        if (!ctor.IsConvenience && !classSym.InstanceFieldInitializers.IsEmpty)
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
             this.methodBodyPlanner.CollectLocalsAndLabels(
@@ -3106,28 +3144,38 @@ internal sealed class ReflectionMetadataEmitter
             liftedBinarySlots: liftedBinarySlots,
             constValues: constValues);
 
-        // base(args) — `this` followed by the (ref-kind aware) base arguments.
-        il.LoadArgument(0);
-        if (init != null && !init.Arguments.IsDefaultOrEmpty)
+        // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
+        // constructor itself — the user-authored body begins with an
+        // `init(args)` self-delegation (BoundConstructorChainingExpression)
+        // that calls a sibling constructor on the same class. That sibling
+        // is responsible for the base chain. We also skip the instance
+        // field-initializer emit step here: the chained-to designated
+        // initializer will run those initializers exactly once.
+        if (!ctor.IsConvenience)
         {
-            emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
-        }
-
-        il.OpCode(ILOpCode.Call);
-        il.Token(baseCtorToken);
-
-        // Issue #640: emit instance field initializer assignments before
-        // the user-authored constructor body (matching C# semantics).
-        if (fieldInitBody != null)
-        {
-            try
+            // base(args) — `this` followed by the (ref-kind aware) base arguments.
+            il.LoadArgument(0);
+            if (init != null && !init.Arguments.IsDefaultOrEmpty)
             {
-                emitter.EmitBlock(fieldInitBody);
+                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
             }
-            catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+
+            // Issue #640: emit instance field initializer assignments before
+            // the user-authored constructor body (matching C# semantics).
+            if (fieldInitBody != null)
             {
-                var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
-                EmitDiagnosticException.Wrap(anchor, ex);
+                try
+                {
+                    emitter.EmitBlock(fieldInitBody);
+                }
+                catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+                {
+                    var anchor = emitter.CurrentAnchor ?? classSym.Declaration;
+                    EmitDiagnosticException.Wrap(anchor, ex);
+                }
             }
         }
 

@@ -133,6 +133,11 @@ public enum BoundNodeKind
     // Issue #575: expression-level type-test and safe-cast operators.
     IsExpression,
     AsExpression,
+
+    // ADR-0065 §2: a `init(args)` self-delegation statement inside a
+    // `convenience init(...)` body. Emitted as a `call .ctor(this, args)`
+    // chained CIL call to another constructor in the same class.
+    ConstructorChainingExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

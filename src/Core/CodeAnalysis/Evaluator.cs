@@ -541,6 +541,7 @@ public sealed class Evaluator
                 BoundNodeKind.InterpolatedStringExpression => EvaluateInterpolatedStringExpression((BoundInterpolatedStringExpression)node),
                 BoundNodeKind.IsExpression => EvaluateIsExpression((BoundIsExpression)node),
                 BoundNodeKind.AsExpression => EvaluateAsExpression((BoundAsExpression)node),
+                BoundNodeKind.ConstructorChainingExpression => EvaluateConstructorChainingExpression((BoundConstructorChainingExpression)node),
                 _ => throw new EvaluatorException($"Unexpected node {node.Kind}", node),
             };
         }
@@ -1109,18 +1110,62 @@ public sealed class Evaluator
         var explicitCtor = node.SelectedConstructor ?? node.StructType.ExplicitConstructor;
         if (explicitCtor != null)
         {
+            // ADR-0065 §5: a synthesized primary-ctor designated init has no
+            // user-authored body in `program.Functions`. Materialize it on
+            // the fly: assign each primary-ctor parameter to its same-named
+            // field, then fall through to base-init / CLR-allocation handling
+            // by reusing the primary-ctor path below.
+            if (explicitCtor.IsSynthesizedFromPrimaryConstructor)
+            {
+                var primaryParams = node.StructType.PrimaryConstructorParameters;
+                for (var i = 0; i < primaryParams.Length; i++)
+                {
+                    sv.Fields[primaryParams[i].Name] = EvaluateExpression(node.Arguments[i]);
+                }
+
+                // Forward an explicit class-level base initializer if present
+                // (the synthesized primary mirrors the original primary-ctor shape).
+                var baseInitOnStruct = node.StructType.BaseConstructorInitializer;
+                if (baseInitOnStruct != null
+                    && baseInitOnStruct.GSharpBaseType is StructSymbol gsBase)
+                {
+                    var frame = new Dictionary<VariableSymbol, object>();
+                    for (var i = 0; i < primaryParams.Length; i++)
+                    {
+                        frame[primaryParams[i]] = sv.Fields[primaryParams[i].Name];
+                    }
+
+                    locals.Push(frame);
+                    try
+                    {
+                        var baseParams = gsBase.PrimaryConstructorParameters;
+                        for (var i = 0; i < baseParams.Length && i < baseInitOnStruct.Arguments.Length; i++)
+                        {
+                            sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInitOnStruct.Arguments[i]);
+                        }
+                    }
+                    finally
+                    {
+                        locals.Pop();
+                    }
+                }
+
+                AllocateClrBacking(sv, node.StructType, baseInitOnStruct);
+                return sv;
+            }
+
             var ctorFunction = explicitCtor.Function;
-            var frame = new Dictionary<VariableSymbol, object>
+            var frame2 = new Dictionary<VariableSymbol, object>
             {
                 [ctorFunction.ThisParameter] = sv,
             };
 
             for (var i = 0; i < ctorFunction.Parameters.Length; i++)
             {
-                frame[ctorFunction.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
+                frame2[ctorFunction.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
             }
 
-            locals.Push(frame);
+            locals.Push(frame2);
             try
             {
                 // Forward the GSharp base initializer. CLR base initializers are
@@ -3469,6 +3514,106 @@ public sealed class Evaluator
         if (targetClr.IsInstanceOfType(value))
         {
             return value;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: evaluates a <c>init(args)</c> self-delegation call inside
+    /// a <c>convenience init</c> body. Looks up the current <c>this</c> in the
+    /// active locals frame and invokes the chained-to sibling constructor's
+    /// body against it. Returns <see langword="null"/> (the statement has no
+    /// value-position result).
+    /// </summary>
+    private object EvaluateConstructorChainingExpression(BoundConstructorChainingExpression node)
+    {
+        var targetCtor = node.SelectedConstructor;
+        if (targetCtor == null)
+        {
+            throw new EvaluatorException("Constructor chaining target was not resolved.", node);
+        }
+
+        var thisParam = targetCtor.Function.ThisParameter;
+        StructValue receiver = null;
+
+        // Walk the local frames stack from innermost outward looking for the
+        // current `this` binding. The convenience init body is bound with its
+        // own `this`, which matches the chained-to ctor's `this` since both
+        // belong to the same class.
+        foreach (var frame in locals)
+        {
+            foreach (var kv in frame)
+            {
+                if (kv.Value is StructValue sv && kv.Key is ParameterSymbol param && param.Name == "this")
+                {
+                    receiver = sv;
+                    break;
+                }
+            }
+
+            if (receiver != null)
+            {
+                break;
+            }
+        }
+
+        if (receiver == null)
+        {
+            throw new EvaluatorException("Convenience initializer self-delegation could not locate the current 'this'.", node);
+        }
+
+        // Evaluate the chained-to ctor's arguments first (in the current frame
+        // so that the convenience init's own parameters are in scope).
+        var argValues = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            argValues[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        // Build the chained-to ctor's frame and run its body. ADR-0065 §5: a
+        // synthesized primary-ctor delegate has no bound body — materialize
+        // the same field-assignment shape as the primary-ctor path.
+        if (targetCtor.IsSynthesizedFromPrimaryConstructor)
+        {
+            var primaryParams = targetCtor.DeclaringType?.PrimaryConstructorParameters ?? ImmutableArray<ParameterSymbol>.Empty;
+            for (var i = 0; i < primaryParams.Length; i++)
+            {
+                receiver.Fields[primaryParams[i].Name] = argValues[i];
+            }
+
+            return null;
+        }
+
+        var chainFrame = new Dictionary<VariableSymbol, object>
+        {
+            [thisParam] = receiver,
+        };
+
+        for (var i = 0; i < targetCtor.Function.Parameters.Length; i++)
+        {
+            chainFrame[targetCtor.Function.Parameters[i]] = argValues[i];
+        }
+
+        locals.Push(chainFrame);
+        try
+        {
+            if (targetCtor.BaseInitializer is BaseConstructorInitializer chainBaseInit
+                && chainBaseInit.GSharpBaseType is StructSymbol chainGsBase)
+            {
+                var baseParams = chainGsBase.PrimaryConstructorParameters;
+                for (var i = 0; i < baseParams.Length && i < chainBaseInit.Arguments.Length; i++)
+                {
+                    receiver.Fields[baseParams[i].Name] = EvaluateExpression(chainBaseInit.Arguments[i]);
+                }
+            }
+
+            var body = program.Functions[targetCtor.Function];
+            EvaluateStatement(body);
+        }
+        finally
+        {
+            locals.Pop();
         }
 
         return null;

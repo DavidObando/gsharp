@@ -172,6 +172,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ConstructorCallExpression:
                 WriteConstructorCallExpression((BoundConstructorCallExpression)node, writer);
                 break;
+            case BoundNodeKind.ConstructorChainingExpression:
+                WriteConstructorChainingExpression((BoundConstructorChainingExpression)node, writer);
+                break;
             case BoundNodeKind.UserInstanceCallExpression:
                 WriteUserInstanceCallExpression((BoundUserInstanceCallExpression)node, writer);
                 break;
@@ -1128,6 +1131,24 @@ public static class BoundNodePrinter
     private static void WriteConstructorCallExpression(BoundConstructorCallExpression node, IndentedTextWriter writer)
     {
         writer.WriteIdentifier(node.StructType.Name);
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Arguments[i].WriteTo(writer);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteConstructorChainingExpression(BoundConstructorChainingExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword("init");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         for (var i = 0; i < node.Arguments.Length; i++)
         {
