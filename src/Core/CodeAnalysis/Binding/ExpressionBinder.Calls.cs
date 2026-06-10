@@ -440,17 +440,26 @@ internal sealed partial class ExpressionBinder
         var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
         var argTypes = new System.Type[boundArguments.Count];
         var argsAllTyped = true;
+        var hasUserClassArg = false;
         for (var i = 0; i < boundArguments.Count; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
             // Issue #533: allow null (nil literal) to flow through; overload
             // resolution now handles null source as compatible with reference
             // types and Nullable<T>.
-            var t = GetEffectiveArgumentClrType(boundArguments[i].Type);
+            // Issue #658: use the overload-resolution variant that provides a
+            // surrogate CLR type for user-defined G# classes (whose ClrType is
+            // null at bind time) so overload resolution can proceed.
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArguments[i].Type);
             if (t == null && boundArguments[i].Type != TypeSymbol.Null)
             {
                 argsAllTyped = false;
                 break;
+            }
+
+            if (boundArguments[i].Type is StructSymbol { IsClass: true })
+            {
+                hasUserClassArg = true;
             }
 
             argTypes[i] = t;
@@ -461,19 +470,38 @@ internal sealed partial class ExpressionBinder
         bool ctorIsExpanded = false;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-            switch (resolution.Outcome)
+            // Issue #658: when any argument is a user-defined G# class, set up
+            // the supplementary interface check so ClassifyImplicit recognises
+            // the user-class → CLR-interface implicit reference conversion.
+            if (hasUserClassArg)
             {
-                case OverloadResolution.ResolutionOutcome.Resolved:
-                    bestCtor = resolution.Best;
-                    ctorMapping = resolution.ParameterMapping;
-                    ctorIsExpanded = resolution.IsExpanded;
-                    break;
-                case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
-                    return false;
-                default:
-                    break;
+                OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+                    IsUserClassAssignableToInterface(boundArguments, argTypes, source, target);
+            }
+
+            try
+            {
+                var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count), argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+                switch (resolution.Outcome)
+                {
+                    case OverloadResolution.ResolutionOutcome.Resolved:
+                        bestCtor = resolution.Best;
+                        ctorMapping = resolution.ParameterMapping;
+                        ctorIsExpanded = resolution.IsExpanded;
+                        break;
+                    case OverloadResolution.ResolutionOutcome.Ambiguous:
+                        Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                        return false;
+                    default:
+                        break;
+                }
+            }
+            finally
+            {
+                if (hasUserClassArg)
+                {
+                    OverloadResolution.SupplementaryInterfaceCheck = null;
+                }
             }
         }
 
@@ -975,17 +1003,24 @@ internal sealed partial class ExpressionBinder
         {
             var argTypes = new System.Type[arguments.Length];
             var argsAllTyped = true;
+            var hasUserClassArg = false;
             for (var i = 0; i < arguments.Length; i++)
             {
                 // Issue #530: use GetEffectiveArgumentClrType so that a
                 // nullable value type argument (e.g. `int32?`) is matched
                 // as `Nullable<T>` in overload resolution.
                 // Issue #533: allow null (nil literal) through.
-                var t = GetEffectiveArgumentClrType(arguments[i].Type);
+                // Issue #658: use overload-resolution variant for user classes.
+                var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
                 if (t == null && arguments[i].Type != TypeSymbol.Null)
                 {
                     argsAllTyped = false;
                     break;
+                }
+
+                if (arguments[i].Type is StructSymbol { IsClass: true })
+                {
+                    hasUserClassArg = true;
                 }
 
                 argTypes[i] = t;
@@ -993,30 +1028,47 @@ internal sealed partial class ExpressionBinder
 
             if (argsAllTyped)
             {
-                var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length), argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-                switch (resolution.Outcome)
+                // Issue #658: set up supplementary interface check for user-class args.
+                if (hasUserClassArg)
                 {
-                    case OverloadResolution.ResolutionOutcome.Resolved:
-                        var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
-                        var instParameters = resolution.Best.GetParameters();
-                        var instMapping = resolution.ParameterMapping;
-                        var instExpandedArgs = resolution.IsExpanded
-                            ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
-                            : arguments;
-                        var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
-                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
-                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping);
-                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
-                        var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
-                        var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
-                        var instRefKinds = ComputeArgumentRefKinds(instParameters);
-                        overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                        return ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
-                    case OverloadResolution.ResolutionOutcome.Ambiguous:
-                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
-                        return new BoundErrorExpression(null);
-                    default:
-                        break;
+                    OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+                        IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
+                }
+
+                try
+                {
+                    var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length), argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+                    switch (resolution.Outcome)
+                    {
+                        case OverloadResolution.ResolutionOutcome.Resolved:
+                            var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols) ?? MapClrMemberType(resolution.Best.ReturnType);
+                            var instParameters = resolution.Best.GetParameters();
+                            var instMapping = resolution.ParameterMapping;
+                            var instExpandedArgs = resolution.IsExpanded
+                                ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
+                                : arguments;
+                            var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
+                            var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
+                            var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping);
+                            var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
+                            var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
+                            var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
+                            var instRefKinds = ComputeArgumentRefKinds(instParameters);
+                            overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
+                            return ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
+                        case OverloadResolution.ResolutionOutcome.Ambiguous:
+                            Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                            return new BoundErrorExpression(null);
+                        default:
+                            break;
+                    }
+                }
+                finally
+                {
+                    if (hasUserClassArg)
+                    {
+                        OverloadResolution.SupplementaryInterfaceCheck = null;
+                    }
                 }
             }
         }
@@ -1269,20 +1321,46 @@ internal sealed partial class ExpressionBinder
         }
 
         var argTypes = new System.Type[arguments.Length];
+        var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
             // Issue #533: allow null (nil literal) through.
-            var t = GetEffectiveArgumentClrType(arguments[i].Type);
+            // Issue #658: use overload-resolution variant for user classes.
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
                 return false;
             }
 
+            if (arguments[i].Type is StructSymbol { IsClass: true })
+            {
+                hasUserClassArg = true;
+            }
+
             argTypes[i] = t;
         }
 
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        // Issue #658: set up supplementary interface check for user-class args.
+        if (hasUserClassArg)
+        {
+            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+                IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
+        }
+
+        OverloadResolution.Result<MethodInfo> resolution;
+        try
+        {
+            resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        }
+        finally
+        {
+            if (hasUserClassArg)
+            {
+                OverloadResolution.SupplementaryInterfaceCheck = null;
+            }
+        }
+
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -1379,14 +1457,21 @@ internal sealed partial class ExpressionBinder
         // resolution (including generic inference) can run.
         var argTypes = new Type[arguments.Length + 1];
         argTypes[0] = receiverClrType;
+        var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
             // Issue #533: allow null (nil literal) through.
-            var t = GetEffectiveArgumentClrType(arguments[i].Type);
+            // Issue #658: use overload-resolution variant for user classes.
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
                 return false;
+            }
+
+            if (arguments[i].Type is StructSymbol { IsClass: true })
+            {
+                hasUserClassArg = true;
             }
 
             argTypes[i + 1] = t;
@@ -1419,7 +1504,26 @@ internal sealed partial class ExpressionBinder
         // when the call site supplied explicit type arguments (e.g.
         // services.AddSingleton[IService, Service]()), those are used to close
         // the generic method instead of inference.
-        var resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: extensionArgumentNames);
+        // Issue #658: set up supplementary interface check for user-class args.
+        if (hasUserClassArg)
+        {
+            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+                IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
+        }
+
+        OverloadResolution.Result<MethodInfo> resolution;
+        try
+        {
+            resolution = OverloadResolution.Resolve(candidates, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences, argumentNames: extensionArgumentNames);
+        }
+        finally
+        {
+            if (hasUserClassArg)
+            {
+                OverloadResolution.SupplementaryInterfaceCheck = null;
+            }
+        }
+
         switch (resolution.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -1536,5 +1640,107 @@ internal sealed partial class ExpressionBinder
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #658: determines whether a user-defined G# class argument (identified
+    /// by its surrogate CLR type in <paramref name="argTypes"/>) implements the
+    /// specified CLR <paramref name="target"/> interface. Used as the
+    /// <see cref="OverloadResolution.SupplementaryInterfaceCheck"/> callback during
+    /// overload resolution for calls that include user-class arguments.
+    /// </summary>
+    private static bool IsUserClassAssignableToInterface(
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        System.Type[] argTypes,
+        System.Type source,
+        System.Type target)
+    {
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            if (!ReferenceEquals(argTypes[i], source))
+            {
+                continue;
+            }
+
+            if (boundArguments[i].Type is StructSymbol { IsClass: true } ss)
+            {
+                if (UserClassImplementsInterface(ss, target))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #658: checks whether a user-defined G# class (or any of its base
+    /// classes) declares implementation of the specified CLR interface.
+    /// </summary>
+    private static bool UserClassImplementsInterface(StructSymbol ss, System.Type target)
+    {
+        for (var current = ss; current != null; current = current.BaseClass)
+        {
+            foreach (var iface in current.ImplementedClrInterfaces)
+            {
+                if (iface.ClrType == null)
+                {
+                    continue;
+                }
+
+                // Direct match: the implemented interface IS the target.
+                if (ClrTypeUtilities.AreSame(iface.ClrType, target))
+                {
+                    return true;
+                }
+
+                // The implemented interface itself inherits from the target.
+                if (ClrTypeUtilities.ImplementsInterfaceByName(iface.ClrType, target))
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Also check the imported CLR base type (if any) — it may implement
+        // the target interface.
+        if (ss.ImportedBaseType?.ClrType != null
+            && ClrTypeUtilities.ImplementsInterfaceByName(ss.ImportedBaseType.ClrType, target))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #658: variant of <see cref="IsUserClassAssignableToInterface"/> that
+    /// works with <see cref="ImmutableArray{T}"/> arguments (used by instance
+    /// method call paths).
+    /// </summary>
+    private static bool IsUserClassAssignableToInterfaceFromArgs(
+        ImmutableArray<BoundExpression> boundArguments,
+        System.Type[] argTypes,
+        System.Type source,
+        System.Type target)
+    {
+        for (var i = 0; i < boundArguments.Length; i++)
+        {
+            if (!ReferenceEquals(argTypes[i], source))
+            {
+                continue;
+            }
+
+            if (boundArguments[i].Type is StructSymbol { IsClass: true } ss)
+            {
+                if (UserClassImplementsInterface(ss, target))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }
