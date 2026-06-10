@@ -858,6 +858,25 @@ internal sealed partial class ExpressionBinder
         switch (rightPart)
         {
             case AccessorExpressionSyntax nested:
+                // Issue #672: when the LHS is a CLR type symbol, check whether
+                // the left segment of the nested accessor names a nested type
+                // (e.g. `Environment.SpecialFolder.ApplicationData` — here
+                // `SpecialFolder` is a nested enum inside `Environment`). If so,
+                // create a new ImportedClassSymbol for the nested type and bind
+                // the right segment against it, enabling chained static/enum
+                // member access on nested types.
+                if (classSymbol != null && TryResolveNestedTypeFromAccessorLeft(classSymbol, nested.LeftPart, out var nestedClassSymbol))
+                {
+                    if (nested.IsNullConditional)
+                    {
+                        // Null-conditional on a type is semantically meaningless
+                        // but fall through to avoid a crash.
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return BindAccessorStep(null, nestedClassSymbol, nested.RightPart);
+                }
+
                 var head = BindAccessorStep(receiver, classSymbol, nested.LeftPart);
                 if (head is BoundErrorExpression)
                 {
@@ -1108,6 +1127,68 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Issue #672: resolves a nested CLR type from the left part of an
+    /// accessor expression when the enclosing type is already known (i.e.
+    /// <paramref name="classSymbol"/> is non-null). Supports single-level
+    /// nesting (left part is a <see cref="NameExpressionSyntax"/>) and
+    /// multi-level nesting (left part is an <see cref="AccessorExpressionSyntax"/>
+    /// whose segments form a chain of nested types).
+    /// </summary>
+    private bool TryResolveNestedTypeFromAccessorLeft(ImportedClassSymbol classSymbol, ExpressionSyntax leftPart, out ImportedClassSymbol nestedClassSymbol)
+    {
+        nestedClassSymbol = null;
+
+        if (leftPart is NameExpressionSyntax nameExpr)
+        {
+            var name = nameExpr.IdentifierToken.Text;
+
+            // Only resolve as a nested type when the name is NOT a static
+            // field/property or method group — those take precedence.
+            if (classSymbol.TryLookupMember(name, nameExpr, out _))
+            {
+                return false;
+            }
+
+            if (TryBindClrMethodGroup(receiver: null, classSymbol.ClassType, wantStatic: true, name, out _))
+            {
+                return false;
+            }
+
+            if (scope.References.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType))
+            {
+                nestedClassSymbol = new ImportedClassSymbol(nestedType, nameExpr);
+                return true;
+            }
+
+            return false;
+        }
+
+        if (leftPart is AccessorExpressionSyntax accessor)
+        {
+            // Multi-level nesting: recursively resolve the left side first,
+            // then resolve the right side as a nested type of that.
+            if (!TryResolveNestedTypeFromAccessorLeft(classSymbol, accessor.LeftPart, out var intermediateSymbol))
+            {
+                return false;
+            }
+
+            if (accessor.RightPart is NameExpressionSyntax innerName)
+            {
+                var innerNameText = innerName.IdentifierToken.Text;
+                if (scope.References.TryResolveNestedType(intermediateSymbol.ClassType, innerNameText, out var deepNested))
+                {
+                    nestedClassSymbol = new ImportedClassSymbol(deepNested, innerName);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return false;
     }
 
     private BoundExpression BindIndexExpression(IndexExpressionSyntax syntax)
