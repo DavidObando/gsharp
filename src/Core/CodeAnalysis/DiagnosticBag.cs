@@ -867,13 +867,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports that top-level statements appear in more than one source file in
-    /// the same compilation, which is not allowed.
+    /// Reports that top-level statements appear in more than one *package* in
+    /// the same compilation, which is not allowed (ADR-0066). The earlier
+    /// ADR-0028 widened the rule from "one source file" to "one package";
+    /// the message text matches the package-scoped rule the binder actually
+    /// enforces.
     /// </summary>
     /// <param name="location">A location in one of the offending files.</param>
     public void ReportMultipleTopLevelFiles(TextLocation location)
     {
-        var message = "Only one source file in a compilation may contain top-level statements.";
+        var message = "Top-level statements may appear in at most one package per compilation.";
         Report(location, "GS0165", message);
     }
 

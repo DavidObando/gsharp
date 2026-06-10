@@ -66,6 +66,8 @@ for (var i = count; i > 0; i--)
 ```
 
 ### Entry-point synthesis rules
+> **Authoritative source:** [`docs/adr/0066-top-level-statement-mechanics.md`](../docs/adr/0066-top-level-statement-mechanics.md) supersedes the bullet list below. The bullets are kept here as the v0.1 historical record and were partially refined by [ADR-0028](../docs/adr/0028-multi-package-emit.md) (multi-package emit) and finalized by ADR-0066.
+
 - A compilation that contains any top-level statements must contain exactly one source file with top-level statements; multiple files with top-level statements is a compile error.
 - The binder synthesizes a single hidden method (conceptually `<TopLevel>$.<Main>$(string[] args)`) whose body is the lowered top-level `BoundBlockStatement`. The emitter marks that method as the assembly entry point.
 - An explicit `func Main()` (or `func Main(args string[])`) is supported and takes precedence: when present, top-level statements are not allowed in the same compilation.
