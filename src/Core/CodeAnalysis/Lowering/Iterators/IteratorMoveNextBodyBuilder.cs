@@ -280,6 +280,26 @@ public static class IteratorMoveNextBodyBuilder
             return base.RewriteAssignmentExpression(node);
         }
 
+        // Issue #655: explicitly rewrite field-access expressions whose
+        // receiver is a BoundVariableExpression referencing the user-class
+        // `this` (hoisted as <>4__this). Ensures the proxy load is applied
+        // directly, protecting against regressions.
+        protected override BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+        {
+            if (node.Receiver is BoundVariableExpression varExpr
+                && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
+            {
+                var rewrittenReceiver = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, this.thisParameter),
+                    this.smClass,
+                    proxyField);
+                return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
+            }
+
+            return base.RewriteFieldAccessExpression(node);
+        }
+
         // Issue #641: rewrite field assignments whose receiver is the
         // user-class `this` (hoisted as <>4__this) to use an expression
         // receiver so the emitter loads the proxy field.
@@ -468,6 +488,22 @@ public static class IteratorMoveNextBodyBuilder
             }
 
             return base.RewriteAssignmentExpression(node);
+        }
+
+        // Issue #655: explicitly rewrite field-access expressions whose
+        // receiver is a BoundVariableExpression referencing the user-class
+        // `this` (hoisted as <>4__this). Ensures the proxy load is applied
+        // directly, protecting against regressions.
+        protected override BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+        {
+            if (node.Receiver is BoundVariableExpression varExpr
+                && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
+            {
+                var rewrittenReceiver = this.FieldRead(proxyField);
+                return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
+            }
+
+            return base.RewriteFieldAccessExpression(node);
         }
 
         // Issue #641: rewrite field assignments whose receiver is the

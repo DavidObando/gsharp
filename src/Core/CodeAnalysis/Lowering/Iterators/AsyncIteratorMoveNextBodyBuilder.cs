@@ -292,6 +292,26 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return node;
             }
 
+            // Issue #655: explicitly rewrite field-access expressions whose
+            // receiver is a BoundVariableExpression referencing the user-class
+            // `this` (hoisted as <>4__this). The base class RewriteFieldAccess-
+            // Expression already calls RewriteExpression on the receiver, but
+            // this explicit override ensures the proxy load is applied directly
+            // — protecting against future changes to the base-class dispatch
+            // order that could leave a raw `this` reference in the MoveNext body
+            // and trigger GS9998 at emit time.
+            protected override BoundExpression RewriteFieldAccessExpression(BoundFieldAccessExpression node)
+            {
+                if (node.Receiver is BoundVariableExpression varExpr
+                    && ctx.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
+                {
+                    var rewrittenReceiver = ctx.ReadField(proxyField);
+                    return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
+                }
+
+                return base.RewriteFieldAccessExpression(node);
+            }
+
             // Issue #641: rewrite field assignments whose receiver is the
             // user-class `this` (hoisted as <>4__this) to use an expression
             // receiver so the emitter loads the proxy field, not the
