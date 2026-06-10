@@ -181,6 +181,84 @@ public class OverloadResolutionTests
         Assert.Equal(new[] { typeof(string), typeof(int) }, typeArgs);
     }
 
+    // --- Issue #661: nullable-aware inference (T vs Nullable<T>) ---
+
+    public enum Quality { Low = 1, High = 2 }
+
+    [Fact]
+    public void InferTypeArguments_Pair_NonNullableAndNullableEnum_PromotesToNullable()
+    {
+        // Issue #661: G_Pair<T>(T, T) with (Quality, Quality?) must infer T = Quality?
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality?) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Pair_NullableEnumAndNonNullable_PromotesToNullable()
+    {
+        // Issue #661: symmetric — G_Pair<T>(T, T) with (Quality?, Quality) must infer T = Quality?
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Pair_BothNullableEnum_InfersNullable()
+    {
+        // Both operands nullable — should infer T = Quality? trivially.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality?) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Pair_BothNonNullableEnum_InfersNonNullable()
+    {
+        // Both non-nullable — should infer T = Quality.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(Quality) }, typeArgs);
+    }
+
+    [Fact]
+    public void InferTypeArguments_Pair_NonNullableAndNullableInt_PromotesToNullable()
+    {
+        // Regression guard: the int case must still work.
+        var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
+        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int?) }, out var typeArgs);
+        Assert.True(ok);
+        Assert.Equal(new[] { typeof(int?) }, typeArgs);
+    }
+
+    [Fact]
+    public void Resolve_EqualLike_NonNullableEnumAndNullableEnum_Resolves()
+    {
+        // Issue #661: Assert.Equal(Quality.High, actual) where actual : Quality?
+        var candidates = typeof(EqualLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == "Equal");
+        var result = OverloadResolution.Resolve(candidates, new[] { typeof(Quality), typeof(Quality?) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(Quality?), result.Best.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_EqualLike_NullableEnumAndNonNullableEnum_Resolves()
+    {
+        // Issue #661: symmetric case.
+        var candidates = typeof(EqualLike)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(m => m.Name == "Equal");
+        var result = OverloadResolution.Resolve(candidates, new[] { typeof(Quality?), typeof(Quality) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(typeof(Quality?), result.Best.GetGenericArguments()[0]);
+    }
+
     [Fact]
     public void Resolve_ClosesOpenGenericMethod_FromInferableArgs()
     {

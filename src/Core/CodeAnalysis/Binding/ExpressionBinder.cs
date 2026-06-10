@@ -636,6 +636,19 @@ internal sealed partial class ExpressionBinder
             return ss.ImportedBaseType?.ClrType ?? typeof(object);
         }
 
+        // Issue #661: user-defined G# enum — backed by int32 at the CLR level.
+        if (typeSymbol is EnumSymbol)
+        {
+            return typeof(int);
+        }
+
+        // Issue #661: Nullable<UserEnum> — the underlying enum has no ClrType,
+        // so GetEffectiveClrType returns null. Map to Nullable<int>.
+        if (typeSymbol is NullableTypeSymbol { UnderlyingType: EnumSymbol })
+        {
+            return typeof(int?);
+        }
+
         return null;
     }
 

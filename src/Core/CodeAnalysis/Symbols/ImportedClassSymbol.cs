@@ -180,6 +180,16 @@ public sealed class ImportedClassSymbol : Symbol
                     t = ss.ImportedBaseType?.ClrType ?? typeof(object);
                     hasUserClassArg = true;
                 }
+                else if (arguments[i].Type is EnumSymbol)
+                {
+                    // Issue #661: user-defined G# enum — backed by int32 at CLR level.
+                    t = typeof(int);
+                }
+                else if (arguments[i].Type is NullableTypeSymbol { UnderlyingType: EnumSymbol })
+                {
+                    // Issue #661: Nullable<UserEnum> — map to Nullable<int>.
+                    t = typeof(int?);
+                }
                 else
                 {
                     return false;
