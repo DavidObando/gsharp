@@ -1563,6 +1563,12 @@ internal sealed partial class ExpressionBinder
         {
             ArrayTypeSymbol arr => arr.ElementType,
             SliceTypeSymbol slice => slice.ElementType,
+
+            // Issue #664: CLR T[] arrays (e.g. result of string.Split) are indexable.
+            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(clr.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
             _ => null,
         };
     }
