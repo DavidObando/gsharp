@@ -911,6 +911,14 @@ internal sealed class ReflectionMetadataEmitter
         {
             classCtorRows[c] = methodRow++;
 
+            // Issue #656 / ADR-0065: when the class declares explicit init(...)
+            // constructors, each overload beyond the first requires an additional
+            // method row. The first overload occupies the classCtorRows slot above.
+            if (c.ExplicitConstructor != null && c.ExplicitConstructors.Length > 1)
+            {
+                methodRow += c.ExplicitConstructors.Length - 1;
+            }
+
             // Issue #306: a class with an explicit base-constructor initializer
             // emits a single forwarding constructor (no separate parameterless
             // ctor), so reserve only one ctor row in that case.
