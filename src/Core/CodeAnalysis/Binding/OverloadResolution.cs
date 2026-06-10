@@ -1943,12 +1943,22 @@ internal static class OverloadResolution
             return null;
         }
 
-        for (var t = type; t != null; t = t.BaseType)
+        var openDefName = openDefinition.FullName;
+
+        try
         {
-            if (t.IsGenericType && ReferenceEquals(t.GetGenericTypeDefinition(), openDefinition))
+            for (var t = type; t != null; t = t.BaseType)
             {
-                return t;
+                if (t.IsGenericType && MatchesOpenDefinition(t.GetGenericTypeDefinition(), openDefinition, openDefName))
+                {
+                    return t;
+                }
             }
+        }
+        catch (NotSupportedException)
+        {
+            // TypeBuilderInstantiation (cross-context constructed generics) may
+            // throw on BaseType traversal; fall through to interface walk.
         }
 
         Type[] ifaces;
@@ -1960,16 +1970,56 @@ internal static class OverloadResolution
         {
             return null;
         }
+        catch (NotSupportedException)
+        {
+            // Issue #666: TypeBuilderInstantiation (produced when
+            // FunctionTypeSymbol.BuildClrType constructs a host-runtime Func<>
+            // with MetadataLoadContext type arguments) throws
+            // NotSupportedException from GetInterfaces(). Treat as "no match"
+            // and let inference continue from other parameters.
+
+            // Fallback: if the type itself is a closed generic whose open
+            // definition matches by name, return it directly. This handles
+            // Func<T,bool> / Action<T> shapes from BuildClrType.
+            if (type.IsGenericType && !type.IsGenericTypeDefinition
+                && MatchesOpenDefinition(type.GetGenericTypeDefinition(), openDefinition, openDefName))
+            {
+                return type;
+            }
+
+            return null;
+        }
 
         foreach (var iface in ifaces)
         {
-            if (iface.IsGenericType && ReferenceEquals(iface.GetGenericTypeDefinition(), openDefinition))
+            if (iface.IsGenericType && MatchesOpenDefinition(iface.GetGenericTypeDefinition(), openDefinition, openDefName))
             {
                 return iface;
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Issue #666: compares a candidate open generic type definition against
+    /// <paramref name="openDefinition"/>. Uses <see cref="object.ReferenceEquals"/>
+    /// first (fast path for same-context types), then falls back to
+    /// <see cref="Type.FullName"/> comparison for cross-reflection-context
+    /// scenarios (e.g. a host-runtime <c>Func&lt;,&gt;</c> vs a
+    /// MetadataLoadContext <c>Func&lt;,&gt;</c>).
+    /// </summary>
+    private static bool MatchesOpenDefinition(Type candidateDefinition, Type openDefinition, string openDefName)
+    {
+        if (ReferenceEquals(candidateDefinition, openDefinition))
+        {
+            return true;
+        }
+
+        // Cross-context fallback: same FullName implies structural equivalence
+        // for open generic definitions.
+        return openDefName != null
+            && string.Equals(candidateDefinition.FullName, openDefName, StringComparison.Ordinal);
     }
 
     /// <summary>
