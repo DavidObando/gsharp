@@ -902,6 +902,34 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #674: when the target resolves to an implicit field on `this`,
+        // the raw ImplicitFieldVariableSymbol has no local slot in the emitter.
+        // Rewrite to a temp-local initialized from the proper field access
+        // expression (mirroring what BindIndexedWriteThroughChain does for
+        // chained member-index assignments). The temp is a real local the
+        // emitter can load.
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            var fieldAccess = new BoundFieldAccessExpression(
+                null,
+                new BoundVariableExpression(null, implicitField.Receiver),
+                implicitField.StructType,
+                implicitField.Field);
+
+            var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type);
+            scope.TryDeclareVariable(tempVar);
+            var declaration = new BoundVariableDeclaration(syntax, tempVar, fieldAccess);
+
+            var assignment = BindIndexedAssignmentToVariable(tempVar, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+            if (assignment is BoundErrorExpression)
+            {
+                return assignment;
+            }
+
+            return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+        }
+
         return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
     }
 
