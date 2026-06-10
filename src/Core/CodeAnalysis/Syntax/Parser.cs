@@ -4054,6 +4054,13 @@ public class Parser
             current = MaybeWrapWithObjectInitializer(current);
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.QuestionToken
+            && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // Issue #663: `string?(expr)` — nullable-type conversion call.
+            current = ParseNullableTypeCallExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
             && LooksLikeGenericCallSite(1))
         {
@@ -4240,6 +4247,21 @@ public class Parser
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
         arguments = MaybeAppendTrailingLambda(arguments);
         return new CallExpressionSyntax(syntaxTree, identifier, openParenthesisToken, arguments, closeParenthesisToken);
+    }
+
+    // Issue #663: `string?(expr)` — nullable-type conversion call form.
+    // Consumes `Identifier ? ( args )` and builds a CallExpressionSyntax
+    // carrying the `?` token so the binder can wrap the resolved type in
+    // NullableTypeSymbol.
+    private ExpressionSyntax ParseNullableTypeCallExpression()
+    {
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var questionToken = MatchToken(SyntaxKind.QuestionToken);
+        var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var arguments = ParseArguments();
+        var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        arguments = MaybeAppendTrailingLambda(arguments);
+        return new CallExpressionSyntax(syntaxTree, identifier, questionToken, typeArgumentList: null, openParenthesisToken, arguments, closeParenthesisToken);
     }
 
     // Issue #522: when the token following a constructor call's `)` is `{`

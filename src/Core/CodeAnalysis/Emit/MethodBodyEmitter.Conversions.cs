@@ -259,6 +259,17 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #663: fall back to user-defined op_Implicit / op_Explicit when
+        // no built-in emit path fires. This covers types like JsonNode that
+        // expose conversion operators to string, int, bool, etc.
+        if (from?.ClrType != null && to?.ClrType != null
+            && ClrOperatorResolution.TryResolveConversion(from.ClrType, to.ClrType, allowExplicit: true, out var userConvMethod, out _))
+        {
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.GetMethodReference(userConvMethod));
+            return;
+        }
+
         throw new NotSupportedException(
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
     }
@@ -632,6 +643,39 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(this.outer.GetMethodReference(conv.Method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(conv.Method.ReturnType), conv.Type);
+
+        // Issue #663: when the operator returns a non-nullable value type T but the
+        // target type is Nullable<T> (e.g. op_Explicit(JsonNode) → int, target int32?),
+        // lift the result into Nullable<T> via newobj.
+        if (conv.Type is NullableTypeSymbol targetNullable
+            && ReflectionMetadataEmitter.IsValueTypeNullable(targetNullable)
+            && conv.Method.ReturnType.IsValueType
+            && !IsNullableValueType(conv.Method.ReturnType))
+        {
+            var innerClr = targetNullable.UnderlyingType.ClrType
+                ?? throw new InvalidOperationException(
+                    $"Nullable<{targetNullable.UnderlyingType.Name}> lift has no CLR underlying type.");
+
+            if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot construct Nullable<{innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+            }
+
+            var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+            var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+                ?? throw new InvalidOperationException(
+                    $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.GetCtorReference(ctor));
+        }
+    }
+
+    private static bool IsNullableValueType(Type t)
+    {
+        return t.IsGenericType
+            && !t.IsGenericTypeDefinition
+            && string.Equals(t.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal);
     }
 
     private void EmitZeroInit(int slot, TypeSymbol gsharpType, Type clrType)
