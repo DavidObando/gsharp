@@ -1044,14 +1044,45 @@ public class Parser
             }
             else if (Current.Kind == SyntaxKind.FuncKeyword)
             {
-                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                // Issue #656 / ADR-0065: `func init(...)` is accepted as an
+                // alternative spelling of the constructor declaration. The
+                // `func` keyword is consumed and the remainder is parsed as
+                // a normal `init(...)` constructor.
+                if (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "init" && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
                 {
-                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
-                }
+                    NextToken(); // consume the `func` keyword
 
-                var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
-                method.WithAnnotations(memberAnnotations);
-                methods.Add(method);
+                    if (memberOpenModifier != null || memberOverrideModifier != null)
+                    {
+                        var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                        Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.OpenParenthesisToken);
+                    }
+
+                    if (memberAsyncModifier != null)
+                    {
+                        Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                    }
+
+                    if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                    {
+                        Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                    }
+
+                    var constructor = ParseConstructorDeclaration(memberAccessibility);
+                    constructor.WithAnnotations(memberAnnotations);
+                    constructors.Add(constructor);
+                }
+                else
+                {
+                    if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                    {
+                        Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
+                    }
+
+                    var method = (FunctionDeclarationSyntax)ParseFunctionDeclaration(memberAccessibility, memberOpenModifier, memberOverrideModifier, memberAsyncModifier);
+                    method.WithAnnotations(memberAnnotations);
+                    methods.Add(method);
+                }
             }
             else
             {
