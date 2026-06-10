@@ -878,7 +878,9 @@ internal sealed partial class ExpressionBinder
                 return BindAccessorStep(head, null, nested.RightPart);
 
             case CallExpressionSyntax ce:
-                return BindAccessorCall(receiver, classSymbol, ce);
+                var callResult = BindAccessorCall(receiver, classSymbol, ce);
+                CheckValueTaskGetAwaiterGetResult(callResult, ce);
+                return callResult;
 
             // Issue #569: an object-initializer suffix on a nested-type
             // constructor (`Outer.Inner() { Prop = val }`) parses as
@@ -1563,5 +1565,57 @@ internal sealed partial class ExpressionBinder
             SliceTypeSymbol slice => slice.ElementType,
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Issue #662: detect the pattern <c>valueTask.GetAwaiter().GetResult()</c> and
+    /// emit warning GS0275. The pattern is unsafe due to ValueTask's single-await
+    /// semantics. The safe form is <c>valueTask.AsTask().GetAwaiter().GetResult()</c>.
+    /// </summary>
+    private void CheckValueTaskGetAwaiterGetResult(BoundExpression boundCall, CallExpressionSyntax callSyntax)
+    {
+        // The outermost call must be GetResult() with 0 args on a CLR instance.
+        if (boundCall is not BoundImportedInstanceCallExpression getResultCall)
+        {
+            return;
+        }
+
+        if (getResultCall.Method.Name != "GetResult" || getResultCall.Arguments.Length != 0)
+        {
+            return;
+        }
+
+        // Its receiver must be a CLR instance call to GetAwaiter() with 0 args.
+        if (getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall)
+        {
+            return;
+        }
+
+        if (getAwaiterCall.Method.Name != "GetAwaiter" || getAwaiterCall.Arguments.Length != 0)
+        {
+            return;
+        }
+
+        // The receiver of GetAwaiter() must have a ValueTask or ValueTask<T> type.
+        var awaiterReceiverType = getAwaiterCall.Receiver?.Type?.ClrType;
+        if (awaiterReceiverType == null)
+        {
+            return;
+        }
+
+        string fullName;
+        if (awaiterReceiverType.IsGenericType && !awaiterReceiverType.IsGenericTypeDefinition)
+        {
+            fullName = awaiterReceiverType.GetGenericTypeDefinition()?.FullName;
+        }
+        else
+        {
+            fullName = awaiterReceiverType.FullName;
+        }
+
+        if (fullName == "System.Threading.Tasks.ValueTask" || fullName == "System.Threading.Tasks.ValueTask`1")
+        {
+            Diagnostics.ReportValueTaskDirectGetResult(callSyntax.Identifier.Location);
+        }
     }
 }

@@ -2191,6 +2191,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0274", $"'nil' cannot be assigned to parameter '{parameterName}' of non-nullable type '{typeName}'; consider changing the parameter type to '{typeName}?'.");
     }
 
+    /// <summary>
+    /// GS0275: Calling <c>.GetAwaiter().GetResult()</c> directly on a <c>ValueTask</c>/<c>ValueTask&lt;T&gt;</c>
+    /// is unsafe due to its single-await semantics.
+    /// </summary>
+    /// <param name="location">The source location of the <c>.GetResult()</c> call.</param>
+    public void ReportValueTaskDirectGetResult(TextLocation location)
+    {
+        Report(
+            location,
+            "GS0275",
+            "Calling '.GetAwaiter().GetResult()' directly on a ValueTask/ValueTask<T> is unsafe due to its single-await semantics. Convert to Task first via '.AsTask()' (e.g. 'v.AsTask().GetAwaiter().GetResult()').",
+            DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();
