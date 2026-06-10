@@ -1298,7 +1298,7 @@ internal sealed class ReflectionMetadataEmitter
                     continue;
                 }
 
-                this.lambdaBodies[literal.Function] = literal.Body;
+                this.lambdaBodies[literal.Function] = (BoundBlockStatement)Lowerer.Lower(literal.Body);
                 hostBucket.Add(literal.Function);
             }
         }

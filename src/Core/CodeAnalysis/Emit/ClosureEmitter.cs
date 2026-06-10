@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -307,7 +308,7 @@ internal sealed class ClosureEmitter
                 $"Synthesized closure '{closureName}' captures '{rewriter.UnsupportedCapture.Name}' from a kind ('{rewriter.UnsupportedCaptureKind}') the emitter cannot currently rewrite. Run under the interpreter for now.");
         }
 
-        this.lambdaBodies[invokeMethod] = rewrittenBody;
+        this.lambdaBodies[invokeMethod] = (BoundBlockStatement)Lowerer.Lower(rewrittenBody);
         this.SynthesizedClosureClasses.Add(closureClass);
         var info = new ClosureInfo(closureClass, invokeMethod, captureFields);
         this.ClosureInvokeToInfo[invokeMethod] = info;
