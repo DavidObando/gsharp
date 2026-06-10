@@ -296,6 +296,11 @@ public enum SyntaxKind
     // `expr is T` → bool; `expr as T` → T (or T?).
     IsExpression,
     AsExpression,
+
+    // Issue #669: if as a value-producing expression.
+    // `if cond { a } else { b }` → value.
+    IfExpression,
+    BlockExpression,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

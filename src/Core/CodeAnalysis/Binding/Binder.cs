@@ -286,7 +286,8 @@ public sealed class Binder
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
-            getCurrentFunction: () => this.function);
+            getCurrentFunction: () => this.function,
+            bindStatement: syntax => statements.BindStatement(syntax));
 
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
