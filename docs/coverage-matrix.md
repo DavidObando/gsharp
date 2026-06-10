@@ -26,6 +26,7 @@ BangBangToken
 BangEqualsToken
 BangToken
 BinaryExpression
+BlockExpression
 BlockStatement
 BreakKeyword
 BreakStatement
@@ -100,6 +101,7 @@ GreaterToken
 HatEqualsToken
 HatToken
 IdentifierToken
+IfExpression
 IfKeyword
 IfStatement
 ImportDeclaration

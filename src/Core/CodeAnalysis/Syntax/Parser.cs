@@ -31,6 +31,13 @@ public class Parser
     // an inner `T() { … }` still works inside `if Foo(T() { X = 1 }) { … }`.
     private int suppressTrailingObjectInitializer;
 
+    // Separate counter that suppresses `Ident {` struct-literal parsing.
+    // Only incremented by ParseIfExpression to prevent the condition from
+    // consuming the then-block's opening brace as a struct literal.
+    // For-range and other body-header contexts must NOT suppress struct
+    // literals — e.g. `for v in Numbers{} { body }` is valid.
+    private int suppressStructLiteral;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
     /// </summary>
@@ -4072,7 +4079,7 @@ public class Parser
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
-            && suppressTrailingObjectInitializer == 0
+            && suppressStructLiteral == 0
             && IsStructLiteralFollowingBrace(2))
         {
             current = ParseStructLiteralExpression();
@@ -4745,6 +4752,7 @@ public class Parser
     {
         var ifKeyword = MatchToken(SyntaxKind.IfKeyword);
         suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
         ExpressionSyntax condition;
         try
         {
@@ -4752,6 +4760,7 @@ public class Parser
         }
         finally
         {
+            suppressStructLiteral--;
             suppressTrailingObjectInitializer--;
         }
 
