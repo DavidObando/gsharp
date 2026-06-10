@@ -163,6 +163,7 @@ public sealed class ImportedClassSymbol : Symbol
         }
 
         var argTypes = new Type[arguments.Length];
+        var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #530: use effective CLR type so nullable value types
@@ -170,16 +171,44 @@ public sealed class ImportedClassSymbol : Symbol
             // Issue #533: allow null (nil literal) through; overload resolution
             // now classifies null source as compatible with reference types and
             // Nullable<T>.
+            // Issue #658: provide surrogate type for user-defined G# classes.
             var t = NullableTypeSymbol.GetEffectiveClrType(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                if (arguments[i].Type is StructSymbol { IsClass: true } ss)
+                {
+                    t = ss.ImportedBaseType?.ClrType ?? typeof(object);
+                    hasUserClassArg = true;
+                }
+                else
+                {
+                    return false;
+                }
             }
 
             argTypes[i] = t;
         }
 
-        var result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames);
+        // Issue #658: set up supplementary interface check for user-class args.
+        if (hasUserClassArg)
+        {
+            OverloadResolution.SupplementaryInterfaceCheck = (source, target) =>
+                IsUserClassAssignableToInterface(arguments, argTypes, source, target);
+        }
+
+        OverloadResolution.Result<MethodInfo> result;
+        try
+        {
+            result = OverloadResolution.Resolve(nameMatches, argTypes, explicitTypeArgs, projectTypeArgument, ComputeInterpolatedStringArgFlags(callExpression, arguments.Length), argumentNames);
+        }
+        finally
+        {
+            if (hasUserClassArg)
+            {
+                OverloadResolution.SupplementaryInterfaceCheck = null;
+            }
+        }
+
         switch (result.Outcome)
         {
             case OverloadResolution.ResolutionOutcome.Resolved:
@@ -264,5 +293,48 @@ public sealed class ImportedClassSymbol : Symbol
         }
 
         return flags;
+    }
+
+    /// <summary>
+    /// Issue #658: checks whether a user-defined G# class argument implements
+    /// the specified CLR target interface.
+    /// </summary>
+    private static bool IsUserClassAssignableToInterface(
+        ImmutableArray<BoundExpression> boundArguments,
+        Type[] argTypes,
+        Type source,
+        Type target)
+    {
+        for (var i = 0; i < boundArguments.Length; i++)
+        {
+            if (!ReferenceEquals(argTypes[i], source))
+            {
+                continue;
+            }
+
+            if (boundArguments[i].Type is StructSymbol { IsClass: true } ss)
+            {
+                for (var current = ss; current != null; current = current.BaseClass)
+                {
+                    foreach (var iface in current.ImplementedClrInterfaces)
+                    {
+                        if (iface.ClrType != null
+                            && (ClrTypeUtilities.AreSame(iface.ClrType, target)
+                                || ClrTypeUtilities.ImplementsInterfaceByName(iface.ClrType, target)))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                if (ss.ImportedBaseType?.ClrType != null
+                    && ClrTypeUtilities.ImplementsInterfaceByName(ss.ImportedBaseType.ClrType, target))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

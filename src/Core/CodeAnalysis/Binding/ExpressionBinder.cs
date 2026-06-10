@@ -612,6 +612,33 @@ internal sealed partial class ExpressionBinder
         return NullableTypeSymbol.GetEffectiveClrType(typeSymbol);
     }
 
+    /// <summary>
+    /// Issue #658: returns a CLR <see cref="Type"/> suitable for overload
+    /// resolution even for user-defined G# class types (whose
+    /// <see cref="TypeSymbol.ClrType"/> is null at bind time). For such types
+    /// the imported base type's CLR type is returned (or <c>typeof(object)</c>
+    /// if none). Regular types delegate to
+    /// <see cref="GetEffectiveArgumentClrType"/>.
+    /// </summary>
+    internal Type GetEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol typeSymbol)
+    {
+        var clrType = GetEffectiveArgumentClrType(typeSymbol);
+        if (clrType != null)
+        {
+            return clrType;
+        }
+
+        // User-defined G# class: provide the imported base type's CLR type
+        // so that overload resolution can proceed (base-class assignability
+        // and the supplementary interface check handle the rest).
+        if (typeSymbol is StructSymbol { IsClass: true } ss)
+        {
+            return ss.ImportedBaseType?.ClrType ?? typeof(object);
+        }
+
+        return null;
+    }
+
     private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
     {
         methodGroup = null;

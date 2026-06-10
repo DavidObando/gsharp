@@ -128,6 +128,22 @@ internal static class OverloadResolution
     public static Func<Type, Type, bool> UserDefinedImplicitConversionLookup { get; set; }
 
     /// <summary>
+    /// Issue #658: per-call supplementary interface check for user-defined G#
+    /// classes whose CLR type does not exist at bind time. When set (non-null),
+    /// <see cref="ClassifyImplicit"/> invokes this callback as a final
+    /// reference-conversion check before falling through to
+    /// <see cref="UserDefinedImplicitConversionLookup"/>. The binder sets this
+    /// before calling <see cref="Resolve{T}"/> for calls that include user-
+    /// class arguments and clears it immediately after.
+    /// </summary>
+    [ThreadStatic]
+#pragma warning disable SA1401 // Field should be private
+#pragma warning disable SA1201 // Elements should appear in the correct order
+    internal static Func<Type, Type, bool> SupplementaryInterfaceCheck;
+#pragma warning restore SA1201
+#pragma warning restore SA1401
+
+    /// <summary>
     /// Classifies the implicit conversion from <paramref name="source"/> to
     /// <paramref name="target"/>. Designed to work across reflection contexts
     /// (MetadataLoadContext vs. live runtime) by falling back to FullName
@@ -263,6 +279,17 @@ internal static class OverloadResolution
                     return ImplicitConversionKind.Reference;
                 }
             }
+        }
+
+        // Issue #658: supplementary interface check for user-defined G# classes.
+        // When the binder is resolving a call that includes a user-class argument
+        // whose CLR type is a surrogate (e.g. System.Object), the built-in checks
+        // above won't recognise that the user class implements the target interface.
+        // This callback lets the binder inject that knowledge.
+        var sic = SupplementaryInterfaceCheck;
+        if (sic != null && target.IsInterface && sic(source, target))
+        {
+            return ImplicitConversionKind.Reference;
         }
 
         var udi = UserDefinedImplicitConversionLookup;
