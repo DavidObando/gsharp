@@ -446,6 +446,8 @@ public abstract class BoundTreeRewriter
                 return RewriteIsExpression((BoundIsExpression)node);
             case BoundNodeKind.AsExpression:
                 return RewriteAsExpression((BoundAsExpression)node);
+            case BoundNodeKind.ConstructorChainingExpression:
+                return RewriteConstructorChainingExpression((BoundConstructorChainingExpression)node);
             default:
                 throw new Exception($"Unexpected node: {node.Kind}");
         }
@@ -1319,6 +1321,34 @@ public abstract class BoundTreeRewriter
         }
 
         return builder == null ? node : new BoundConstructorCallExpression(null, node.StructType, builder.ToImmutable(), node.SelectedConstructor);
+    }
+
+    /// <summary>ADR-0065 §2: rewrites a constructor self-delegation expression.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundExpression RewriteConstructorChainingExpression(BoundConstructorChainingExpression node)
+    {
+        ImmutableArray<BoundExpression>.Builder builder = null;
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            var oldArg = node.Arguments[i];
+            var newArg = RewriteExpression(oldArg);
+            if (newArg != oldArg && builder == null)
+            {
+                builder = ImmutableArray.CreateBuilder<BoundExpression>(node.Arguments.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    builder.Add(node.Arguments[j]);
+                }
+            }
+
+            if (builder != null)
+            {
+                builder.Add(newArg);
+            }
+        }
+
+        return builder == null ? node : new BoundConstructorChainingExpression(node.Syntax, node.SelectedConstructor, builder.ToImmutable());
     }
 
     /// <summary>Rewrites a CLR constructor call (Phase 4 exit).</summary>

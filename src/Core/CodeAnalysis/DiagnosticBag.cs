@@ -2225,6 +2225,88 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0277", "A block in an if-expression value position must end with a value-producing expression.");
     }
 
+    /// <summary>
+    /// ADR-0065 §2: GS0278 — a <c>convenience init</c> body must begin with a
+    /// self-delegation <c>init(args)</c> call.
+    /// </summary>
+    /// <param name="location">The source location of the convenience init declaration.</param>
+    /// <param name="className">The owning class.</param>
+    public void ReportConvenienceInitMustDelegate(TextLocation location, string className)
+    {
+        Report(location, "GS0278", $"Convenience initializer on class '{className}' must delegate to another initializer via 'init(args)' before any other statement.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: GS0279 — a <c>convenience init</c> may not declare an
+    /// explicit <c>: base(args)</c> clause; convenience initializers must
+    /// chain to another initializer in the same class, which transitively
+    /// reaches a designated initializer that performs the base call.
+    /// </summary>
+    /// <param name="location">The source location of the <c>: base</c> clause.</param>
+    /// <param name="className">The owning class.</param>
+    public void ReportConvenienceInitMayNotCallBase(TextLocation location, string className)
+    {
+        Report(location, "GS0279", $"Convenience initializer on class '{className}' may not declare ': base(args)'; chain to another initializer with 'init(args)' instead.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: GS0280 — <c>init(args)</c> self-delegation only appears
+    /// inside a constructor body of a class.
+    /// </summary>
+    /// <param name="location">The source location of the self-delegation call.</param>
+    public void ReportInitDelegationOutsideCtor(TextLocation location)
+    {
+        Report(location, "GS0280", "'init(args)' constructor self-delegation is only valid inside a class constructor body.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: GS0281 — <c>init(args)</c> self-delegation is only legal
+    /// inside a <c>convenience init</c>; designated initializers must chain
+    /// to the base class with <c>: base(args)</c> instead.
+    /// </summary>
+    /// <param name="location">The source location of the self-delegation call.</param>
+    /// <param name="className">The owning class.</param>
+    public void ReportInitDelegationFromDesignated(TextLocation location, string className)
+    {
+        Report(location, "GS0281", $"Designated initializer on class '{className}' may not delegate to a sibling 'init(args)' overload; use ': base(args)' (or omit it) to chain to the base class.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: GS0282 — <c>init(args)</c> self-delegation must target a
+    /// different constructor than the one being executed; recursive delegation
+    /// would loop indefinitely.
+    /// </summary>
+    /// <param name="location">The source location of the self-delegation call.</param>
+    /// <param name="className">The owning class.</param>
+    public void ReportInitDelegationRecursive(TextLocation location, string className)
+    {
+        Report(location, "GS0282", $"Convenience initializer on class '{className}' may not delegate to itself; choose a different 'init(args)' overload.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §2: GS0283 — overload resolution found no matching sibling
+    /// initializer for an <c>init(args)</c> self-delegation call.
+    /// </summary>
+    /// <param name="location">The source location of the self-delegation call.</param>
+    /// <param name="className">The owning class.</param>
+    public void ReportInitDelegationNoMatch(TextLocation location, string className)
+    {
+        Report(location, "GS0283", $"No applicable 'init(...)' overload on class '{className}' matches the arguments of this 'init(args)' self-delegation.");
+    }
+
+    /// <summary>
+    /// ADR-0065 §5: GS0284 — a user-declared <c>init(...)</c> overload has the
+    /// same signature as the constructor synthesized from the class's primary
+    /// constructor parameter list.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>init</c> declaration.</param>
+    /// <param name="className">The owning class.</param>
+    /// <param name="signature">The signature description.</param>
+    public void ReportInitDuplicatesPrimaryCtor(TextLocation location, string className, string signature)
+    {
+        Report(location, "GS0284", $"'init({signature})' on class '{className}' duplicates the synthesized primary-constructor overload; remove either the primary-constructor parameter list or this 'init' declaration.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

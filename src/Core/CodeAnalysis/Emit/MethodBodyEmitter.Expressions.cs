@@ -341,6 +341,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundConstructorCallExpression ctorCall:
                 this.EmitConstructorCall(ctorCall);
                 break;
+            case BoundConstructorChainingExpression ctorChain:
+                this.EmitConstructorChaining(ctorChain);
+                break;
             case BoundUserInstanceCallExpression uic:
                 this.EmitUserInstanceCall(uic);
                 break;

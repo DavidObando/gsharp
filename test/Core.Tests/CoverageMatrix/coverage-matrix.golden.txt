@@ -259,6 +259,7 @@ ConditionalExpression
 ConditionalGotoStatement
 ConstantPattern
 ConstructorCallExpression
+ConstructorChainingExpression
 ConversionExpression
 DefaultExpression
 DereferenceExpression

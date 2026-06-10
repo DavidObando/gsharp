@@ -316,6 +316,7 @@ public static class SpillSequenceSpiller
                 case BoundClrEventSubscriptionExpression:
                 case BoundEventSubscriptionExpression:
                 case BoundConstructorCallExpression:
+                case BoundConstructorChainingExpression:
                 case BoundFieldAccessExpression:
                 case BoundPropertyAccessExpression:
                 case BoundPropertyAssignmentExpression:

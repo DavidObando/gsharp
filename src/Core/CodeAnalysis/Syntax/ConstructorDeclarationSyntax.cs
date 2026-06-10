@@ -18,6 +18,7 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     /// <summary>Initializes a new instance of the <see cref="ConstructorDeclarationSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="accessibilityModifier">The optional accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>).</param>
+    /// <param name="convenienceModifier">The optional ADR-0065 §2 <c>convenience</c> modifier, or <c>null</c>.</param>
     /// <param name="initKeyword">The contextual <c>init</c> keyword that introduces the constructor.</param>
     /// <param name="openParenthesisToken">The opening paren of the parameter list.</param>
     /// <param name="parameters">The constructor parameters.</param>
@@ -31,6 +32,7 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     public ConstructorDeclarationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken accessibilityModifier,
+        SyntaxToken convenienceModifier,
         SyntaxToken initKeyword,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
@@ -44,6 +46,7 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
+        ConvenienceModifier = convenienceModifier;
         InitKeyword = initKeyword;
         OpenParenthesisToken = openParenthesisToken;
         Parameters = parameters;
@@ -61,6 +64,12 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets the optional accessibility modifier.</summary>
     public SyntaxToken AccessibilityModifier { get; }
+
+    /// <summary>Gets the optional ADR-0065 §2 <c>convenience</c> modifier, or <c>null</c>.</summary>
+    public SyntaxToken ConvenienceModifier { get; }
+
+    /// <summary>Gets a value indicating whether this constructor is declared with the <c>convenience</c> modifier (ADR-0065 §2).</summary>
+    public bool IsConvenience => ConvenienceModifier != null;
 
     /// <summary>Gets the contextual <c>init</c> keyword.</summary>
     public SyntaxToken InitKeyword { get; }
@@ -96,5 +105,5 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     public bool HasBaseInitializer => BaseKeyword != null;
 
     /// <inheritdoc/>
-    public override TextSpan Span => TextSpan.FromBounds(InitKeyword.Span.Start, Body.Span.End);
+    public override TextSpan Span => TextSpan.FromBounds((ConvenienceModifier ?? InitKeyword).Span.Start, Body.Span.End);
 }

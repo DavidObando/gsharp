@@ -636,10 +636,11 @@ var r = Rect(true)
     }
 
     [Fact]
-    public void ExplicitConstructor_PrimaryAndExplicit_Diagnoses()
+    public void ExplicitConstructor_PrimaryAndExplicit_SameSignatureDiagnoses()
     {
-        // Issue #306: GS0215 — a class cannot declare both a primary constructor
-        // and an explicit `init` constructor.
+        // ADR-0065 §5: the primary constructor is one designated init among
+        // others. A user-declared init that duplicates its signature is a
+        // compile-time error (GS0284).
         var source = @"
 type Bad class(X int32) {
     init(y int32) {
@@ -649,7 +650,28 @@ type Bad class(X int32) {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("both a primary constructor and an explicit 'init' constructor"));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("duplicates the synthesized primary-constructor overload"));
+    }
+
+    [Fact]
+    public void ExplicitConstructor_PrimaryAndExplicit_DistinctSignatures_Compile()
+    {
+        // ADR-0065 §5: when a class declares a primary-constructor parameter
+        // list AND additional explicit init(...) bodies with distinct
+        // signatures, both kinds coexist as designated initializers.
+        var source = @"
+type Both class(Name string) {
+    Age int32
+    init(age int32) {
+        Age = age
+    }
+}
+var byName = Both(""Alice"")
+byName.Name
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Alice", result.Value);
     }
 
     [Fact]
@@ -673,6 +695,91 @@ b.X
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void ConvenienceInit_DelegatesToDesignated_Evaluates()
+    {
+        // ADR-0065 §2: convenience init body begins with `init(args)` which
+        // delegates to the designated init in the same class.
+        var source = @"
+type Rect class {
+    Width int32
+    Height int32
+    init(w int32, h int32) {
+        Width = w
+        Height = h
+    }
+    convenience init(side int32) {
+        init(side, side)
+    }
+}
+var r = Rect(7)
+r.Width + r.Height
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(14, result.Value);
+    }
+
+    [Fact]
+    public void ConvenienceInit_MissingDelegation_ReportsGS0278()
+    {
+        // ADR-0065 §2 Rule 3 / GS0278.
+        var source = @"
+type Bad class {
+    X int32
+    init(x int32) {
+        X = x
+    }
+    convenience init() {
+        X = 0
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("delegate to another initializer"));
+    }
+
+    [Fact]
+    public void DesignatedInit_InitDelegation_ReportsGS0281()
+    {
+        // ADR-0065 §2 / GS0281: only convenience init may use init(args).
+        var source = @"
+type Bad class {
+    X int32
+    init(x int32) {
+        X = x
+    }
+    init() {
+        init(0)
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Designated initializer"));
+    }
+
+    [Fact]
+    public void ConvenienceInit_WithBase_ReportsGS0279()
+    {
+        // ADR-0065 §2 / GS0279: convenience may not declare `: base()`.
+        var source = @"
+type Animal open class(Name string) {
+}
+type Dog class : Animal(""rex"") {
+    init(n string) {
+    }
+    convenience init() : base(""rex"") {
+        init(""rex"")
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("may not declare ': base"));
     }
 
     private static EvaluationResult Evaluate(string source)

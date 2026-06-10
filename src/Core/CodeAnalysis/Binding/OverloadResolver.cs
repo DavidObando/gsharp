@@ -1632,6 +1632,263 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
+    /// ADR-0065 §2: binds a bare <c>init(args)</c> self-delegation call inside a
+    /// constructor body. The selected sibling constructor must be a different
+    /// member of the same class's <see cref="StructSymbol.ExplicitConstructors"/>
+    /// overload set. Designated initializers may not chain to a sibling; only
+    /// <c>convenience init</c> bodies may issue an <c>init(args)</c> self-delegation.
+    /// </summary>
+    private BoundExpression BindConstructorChainingExpression(CallExpressionSyntax syntax, StructSymbol owningClass, FunctionSymbol currentCtorFunction)
+    {
+        // Resolve the current ConstructorSymbol so we know whether the caller
+        // is convenience or designated, and so we can exclude it from the
+        // candidate set (recursion would loop indefinitely).
+        ConstructorSymbol currentCtor = null;
+        foreach (var c in owningClass.ExplicitConstructors)
+        {
+            if (ReferenceEquals(c.Function, currentCtorFunction))
+            {
+                currentCtor = c;
+                break;
+            }
+        }
+
+        if (currentCtor == null)
+        {
+            Diagnostics.ReportInitDelegationOutsideCtor(syntax.Identifier.Location);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (!currentCtor.IsConvenience)
+        {
+            Diagnostics.ReportInitDelegationFromDesignated(syntax.Identifier.Location, owningClass.Name);
+            return new BoundErrorExpression(syntax);
+        }
+
+        // Build the candidate overload set: every sibling explicit constructor
+        // except the one currently being bound.
+        var siblingBuilder = ImmutableArray.CreateBuilder<ConstructorSymbol>(owningClass.ExplicitConstructors.Length);
+        foreach (var c in owningClass.ExplicitConstructors)
+        {
+            if (ReferenceEquals(c, currentCtor))
+            {
+                continue;
+            }
+
+            siblingBuilder.Add(c);
+        }
+
+        if (siblingBuilder.Count == 0)
+        {
+            Diagnostics.ReportInitDelegationRecursive(syntax.Identifier.Location, owningClass.Name);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var boundArgsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+            ParameterSymbol parameterForArg = null;
+            if (siblingBuilder.Count == 1 && i < siblingBuilder[0].Parameters.Length)
+            {
+                parameterForArg = siblingBuilder[0].Parameters[i];
+            }
+
+            if (argument is RefArgumentExpressionSyntax refArg)
+            {
+                boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg));
+            }
+            else
+            {
+                boundArgsBuilder.Add(bindExpression(argument));
+            }
+        }
+
+        ConstructorSymbol selectedCtor;
+        if (siblingBuilder.Count == 1)
+        {
+            selectedCtor = siblingBuilder[0];
+        }
+        else
+        {
+            var ctorFunctions = ImmutableArray.CreateBuilder<FunctionSymbol>(siblingBuilder.Count);
+            foreach (var c in siblingBuilder)
+            {
+                ctorFunctions.Add(c.Function);
+            }
+
+            var selectedFn = SelectBestInstanceOverload(
+                ctorFunctions.MoveToImmutable(),
+                syntax.Arguments.Count,
+                argumentNames,
+                boundArgsBuilder.ToImmutable(),
+                out var ambiguous);
+
+            if (selectedFn == null)
+            {
+                if (ambiguous)
+                {
+                    Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, "init");
+                }
+                else
+                {
+                    Diagnostics.ReportInitDelegationNoMatch(syntax.Identifier.Location, owningClass.Name);
+                }
+
+                return new BoundErrorExpression(syntax);
+            }
+
+            selectedCtor = null;
+            foreach (var c in siblingBuilder)
+            {
+                if (ReferenceEquals(c.Function, selectedFn))
+                {
+                    selectedCtor = c;
+                    break;
+                }
+            }
+
+            if (selectedCtor == null)
+            {
+                Diagnostics.ReportInitDelegationNoMatch(syntax.Identifier.Location, owningClass.Name);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+
+        var parameters = selectedCtor.Parameters;
+        var requestedArgCount = syntax.Arguments.Count;
+        if (requestedArgCount < parameters.Length)
+        {
+            var minRequired = parameters.Length;
+            for (var i = parameters.Length - 1; i >= 0; i--)
+            {
+                if (parameters[i].HasExplicitDefaultValue)
+                {
+                    minRequired = i;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (requestedArgCount < minRequired)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, "init", parameters.Length, requestedArgCount);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+        else if (requestedArgCount > parameters.Length)
+        {
+            Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, "init", parameters.Length, requestedArgCount);
+            return new BoundErrorExpression(syntax);
+        }
+
+        ExpressionSyntax[] parameterSyntax;
+        var boundArgs = boundArgsBuilder;
+        if (!argumentNames.IsDefault || requestedArgCount < parameters.Length)
+        {
+            if (!TryReorderUserCallArgumentsWithDefaults(
+                    syntax.Arguments,
+                    boundArgs.ToImmutable(),
+                    parameters,
+                    "init",
+                    syntax.Identifier.Location,
+                    out parameterSyntax,
+                    out var permutedBound))
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedBound.Length);
+            for (var i = 0; i < permutedBound.Length; i++)
+            {
+                boundArgs.Add(permutedBound[i]);
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+        var hadErrors = false;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            var argument = boundArgs[i];
+            var argLocation = parameterSyntax[i]?.Location ?? syntax.Identifier.Location;
+
+            if (argument.Type == TypeSymbol.Error)
+            {
+                hadErrors = true;
+                convertedArgs.Add(argument);
+                continue;
+            }
+
+            // ADR-0060: when the parameter is ref-kind, the bound argument is
+            // a BoundAddressOfExpression of type *T; bypass the standard
+            // convertibility check so the address is forwarded as-is.
+            if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrInit)
+            {
+                var pointee = addrInit.Operand?.Type;
+                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                {
+                    convertedArgs.Add(argument);
+                    continue;
+                }
+            }
+            else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrInit)
+            {
+                var pointee = condAddrInit.PointeeType;
+                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                {
+                    convertedArgs.Add(argument);
+                    continue;
+                }
+            }
+
+            if (argument.Type != parameter.Type
+                && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
+            {
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, parameter.Type, out var convertedArg))
+                {
+                    convertedArgs.Add(convertedArg);
+                    continue;
+                }
+
+                if (argument.Type != TypeSymbol.Error)
+                {
+                    Diagnostics.ReportWrongArgumentType(argLocation, parameter.Name, parameter.Type, argument.Type);
+                }
+
+                hadErrors = true;
+                convertedArgs.Add(argument);
+            }
+            else
+            {
+                convertedArgs.Add(conversions.BindConversion(argLocation, argument, parameter.Type));
+            }
+        }
+
+        if (hadErrors)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        return new BoundConstructorChainingExpression(syntax, selectedCtor, convertedArgs.ToImmutable());
+    }
+
+    /// <summary>
     /// ADR-0063 §9: variant of <c>TryReorderUserCallArguments</c> for constructor
     /// calls that may omit trailing or middle optional parameters. For each
     /// parameter slot not filled by a positional/named argument we synthesize a
@@ -1736,6 +1993,28 @@ internal sealed class OverloadResolver
 
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
+        // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
+        // a self-delegation to a sibling constructor on the same class. This
+        // is the only legal use of `init` as a callable identifier. Recognise
+        // it before any other call-binding path so the generic identifier
+        // fallback at the bottom doesn't surface a misleading "unknown
+        // function" diagnostic.
+        if (syntax.TypeArgumentList == null
+            && syntax.Identifier.Kind == SyntaxKind.IdentifierToken
+            && syntax.Identifier.Text == "init")
+        {
+            var inCtor = getCurrentFunction();
+            if (inCtor != null
+                && inCtor.IsSpecialName
+                && inCtor.Name == ".ctor"
+                && inCtor.ReceiverType is StructSymbol owningClass
+                && owningClass.IsClass
+                && !owningClass.ExplicitConstructors.IsDefaultOrEmpty)
+            {
+                return BindConstructorChainingExpression(syntax, owningClass, inCtor);
+            }
+        }
+
         // Phase 4-exit: prefer CLR class instantiation over the single-arg
         // conversion-call hijack below, so that `StringBuilder(16)` resolves
         // to a CLR ctor rather than `conversions.BindConversion(int → StringBuilder)`.

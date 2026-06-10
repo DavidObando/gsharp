@@ -319,6 +319,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.AsExpression:
                 VisitAsExpression((BoundAsExpression)node);
                 break;
+            case BoundNodeKind.ConstructorChainingExpression:
+                VisitConstructorChainingExpression((BoundConstructorChainingExpression)node);
+                break;
             default:
                 throw new InvalidOperationException(
                     $"BoundTreeWalker: unexpected expression kind '{node.Kind}'.");
@@ -607,6 +610,13 @@ public abstract class BoundTreeWalker
     }
 
     protected virtual void VisitConstructorCallExpression(BoundConstructorCallExpression node)
+    {
+        VisitList(node.Arguments);
+    }
+
+    /// <summary>ADR-0065 §2: visits a <see cref="BoundConstructorChainingExpression"/>.</summary>
+    /// <param name="node">The node being visited.</param>
+    protected virtual void VisitConstructorChainingExpression(BoundConstructorChainingExpression node)
     {
         VisitList(node.Arguments);
     }
