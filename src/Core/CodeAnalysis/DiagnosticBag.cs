@@ -381,6 +381,14 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="name">The name of the variable.</param>
     public void ReportUndefinedVariable(TextLocation location, string name)
     {
+        // Issue #660: when the user writes 'null' (C# spelling), produce a
+        // targeted diagnostic suggesting 'nil' instead of the generic GS0125.
+        if (name == "null")
+        {
+            ReportUseNilInsteadOfNull(location);
+            return;
+        }
+
         var message = $"Variable '{name}' doesn't exist.";
         Report(location, "GS0125", message);
     }
@@ -2156,6 +2164,31 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     public void ReportTypeNotAsyncDisposable(TextLocation location, TypeSymbol type)
     {
         Report(location, "GS0272", $"Type '{type.Name}' cannot be used in an 'await using' statement because it does not provide a public DisposeAsync() method returning ValueTask.");
+    }
+
+    /// <summary>
+    /// Reports that the identifier <c>null</c> was used where the G# null
+    /// literal <c>nil</c> is required. G# does not recognise <c>null</c> as
+    /// a keyword — the correct spelling is <c>nil</c>.
+    /// </summary>
+    /// <param name="location">The source location of the <c>null</c> identifier.</param>
+    public void ReportUseNilInsteadOfNull(TextLocation location)
+    {
+        Report(location, "GS0273", "G# spells the null literal as 'nil'; 'null' is not a recognised keyword.");
+    }
+
+    /// <summary>
+    /// Reports that <c>nil</c> was supplied as an attribute argument for a
+    /// parameter whose type is not nullable. The user should make the
+    /// corresponding parameter nullable (e.g. <c>string?</c> instead of
+    /// <c>string</c>).
+    /// </summary>
+    /// <param name="location">The source location of the <c>nil</c> literal.</param>
+    /// <param name="parameterName">The name of the target method parameter.</param>
+    /// <param name="typeName">The non-nullable type name.</param>
+    public void ReportNilNotAssignableToNonNullableParameter(TextLocation location, string parameterName, string typeName)
+    {
+        Report(location, "GS0274", $"'nil' cannot be assigned to parameter '{parameterName}' of non-nullable type '{typeName}'; consider changing the parameter type to '{typeName}?'.");
     }
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)

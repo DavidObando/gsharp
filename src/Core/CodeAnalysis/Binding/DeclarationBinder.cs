@@ -950,6 +950,7 @@ internal sealed class DeclarationBinder
                             "a method declaration",
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
+                        ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                     }
 
                     // ADR-0063 §11: detect duplicate-signature within the class.
@@ -1461,6 +1462,7 @@ internal sealed class DeclarationBinder
                             "a method declaration",
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
+                        ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                     }
 
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
@@ -2575,6 +2577,7 @@ internal sealed class DeclarationBinder
                 function.ReturnRefKind = returnRefKind;
                 Binder.AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
+                ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
                 // ADR-0063 §11: detect duplicate-signature against existing methods on the receiver.
                 foreach (var existingMethod in methodReceiverStruct.Methods)
@@ -2599,6 +2602,7 @@ internal sealed class DeclarationBinder
             function.ReturnRefKind = returnRefKind;
             Binder.AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);
+            ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
             if (syntax.IsExtension)
             {
@@ -3881,6 +3885,61 @@ internal sealed class DeclarationBinder
         value = result;
         type = bound.Type;
         return true;
+    }
+
+    /// <summary>
+    /// Issue #660: for test-data attributes like xUnit's <c>@InlineData</c>,
+    /// cross-validates nil (null) positional arguments against the owning
+    /// method's parameter types. If a nil is supplied for a non-nullable
+    /// parameter, reports GS0274.
+    /// </summary>
+    internal void ValidateInlineDataNilArguments(
+        ImmutableArray<BoundAttribute> attributes,
+        ImmutableArray<ParameterSymbol> parameters)
+    {
+        foreach (var attr in attributes)
+        {
+            if (attr == null)
+            {
+                continue;
+            }
+
+            // Match the InlineDataAttribute by CLR type name (handles any xunit version).
+            var clrType = attr.AttributeType?.ClrType;
+            if (clrType == null || !clrType.FullName.EndsWith("InlineDataAttribute", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var positional = attr.PositionalArguments;
+            var annotation = attr.Syntax;
+            if (annotation == null || positional.IsDefaultOrEmpty || parameters.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            // InlineData's positional arguments are expanded into the params
+            // object[] — each positional arg[i] corresponds to method parameter[i].
+            var argExpressions = annotation.Arguments;
+            for (int i = 0; i < positional.Length && i < parameters.Length; i++)
+            {
+                if (positional[i].Value == null && positional[i].Type == TypeSymbol.Null)
+                {
+                    var paramType = parameters[i].Type;
+                    if (paramType != null && !(paramType is NullableTypeSymbol))
+                    {
+                        // Get the source location of the nil literal in the argument list.
+                        var argLocation = i < argExpressions.Count
+                            ? argExpressions[i].Location
+                            : annotation.Location;
+                        Diagnostics.ReportNilNotAssignableToNonNullableParameter(
+                            argLocation,
+                            parameters[i].Name,
+                            paramType.Name);
+                    }
+                }
+            }
+        }
     }
 
     private static object CoerceAttributeElement(object value, Type elementType)
