@@ -1349,14 +1349,22 @@ public sealed class Binder
                 if (TypeSymbol.ContainsTypeParameter(ta))
                 {
                     hasTypeParameterArg = true;
-                    clrArgs[i] = typeof(object);
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
                     continue;
                 }
 
+                // Issue #671: a user-defined G# type (class, struct,
+                // interface, enum, delegate) used as a type argument to a CLR
+                // generic has no ClrType at bind time — the CLR TypeDef is only
+                // produced during emit. Handle the same way as type parameters:
+                // project onto System.Object for the closed CLR shape and
+                // preserve the symbolic argument via GetConstructed so the
+                // emitter can recover the real type.
                 if (ta.ClrType == null)
                 {
-                    Diagnostics.ReportTypeNotGeneric(syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location, ta.Name);
-                    return null;
+                    hasTypeParameterArg = true;
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+                    continue;
                 }
 
                 // Project host CLR type arguments onto the resolver's reference
@@ -1373,9 +1381,10 @@ public sealed class Binder
                 var closed = clrOpenType.MakeGenericType(clrArgs);
                 if (hasTypeParameterArg)
                 {
-                    // #313: keep the symbolic `[T]` arguments alongside the
-                    // type-erased closed CLR shape so call-site inference and
-                    // return-type substitution can recover the type parameter.
+                    // #313 / #671: keep the symbolic type arguments alongside
+                    // the type-erased closed CLR shape so call-site inference,
+                    // return-type substitution, and user-type emit can recover
+                    // the real type argument.
                     return ImportedTypeSymbol.GetConstructed(closed, clrOpenType, symbolicArgs.MoveToImmutable());
                 }
 
@@ -1755,14 +1764,17 @@ public sealed class Binder
             if (TypeSymbol.ContainsTypeParameter(ta))
             {
                 hasTypeParameterArg = true;
-                clrArgs[i] = typeof(object);
+                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
                 continue;
             }
 
+            // Issue #671: user-defined types without a ClrType project onto
+            // System.Object (same as type parameters above).
             if (ta.ClrType == null)
             {
-                Diagnostics.ReportTypeNotGeneric(syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location, ta.Name);
-                return null;
+                hasTypeParameterArg = true;
+                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+                continue;
             }
 
             clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
