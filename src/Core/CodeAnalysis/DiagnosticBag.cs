@@ -2205,6 +2205,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// GS0276: An if-expression used in value position has no <c>else</c> branch.
+    /// Without an else, the expression cannot produce a value for all code paths.
+    /// </summary>
+    /// <param name="location">The source location of the <c>if</c> keyword.</param>
+    public void ReportIfExpressionMissingElse(TextLocation location)
+    {
+        Report(location, "GS0276", "An if-expression in value position must have an 'else' branch so that all code paths produce a value.");
+    }
+
+    /// <summary>
+    /// GS0277: A block in an if-expression value position has no trailing
+    /// value-producing expression.
+    /// </summary>
+    /// <param name="location">The source location of the block's closing brace.</param>
+    public void ReportBlockExpressionMissingTrailingExpression(TextLocation location)
+    {
+        Report(location, "GS0277", "A block in an if-expression value position must end with a value-producing expression.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

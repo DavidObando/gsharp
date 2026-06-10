@@ -69,6 +69,7 @@ internal sealed partial class ExpressionBinder
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<StatementSyntax, BoundStatement> bindStatement;
 
     public ExpressionBinder(
         BinderContext binderCtx,
@@ -82,7 +83,8 @@ internal sealed partial class ExpressionBinder
         Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
-        Func<FunctionSymbol> getCurrentFunction)
+        Func<FunctionSymbol> getCurrentFunction,
+        Func<StatementSyntax, BoundStatement> bindStatement = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -96,6 +98,7 @@ internal sealed partial class ExpressionBinder
         this.reportObsoleteUseIfApplicable = reportObsoleteUseIfApplicable ?? throw new ArgumentNullException(nameof(reportObsoleteUseIfApplicable));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
+        this.bindStatement = bindStatement;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -231,6 +234,8 @@ internal sealed partial class ExpressionBinder
                 // the call sites short-circuit to BindConditionalAddress
                 // before reaching this dispatch.
                 return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
+            case SyntaxKind.IfExpression:
+                return BindIfExpression((IfExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
             case SyntaxKind.IsExpression:

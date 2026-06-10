@@ -233,6 +233,108 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #669: binds an if-expression to a <see cref="BoundConditionalExpression"/>
+    /// (the same bound node used by the ternary operator). Multi-statement blocks
+    /// are lowered to <see cref="BoundBlockExpression"/> wrapping the final value.
+    /// </summary>
+    private BoundExpression BindIfExpression(IfExpressionSyntax syntax)
+    {
+        // An if-expression in value position must have an else branch.
+        if (syntax.ElseExpression == null)
+        {
+            Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
+
+        var whenTrue = BindBlockExpressionValue(syntax.ThenBlock);
+        var whenFalse = BindIfExpressionElseBranch(syntax.ElseExpression);
+
+        if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var resultType = ComputeConditionalCommonType(whenTrue.Type, whenFalse.Type);
+        if (resultType == null)
+        {
+            Diagnostics.ReportConditionalNoCommonResultType(
+                syntax.Location,
+                whenTrue.Type?.Name ?? "?",
+                whenFalse.Type?.Name ?? "?");
+            return new BoundErrorExpression(null);
+        }
+
+        var convertedTrue = ConvertConditionalBranch(syntax.ThenBlock.Location, whenTrue, resultType);
+        var convertedFalse = ConvertConditionalBranch(syntax.ElseExpression.Location, whenFalse, resultType);
+        if (convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        return new BoundConditionalExpression(null, condition, convertedTrue, convertedFalse, resultType);
+    }
+
+    /// <summary>
+    /// Binds the else branch of an if-expression: either a nested if-expression
+    /// (<c>else if</c> chain) or a block expression.
+    /// </summary>
+    private BoundExpression BindIfExpressionElseBranch(ExpressionSyntax elseSyntax)
+    {
+        if (elseSyntax is IfExpressionSyntax nestedIf)
+        {
+            return BindIfExpression(nestedIf);
+        }
+
+        if (elseSyntax is BlockExpressionSyntax block)
+        {
+            return BindBlockExpressionValue(block);
+        }
+
+        // Should not happen from well-formed parse trees.
+        return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Binds a block-with-trailing-expression in value position. If the block
+    /// has no trailing expression, reports a diagnostic. The result is either
+    /// the bound trailing expression (when there are no prefix statements), or
+    /// a <see cref="BoundBlockExpression"/> wrapping the prefix statements and
+    /// the trailing value.
+    /// </summary>
+    private BoundExpression BindBlockExpressionValue(BlockExpressionSyntax syntax)
+    {
+        if (syntax.Expression == null)
+        {
+            Diagnostics.ReportBlockExpressionMissingTrailingExpression(syntax.CloseBraceToken.Location);
+            return new BoundErrorExpression(null);
+        }
+
+        // If there are no prefix statements, just bind the expression directly.
+        if (syntax.Statements.IsDefaultOrEmpty)
+        {
+            return BindExpression(syntax.Expression);
+        }
+
+        // Bind prefix statements.
+        var boundStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var stmt in syntax.Statements)
+        {
+            var boundStmt = bindStatement(stmt);
+            boundStatements.Add(boundStmt);
+        }
+
+        var boundExpression = BindExpression(syntax.Expression);
+        if (boundExpression is BoundErrorExpression)
+        {
+            return boundExpression;
+        }
+
+        return new BoundBlockExpression(null, boundStatements.ToImmutable(), boundExpression);
+    }
+
+    /// <summary>
     /// ADR-0062: chooses a common result type for two conditional branches
     /// using the following ordered rules (mirroring the ADR §2 common-type
     /// procedure):

@@ -31,6 +31,13 @@ public class Parser
     // an inner `T() { … }` still works inside `if Foo(T() { X = 1 }) { … }`.
     private int suppressTrailingObjectInitializer;
 
+    // Separate counter that suppresses `Ident {` struct-literal parsing.
+    // Only incremented by ParseIfExpression to prevent the condition from
+    // consuming the then-block's opening brace as a struct literal.
+    // For-range and other body-header contexts must NOT suppress struct
+    // literals — e.g. `for v in Numbers{} { body }` is valid.
+    private int suppressStructLiteral;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="Parser"/> class.
     /// </summary>
@@ -3709,6 +3716,9 @@ public class Parser
             case SyntaxKind.SwitchKeyword:
                 return ParsePostfixChain(ParseSwitchExpression());
 
+            case SyntaxKind.IfKeyword:
+                return ParsePostfixChain(ParseIfExpression());
+
             case SyntaxKind.IdentifierToken:
             default:
                 return ParseNameOrCallExpression();
@@ -4069,6 +4079,7 @@ public class Parser
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
+            && suppressStructLiteral == 0
             && IsStructLiteralFollowingBrace(2))
         {
             current = ParseStructLiteralExpression();
@@ -4732,6 +4743,117 @@ public class Parser
         }
 
         return NextToken();
+    }
+
+    // Issue #669: parse an if-expression of the form
+    // `if cond { expr }`, `if cond { expr } else { expr }`,
+    // or `if cond { expr } else if ... { expr } else { expr }`.
+    private IfExpressionSyntax ParseIfExpression()
+    {
+        var ifKeyword = MatchToken(SyntaxKind.IfKeyword);
+        suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
+        ExpressionSyntax condition;
+        try
+        {
+            condition = ParseExpression();
+        }
+        finally
+        {
+            suppressStructLiteral--;
+            suppressTrailingObjectInitializer--;
+        }
+
+        var thenBlock = ParseBlockExpression();
+
+        SyntaxToken elseKeyword = null;
+        ExpressionSyntax elseExpression = null;
+        if (Current.Kind == SyntaxKind.ElseKeyword)
+        {
+            elseKeyword = NextToken();
+            if (Current.Kind == SyntaxKind.IfKeyword)
+            {
+                elseExpression = ParseIfExpression();
+            }
+            else
+            {
+                elseExpression = ParseBlockExpression();
+            }
+        }
+
+        return new IfExpressionSyntax(syntaxTree, ifKeyword, condition, thenBlock, elseKeyword, elseExpression);
+    }
+
+    // Issue #669: parse a block expression `{ stmt*; expr? }`.
+    // The last item in the block, if it is an expression statement, becomes
+    // the trailing value-producing expression of the block.
+    private BlockExpressionSyntax ParseBlockExpression()
+    {
+        var statements = ImmutableArray.CreateBuilder<StatementSyntax>();
+        ExpressionSyntax trailingExpression = null;
+
+        var openBraceToken = MatchToken(SyntaxKind.OpenBraceToken);
+
+        while (Current.Kind != SyntaxKind.EndOfFileToken &&
+               Current.Kind != SyntaxKind.CloseBraceToken)
+        {
+            var startToken = Current;
+
+            var statement = ParseBlockExpressionItem();
+            statements.Add(statement);
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        var closeBraceToken = MatchToken(SyntaxKind.CloseBraceToken);
+
+        // If the last statement is an expression statement, treat its
+        // expression as the block's trailing value-producing expression.
+        if (statements.Count > 0 && statements[^1] is ExpressionStatementSyntax exprStmt)
+        {
+            statements.RemoveAt(statements.Count - 1);
+            trailingExpression = exprStmt.Expression;
+        }
+
+        return new BlockExpressionSyntax(syntaxTree, openBraceToken, statements.ToImmutable(), trailingExpression, closeBraceToken);
+    }
+
+    // Issue #669: parse a single item inside a block expression. This is
+    // similar to ParseStatement() but recognizes `if` as potentially
+    // an if-expression (when followed by the block-expression shape).
+    private StatementSyntax ParseBlockExpressionItem()
+    {
+        // If the current token is `if` and this could be an if-expression
+        // (value-producing), parse it as an expression statement wrapping
+        // an IfExpressionSyntax. This handles nested `if` in block position.
+        if (Current.Kind == SyntaxKind.IfKeyword && LooksLikeIfExpression())
+        {
+            var ifExpr = ParseIfExpression();
+            return new ExpressionStatementSyntax(syntaxTree, ifExpr);
+        }
+
+        return ParseStatement();
+    }
+
+    // Issue #669: lookahead to determine if an `if` at the current position
+    // looks like an if-expression rather than an if-statement. We check
+    // whether `if <expr> {` pattern is followed by a `}` at the same brace
+    // depth, and then either by `else` or by the end of the enclosing block.
+    // Simple heuristic: an if-expression body is always a brace block
+    // (not a bare statement), so `if expr {` is the if-expression shape.
+    // If-statements in G# also use `if expr {`, so we disambiguate by
+    // context: in a block expression, we always prefer the expression parse.
+    private bool LooksLikeIfExpression()
+    {
+        // In block-expression context, all `if` forms can be treated as
+        // expressions. If the if has no else (statement-only form), the binder
+        // will reject it with GS0276 when in value position; but in non-value
+        // trailing position it would just produce a null trailing expression
+        // which the binder handles. We always prefer the expression parse here.
+        return true;
     }
 
     // ADR-0060 helper for the optional `out var name T` / `out let name T` /
