@@ -489,26 +489,54 @@ public sealed class Lowerer : BoundTreeRewriter
             return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
-        var elementClr = asyncEnumerableInterface.GetGenericArguments()[0];
-        var enumeratorClr = typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr);
-        var valueTaskBoolClr = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(typeof(bool));
+        // Issue #652: resolve all helper types from the same MetadataLoadContext
+        // as the stream type. Using typeof(...) here would yield host-runtime types
+        // that cannot be mixed with MLC-loaded types in MakeGenericType/GetMethod
+        // calls, causing ArgumentException ("Type must be a type provided by the
+        // MetadataLoadContext").  Instead, derive everything from the interface and
+        // method signatures that are already in the correct context.
 
-        var getAsyncEnumerator = asyncEnumerableInterface.GetMethod(
-            "GetAsyncEnumerator",
-            new[] { typeof(System.Threading.CancellationToken) });
-        var moveNextAsync = enumeratorClr.GetMethod("MoveNextAsync", System.Type.EmptyTypes);
-        var currentProperty = enumeratorClr.GetProperty("Current");
-        var disposeAsync = typeof(System.IAsyncDisposable).GetMethod("DisposeAsync", System.Type.EmptyTypes);
-
-        if (getAsyncEnumerator == null || moveNextAsync == null || currentProperty == null || disposeAsync == null)
+        // GetAsyncEnumerator is the sole method on IAsyncEnumerable<T>.
+        var getAsyncEnumerator = asyncEnumerableInterface.GetMethod("GetAsyncEnumerator");
+        if (getAsyncEnumerator == null)
         {
             return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
-        var cancellationTokenType = TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken));
+        // IAsyncEnumerator<T> — from the return type (already in MLC context).
+        var enumeratorClr = getAsyncEnumerator.ReturnType;
+        var moveNextAsync = enumeratorClr.GetMethod("MoveNextAsync");
+        var currentProperty = enumeratorClr.GetProperty("Current");
+
+        // IAsyncDisposable.DisposeAsync — find via enumerator's implemented interfaces.
+        System.Reflection.MethodInfo disposeAsync = null;
+        foreach (var iface in enumeratorClr.GetInterfaces())
+        {
+            if (iface.FullName == "System.IAsyncDisposable")
+            {
+                disposeAsync = iface.GetMethod("DisposeAsync");
+                break;
+            }
+        }
+
+        if (moveNextAsync == null || currentProperty == null || disposeAsync == null)
+        {
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+        }
+
+        // ValueTask<bool> — from MoveNextAsync's return type (MLC context).
+        var valueTaskBoolClr = moveNextAsync.ReturnType;
+
+        // CancellationToken — from GetAsyncEnumerator's parameter (MLC context).
+        var cancellationTokenClr = getAsyncEnumerator.GetParameters()[0].ParameterType;
+
+        // ValueTask (non-generic) — from DisposeAsync's return type (MLC context).
+        var valueTaskClr = disposeAsync.ReturnType;
+
+        var cancellationTokenType = TypeSymbol.FromClrType(cancellationTokenClr);
         var enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
         var valueTaskBoolType = TypeSymbol.FromClrType(valueTaskBoolClr);
-        var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+        var valueTaskType = TypeSymbol.FromClrType(valueTaskClr);
         var currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
 
         var enumeratorSymbol = new LocalVariableSymbol("$awaitEnum", isReadOnly: true, type: enumeratorType);
