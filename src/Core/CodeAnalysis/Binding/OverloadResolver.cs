@@ -1749,6 +1749,14 @@ internal sealed class OverloadResolver
 
         if (syntax.Arguments.Count == 1 && lookupType(syntax.Identifier.Text) is TypeSymbol type)
         {
+            // Issue #663: when the call carries a `?` token (e.g. `string?(x)`),
+            // wrap the resolved type in NullableTypeSymbol so the conversion
+            // targets the nullable form.
+            if (syntax.NullableQuestionToken != null)
+            {
+                type = NullableTypeSymbol.Get(type);
+            }
+
             // A single-arg call to a primitive-typed name is a conversion
             // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
             // or inline-struct type, treat it as a ctor call instead — even
