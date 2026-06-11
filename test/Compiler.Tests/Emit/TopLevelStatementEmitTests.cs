@@ -106,12 +106,38 @@ public class TopLevelStatementEmitTests
         Assert.Equal("3\n", result.Stdout);
     }
 
+    [Fact]
+    public void TLS_Return_Int_Propagates_To_Process_ExitCode()
+    {
+        // ADR-0066 D2: a TLS source whose only `return` carries an
+        // expression infers `int` as the synthesized entry point's return
+        // type; the CLR surfaces that value as Process.ExitCode.
+        var source = """
+            package TopLevelReturnInt
+
+            return 7
+            """;
+
+        var result = CompileAndRun(
+            new[] { ("Program.gs", source) },
+            extraRuntimeArgs: null,
+            assertZeroExit: false);
+
+        Assert.Equal(7, result.ExitCode);
+    }
+
     private static CompileResult CompileAndRun(params (string FileName, string Source)[] files)
-        => CompileAndRun(files, extraRuntimeArgs: null);
+        => CompileAndRun(files, extraRuntimeArgs: null, assertZeroExit: true);
 
     private static CompileResult CompileAndRun(
         IReadOnlyList<(string FileName, string Source)> files,
         IReadOnlyList<string> extraRuntimeArgs)
+        => CompileAndRun(files, extraRuntimeArgs, assertZeroExit: true);
+
+    private static CompileResult CompileAndRun(
+        IReadOnlyList<(string FileName, string Source)> files,
+        IReadOnlyList<string> extraRuntimeArgs,
+        bool assertZeroExit)
     {
         Assert.NotEmpty(files);
 
@@ -182,11 +208,14 @@ public class TopLevelStatementEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            Assert.True(
-                proc.ExitCode == 0,
-                $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            if (assertZeroExit)
+            {
+                Assert.True(
+                    proc.ExitCode == 0,
+                    $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            }
 
-            return new CompileResult(stdout.Replace("\r\n", "\n"), methodNames);
+            return new CompileResult(stdout.Replace("\r\n", "\n"), methodNames, proc.ExitCode, compileOut.ToString() + compileErr.ToString());
         }
         finally
         {
@@ -209,5 +238,5 @@ public class TopLevelStatementEmitTests
         return names;
     }
 
-    private sealed record CompileResult(string Stdout, IReadOnlyList<string> MethodNames);
+    private sealed record CompileResult(string Stdout, IReadOnlyList<string> MethodNames, int ExitCode, string CompileOutput);
 }

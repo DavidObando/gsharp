@@ -643,10 +643,19 @@ public sealed class Binder
             var argsParameter = new ParameterSymbol("args", argsType);
             var entryPointParameters = ImmutableArray.Create(argsParameter);
 
+            // ADR-0066 D2: pre-scan TLS for `return` shapes (bare vs
+            // value-returning) so the synthesized entry point's return type
+            // is inferred BEFORE binding. Any value-returning return → `int`;
+            // any mix → GS0287 at the first offending site, with the first
+            // shape seen winning recovery.
+            var entryPointReturnType = InferTopLevelEntryPointReturnType(
+                globalStatements,
+                binder.Diagnostics);
+
             synthesizedEntryPoint = new FunctionSymbol(
                 name: "<Main>$",
                 parameters: entryPointParameters,
-                type: TypeSymbol.Void,
+                type: entryPointReturnType,
                 declaration: null,
                 package: synthesizedEntryPointPackage);
             synthesizedEntryPoint.IsTopLevelEntryPoint = true;
@@ -1111,6 +1120,100 @@ public sealed class Binder
         {
             // Inference must never throw into the editor pipeline.
             return null;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0066 D2/D3: pre-scans the top-level statements to determine the
+    /// synthesized entry point's return type before binding. If any TLS
+    /// <c>return</c> carries an expression, the entry point returns
+    /// <c>int</c>; otherwise it returns <c>void</c>. Mixed bare and
+    /// value-returning shapes report GS0287 at the first offending site,
+    /// and recovery picks whichever shape appeared first. Returns and
+    /// awaits inside nested function literals are deliberately ignored:
+    /// they belong to the lambda, not the entry point.
+    /// </summary>
+    private static TypeSymbol InferTopLevelEntryPointReturnType(
+        IReadOnlyList<GlobalStatementSyntax> globalStatements,
+        DiagnosticBag diagnostics)
+    {
+        ReturnStatementSyntax firstBare = null;
+        ReturnStatementSyntax firstValue = null;
+        foreach (var gs in globalStatements)
+        {
+            CollectTopLevelReturns(gs.Statement, ref firstBare, ref firstValue);
+        }
+
+        if (firstBare != null && firstValue != null)
+        {
+            // Recovery: the first shape seen wins. The mismatch fires at the
+            // *later* offender's location so the user sees which return
+            // disagreed with the prevailing shape.
+            var firstBareSpan = firstBare.ReturnKeyword.Span.Start;
+            var firstValueSpan = firstValue.ReturnKeyword.Span.Start;
+            if (firstBareSpan < firstValueSpan)
+            {
+                diagnostics.ReportTopLevelReturnShapeMismatch(firstValue.ReturnKeyword.Location);
+                return TypeSymbol.Void;
+            }
+            else
+            {
+                diagnostics.ReportTopLevelReturnShapeMismatch(firstBare.ReturnKeyword.Location);
+                return TypeSymbol.Int32;
+            }
+        }
+
+        return firstValue != null ? TypeSymbol.Int32 : TypeSymbol.Void;
+    }
+
+    /// <summary>
+    /// Recursively walks <paramref name="node"/>, classifying every
+    /// <see cref="ReturnStatementSyntax"/> as either bare or value-returning,
+    /// and recording the first instance of each. Descent stops at
+    /// <see cref="FunctionLiteralExpressionSyntax"/> boundaries: returns
+    /// inside lambdas belong to the lambda's own function body, not to the
+    /// surrounding TLS entry point.
+    /// </summary>
+    private static void CollectTopLevelReturns(
+        SyntaxNode node,
+        ref ReturnStatementSyntax firstBare,
+        ref ReturnStatementSyntax firstValue)
+    {
+        if (node == null)
+        {
+            return;
+        }
+
+        if (node is FunctionLiteralExpressionSyntax)
+        {
+            // ADR-0066 D2: lambda bodies host their own `return`s; skip them.
+            return;
+        }
+
+        if (node is ReturnStatementSyntax ret)
+        {
+            if (ret.Expression == null)
+            {
+                if (firstBare == null)
+                {
+                    firstBare = ret;
+                }
+            }
+            else
+            {
+                if (firstValue == null)
+                {
+                    firstValue = ret;
+                }
+            }
+
+            // Returns have no children that could host nested returns.
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectTopLevelReturns(child, ref firstBare, ref firstValue);
         }
     }
 

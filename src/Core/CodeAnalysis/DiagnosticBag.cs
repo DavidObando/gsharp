@@ -892,6 +892,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0066 D2: reports that top-level statements mix bare <c>return;</c> and
+    /// <c>return &lt;expr&gt;;</c> shapes. The synthesized entry point has a
+    /// single return type (either <c>void</c> or <c>int</c>), so the user must
+    /// pick one return shape across all TLS.
+    /// </summary>
+    /// <param name="location">The location of the first offending return statement.</param>
+    public void ReportTopLevelReturnShapeMismatch(TextLocation location)
+    {
+        var message = "Top-level statements mix bare `return;` and `return <expr>;`. Choose one return shape so the synthesized entry point has a single return type.";
+        Report(location, "GS0287", message);
+    }
+
+    /// <summary>
     /// Reports that a multi-target assignment or short variable declaration has
     /// a different number of targets and values.
     /// </summary>

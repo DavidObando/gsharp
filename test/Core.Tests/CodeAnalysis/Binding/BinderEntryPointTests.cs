@@ -265,6 +265,58 @@ public class BinderEntryPointTests
         Assert.DoesNotContain(globalScope.Diagnostics, IsMultiPackageTopLevel);
     }
 
+    [Fact]
+    public void Synthesizes_Int_EntryPoint_When_Return_Has_Expression()
+    {
+        // ADR-0066 D2: any value-returning return in TLS infers `int` as the
+        // synthesized entry point's return type (so the CLR can surface the
+        // value as Process.ExitCode).
+        var globalScope = BindSource("return 0\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Synthesizes_Void_EntryPoint_When_Only_Bare_Return()
+    {
+        // ADR-0066 D2: bare `return;` keeps the synthesized entry point as
+        // `void`-returning.
+        var globalScope = BindSource("return\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Synthesizes_Void_EntryPoint_When_No_Return()
+    {
+        // ADR-0066 D2: the absence of any return keeps the synthesized
+        // entry point as `void` (the default).
+        var globalScope = BindSource("var n = 1\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Reports_GS0287_When_TLS_Mixes_Bare_And_Value_Returns()
+    {
+        // ADR-0066 D2: mixing bare `return;` and value-returning `return X`
+        // in TLS reports GS0287 at the first offender. The first-seen shape
+        // wins recovery. Here the first return is value-returning, so the
+        // bare return is the offender and the synthesized entry point keeps
+        // `int`.
+        var globalScope = BindSource("if (true) { return 0 }\nreturn\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+        Assert.Single(globalScope.Diagnostics.Where(d => d.Id == "GS0287"));
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
