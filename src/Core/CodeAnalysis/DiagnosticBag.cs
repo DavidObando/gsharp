@@ -892,6 +892,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that top-level statements within a single source file are not
+    /// contiguous — they are split into two or more blocks separated by a
+    /// type or function declaration (ADR-0066 deferred decision D5). Emitted
+    /// as a <b>warning</b> so the established G# Go-style trailing-TLS
+    /// idiom (decls first, then a single TLS block) keeps working
+    /// unchanged, while genuinely interleaved layouts still surface a hint.
+    /// </summary>
+    /// <param name="location">The location of the misplaced top-level statement.</param>
+    public void ReportTopLevelStatementsMustBeContiguous(TextLocation location)
+    {
+        var message = "Top-level statements should form a single contiguous block within a file — interleaving them with type or function declarations is hard to read.";
+        Report(location, "GS0286", message, DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
     /// Reports that a multi-target assignment or short variable declaration has
     /// a different number of targets and values.
     /// </summary>
