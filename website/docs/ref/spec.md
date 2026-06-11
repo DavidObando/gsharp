@@ -48,7 +48,7 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer else enum false fallthrough finally for func go goto if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var
+as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
 Several words are contextual rather than reserved. `record`, `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below.
@@ -442,7 +442,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | ForStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -474,7 +474,7 @@ SwitchCase = "case" Pattern Block | "default" Block .
 
 ### For loops and while-style loops
 
-G# has `for`, `for in`, and `for range` forms. There is no implemented `while` keyword or while statement; write `for condition { ... }` for while-style loops.
+G# has `for`, `for in`, `for range`, `while`, and `do`-`while` forms.
 
 ```ebnf
 ForStmt = "for" Statement
@@ -482,6 +482,35 @@ ForStmt = "for" Statement
         | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
         | "for" identifier ( "," identifier )? ( ":=" "range" | "in" ) Expression Statement
         | "for" identifier ":=" Expression "..." Expression Statement .
+
+WhileStmt    = "while" Expression Statement .
+DoWhileStmt  = "do" Block "while" Expression .
+```
+
+`while` evaluates its condition first and runs the body while the condition is
+true. `do`-`while` always runs the body once before evaluating the condition;
+the body must be a block.
+
+### Labeled loops, break, and continue (ADR-0070)
+
+`for`, `while`, and `do`-`while` may be prefixed with `identifier ":"` to
+declare a label. `break identifier` and `continue identifier` then target the
+matching enclosing loop instead of the innermost one. Unlabeled
+`break`/`continue` keep their existing innermost-loop semantics. The optional
+label after `break`/`continue` must appear on the same source line as the
+keyword (mirroring `return` value parsing).
+
+Diagnostics:
+
+- **GS0293** — `break`/`continue` names a label that is not in scope on the
+  enclosing loop stack.
+- **GS0294** — a label declaration prefixes a statement that is not a loop.
+- **GS0295** — *warning*. A loop label shadows another label of the same name
+  on the enclosing loop stack.
+- **GS0120** — pre-existing — `break`/`continue` used outside any loop.
+
+```ebnf
+LabeledLoopStmt   ::= identifier ':' ( ForStmt | WhileStmt | DoWhileStmt )
 ```
 
 ### Return and yield
@@ -649,7 +678,7 @@ TypeClauseList    ::= TypeClause (',' TypeClause)*
 Block             ::= '{' Statement* '}'
 Statement         ::= Block
                     | Annotation* VariableDecl
-                    | IfStmt | ForStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
+                    | IfStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
                     | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
@@ -667,9 +696,12 @@ ForStmt           ::= 'for' Statement
                     | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Statement
                     | 'for' identifier (',' identifier)? (':=' 'range' | contextual 'in') Expression Statement
                     | 'for' identifier ':=' Expression '...' Expression Statement
+WhileStmt         ::= 'while' Expression Statement
+DoWhileStmt       ::= 'do' Block 'while' Expression
+LabeledLoopStmt   ::= identifier ':' (ForStmt | WhileStmt | DoWhileStmt)
 SimpleStmt        ::= ShortVarDecl | IncDecStmt | ExpressionStmt
-BreakStmt         ::= 'break'
-ContinueStmt      ::= 'continue'
+BreakStmt         ::= 'break' identifier?
+ContinueStmt      ::= 'continue' identifier?
 ReturnStmt        ::= 'return' Expression? (',' Expression)*
 YieldStmt         ::= contextual 'yield' Expression
 

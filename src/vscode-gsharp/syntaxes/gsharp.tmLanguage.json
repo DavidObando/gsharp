@@ -161,7 +161,7 @@
       "patterns": [
         {
           "name": "keyword.control.gsharp",
-          "match": "\\b(if|else|for|switch|case|default|break|continue|return|goto|fallthrough|range|select|in|from|where|when|yield)\\b"
+          "match": "\\b(if|else|for|while|do|switch|case|default|break|continue|return|goto|fallthrough|range|select|in|from|where|when|yield)\\b"
         },
         {
           "name": "keyword.control.flow.gsharp",

@@ -15,7 +15,10 @@ In this tutorial, you will write G# branches, loops, switches, and patterns. G# 
 
 ## 1. Count with `for`
 
-G# does not have a `while` keyword. Use `for condition` for while-shaped loops, or a C-style header when you need init and post clauses:
+G# also supports a `while` keyword and a `do`-`while` form (ADR-0070); the
+`for` family remains the most common choice for indexed loops. Use
+`for condition` (or `while condition`) for while-shaped loops, or a C-style
+header when you need init and post clauses:
 
 ```gsharp title="Loop.gs"
 // file: Loop.gs

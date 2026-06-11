@@ -2524,6 +2524,10 @@ public class Parser
                 return ParseIfStatement();
             case SyntaxKind.ForKeyword:
                 return ParseForStatement();
+            case SyntaxKind.WhileKeyword:
+                return ParseWhileStatement();
+            case SyntaxKind.DoKeyword:
+                return ParseDoWhileStatement();
             case SyntaxKind.BreakKeyword:
                 return ParseBreakStatement();
             case SyntaxKind.ContinueKeyword:
@@ -2588,6 +2592,17 @@ public class Parser
                     Peek(1).Kind != SyntaxKind.OpenSquareBracketToken)
                 {
                     return ParseYieldStatement();
+                }
+
+                if (Current.Kind == SyntaxKind.IdentifierToken &&
+                    Peek(1).Kind == SyntaxKind.ColonToken)
+                {
+                    // ADR-0070: `label: loop-statement`. We accept any inner
+                    // statement here and rely on the binder to issue GS0294
+                    // when the inner statement is not a loop — this gives a
+                    // single high-quality diagnostic rather than a cascade of
+                    // confused parser errors.
+                    return ParseLabeledLoopStatement();
                 }
 
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
@@ -3191,13 +3206,64 @@ public class Parser
     private StatementSyntax ParseBreakStatement()
     {
         var keyword = MatchToken(SyntaxKind.BreakKeyword);
-        return new BreakStatementSyntax(syntaxTree, keyword);
+        var label = TryParseLoopTargetLabel(keyword);
+        return new BreakStatementSyntax(syntaxTree, keyword, label);
     }
 
     private StatementSyntax ParseContinueStatement()
     {
         var keyword = MatchToken(SyntaxKind.ContinueKeyword);
-        return new ContinueStatementSyntax(syntaxTree, keyword);
+        var label = TryParseLoopTargetLabel(keyword);
+        return new ContinueStatementSyntax(syntaxTree, keyword, label);
+    }
+
+    private SyntaxToken TryParseLoopTargetLabel(SyntaxToken keyword)
+    {
+        // ADR-0070: an optional bare identifier on the same source line names
+        // a labeled enclosing loop. Restricting the label to the same line
+        // avoids accidentally swallowing the next statement.
+        if (Current.Kind != SyntaxKind.IdentifierToken)
+        {
+            return null;
+        }
+
+        var keywordLine = syntaxTree.Text.GetLineIndex(keyword.Span.Start);
+        var currentLine = syntaxTree.Text.GetLineIndex(Current.Span.Start);
+        if (keywordLine != currentLine)
+        {
+            return null;
+        }
+
+        return NextToken();
+    }
+
+    private StatementSyntax ParseLabeledLoopStatement()
+    {
+        var label = MatchToken(SyntaxKind.IdentifierToken);
+        var colon = MatchToken(SyntaxKind.ColonToken);
+        var inner = ParseStatement();
+        return new LabeledStatementSyntax(syntaxTree, label, colon, inner);
+    }
+
+    private StatementSyntax ParseWhileStatement()
+    {
+        // ADR-0070: `while cond { body }` — same lowering as `for cond { body }`.
+        var keyword = MatchToken(SyntaxKind.WhileKeyword);
+        var condition = ParseExpressionInBodyHeader();
+        var body = ParseStatement();
+        return new WhileStatementSyntax(syntaxTree, keyword, condition, body);
+    }
+
+    private StatementSyntax ParseDoWhileStatement()
+    {
+        // ADR-0070: `do { body } while cond` — post-test loop. The trailing
+        // `while` keyword reuses SyntaxKind.WhileKeyword so the lexer is
+        // unchanged; the parser disambiguates by remembering it saw `do`.
+        var doKeyword = MatchToken(SyntaxKind.DoKeyword);
+        var body = ParseStatement();
+        var whileKeyword = MatchToken(SyntaxKind.WhileKeyword);
+        var condition = ParseExpression();
+        return new DoWhileStatementSyntax(syntaxTree, doKeyword, body, whileKeyword, condition);
     }
 
     private StatementSyntax ParseReturnStatement()

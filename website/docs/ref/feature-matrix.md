@@ -71,10 +71,11 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
 | `if` | Supported | Supported | Includes simple-statement form. |
-| `for` condition, clause, infinite loops | Supported | Supported | There is no `while` keyword. |
+| `for` condition, clause, infinite loops | Supported | Supported | Companion `while` and `do`-`while` forms shipped in ADR-0070. |
 | `for x in collection` and `for x := range collection` | Supported | Supported | Canonical `in` form plus Go-style range form. |
 | Ellipsis loops | Supported | Supported | `for i := start ... end`. |
-| `break` and `continue` | Supported | Supported | Invalid locations are diagnosed. |
+| `while` and `do`-`while` | Supported | Supported | ADR-0070. `while cond { ... }` (pre-test) and `do { ... } while cond` (post-test). |
+| `break` and `continue` (with optional loop labels) | Supported | Supported | Invalid locations are diagnosed. Loop labels (`label: for ...`, `break label`, `continue label`) added in ADR-0070; diagnostics `GS0293`–`GS0295`. |
 | Multi-assignment and deconstruction | Supported | Supported | Target/value mismatches are diagnosed. |
 | `switch` statements | Supported | Supported | Cases do not fall through. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |

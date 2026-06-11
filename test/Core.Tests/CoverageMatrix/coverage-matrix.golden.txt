@@ -61,6 +61,8 @@ DeferStatement
 DeinitDeclaration
 DelegateDeclaration
 DiscardPattern
+DoKeyword
+DoWhileStatement
 DocumentationCommentToken
 DotToken
 EllipsisToken
@@ -117,6 +119,7 @@ InterpolatedStringExpression
 InterpolatedStringToken
 IsExpression
 IsKeyword
+LabeledStatement
 LeftArrowToken
 LessOrEqualsToken
 LessToken
@@ -221,6 +224,8 @@ UsingKeyword
 UsingStatement
 VarKeyword
 VariableDeclaration
+WhileKeyword
+WhileStatement
 WhitespaceToken
 WithExpression
 YieldStatement
