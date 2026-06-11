@@ -270,7 +270,24 @@ internal sealed class LambdaBinder
             Scope.TryDeclareVariable(ps);
         }
 
-        var body = bindBlockStatement(syntax.Body);
+        // ADR-0069 / issue #700: smart-cast narrowings do not survive into a
+        // closure body — the narrowed variable could be reassigned by the
+        // enclosing scope between when the closure is created and when it
+        // runs. Save and restore the outer narrowing-frame stack so the
+        // lambda body binds at the captured variables' declared types.
+        var savedNarrowed = binderCtx.NarrowedVariables.ToList();
+        binderCtx.NarrowedVariables.Clear();
+
+        BoundStatement body;
+        try
+        {
+            body = bindBlockStatement(syntax.Body);
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.Clear();
+            binderCtx.NarrowedVariables.AddRange(savedNarrowed);
+        }
 
         Scope = outerScope;
         setCurrentFunction(outerFunction);

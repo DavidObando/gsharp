@@ -303,6 +303,13 @@ internal sealed class StatementBinder
                 // [MemberNotNull] post-condition narrowings to the persistent frame.
                 ApplyMemberNotNullNarrowings(statement, memberNotNullFrame);
 
+                // ADR-0069 / issue #700: lift the else-frame of an
+                // `if x !is T { return }` (or any if whose then-branch
+                // ends in an unconditional exit) into the enclosing
+                // block's persistent frame, so subsequent reads in this
+                // block see the narrowing.
+                ApplyEarlyExitNarrowings(statement, memberNotNullFrame);
+
                 // Phase 3.C.4: mutation invalidates the narrowing. After binding
                 // a statement that writes to a narrowed variable, drop its
                 // narrowing from the current frame so subsequent reads in this
@@ -458,6 +465,87 @@ internal sealed class StatementBinder
         foreach (var child in node.GetChildren())
         {
             CollectAssignedNames(child, assigned);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0069 / issue #700: when the bound statement is an
+    /// <see cref="BoundIfStatement"/> whose then-branch unconditionally
+    /// exits the enclosing block, and whose else-frame (recorded by
+    /// <see cref="BindIfStatement"/>) is non-empty, merge that frame into
+    /// <paramref name="persistentFrame"/> so subsequent statements in the
+    /// enclosing block see the narrowing.
+    /// </summary>
+    private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+    {
+        if (statement is not BoundIfStatement ifStmt)
+        {
+            return;
+        }
+
+        if (!binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame))
+        {
+            return;
+        }
+
+        binderCtx.PendingEarlyExitFrames.Remove(ifStmt);
+
+        // Only apply the lift if the then-branch unconditionally exits.
+        // Falling through means the variable could still be of any type
+        // that satisfies the original condition, so the else-frame is not
+        // a safe post-condition.
+        if (!EndsInUnconditionalExit(ifStmt.ThenStatement))
+        {
+            return;
+        }
+
+        foreach (var kv in elseFrame)
+        {
+            persistentFrame[kv.Key] = kv.Value;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0069 / issue #700: structurally determine whether the given
+    /// bound statement unconditionally transfers control out of its
+    /// enclosing block (return / throw / unconditional goto, which covers
+    /// the lowered shapes of <c>break</c> and <c>continue</c>). A block
+    /// counts when its last statement does any of those; an
+    /// <see cref="BoundIfStatement"/> counts only if both arms do.
+    /// </summary>
+    private static bool EndsInUnconditionalExit(BoundStatement statement)
+    {
+        switch (statement)
+        {
+            case BoundReturnStatement:
+            case BoundThrowStatement:
+                return true;
+
+            case BoundGotoStatement:
+                // `break`/`continue` lower to BoundGotoStatement before this
+                // helper runs; an explicit `goto` likewise transfers
+                // control unconditionally.
+                return true;
+
+            case BoundBlockStatement block:
+                if (block.Statements.IsDefaultOrEmpty)
+                {
+                    return false;
+                }
+
+                return EndsInUnconditionalExit(block.Statements[block.Statements.Length - 1]);
+
+            case BoundIfStatement nested:
+                if (nested.ElseStatement == null)
+                {
+                    return false;
+                }
+
+                return EndsInUnconditionalExit(nested.ThenStatement)
+                    && EndsInUnconditionalExit(nested.ElseStatement);
+
+            default:
+                return false;
         }
     }
 
@@ -809,16 +897,34 @@ internal sealed class StatementBinder
 
             // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
             // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
-            // is intentionally deferred.
+            // is intentionally deferred for the nil-guard classifier.
             var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
             if (thenNarrow == null && elseNarrow == null)
             {
                 (thenNarrow, elseNarrow) = TryClassifyBoolCallNarrowing(condition);
             }
 
+            // ADR-0069 / issue #700: smart-cast type-test narrowing on
+            // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
+            // nullable / `[NotNullWhen]` frames computed above so a condition
+            // that combines both styles narrows on both axes.
+            var (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition);
+            thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen);
+            elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse);
+
             var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
             var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
-            return new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
+            var result = new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
+
+            // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
+            // can lift it into the enclosing block when the then-branch ends in
+            // an unconditional exit (`return`/`throw`/`break`/`continue`).
+            if (elseNarrow != null && elseNarrow.Count > 0)
+            {
+                binderCtx.PendingEarlyExitFrames[result] = elseNarrow;
+            }
+
+            return result;
         }
 
         // `if init; cond { then } else { else }` lowers to a block that
@@ -831,13 +937,170 @@ internal sealed class StatementBinder
 
         var initStatement = BindStatement(syntax.Initializer);
         var initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
-        var initThen = BindStatement(syntax.ThenStatement);
-        var initElse = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+        var (initThenNarrow, initElseNarrow) = TryClassifyNilGuard(initCondition);
+        if (initThenNarrow == null && initElseNarrow == null)
+        {
+            (initThenNarrow, initElseNarrow) = TryClassifyBoolCallNarrowing(initCondition);
+        }
+
+        var (initTypeThen, initTypeElse) = TryClassifyTypeTestNarrowing(initCondition);
+        initThenNarrow = MergeNarrowingFrames(initThenNarrow, initTypeThen);
+        initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse);
+
+        var initThen = BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
+        var initElse = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
 
         scope = scope.Parent;
 
         var inner = new BoundIfStatement(syntax, initCondition, initThen, initElse);
+        if (initElseNarrow != null && initElseNarrow.Count > 0)
+        {
+            binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow;
+        }
+
         return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    private static Dictionary<VariableSymbol, TypeSymbol> MergeNarrowingFrames(
+        Dictionary<VariableSymbol, TypeSymbol> a,
+        Dictionary<VariableSymbol, TypeSymbol> b)
+    {
+        if (a == null || a.Count == 0)
+        {
+            return (b == null || b.Count == 0) ? null : b;
+        }
+
+        if (b == null || b.Count == 0)
+        {
+            return a;
+        }
+
+        var merged = new Dictionary<VariableSymbol, TypeSymbol>(a);
+        foreach (var kv in b)
+        {
+            // Later (more specific) wins on conflict. The type-test path passes
+            // its frame as `b`, so a type-test narrowing supersedes a coincident
+            // nil-guard narrowing on the same variable.
+            merged[kv.Key] = kv.Value;
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// ADR-0069 / issue #700: classify <c>is</c> / <c>!is</c> tests (and
+    /// <c>&amp;&amp;</c> chains thereof) on a local-variable or parameter
+    /// receiver into per-branch narrowing frames.
+    /// </summary>
+    /// <param name="condition">The bound condition expression.</param>
+    /// <returns>A pair of narrowing frames — the first applies to the
+    /// then-branch, the second to the else-branch. Either may be
+    /// <c>null</c> if the corresponding branch has no narrowing.</returns>
+    private (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) TryClassifyTypeTestNarrowing(BoundExpression condition)
+    {
+        switch (condition)
+        {
+            case BoundIsExpression isExpr:
+                {
+                    if (!IsNarrowableVariable(isExpr.Expression, out var target))
+                    {
+                        return (null, null);
+                    }
+
+                    var targetType = isExpr.TargetType;
+                    if (targetType == null || targetType == TypeSymbol.Error)
+                    {
+                        return (null, null);
+                    }
+
+                    // `x is T` narrows `x` to `T` in the then-branch. The
+                    // else-branch carries no narrowing: failing the type test
+                    // tells us nothing more about the variable's type.
+                    var narrowed = StripNullable(targetType);
+                    if (!IsStrictlyNarrower(target.Type, narrowed))
+                    {
+                        return (null, null);
+                    }
+
+                    return (new Dictionary<VariableSymbol, TypeSymbol> { [target] = narrowed }, null);
+                }
+
+            case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
+                {
+                    var (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand);
+                    return (inElse, inThen);
+                }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd:
+                {
+                    var (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left);
+                    var (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right);
+                    var combinedThen = MergeNarrowingFrames(leftThen, rightThen);
+                    if (combinedThen == null || combinedThen.Count == 0)
+                    {
+                        return (null, null);
+                    }
+
+                    return (combinedThen, null);
+                }
+        }
+
+        return (null, null);
+    }
+
+    private static bool IsNarrowableVariable(BoundExpression expr, out VariableSymbol variable)
+    {
+        variable = null;
+        if (expr is not BoundVariableExpression bve)
+        {
+            return false;
+        }
+
+        // ADR-0069 narrows locals and parameters only — never fields,
+        // properties, or implicit-field/property reads. Those receivers
+        // can be mutated by aliasing or another thread between the test
+        // and the use, so narrowing would be unsound.
+        if (bve.Variable is LocalVariableSymbol or ParameterSymbol)
+        {
+            variable = bve.Variable;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static TypeSymbol StripNullable(TypeSymbol type)
+    {
+        return type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+    }
+
+    private static bool IsStrictlyNarrower(TypeSymbol declared, TypeSymbol candidate)
+    {
+        if (candidate == null || candidate == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        if (declared == candidate)
+        {
+            return false;
+        }
+
+        // Stripping the nullable wrapper alone counts as narrowing
+        // (`string? → string`).
+        if (declared is NullableTypeSymbol declaredNullable && declaredNullable.UnderlyingType == candidate)
+        {
+            return true;
+        }
+
+        // For any other shape, accept it as a narrowing as long as the
+        // declared and candidate types are distinct. The runtime `is`
+        // test has already proved that the value is of the candidate
+        // type, so binder-time soundness is satisfied regardless of
+        // whether the candidate is a strict subtype in the type
+        // hierarchy.
+        return true;
     }
 
     private (Dictionary<VariableSymbol, TypeSymbol> NonNil, Dictionary<VariableSymbol, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)

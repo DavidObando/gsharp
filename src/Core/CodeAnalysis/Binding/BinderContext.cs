@@ -112,6 +112,18 @@ internal sealed class BinderContext
         = new List<Dictionary<VariableSymbol, TypeSymbol>>();
 
     /// <summary>
+    /// Gets the side-table that parks the else-branch narrowing frame of an
+    /// <c>if</c>-statement keyed by the resulting bound
+    /// <see cref="BoundIfStatement"/> node identity. ADR-0069 / issue #700:
+    /// <c>BindBlockStatements</c> consults this table and lifts the frame
+    /// into the enclosing block's persistent narrowing scope when the
+    /// then-branch ends in an unconditional exit (return, throw, break,
+    /// continue), so subsequent reads in the block see the narrowing.
+    /// </summary>
+    public Dictionary<BoundIfStatement, Dictionary<VariableSymbol, TypeSymbol>> PendingEarlyExitFrames { get; }
+        = new Dictionary<BoundIfStatement, Dictionary<VariableSymbol, TypeSymbol>>();
+
+    /// <summary>
     /// Gets or sets the type-parameter dictionary in scope while binding a
     /// generic function body. Indexed by type-parameter name. <c>null</c> when
     /// no generic context is active.

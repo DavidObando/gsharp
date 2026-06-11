@@ -502,7 +502,21 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)
     {
         var boundLeft = BindExpression(syntax.Left);
-        var boundRight = BindExpression(syntax.Right);
+
+        // ADR-0069 / issue #700: `&&` short-circuits — the right operand is
+        // only evaluated when the left operand was true. Thread any
+        // narrowing implied by the left operand into the right-operand
+        // binder so `x is T && f(x)` binds `f(x)` with `x` narrowed to `T`.
+        BoundExpression boundRight;
+        if (syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken)
+        {
+            var rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft);
+            boundRight = BindExpressionWithNarrowing(syntax.Right, rightFrame);
+        }
+        else
+        {
+            boundRight = BindExpression(syntax.Right);
+        }
 
         if (boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error)
         {

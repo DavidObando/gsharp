@@ -3873,6 +3873,21 @@ public class Parser
                     continue;
                 }
 
+                // ADR-0069 / issue #700: `!is` is recognised as the two-token
+                // sequence `!` immediately followed by `is`. It lowers to
+                // `!(left is T)` — the same bound tree the binder would produce
+                // for the parenthesised form — so every downstream pass
+                // (classification, narrowing, emit) handles it identically.
+                if (parentPrecedence < 3 && Current.Kind == SyntaxKind.BangToken && Peek(1).Kind == SyntaxKind.IsKeyword)
+                {
+                    var bangToken = NextToken();
+                    var isKeyword = NextToken();
+                    var typeClause = ParseTypeClause();
+                    var inner = new IsExpressionSyntax(syntaxTree, left, isKeyword, typeClause);
+                    left = new UnaryExpressionSyntax(syntaxTree, bangToken, inner);
+                    continue;
+                }
+
                 break;
             }
 
