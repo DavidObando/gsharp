@@ -476,7 +476,7 @@ public class Issue605AwaitUsingLetEmitTests
             var args = new[]
             {
                 "/out:" + outPath,
-                "/target:library",
+                "/target:exe",
                 "/targetframework:net10.0",
                 srcPath,
             };

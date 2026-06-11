@@ -505,6 +505,23 @@ public sealed class Binder
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols, isLibrary: false);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full
+    /// control over implicit-import seeding, the active preprocessor symbol
+    /// set, and whether the compilation is a library (ADR-0066 deferred
+    /// decision D4 — top-level statements in a library are an error,
+    /// matching C#'s CS8805).
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
+    /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary)
     {
         var parentScope = CreateParentScope(previous, references, preprocessorSymbols);
         var binder = new Binder(parentScope, function: null);
@@ -623,6 +640,18 @@ public sealed class Binder
         var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
                                           .OfType<GlobalStatementSyntax>()
                                           .ToArray();
+
+        // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
+        // statements are not allowed in a library compilation. Report once
+        // at the first global statement and continue binding so the rest of
+        // the flow (synthesized <Main>$, etc.) still runs — the diagnostic
+        // makes the compilation fail, but downstream consumers see a
+        // complete bound tree.
+        if (globalStatements.Length > 0 && isLibrary)
+        {
+            binder.Diagnostics.ReportTopLevelStatementsInLibrary(globalStatements[0].Location);
+        }
+
         foreach (var globalStatement in globalStatements)
         {
             var statement = binder.statements.BindStatement(globalStatement.Statement);

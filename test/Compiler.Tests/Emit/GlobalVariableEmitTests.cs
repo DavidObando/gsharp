@@ -232,7 +232,7 @@ public class GlobalVariableEmitTests
     }
 
     private static Assembly CompileToAssembly(string source)
-        => CompileToAssembly(source, target: "library");
+        => CompileToAssembly(source, target: "exe");
 
     private static Assembly CompileToAssembly(string source, string target)
     {
