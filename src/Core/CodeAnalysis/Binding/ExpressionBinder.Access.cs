@@ -456,7 +456,32 @@ internal sealed partial class ExpressionBinder
         if (leftPart is NameExpressionSyntax leftName)
         {
             var name = leftName.IdentifierToken.Text;
-            if (scope.TryLookupSymbol(name) is VariableSymbol variable)
+            var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
+
+            // Issue #687 (Option A — C#-style "color color"): when an identifier
+            // resolves to both a value (field/local/parameter) AND a same-named
+            // type in scope, prefer the type interpretation if the right-hand
+            // side of the accessor is a static member of that type. Fall through
+            // to the value interpretation otherwise so instance access continues
+            // to bind as today (`field.InstanceMethod()`).
+            if (variableHit != null
+                && TryResolveColorColorType(name, leftName, out var colorClassSymbol, out var colorStructSymbol, out var colorEnumSymbol)
+                && RightPartLooksLikeStaticMember(colorClassSymbol, colorStructSymbol, colorEnumSymbol, rightPart))
+            {
+                if (colorClassSymbol != null)
+                {
+                    classSymbol = colorClassSymbol;
+                }
+                else if (colorStructSymbol != null)
+                {
+                    userStructSymbol = colorStructSymbol;
+                }
+                else
+                {
+                    enumSymbol = colorEnumSymbol;
+                }
+            }
+            else if (variableHit is VariableSymbol variable)
             {
                 if (variable is ImplicitFieldVariableSymbol implicitField)
                 {
@@ -642,39 +667,254 @@ internal sealed partial class ExpressionBinder
 
     private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
     {
-        // Handle `<importName>.<TypeName>(.<more>)*` where <importName> is either an
-        // alias or the import's path. The next segment of the chain names the type;
-        // we resolve `<import.Target>.<TypeName>` and consume that segment.
+        // Handle `<importName>.<Segment>(.<Segment>)*.<TypeName>(.<more>)*` where
+        // <importName> is either an alias or the import's path. Walks the accessor
+        // chain extending the namespace prefix until a segment resolves as a type;
+        // unresolved leading segments are treated as additional namespace levels
+        // (issue #687: e.g. `System.IO.Path.Combine(...)` with `import System.IO`
+        // peels `IO` as a namespace continuation, then resolves `System.IO.Path`).
         importedClass = null;
 
-        NameExpressionSyntax typeNameSyntax;
-        ExpressionSyntax remainder;
-
-        switch (rightPart)
+        var currentPath = import.Target;
+        var currentRight = rightPart;
+        while (true)
         {
-            case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
-                typeNameSyntax = leftName;
-                remainder = nested.RightPart;
-                break;
+            NameExpressionSyntax typeNameSyntax;
+            ExpressionSyntax remainder;
+            bool hasMoreChain;
 
-            case NameExpressionSyntax ne:
-                typeNameSyntax = ne;
-                remainder = ne;
-                break;
+            switch (currentRight)
+            {
+                case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
+                    typeNameSyntax = leftName;
+                    remainder = nested.RightPart;
+                    hasMoreChain = true;
+                    break;
 
-            default:
+                case NameExpressionSyntax ne:
+                    typeNameSyntax = ne;
+                    remainder = ne;
+                    hasMoreChain = false;
+                    break;
+
+                default:
+                    return false;
+            }
+
+            var fullTypeName = currentPath + "." + typeNameSyntax.IdentifierToken.Text;
+            if (scope.References.TryResolveType(fullTypeName, out var type))
+            {
+                importedClass = new ImportedClassSymbol(type, typeNameSyntax);
+                rightPart = remainder;
+                return true;
+            }
+
+            // Not a type. If there's still a chain to consume, treat this segment
+            // as another namespace level and keep walking. Otherwise, give up.
+            if (!hasMoreChain)
+            {
                 return false;
+            }
+
+            currentPath = fullTypeName;
+            currentRight = remainder;
+        }
+    }
+
+    /// <summary>
+    /// Issue #687 (Option A): when a name resolves to a value but also matches an
+    /// in-scope type with the same simple name (an imported CLR class, user-defined
+    /// struct/class, or enum), surface that type so the caller can apply the
+    /// C#-style "color color" preference when the right-hand side of the accessor
+    /// is a static member of the type.
+    /// </summary>
+    private bool TryResolveColorColorType(
+        string name,
+        NameExpressionSyntax leftName,
+        out ImportedClassSymbol importedClassSymbol,
+        out StructSymbol userStructSymbol,
+        out EnumSymbol enumSymbol)
+    {
+        importedClassSymbol = null;
+        userStructSymbol = null;
+        enumSymbol = null;
+
+        if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
+        {
+            importedClassSymbol = importedClass;
+            return true;
         }
 
-        var fullTypeName = import.Target + "." + typeNameSyntax.IdentifierToken.Text;
-        if (!scope.References.TryResolveType(fullTypeName, out var type))
+        if (scope.TryLookupTypeAlias(name, out var typeAlias))
+        {
+            if (typeAlias is StructSymbol foundStruct)
+            {
+                userStructSymbol = foundStruct;
+                return true;
+            }
+
+            if (typeAlias is EnumSymbol foundEnum)
+            {
+                enumSymbol = foundEnum;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #687 (Option A): inspects the right-hand side of an accessor chain
+    /// to determine whether it would bind as a static member (field, property,
+    /// event, nested type, or method) of the supplied type. Used to decide
+    /// between the value and type interpretation when a name collides with a
+    /// same-named type in scope. When no static member matches, the binder
+    /// falls back to the value interpretation so existing instance-access
+    /// semantics continue to work unchanged.
+    /// </summary>
+    private bool RightPartLooksLikeStaticMember(
+        ImportedClassSymbol importedClassSymbol,
+        StructSymbol userStructSymbol,
+        EnumSymbol enumSymbol,
+        ExpressionSyntax rightPart)
+    {
+        if (!TryGetAccessorChainHead(rightPart, out var headName, out var isCall))
         {
             return false;
         }
 
-        importedClass = new ImportedClassSymbol(type, typeNameSyntax);
-        rightPart = remainder;
-        return true;
+        if (importedClassSymbol != null)
+        {
+            return HasStaticMember(importedClassSymbol.ClassType, headName, isCall);
+        }
+
+        if (userStructSymbol != null)
+        {
+            return HasUserTypeStaticMember(userStructSymbol, headName, isCall);
+        }
+
+        if (enumSymbol != null)
+        {
+            return !isCall && enumSymbol.TryGetMember(headName, out _);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAccessorChainHead(ExpressionSyntax rightPart, out string headName, out bool isCall)
+    {
+        switch (rightPart)
+        {
+            case CallExpressionSyntax ce when !ce.Identifier.IsMissing:
+                headName = ce.Identifier.Text;
+                isCall = true;
+                return !string.IsNullOrEmpty(headName);
+
+            case NameExpressionSyntax ne when !ne.IdentifierToken.IsMissing:
+                headName = ne.IdentifierToken.Text;
+                isCall = false;
+                return !string.IsNullOrEmpty(headName);
+
+            case AccessorExpressionSyntax acc:
+                return TryGetAccessorChainHead(acc.LeftPart, out headName, out isCall);
+
+            case IndexExpressionSyntax ix:
+                return TryGetAccessorChainHead(ix.Target, out headName, out isCall);
+
+            case ObjectCreationExpressionSyntax objCreate:
+                return TryGetAccessorChainHead(objCreate.Target, out headName, out isCall);
+
+            default:
+                headName = null;
+                isCall = false;
+                return false;
+        }
+    }
+
+    private bool HasStaticMember(System.Type clrType, string headName, bool isCall)
+    {
+        if (clrType == null)
+        {
+            return false;
+        }
+
+        if (isCall)
+        {
+            var methods = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, BindingFlags.Public | BindingFlags.Static);
+            foreach (var m in methods)
+            {
+                if (m.Name == headName)
+                {
+                    return true;
+                }
+            }
+
+            if (scope.References.TryResolveNestedType(clrType, headName, out _))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        if (ClrTypeUtilities.SafeGetField(clrType, headName, BindingFlags.Public | BindingFlags.Static) != null)
+        {
+            return true;
+        }
+
+        var prop = ClrTypeUtilities.SafeGetProperty(clrType, headName, BindingFlags.Public | BindingFlags.Static);
+        if (prop != null && prop.GetIndexParameters().Length == 0)
+        {
+            return true;
+        }
+
+        if (scope.References.TryResolveNestedType(clrType, headName, out _))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (clrType.GetEvent(headName, BindingFlags.Public | BindingFlags.Static) != null)
+            {
+                return true;
+            }
+        }
+        catch (System.Exception)
+        {
+            // Defensive: some metadata-load-context types throw on event lookup;
+            // treat as "no event" so the binder falls back to instance semantics.
+        }
+
+        return false;
+    }
+
+    private static bool HasUserTypeStaticMember(StructSymbol structSym, string headName, bool isCall)
+    {
+        if (structSym == null)
+        {
+            return false;
+        }
+
+        if (isCall)
+        {
+            return structSym.TryGetStaticMethod(headName, out _);
+        }
+
+        if (structSym.TryGetStaticField(headName, out _))
+        {
+            return true;
+        }
+
+        foreach (var prop in structSym.StaticProperties)
+        {
+            if (prop.Name == headName)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
