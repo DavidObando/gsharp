@@ -1,5 +1,5 @@
-# GSharp
-GSharp Programming Language.
+# G#
+G# Programming Language.
 A modern, simple, and accessible programming language for .NET.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
@@ -10,7 +10,7 @@ A modern, simple, and accessible programming language for .NET.
 
 ## Getting started
 
-GSharp ships an MSBuild SDK ([`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/)) and a `dotnet new` template package ([`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/)), both available on NuGet, so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
+G# ships an MSBuild SDK ([`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/)) and a `dotnet new` template package ([`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/)), both available on NuGet, so a `.gsproj` is just a regular .NET project that happens to compile `.gs` files. After installing the template package, you can scaffold and run a console app in three commands:
 
 ```sh
 dotnet new install Gsharp.Templates
@@ -31,7 +31,7 @@ A minimal `.gsproj` looks like any other modern .NET project:
 </Project>
 ```
 
-The SDK is validated against `net8.0` and `net10.0`; adding additional target frameworks is a one-line change in [`build/multitarget-e2e.sh`](build/multitarget-e2e.sh). See [`docs/sdk-usage.md`](docs/sdk-usage.md) for the full SDK + templates walkthrough and [`docs/emit-pipeline.md`](docs/emit-pipeline.md) for the compiler architecture.
+The SDK is validated against `net8.0` and `net10.0`; adding additional target frameworks is a one-line change in [`e2etests/multitarget-e2e.sh`](e2etests/multitarget-e2e.sh). See [`docs/sdk-usage.md`](docs/sdk-usage.md) for the full SDK + templates walkthrough and [`docs/emit-pipeline.md`](docs/emit-pipeline.md) for the compiler architecture.
 
 ## Editor support
 
@@ -55,50 +55,148 @@ code --install-extension gsharplang.vscode-gsharp
 
 ```
 src/
-  Core/             # Shared front-end: syntax, binder, lowering, symbols, emit
-  Compiler/         # gsc.dll command-line driver
-  Interpreter/      # In-process evaluator (REPL + language tests)
-  LanguageServer/   # LSP server backing the editor experience
-  Roslyn/           # Roslyn fork, staged for future semantic-model work
+  Core/               # Shared front-end: syntax, binder, lowering, symbols, emit
+  Compiler/           # gsc.dll command-line driver
+  Interpreter/        # In-process evaluator (REPL + language tests)
+  LanguageServer/     # LSP server backing the editor experience
   Sdk/
-    Gsharp.NET.Sdk/ # MSBuild SDK that wires .gsproj into dotnet build
+    Gsharp.NET.Sdk/   # MSBuild SDK that wires .gsproj into dotnet build
     Gsharp.Templates/ # dotnet new template package (gsharp-console)
-samples/            # HelloWorld and other end-user fixtures
-build/              # End-to-end smoke scripts: sdk-e2e, templates-e2e, multitarget-e2e
-test/               # xUnit projects covering Core, Compiler, Interpreter, LSP
+samples/              # HelloWorld and other end-user fixtures
+e2etests/             # End-to-end smoke scripts: sdk-e2e, templates-e2e, multitarget-e2e
+test/                 # xUnit projects covering Core, Compiler, Interpreter, LSP
 ```
 
-## Motivation 1: Accessibility
-I want to enable other developers to benefit from the .NET framework without necessarily having to learn C#. In particular, I want to ensure new developers and developers who find C#'s learning curve a bit steep to be able to use .NET. I want VB.NET developers and Python developers to find a language that speaks to them as well. I want non-English speakers to have access to powerful libraries and technologies in .NET. In short, I want simplicity and productivity at the hand of everyone.
+## Samples
+Here's a few introductory samples of G#.
 
-## Motivation 2: Simplicity
-I want a simple, concise, productive programming language targetting .NET based on the good lessons learned from Go, Kotlin, as well as other programming languages. Modern languages such as Go give the user a simple approach to programming while also providing powerful foundations to deliver applications in all forms and factors.
+A unit test:
+```gsharp
+package GsharpLibrary.Tests
 
-Here's a few relevant links to bring this point home:
-  - [Classes versus Data Structures](http://blog.cleancoder.com/uncle-bob/2019/06/16/ObjectsAndDataStructures.html)
-  - [Why OO sucks](http://www.cs.otago.ac.nz/staffpriv/ok/Joe-Hates-OO.htm)
-  - [Why I prefer go over Java or Python](https://yourbasic.org/golang/advantages-over-java-python/)
-  - [Go is in a trajectory to become the next enterprise language](https://hackernoon.com/go-is-on-a-trajectory-to-become-the-next-enterprise-programming-language-3b75d70544e)
+import Xunit
+import GsharpLibrary
 
-Go is also finding its way into unexpected places with projects such as TinyGo https://tinygo.org/.
+type GreeterTests class {
+    @Fact
+    func Greet_Returns_Hello_With_Name() {
+        var greeter = Greeter()
 
-Kotlin, on the other hand, is gaining popularity as a language targetting the JVM in replacement of Java. Kotlin provides a more elegant and smaller language to efficiently write code that runs on the JVM and is interoperable with Java language code. This allows developers to not have to use the Java language while still leveraging the power of the JVM and the large body of libraries available.
+        Assert.Equal("Hello, World!", greeter.Greet("World"))
+    }
 
-GSharp is born with a similar mindset to Kotlin and with a similar philosophy to Go. GSharp is intended to start small, slowly lighting up application development features such as consuming libraries written in C#, while keeping the language simple.
+    @Theory
+    @InlineData("Alice", "Hello, Alice!")
+    @InlineData("Bob", "Hello, Bob!")
+    func Greet_Formats_Each_Name(name string, expected string) {
+        var greeter = Greeter()
 
-# Go developers?
-Note that I'm not thinking about attracting current Go developers necessarily. I am a Go developer myself and I will continue using Go where it's appropriate. GSharp doesn't intend to take developers away from Go, although Go skills should be transferable to GSharp development: grammar, channels, goroutines, etc.
+        Assert.Equal(expected, greeter.Greet(name))
+    }
+}
+```
+
+Scoped goroutines:
+```gsharp
+package GSharp.Samples.GoScope
+
+import System
+
+func send(value int32, ch chan int32) int32 {
+    ch <- value
+    return 0
+}
+
+let ch = make(chan int32, 3)
+scope {
+    go send(1, ch)
+    go send(2, ch)
+    go send(3, ch)
+}
+
+let a = <-ch
+let b = <-ch
+let c = <-ch
+Console.WriteLine(a + b + c)
+```
+
+Patterns:
+```gsharp
+package GSharp.Samples.Patterns
+
+import System
+
+let number = 7
+let numericLabel = switch number {
+  case < 0 -> "negative"
+  case > 0 -> "positive"
+  default -> "zero"
+}
+
+let values = []int32{1, 2, 3}
+let listLabel = switch values {
+  case [1, _, 3] -> "bookended"
+  case _ -> "other"
+}
+
+Console.WriteLine("$numericLabel / $listLabel")
+```
+
+Generic methods:
+```gsharp
+package GSharp.Example.GenericMethods
+
+import System
+
+// Instance generic methods on a non-generic class. `Wrap` uses `T` in its
+// parameter, return type, and a local; `Pair` declares two type parameters.
+type Box class {
+    func Wrap[T](item T) T {
+        var local T = item
+        return local
+    }
+
+    func Pair[T, U](a T, b U) T {
+        return a
+    }
+}
+
+// A generic method declared on a generic class: `Echo` uses the class's `T`
+// while `GetOr` introduces its own method-level type parameter `U`.
+type Container[T] class {
+    var Value T
+
+    func Echo(x T) T {
+        return x
+    }
+
+    func GetOr[U](other U) U {
+        return other
+    }
+}
+
+// A generic static method declared inside a `shared` block.
+type Util class {
+    shared {
+        func Identity[T](x T) T {
+            return x
+        }
+    }
+}
+
+var b = Box{}
+Console.WriteLine(b.Wrap(42))
+Console.WriteLine(b.Wrap("text"))
+Console.WriteLine(b.Pair(7, "ignored"))
+Console.WriteLine(b.Wrap[int32](100))
+
+var c = Container[int32]{Value: 10}
+Console.WriteLine(c.Echo(5))
+Console.WriteLine(c.GetOr("hello"))
+
+Console.WriteLine(Util.Identity(99))
+Console.WriteLine(Util.Identity("z"))
+```
 
 ## Contributing
 Contributions to this project are welcome. Before you submit a pull request, open an issue to discuss your idea, the problem it solves, the desired implementation and after that a PR can be considered. This should expedite the PR acceptance process.
-
-## Name
-The GSharp language takes its name from [CSharp](https://github.com/dotnet/csharplang) and [Go](https://go.googlesource.com/go), reflecting its roots and target (.NET).
-
-#### Other interesting links
-  - [An Exhausting List of Differences Between VB.NET & C#](https://anthonydgreen.net/2019/02/12/exhausting-list-of-differences-between-vb-net-c/)
-  - [“Go programmer claims he doesn’t need generics”](https://classicprogrammerpaintings.com/post/144854447139/go-programmer-claims-he-doesnt-need-generics)
-  - [The value in Go's simplicity](https://benjamincongdon.me/blog/2019/11/11/The-Value-in-Gos-Simplicity/)
-  - [Learn Go in ~5mins](https://gist.github.com/prologic/5f6afe9c1b98016ca278f4d507e65510)
-
-
