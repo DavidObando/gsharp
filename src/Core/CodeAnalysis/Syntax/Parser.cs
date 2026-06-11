@@ -4178,6 +4178,16 @@ public class Parser
     // `name [ expr ]` (indexing) and `name [ TypeClause, ... ] ( args )`
     // (generic instantiation followed by call). `bracketOffset` is the
     // offset of the `[` token relative to Current.
+    //
+    // The comma-loop below intentionally supports any arity, including the
+    // multi-type-arg shape `Dictionary[K, V]()` / `Dictionary[K, V, W]()`,
+    // so the parser commits to a generic call site as long as every
+    // comma-separated item inside the brackets parses as a type clause
+    // (via `TryScanTypeClause`) and the token after the matching `]` is
+    // one of the ADR-0020 follow-set markers (`(`, `{`, `.`). Regression
+    // coverage lives in test/Core.Tests/CodeAnalysis/Syntax/Issue693MultiTypeArgGenericCallParserTests.cs
+    // and end-to-end emit coverage in
+    // test/Compiler.Tests/Emit/Issue693DictionaryConstructionEmitTests.cs.
     private bool LooksLikeGenericCallSite(int bracketOffset)
     {
         if (Peek(bracketOffset).Kind != SyntaxKind.OpenSquareBracketToken)
