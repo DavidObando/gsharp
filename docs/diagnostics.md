@@ -453,6 +453,25 @@ These complement the existing top-level statement diagnostics in the main table 
 | GS0286 | Warning | Top-level statements should form a single contiguous block within a file. | A `.gs` file that interleaves declarations between top-level statements, e.g. `var x = 1; func helper() {}; var y = 2`. Both the C# style (TLS first, then decls) and the Go style (decls first, then TLS) are accepted; only interleaved layouts trigger the warning (ADR-0066 §11 / D5). |
 | GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. | TLS that contains both `return` (no value) and `return 0` — the synthesized `<Main>$` must have a single return type, so choose one shape (ADR-0066 §8 / D2). |
 
+## Field declaration diagnostics (GS0288)
+
+See [ADR-0067](adr/0067-fields-require-var-keyword.md). Field declarations inside class/struct bodies must use `var` or `let`.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0288 | Error | Field declarations require a `var` (mutable) or `let` (read-only) keyword. | `type Point struct { X int32 }` — must be written as `var X int32` (mutable) or `let X int32` (read-only). |
+
+## Class destructor diagnostics (GS0289–GS0292)
+
+See [ADR-0068](adr/0068-deinit-destructor-support.md). The Swift-style `deinit { … }` form on a class is the source-level analog of a C# `~Type()` finalizer. Each diagnostic in this block guards the surface against shapes the destructor cannot legally have.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0289 | Error | `deinit` is only valid on class types (not structs, ref-structs, interfaces, or enums). | `type Point struct { var X int32 deinit { … } }` — value types do not have finalizers in the CLR. |
+| GS0290 | Error | Only one `deinit` declaration is allowed per class. | A class body that declares `deinit { … }` twice — the C# finalizer surface only supports a single `~Type()` per type. |
+| GS0291 | Error | `deinit` may not declare parameters. | `deinit(x int32) { … }` — a CLR finalizer is parameter-less. |
+| GS0292 | Error | `deinit` may not declare a return type. | `deinit int32 { … }` — a CLR finalizer is `void`. |
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

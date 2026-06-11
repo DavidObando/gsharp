@@ -534,7 +534,8 @@ internal sealed class ReflectionMetadataEmitter
             this.EmitClassDefaultConstructorBodyBytes,
             this.EmitClassPrimaryConstructorBodyBytes,
             this.EmitClassConstructorWithBaseInitializerBodyBytes,
-            this.EmitClassConstructorWithBodyBodyBytes);
+            this.EmitClassConstructorWithBodyBodyBytes,
+            this.EmitClassDeinitializerBodyBytes);
 
         // PR-E-9: ClosureEmitter wires up after TypeDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -939,6 +940,16 @@ internal sealed class ReflectionMetadataEmitter
                     aggregateMethodHandles[m] = handle;
                     this.cache.MethodHandles[m] = handle;
                 }
+            }
+
+            // ADR-0068 / issue #698: reserve a row for the synthesized
+            // `Finalize` override produced by a class `deinit { … }`. The
+            // emitter materialises it as a regular instance method between
+            // user-declared methods and property accessors in the row order.
+            if (c.Deinitializer != null)
+            {
+                var deinitHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                this.cache.MethodHandles[c.Deinitializer.Function] = deinitHandle;
             }
 
             // ADR-0051 Phase 6: plan accessor method rows for class properties.
@@ -1595,6 +1606,16 @@ internal sealed class ReflectionMetadataEmitter
                     var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
                     this.cache.MethodHandles[m] = emittedHandle;
                 }
+            }
+
+            // ADR-0068 / issue #698: emit the synthesized `Finalize` override
+            // produced by the class's `deinit { … }` body. The emitted method
+            // wraps the lowered user body in `try { … } finally { base.Finalize(); }`.
+            if (c.Deinitializer != null
+                && this.emitCtx.Program.Functions.TryGetValue(c.Deinitializer.Function, out var deinitBody))
+            {
+                var deinitHandle = this.typeDefEmitter.EmitClassDeinitializer(c, c.Deinitializer, deinitBody);
+                this.cache.MethodHandles[c.Deinitializer.Function] = deinitHandle;
             }
 
             // ADR-0051 Phase 6: emit property accessor methods for classes.
@@ -3189,6 +3210,152 @@ internal sealed class ReflectionMetadataEmitter
             var anchor = emitter.CurrentAnchor ?? classSym.Declaration ?? body.Syntax;
             EmitDiagnosticException.Wrap(anchor, ex);
         }
+
+        il.OpCode(ILOpCode.Ret);
+        return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);
+    }
+
+    // ADR-0068 / issue #698: emits the body of the synthesized `Finalize`
+    // override produced by a class `deinit { … }`. The body wraps the
+    // lowered user body in `try { … } finally { base.Finalize(); }` exactly
+    // as the C# compiler emits for `~Type()`. Mirrors the locals/labels
+    // pre-scan scaffolding from `EmitClassConstructorWithBodyBodyBytes`.
+    private int EmitClassDeinitializerBodyBytes(
+        StructSymbol classSym,
+        DeinitSymbol deinit,
+        BoundBlockStatement body,
+        EntityHandle baseFinalizeRef)
+    {
+        _ = classSym;
+        var function = deinit.Function;
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+
+        var locals = new Dictionary<VariableSymbol, int>();
+        var labels = new Dictionary<BoundLabel, LabelHandle>();
+        var localTypes = new List<TypeSymbol>();
+        var appendSlots = new Dictionary<BoundAppendExpression, (int Src, int Dst)>();
+        var structLiteralSlots = new Dictionary<BoundStructLiteralExpression, int>();
+        var defaultExpressionSlots = new Dictionary<BoundDefaultExpression, int>();
+        var mapIndexSlots = new Dictionary<BoundIndexExpression, int>();
+        var patternSwitchSlots = new Dictionary<BoundPatternSwitchStatement, int>();
+        var typePatternScratchSlots = new Dictionary<BoundTypePattern, int>();
+        var switchExpressionSlots = new Dictionary<BoundSwitchExpression, (int Result, int Discriminant)>();
+        var channelOpSlots = new Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)>();
+        var scopeFrameSlots = new Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)>();
+        var selectStatementSlots = new Dictionary<BoundSelectStatement, SelectSlots>();
+        var receiverSpillSlots = new Dictionary<BoundExpression, int>();
+        var indexAssignmentValueSlots = new Dictionary<BoundExpression, int>();
+        var goEnclosingScopes = new Dictionary<BoundGoStatement, BoundScopeStatement>();
+        var liftedBinarySlots = new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
+        var constValues = new Dictionary<VariableSymbol, object>();
+
+        MethodBodyPlanner.CollectConstValues(body, constValues);
+        this.methodBodyPlanner.CollectLocalsAndLabels(
+            body,
+            function,
+            locals,
+            localTypes,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots,
+            il);
+
+        // Slot 0 is the implicit `this`; deinit has no user parameters.
+        var paramSlots = new Dictionary<ParameterSymbol, int>
+        {
+            [function.ThisParameter] = 0,
+        };
+
+        StandaloneSignatureHandle localsSignature = default;
+        if (localTypes.Count > 0)
+        {
+            var localsSigBlob = new BlobBuilder();
+            var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(localTypes.Count);
+            foreach (var t in localTypes)
+            {
+                EncodeLocalVariableType(encoder.AddVariable(), t);
+            }
+
+            localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
+        }
+
+        var emitter = new MethodBodyEmitter(
+            this,
+            il,
+            locals,
+            paramSlots,
+            labels,
+            appendSlots,
+            structLiteralSlots,
+            defaultExpressionSlots,
+            mapIndexSlots,
+            patternSwitchSlots,
+            typePatternScratchSlots,
+            switchExpressionSlots,
+            channelOpSlots,
+            scopeFrameSlots,
+            selectStatementSlots,
+            receiverSpillSlots,
+            indexAssignmentValueSlots,
+            goEnclosingScopes,
+            liftedBinarySlots: liftedBinarySlots,
+            constValues: constValues);
+
+        // Wrap the user body in try { … } finally { base.Finalize(); }.
+        // Matches the IL shape Roslyn emits for `~Type()`. The base
+        // Finalize target is the closest user-declared base `deinit` (if
+        // any) — emit a non-virtual `call` to its MethodDef — otherwise
+        // chain straight to System.Object::Finalize().
+        var tryStart = il.DefineLabel();
+        var finallyStart = il.DefineLabel();
+        var finallyEnd = il.DefineLabel();
+
+        il.MarkLabel(tryStart);
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? classSym.Declaration ?? body.Syntax;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        il.Branch(ILOpCode.Leave, finallyEnd);
+
+        il.MarkLabel(finallyStart);
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Call);
+
+        EntityHandle baseFinalizeToken = baseFinalizeRef;
+        for (var ancestor = classSym.BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        {
+            if (ancestor.Deinitializer != null
+                && this.cache.MethodHandles.TryGetValue(ancestor.Deinitializer.Function, out var ancestorHandle))
+            {
+                baseFinalizeToken = ancestorHandle;
+                break;
+            }
+        }
+
+        il.Token(baseFinalizeToken);
+        il.OpCode(ILOpCode.Endfinally);
+        il.MarkLabel(finallyEnd);
+
+        il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, localVariablesSignature: localsSignature);

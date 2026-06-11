@@ -923,6 +923,62 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0068 / issue #698: reports a <c>deinit</c> destructor declaration
+    /// on a non-class type. <c>deinit</c> lowers to a CLR finalizer, which
+    /// the CLR does not run for value types, so it is only legal inside a
+    /// <c>class</c> body.
+    /// </summary>
+    /// <param name="location">The location of the offending <c>deinit</c> keyword.</param>
+    /// <param name="typeName">The enclosing type's name (may be empty).</param>
+    /// <param name="enclosingKind">The enclosing type-introducer keyword (<c>struct</c>, etc.).</param>
+    public void ReportDeinitOnNonClass(TextLocation location, string typeName, SyntaxKind enclosingKind)
+    {
+        var kindText = enclosingKind == SyntaxKind.StructKeyword ? "struct" : enclosingKind.ToString();
+        var typeText = string.IsNullOrEmpty(typeName) ? "this type" : "'" + typeName + "'";
+        var message = $"'deinit' is only valid on a class type — {typeText} is a {kindText}.";
+        Report(location, "GS0289", message);
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: reports a duplicate <c>deinit</c> declaration
+    /// on the same class. A class instance is finalized at most once by the
+    /// CLR garbage collector, so only one <c>deinit</c> body may be emitted
+    /// as the type's <c>Finalize</c> override.
+    /// </summary>
+    /// <param name="location">The location of the duplicate <c>deinit</c> keyword.</param>
+    /// <param name="className">The enclosing class's name.</param>
+    public void ReportDuplicateDeinit(TextLocation location, string className)
+    {
+        var classText = string.IsNullOrEmpty(className) ? "this class" : "Class '" + className + "'";
+        var message = $"{classText} declares more than one 'deinit'; only the first declaration emits a finalizer.";
+        Report(location, "GS0290", message);
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: reports a <c>deinit</c> declaration that
+    /// carries a parameter list. Destructors take no parameters — the CLR
+    /// invokes <c>Finalize()</c> with no arguments.
+    /// </summary>
+    /// <param name="location">The location of the offending open paren.</param>
+    public void ReportDeinitMayNotDeclareParameters(TextLocation location)
+    {
+        var message = "'deinit' may not declare parameters — the CLR invokes the destructor with no arguments.";
+        Report(location, "GS0291", message);
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: reports a <c>deinit</c> declaration that
+    /// carries a return type. Destructors always return <c>void</c> — the
+    /// CLR's <c>Finalize</c> override may not return a value.
+    /// </summary>
+    /// <param name="location">The location of the offending return type token.</param>
+    public void ReportDeinitMayNotDeclareReturnType(TextLocation location)
+    {
+        var message = "'deinit' may not declare a return type — the CLR finalizer always returns void.";
+        Report(location, "GS0292", message);
+    }
+
+    /// <summary>
     /// Reports that top-level statements within a single source file are not
     /// contiguous — they are split into two or more blocks separated by a
     /// type or function declaration (ADR-0066 deferred decision D5). Emitted

@@ -58,6 +58,7 @@ ContinueStatement
 DefaultKeyword
 DeferKeyword
 DeferStatement
+DeinitDeclaration
 DelegateDeclaration
 DiscardPattern
 DocumentationCommentToken

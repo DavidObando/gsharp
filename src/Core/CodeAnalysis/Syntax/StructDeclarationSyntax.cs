@@ -460,4 +460,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets or sets the standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
     public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors { get; set; }
         = System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax>.Empty;
+
+    /// <summary>Gets or sets the optional user-defined <c>deinit</c> declaration (ADR-0068 / issue #698). Non-null only when the class body declares exactly one <c>deinit</c>; assigned by the parser. The parser reports GS0290 on any subsequent duplicate and stores only the first.</summary>
+    public DeinitDeclarationSyntax Deinitializer { get; set; }
 }

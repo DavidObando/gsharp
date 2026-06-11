@@ -892,6 +892,26 @@ public sealed class Binder
             }
         }
 
+        // ADR-0068 / issue #698: bind class destructor (`deinit { … }`) bodies.
+        // The body sees `this` and the class's fields (via bare names) — just
+        // like an instance-method or constructor body. The emitter wraps the
+        // bound body in `try { … } finally { base.Finalize(); }` directly in
+        // IL, so we do not synthesize the wrapper here.
+        foreach (var structSym in globalScope.Structs)
+        {
+            var deinit = structSym.Deinitializer;
+            if (deinit == null || deinit.Declaration == null)
+            {
+                continue;
+            }
+
+            var deinitBinder = new Binder(parentScope, deinit.Function);
+            var deinitBody = deinitBinder.statements.BindStatement(deinit.Declaration.Body);
+            var loweredDeinitBody = Lowerer.Lower(deinitBody, structSym);
+            functionBodies.Add(deinit.Function, loweredDeinitBody);
+            diagnostics.AddRange(deinitBinder.Diagnostics);
+        }
+
         // ADR-0051: bind computed property accessor bodies. These are analogous
         // to method bodies but hang off PropertySymbol.GetterSymbol/SetterSymbol.
         foreach (var structSym in globalScope.Structs)
