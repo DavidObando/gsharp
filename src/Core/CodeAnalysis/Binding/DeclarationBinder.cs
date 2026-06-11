@@ -1789,6 +1789,9 @@ internal sealed class DeclarationBinder
 
         // Issue #306: bind standalone user-defined constructors (`init(...)`).
         BindConstructorDeclarations(syntax, structSymbol, package, baseClassSymbol, importedBaseType);
+
+        // ADR-0068 / issue #698: bind the optional class destructor (`deinit { … }`).
+        BindDeinitDeclaration(syntax, structSymbol, package);
     }
 
     internal void VerifyInterfaceImplementations()
@@ -3283,6 +3286,45 @@ internal sealed class DeclarationBinder
         }
 
         structSymbol.SetExplicitConstructors(ctorBuilder.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: binds the optional <c>deinit { … }</c> destructor
+    /// on a class body into a synthesized <see cref="FunctionSymbol"/> named
+    /// <c>Finalize</c>. The body itself is bound later in
+    /// <see cref="Binder.BindProgram(BoundGlobalScope, ReferenceResolver)"/>
+    /// alongside method and constructor bodies. Non-class types are rejected
+    /// here so the parser-level GS0289 is never the only signal in tools that
+    /// skip parser diagnostics.
+    /// </summary>
+    private void BindDeinitDeclaration(StructDeclarationSyntax syntax, StructSymbol structSymbol, PackageSymbol package)
+    {
+        var deinitSyntax = syntax.Deinitializer;
+        if (deinitSyntax == null)
+        {
+            return;
+        }
+
+        // Defence-in-depth: the parser already reports GS0289 when `deinit`
+        // appears inside a non-class body, but if a downstream tool feeds us
+        // such a tree directly we must still refuse to synthesise a Finalize
+        // symbol for the value type.
+        if (!structSymbol.IsClass)
+        {
+            return;
+        }
+
+        var ctorFunction = new FunctionSymbol(
+            "Finalize",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            declaration: null,
+            package,
+            Accessibility.Private,
+            receiverType: structSymbol);
+
+        var deinitSymbol = new DeinitSymbol(ctorFunction, deinitSyntax);
+        structSymbol.SetDeinitializer(deinitSymbol);
     }
 
     /// <summary>

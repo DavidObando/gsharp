@@ -96,6 +96,10 @@ internal sealed class WellKnownReferences
     private EntityHandle? systemAttributeTypeRef;
     private MemberReferenceHandle? systemAttributeCtorRef;
 
+    // ADR-0068 / issue #698: cached MemberRef for System.Object::Finalize().
+    // Used to chain `base.Finalize()` from each user-declared deinit method.
+    private MemberReferenceHandle? objectFinalizeRef;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="WellKnownReferences"/>
     /// class and eagerly resolves the three references the emitter needs
@@ -830,6 +834,31 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString("Concat"),
             this.emitCtx.Metadata.GetOrAddBlob(sig));
         return this.stringConcatArrayRef;
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: resolves a MemberReferenceHandle for the
+    /// parameter-less instance method <c>System.Object::Finalize()</c>. Used
+    /// by every emitted <c>deinit</c> destructor to chain to the base
+    /// finalizer via the wrapping <c>finally</c>, exactly as the C# compiler
+    /// emits for <c>~Type()</c>.
+    /// </summary>
+    /// <returns>The cached <see cref="MemberReferenceHandle"/>.</returns>
+    public MemberReferenceHandle GetObjectFinalizeRef()
+    {
+        if (this.objectFinalizeRef.HasValue)
+        {
+            return this.objectFinalizeRef.Value;
+        }
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+        this.objectFinalizeRef = this.emitCtx.Metadata.AddMemberReference(
+            parent: this.ObjectTypeRef,
+            name: this.emitCtx.Metadata.GetOrAddString("Finalize"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return this.objectFinalizeRef.Value;
     }
 
     private MemberReferenceHandle BuildObjectDefaultCtorReference()

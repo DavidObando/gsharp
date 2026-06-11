@@ -100,6 +100,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
     private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
+    private readonly Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes;
 
     public TypeDefEmitter(
         EmitContext emitCtx,
@@ -116,7 +117,8 @@ internal sealed class TypeDefEmitter
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
-        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes)
+        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
+        Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -133,6 +135,7 @@ internal sealed class TypeDefEmitter
         this.emitClassPrimaryConstructorBodyBytes = emitClassPrimaryConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassPrimaryConstructorBodyBytes));
         this.emitClassConstructorWithBaseInitializerBodyBytes = emitClassConstructorWithBaseInitializerBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBaseInitializerBodyBytes));
         this.emitClassConstructorWithBodyBodyBytes = emitClassConstructorWithBodyBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBodyBodyBytes));
+        this.emitClassDeinitializerBodyBytes = emitClassDeinitializerBodyBytes ?? throw new ArgumentNullException(nameof(emitClassDeinitializerBodyBytes));
     }
 
     // TypeDef shape emission
@@ -1089,6 +1092,45 @@ internal sealed class TypeDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: firstCtorParamHandle);
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: emits the synthesized <c>Finalize</c> override
+    /// for a class that declares a <c>deinit { … }</c> body. The emitted
+    /// method has signature <c>protected override void Finalize()</c>
+    /// (<see cref="MethodAttributes.Family"/> | <see cref="MethodAttributes.Virtual"/>
+    /// | <see cref="MethodAttributes.HideBySig"/>) and overrides the
+    /// <c>Finalize</c> slot inherited from <c>System.Object</c> by
+    /// name+signature match. The body bytes are produced by the injected
+    /// <c>emitClassDeinitializerBodyBytes</c> delegate which wraps the user
+    /// body in <c>try { … } finally { base.Finalize(); }</c> exactly as the
+    /// C# compiler emits for <c>~Type()</c>.
+    /// </summary>
+    /// <param name="classSym">The class declaring the <c>deinit</c>.</param>
+    /// <param name="deinit">The bound deinit symbol.</param>
+    /// <param name="body">The lowered deinit body block.</param>
+    /// <returns>The emitted method's MethodDef handle.</returns>
+    public MethodDefinitionHandle EmitClassDeinitializer(StructSymbol classSym, DeinitSymbol deinit, BoundBlockStatement body)
+    {
+        var baseFinalizeRef = this.wellKnown.GetObjectFinalizeRef();
+
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            bodyOffset = this.emitClassDeinitializerBodyBytes(classSym, deinit, body, baseFinalizeRef);
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        return this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Family | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString("Finalize"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: this.nextParameterHandle());
     }
 
     /// <summary>

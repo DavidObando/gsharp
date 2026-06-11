@@ -248,6 +248,11 @@ public enum SyntaxKind
     // Issue #306: standalone user-defined constructor declarations (`init(...)`)
     ConstructorDeclaration,
 
+    // ADR-0068 / issue #698: `deinit { … }` destructor declarations inside a
+    // class body. Lowered by the emitter to a `Finalize` override with the
+    // body wrapped in `try { … } finally { base.Finalize(); }`.
+    DeinitDeclaration,
+
     // ADR-0059 / issue #255: named delegate type declarations
     // (`type Name = delegate func(...)`). `delegate` is a contextual
     // keyword — kept as IdentifierToken at lex time; the parser recognises

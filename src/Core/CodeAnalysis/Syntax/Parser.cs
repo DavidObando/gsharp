@@ -894,6 +894,7 @@ public class Parser
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
+        DeinitDeclarationSyntax structDecl_deinit = null;
         SharedBlockSyntax structDecl_sharedBlock = null;
         if (inlineKeyword != null && Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -1043,6 +1044,54 @@ public class Parser
                 constructor.WithAnnotations(memberAnnotations);
                 constructors.Add(constructor);
             }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "deinit"
+                     && (Peek(1).Kind == SyntaxKind.OpenBraceToken
+                         || Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+                         || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(2).Kind == SyntaxKind.OpenBraceToken)))
+            {
+                // ADR-0068 / issue #698: `deinit { … }` destructor declaration.
+                // The keyword is a contextual identifier — we recognise it only
+                // when it is immediately followed by `{` (well-formed case) or
+                // by `(` (a malformed parameter-list shape we still want to
+                // diagnose, not silently treat as a field).
+                if (memberAccessibility != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAccessibility.Location, memberAccessibility.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                if (memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.IdentifierToken);
+                }
+
+                if (memberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.IdentifierToken);
+                }
+
+                if (memberConvenienceModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberConvenienceModifier.Location, memberConvenienceModifier.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                var deinitDecl = ParseDeinitDeclaration();
+                deinitDecl.WithAnnotations(memberAnnotations);
+
+                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                {
+                    Diagnostics.ReportDeinitOnNonClass(deinitDecl.DeinitKeyword.Location, identifier.Text ?? string.Empty, structOrClassKeyword.Kind);
+                }
+
+                if (structDecl_deinit != null)
+                {
+                    Diagnostics.ReportDuplicateDeinit(deinitDecl.DeinitKeyword.Location, identifier.Text ?? string.Empty);
+                }
+                else
+                {
+                    structDecl_deinit = deinitDecl;
+                }
+            }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 // ADR-0051: property declaration inside struct/class body.
@@ -1183,7 +1232,65 @@ public class Parser
         structDecl.BaseConstructorArguments = baseCtorArguments;
         structDecl.BaseConstructorCloseParenthesisToken = baseCtorCloseParen;
         structDecl.Constructors = constructors.ToImmutable();
+        structDecl.Deinitializer = structDecl_deinit;
         return structDecl;
+    }
+
+    /// <summary>
+    /// ADR-0068 / issue #698: parses a class-body destructor declaration
+    /// <c>deinit { body }</c>. The keyword carries no parameters, no return
+    /// type, no accessibility modifier. A malformed parameter list (the user
+    /// wrote <c>deinit(...)</c>) is consumed and diagnosed so the parser can
+    /// still locate the body block and recover.
+    /// </summary>
+    private DeinitDeclarationSyntax ParseDeinitDeclaration()
+    {
+        var deinitKeyword = NextToken(); // consume the contextual "deinit" identifier
+
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // `deinit(...)` is invalid — destructors take no parameters. Emit
+            // a diagnostic at the paren location and consume up to the matching
+            // close paren so we still see the body block.
+            Diagnostics.ReportDeinitMayNotDeclareParameters(Current.Location);
+            NextToken(); // consume '('
+            var depth = 1;
+            while (depth > 0 && Current.Kind != SyntaxKind.EndOfFileToken && Current.Kind != SyntaxKind.OpenBraceToken)
+            {
+                if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+                {
+                    depth++;
+                }
+                else if (Current.Kind == SyntaxKind.CloseParenthesisToken)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        NextToken(); // consume ')'
+                        break;
+                    }
+                }
+
+                NextToken();
+            }
+        }
+
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            // `deinit T { ... }` (a stray return type) and similar shapes —
+            // emit a diagnostic at whatever token sits before the body and
+            // consume tokens until we find `{`.
+            Diagnostics.ReportDeinitMayNotDeclareReturnType(Current.Location);
+            while (Current.Kind != SyntaxKind.OpenBraceToken
+                   && Current.Kind != SyntaxKind.CloseBraceToken
+                   && Current.Kind != SyntaxKind.EndOfFileToken)
+            {
+                NextToken();
+            }
+        }
+
+        var body = ParseBlockStatement();
+        return new DeinitDeclarationSyntax(syntaxTree, deinitKeyword, body);
     }
 
     /// <summary>

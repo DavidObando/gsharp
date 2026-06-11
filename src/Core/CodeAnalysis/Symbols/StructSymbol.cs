@@ -293,6 +293,14 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public ImmutableArray<ConstructorSymbol> ExplicitConstructors { get; private set; } = ImmutableArray<ConstructorSymbol>.Empty;
 
+    /// <summary>
+    /// Gets the user-declared <c>deinit { … }</c> destructor on this class
+    /// (ADR-0068 / issue #698), or <c>null</c> when the class has none.
+    /// Populated by the binder; consumed by the emitter to materialise the
+    /// CLR <c>Finalize</c> override.
+    /// </summary>
+    public DeinitSymbol Deinitializer { get; private set; }
+
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
     public void SetImportedBaseType(TypeSymbol importedBaseType)
@@ -328,6 +336,13 @@ public sealed class StructSymbol : TypeSymbol
     {
         ExplicitConstructors = constructors.IsDefault ? ImmutableArray<ConstructorSymbol>.Empty : constructors;
         ExplicitConstructor = ExplicitConstructors.Length == 0 ? null : ExplicitConstructors[0];
+    }
+
+    /// <summary>ADR-0068 / issue #698: sets <see cref="Deinitializer"/> after the binder synthesises the <c>Finalize</c> function symbol for a class with a <c>deinit { … }</c> body.</summary>
+    /// <param name="deinitializer">The bound destructor symbol, or <c>null</c> to clear.</param>
+    public void SetDeinitializer(DeinitSymbol deinitializer)
+    {
+        Deinitializer = deinitializer;
     }
 
     /// <summary>Sets <see cref="Interfaces"/> after binding. Intended to be called exactly once by the binder during <c>BindStructDeclaration</c>.</summary>
