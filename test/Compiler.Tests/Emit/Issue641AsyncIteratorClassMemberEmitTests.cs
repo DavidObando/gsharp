@@ -552,7 +552,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
         // Run the entry point
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         return assembly;
     }

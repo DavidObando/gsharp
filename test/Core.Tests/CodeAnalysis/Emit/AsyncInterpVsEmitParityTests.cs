@@ -401,7 +401,7 @@ Console.WriteLine(""end"")
             Console.SetOut(captured);
             try
             {
-                var ret = entry!.Invoke(null, parameters: null);
+                var ret = entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
                 if (ret is Task task)
                 {
                     task.Wait(TimeSpan.FromSeconds(30));

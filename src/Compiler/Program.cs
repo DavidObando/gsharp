@@ -99,6 +99,7 @@ public class Program
                 var compilation = new Compilation(references, syntaxTrees.ToArray())
                 {
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
+                    IsLibrary = parsed.Target == OutputTarget.Library,
                     DebugInformation =
                     {
                         Format = parsed.DebugFormat,

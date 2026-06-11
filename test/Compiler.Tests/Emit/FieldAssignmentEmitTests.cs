@@ -140,7 +140,7 @@ public class FieldAssignmentEmitTests
             "result",
             BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         return (int)resultField!.GetValue(null)!;
     }
 

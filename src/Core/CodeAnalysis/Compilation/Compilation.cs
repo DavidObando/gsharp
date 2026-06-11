@@ -55,6 +55,7 @@ public class Compilation
         SyntaxTrees = syntaxTrees.ToImmutableArray();
         References = references ?? previous?.References;
         ImplicitSystemImport = previous?.ImplicitSystemImport ?? true;
+        IsLibrary = previous?.IsLibrary ?? false;
         PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
         WarnOnMissingDocumentation = previous?.WarnOnMissingDocumentation ?? false;
         debugInformation = CloneDebugInformation(previous?.DebugInformation);
@@ -81,6 +82,18 @@ public class Compilation
     /// <see langword="true"/>.
     /// </summary>
     public bool ImplicitSystemImport { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this compilation produces a
+    /// library (a <c>.dll</c> with no entry point) as opposed to an
+    /// executable. When <see langword="true"/>, top-level statements are an
+    /// error (ADR-0066 deferred decision D4 — mirrors C#'s CS8805), since
+    /// the synthesized <c>&lt;Main&gt;$</c> would never run from a library
+    /// assembly. Defaults to <see langword="false"/>. Inherits from
+    /// <see cref="Previous"/> when chained, matching the inheritance shape
+    /// of <see cref="ImplicitSystemImport"/>.
+    /// </summary>
+    public bool IsLibrary { get; set; } = false;
 
     /// <summary>
     /// Gets or sets the active preprocessor symbol set used by
@@ -134,7 +147,7 @@ public class Compilation
         {
             if (globalScope == null)
             {
-                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols);
+                var globalScope = Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 

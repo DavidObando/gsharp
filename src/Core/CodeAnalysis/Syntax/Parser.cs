@@ -165,11 +165,41 @@ public class Parser
     {
         var members = ImmutableArray.CreateBuilder<MemberSyntax>();
 
+        // ADR-0066 deferred decision D5 (GS0286): top-level statements within a
+        // single .gs file must form a single contiguous block — they may all
+        // sit at the top of the file, all at the bottom (the Go-style idiom
+        // most G# samples and tests follow), or be the only members — but
+        // they must not be interleaved with type / function declarations.
+        //
+        // Track two booleans rather than the strict C# "TLS must precede any
+        // declaration" rule because G#'s established idiom is decls-first /
+        // trailing-TLS (~488 sources across samples/ and test fixtures use
+        // this layout). The contiguous-block rule still catches the truly
+        // confusing case (TLS, decl, TLS) without forcing a coordinated
+        // rewrite of the existing corpus.
+        var seenTopLevelStatement = false;
+        var seenDeclarationAfterTopLevel = false;
+
         while (Current.Kind != SyntaxKind.EndOfFileToken)
         {
             var startToken = Current;
 
             var member = ParseMember();
+
+            if (member is GlobalStatementSyntax globalStatement)
+            {
+                if (seenDeclarationAfterTopLevel)
+                {
+                    Diagnostics.ReportTopLevelStatementsMustBeContiguous(globalStatement.Statement.Location);
+                }
+
+                seenTopLevelStatement = true;
+            }
+            else if (seenTopLevelStatement)
+            {
+                seenDeclarationAfterTopLevel = true;
+            }
+
             members.Add(member);
 
             if (Current == startToken)

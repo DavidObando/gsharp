@@ -470,7 +470,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             "result",
             BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         return (int)resultField!.GetValue(null)!;
     }
 
@@ -484,7 +484,7 @@ public class Issue507MemberIndexAssignmentEmitTests
         var first = program.GetField(firstField, BindingFlags.Public | BindingFlags.Static);
         var second = program.GetField(secondField, BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         return ((int)first!.GetValue(null)!, (int)second!.GetValue(null)!);
     }
 

@@ -47,7 +47,7 @@ public class NamedArgumentEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(resultField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(777, (int)resultField!.GetValue(null)!);
     }
@@ -76,7 +76,7 @@ public class NamedArgumentEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(resultField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(37, (int)resultField!.GetValue(null)!);
     }
@@ -102,7 +102,7 @@ public class NamedArgumentEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(resultField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(6, (int)resultField!.GetValue(null)!);
     }

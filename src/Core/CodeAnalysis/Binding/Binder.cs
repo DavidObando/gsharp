@@ -505,6 +505,23 @@ public sealed class Binder
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols, isLibrary: false);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full
+    /// control over implicit-import seeding, the active preprocessor symbol
+    /// set, and whether the compilation is a library (ADR-0066 deferred
+    /// decision D4 — top-level statements in a library are an error,
+    /// matching C#'s CS8805).
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
+    /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary)
     {
         var parentScope = CreateParentScope(previous, references, preprocessorSymbols);
         var binder = new Binder(parentScope, function: null);
@@ -619,14 +636,113 @@ public sealed class Binder
 
         binder.declarations.VerifyInterfaceImplementations();
 
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
-                                          .OfType<GlobalStatementSyntax>()
-                                          .ToArray();
-        foreach (var globalStatement in globalStatements)
+        // ADR-0066 §2 (deferred decision D7): sort the contributing syntax
+        // trees by source path before concatenating top-level statements
+        // across files, so cross-file TLS ordering is identical regardless
+        // of how the build tool populates @(Compile) or how a test
+        // permutes the input order. Trees without a file path (in-memory
+        // SyntaxTree.Parse calls) sort stably among themselves by
+        // SelectMany's iteration order.
+        var globalStatements = syntaxTrees
+            .OrderBy(st => st.Text?.FileName ?? string.Empty, StringComparer.Ordinal)
+            .SelectMany(st => st.Root.Members)
+            .OfType<GlobalStatementSyntax>()
+            .ToArray();
+
+        // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
+        // statements are not allowed in a library compilation. Report once
+        // at the first global statement and continue binding so the rest of
+        // the flow (synthesized <Main>$, etc.) still runs — the diagnostic
+        // makes the compilation fail, but downstream consumers see a
+        // complete bound tree.
+        if (globalStatements.Length > 0 && isLibrary)
         {
-            var statement = binder.statements.BindStatement(globalStatement.Statement);
-            statements.Add(statement);
+            binder.Diagnostics.ReportTopLevelStatementsInLibrary(globalStatements[0].Location);
+        }
+
+        // ADR-0066 D1: when top-level statements exist, synthesize the
+        // entry-point FunctionSymbol BEFORE binding the statements so the
+        // statements can be bound through a function-scoped Binder. That
+        // binder declares the implicit `args string[]` parameter and exposes
+        // a non-null `function` for downstream return-type checks (D2/D3
+        // build on this).
+        FunctionSymbol synthesizedEntryPoint = null;
+        PackageSymbol synthesizedEntryPointPackage = null;
+        if (globalStatements.Length > 0)
+        {
+            synthesizedEntryPointPackage = packageByTree[globalStatements[0].SyntaxTree];
+
+            // D1: every TLS-synthesized `<Main>$` carries an implicit
+            // `args string[]` parameter so user code may reference `args`
+            // and the emitted CLR signature matches the standard
+            // `static T Main(string[])` shape that the .NET runtime hosts.
+            var argsType = SliceTypeSymbol.Get(TypeSymbol.String);
+            var argsParameter = new ParameterSymbol("args", argsType);
+            var entryPointParameters = ImmutableArray.Create(argsParameter);
+
+            // ADR-0066 D2/D3: pre-scan TLS for `return` shapes (bare vs
+            // value-returning) so the synthesized entry point's return type
+            // is inferred BEFORE binding. Any value-returning return → `int`;
+            // any mix → GS0287 at the first offending site, with the first
+            // shape seen winning recovery. D3: also detect any `await` so
+            // the entry point is flagged async (its kickoff signature is
+            // wrapped to Task / Task<int> by the async lowerer).
+            var entryPointReturnType = InferTopLevelEntryPointReturnType(
+                globalStatements,
+                binder.Diagnostics,
+                out var awaitFound);
+
+            synthesizedEntryPoint = new FunctionSymbol(
+                name: "<Main>$",
+                parameters: entryPointParameters,
+                type: entryPointReturnType,
+                declaration: null,
+                package: synthesizedEntryPointPackage);
+            synthesizedEntryPoint.IsTopLevelEntryPoint = true;
+            if (awaitFound)
+            {
+                // ADR-0066 D3: any TLS `await` makes the synthesized
+                // entry point async. The state-machine lowering pass
+                // (ADR-0023) already keys off `FunctionSymbol.IsAsync`,
+                // and the emitter wraps the kickoff method's return type
+                // through `AsyncStateMachineTypeBuilder.ResolveAsyncReturnClrType`
+                // (Void → Task, T → Task<T>). The raw `Type` stays Void/Int32.
+                synthesizedEntryPoint.IsAsync = true;
+            }
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (synthesizedEntryPoint != null)
+        {
+            // Bind TLS through a function-scoped Binder. Its RootScope's
+            // parent is `binder.scope`, so all globally-declared imports /
+            // types / functions remain visible while the new binder's own
+            // RootScope owns the `args` parameter declaration.
+            var tlsBinder = new Binder(binder.scope, synthesizedEntryPoint);
+            foreach (var globalStatement in globalStatements)
+            {
+                var statement = tlsBinder.statements.BindStatement(globalStatement.Statement);
+                statements.Add(statement);
+            }
+
+            // Forward the per-function binder's diagnostics back into the
+            // global diagnostic bag so callers see them on
+            // BoundGlobalScope.Diagnostics.
+            binder.Diagnostics.AddRange(tlsBinder.Diagnostics);
+
+            // ADR-0066 D1: variables declared at the top of TLS are
+            // GlobalVariableSymbols (see BindVariableDeclaration's
+            // IsTopLevelEntryPoint fallback), but they were declared on the
+            // per-function tlsBinder root scope. Republish them onto the
+            // global binder scope so BoundGlobalScope.Variables sees them
+            // (the emitter and evaluator both consume globals from there).
+            foreach (var v in tlsBinder.scope.GetDeclaredVariables())
+            {
+                if (v is GlobalVariableSymbol)
+                {
+                    binder.scope.TryDeclareVariable(v);
+                }
+            }
         }
 
         var imports = binder.scope.GetDeclaredImports();
@@ -648,8 +764,9 @@ public sealed class Binder
         // both, the first declared package. This becomes Package — the
         // legacy single-package accessor — and the namespace that owns the
         // synthesized <Main>$ in emit.
-        var entryPointPackage = ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
-        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage);
+        var entryPointPackage = synthesizedEntryPointPackage
+            ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
+        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
@@ -1053,6 +1170,122 @@ public sealed class Binder
         {
             // Inference must never throw into the editor pipeline.
             return null;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0066 D2/D3: pre-scans the top-level statements to determine the
+    /// synthesized entry point's return type before binding. If any TLS
+    /// <c>return</c> carries an expression, the entry point returns
+    /// <c>int</c>; otherwise it returns <c>void</c>. Mixed bare and
+    /// value-returning shapes report GS0287 at the first offending site,
+    /// and recovery picks whichever shape appeared first. Awaits in TLS are
+    /// reported via <paramref name="awaitFound"/> for D3 async wiring.
+    /// Returns and awaits inside nested function literals are deliberately
+    /// ignored: they belong to the lambda, not the entry point.
+    /// </summary>
+    private static TypeSymbol InferTopLevelEntryPointReturnType(
+        IReadOnlyList<GlobalStatementSyntax> globalStatements,
+        DiagnosticBag diagnostics,
+        out bool awaitFound)
+    {
+        ReturnStatementSyntax firstBare = null;
+        ReturnStatementSyntax firstValue = null;
+        bool localAwaitFound = false;
+        foreach (var gs in globalStatements)
+        {
+            CollectTopLevelReturnsAndAwaits(gs.Statement, ref firstBare, ref firstValue, ref localAwaitFound);
+        }
+
+        awaitFound = localAwaitFound;
+
+        if (firstBare != null && firstValue != null)
+        {
+            // Recovery: the first shape seen wins. The mismatch fires at the
+            // *later* offender's location so the user sees which return
+            // disagreed with the prevailing shape.
+            var firstBareSpan = firstBare.ReturnKeyword.Span.Start;
+            var firstValueSpan = firstValue.ReturnKeyword.Span.Start;
+            if (firstBareSpan < firstValueSpan)
+            {
+                diagnostics.ReportTopLevelReturnShapeMismatch(firstValue.ReturnKeyword.Location);
+                return TypeSymbol.Void;
+            }
+            else
+            {
+                diagnostics.ReportTopLevelReturnShapeMismatch(firstBare.ReturnKeyword.Location);
+                return TypeSymbol.Int32;
+            }
+        }
+
+        return firstValue != null ? TypeSymbol.Int32 : TypeSymbol.Void;
+    }
+
+    /// <summary>
+    /// Recursively walks <paramref name="node"/>, classifying every
+    /// <see cref="ReturnStatementSyntax"/> as either bare or value-returning,
+    /// recording the first instance of each, and noting whether any
+    /// <see cref="AwaitExpressionSyntax"/> was encountered. Descent stops at
+    /// <see cref="FunctionLiteralExpressionSyntax"/> boundaries: returns
+    /// and awaits inside lambdas belong to the lambda's own function body,
+    /// not to the surrounding TLS entry point.
+    /// </summary>
+    private static void CollectTopLevelReturnsAndAwaits(
+        SyntaxNode node,
+        ref ReturnStatementSyntax firstBare,
+        ref ReturnStatementSyntax firstValue,
+        ref bool awaitFound)
+    {
+        if (node == null)
+        {
+            return;
+        }
+
+        if (node is FunctionLiteralExpressionSyntax)
+        {
+            // ADR-0066 D2/D3: lambda bodies host their own `return`s and
+            // `await`s; skip them when inferring the TLS entry point shape.
+            return;
+        }
+
+        if (node is AwaitExpressionSyntax)
+        {
+            awaitFound = true;
+
+            // Await operands may themselves contain returns/awaits that
+            // belong to the entry point — fall through to recurse.
+        }
+
+        if (node is ReturnStatementSyntax ret)
+        {
+            if (ret.Expression == null)
+            {
+                if (firstBare == null)
+                {
+                    firstBare = ret;
+                }
+            }
+            else
+            {
+                if (firstValue == null)
+                {
+                    firstValue = ret;
+                }
+            }
+
+            // The return expression itself may contain an `await` (e.g.
+            // `return await Task.FromResult(0)`) — recurse so D3 sees it.
+            if (ret.Expression != null)
+            {
+                CollectTopLevelReturnsAndAwaits(ret.Expression, ref firstBare, ref firstValue, ref awaitFound);
+            }
+
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectTopLevelReturnsAndAwaits(child, ref firstBare, ref firstValue, ref awaitFound);
         }
     }
 
@@ -2796,7 +3029,8 @@ public sealed class Binder
         ImmutableArray<FunctionSymbol> functions,
         GlobalStatementSyntax[] globalStatements,
         ImmutableArray<SyntaxTree> syntaxTrees,
-        PackageSymbol entryPointPackage)
+        PackageSymbol entryPointPackage,
+        FunctionSymbol synthesizedEntryPoint)
     {
         var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
         var hasTopLevel = globalStatements.Length > 0;
@@ -2833,22 +3067,14 @@ public sealed class Binder
                     explicitMain.Declaration.Identifier.Location);
             }
 
-            return SynthesizeTopLevelEntryPoint(entryPointPackage);
+            // ADR-0066 D1: the synthesized entry-point symbol (with its
+            // `args string[]` parameter) is constructed up front in
+            // BindGlobalScope so that TLS can be bound through a
+            // function-scoped Binder; here we just return that symbol.
+            return synthesizedEntryPoint;
         }
 
         return explicitMain;
-    }
-
-    private static FunctionSymbol SynthesizeTopLevelEntryPoint(PackageSymbol package)
-    {
-        // <Main>$ — Roslyn-style mangled name; not a legal user identifier so it
-        // cannot collide with a user-declared function.
-        return new FunctionSymbol(
-            name: "<Main>$",
-            parameters: ImmutableArray<ParameterSymbol>.Empty,
-            type: TypeSymbol.Void,
-            declaration: null,
-            package: package);
     }
 
     private static PackageSymbol ResolveEntryPointPackage(

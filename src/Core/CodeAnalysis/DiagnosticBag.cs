@@ -867,25 +867,73 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports that top-level statements appear in more than one source file in
-    /// the same compilation, which is not allowed.
+    /// Reports that top-level statements appear in more than one *package* in
+    /// the same compilation, which is not allowed (ADR-0066). The earlier
+    /// ADR-0028 widened the rule from "one source file" to "one package";
+    /// the message text matches the package-scoped rule the binder actually
+    /// enforces.
     /// </summary>
     /// <param name="location">A location in one of the offending files.</param>
     public void ReportMultipleTopLevelFiles(TextLocation location)
     {
-        var message = "Only one source file in a compilation may contain top-level statements.";
+        var message = "Top-level statements may appear in at most one package per compilation.";
         Report(location, "GS0165", message);
     }
 
     /// <summary>
     /// Reports that the compilation contains both top-level statements and an
-    /// explicit Main function, which is ambiguous.
+    /// explicit Main function, which is ambiguous. ADR-0066 D6: this is a
+    /// warning rather than an error — when both shapes coexist, the
+    /// synthesized top-level entry point wins and the explicit Main is
+    /// shadowed. C# behaves the same way (CS7022 is a warning).
     /// </summary>
     /// <param name="location">The location of the explicit Main function declaration.</param>
     public void ReportTopLevelStatementsConflictWithMain(TextLocation location)
     {
-        var message = "Top-level statements cannot be used together with an explicit Main function.";
-        Report(location, "GS0166", message);
+        var message = "The entry point of the program is global statements; ignoring the explicit Main function entry point.";
+        Report(location, "GS0166", message, DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0066 D2: reports that top-level statements mix bare <c>return;</c> and
+    /// <c>return &lt;expr&gt;;</c> shapes. The synthesized entry point has a
+    /// single return type (either <c>void</c> or <c>int</c>), so the user must
+    /// pick one return shape across all TLS.
+    /// </summary>
+    /// <param name="location">The location of the first offending return statement.</param>
+    public void ReportTopLevelReturnShapeMismatch(TextLocation location)
+    {
+        var message = "Top-level statements mix bare `return;` and `return <expr>;`. Choose one return shape so the synthesized entry point has a single return type.";
+        Report(location, "GS0287", message);
+    }
+
+    /// <summary>
+    /// Reports that top-level statements within a single source file are not
+    /// contiguous — they are split into two or more blocks separated by a
+    /// type or function declaration (ADR-0066 deferred decision D5). Emitted
+    /// as a <b>warning</b> so the established G# Go-style trailing-TLS
+    /// idiom (decls first, then a single TLS block) keeps working
+    /// unchanged, while genuinely interleaved layouts still surface a hint.
+    /// </summary>
+    /// <param name="location">The location of the misplaced top-level statement.</param>
+    public void ReportTopLevelStatementsMustBeContiguous(TextLocation location)
+    {
+        var message = "Top-level statements should form a single contiguous block within a file — interleaving them with type or function declarations is hard to read.";
+        Report(location, "GS0286", message, DiagnosticSeverity.Warning);
+    }
+
+    /// <summary>
+    /// ADR-0066 deferred decision D4: reports that top-level statements appear
+    /// in a compilation that produces a library, not an executable. Mirrors
+    /// C#'s CS8805. Without this guard the binder would silently synthesize
+    /// a <c>&lt;Main&gt;$</c> inside the emitted <c>.dll</c> that the runtime
+    /// will never invoke.
+    /// </summary>
+    /// <param name="location">The location of the first offending top-level statement.</param>
+    public void ReportTopLevelStatementsInLibrary(TextLocation location)
+    {
+        var message = "Top-level statements are not allowed in a library project. Set <OutputType>Exe</OutputType> on the project, or move the statements into an explicit `func Main()`.";
+        Report(location, "GS0285", message);
     }
 
     /// <summary>

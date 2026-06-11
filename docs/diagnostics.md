@@ -114,8 +114,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
 | GS0163 | Error | Deconstruction field count mismatch. | `a, b := p` where `p` is a `data struct` with three fields. |
 | GS0164 | Error | Deconstruction requires a tuple or `data struct` initializer. | Deconstruction attempted on a plain `struct`. |
-| GS0165 | Error | Multiple top-level files. | More than one source file contains top-level statements. |
-| GS0166 | Error | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present. |
+| GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements (see [ADR-0066](adr/0066-top-level-statement-mechanics.md)). |
+| GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins, the explicit `Main` is shadowed (see [ADR-0066](adr/0066-top-level-statement-mechanics.md) §4). |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
 | GS0168 | Error | `fallthrough` is not supported (ADR-0013). | `fallthrough` keyword used in a `switch` case body. |
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
@@ -442,6 +442,16 @@ Cause/fix examples:
 |----|----------|-------------|-----------------|
 | GS0271 | Error | `await using let` outside an async function. | `func f() { await using let x = ... }` — `await using let` requires `async func`. |
 | GS0272 | Error | Type is not async-disposable. | `await using let x = Foo()` where `Foo` provides no public `DisposeAsync()` method returning `ValueTask`. |
+
+## Top-level statement diagnostics (GS0285–GS0287)
+
+These complement the existing top-level statement diagnostics in the main table (GS0165 multi-package, GS0166 conflict-with-Main) and round out ADR-0066's contract. See [ADR-0066](adr/0066-top-level-statement-mechanics.md) for the full rule set.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0285 | Error | Top-level statements are not allowed in a library project. | A `.gsproj` with `<OutputType>Library</OutputType>` whose `.gs` source contains statements at the file root. Set `<OutputType>Exe</OutputType>` or move the statements into an explicit `func Main()`. Mirrors C# CS8805 (ADR-0066 §10 / D4). |
+| GS0286 | Warning | Top-level statements should form a single contiguous block within a file. | A `.gs` file that interleaves declarations between top-level statements, e.g. `var x = 1; func helper() {}; var y = 2`. Both the C# style (TLS first, then decls) and the Go style (decls first, then TLS) are accepted; only interleaved layouts trigger the warning (ADR-0066 §11 / D5). |
+| GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. | TLS that contains both `return` (no value) and `return 0` — the synthesized `<Main>$` must have a single return type, so choose one shape (ADR-0066 §8 / D2). |
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
