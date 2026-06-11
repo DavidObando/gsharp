@@ -619,14 +619,71 @@ public sealed class Binder
 
         binder.declarations.VerifyInterfaceImplementations();
 
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
                                           .OfType<GlobalStatementSyntax>()
                                           .ToArray();
-        foreach (var globalStatement in globalStatements)
+
+        // ADR-0066 D1: when top-level statements exist, synthesize the
+        // entry-point FunctionSymbol BEFORE binding the statements so the
+        // statements can be bound through a function-scoped Binder. That
+        // binder declares the implicit `args string[]` parameter and exposes
+        // a non-null `function` for downstream return-type checks (D2/D3
+        // build on this).
+        FunctionSymbol synthesizedEntryPoint = null;
+        PackageSymbol synthesizedEntryPointPackage = null;
+        if (globalStatements.Length > 0)
         {
-            var statement = binder.statements.BindStatement(globalStatement.Statement);
-            statements.Add(statement);
+            synthesizedEntryPointPackage = packageByTree[globalStatements[0].SyntaxTree];
+
+            // D1: every TLS-synthesized `<Main>$` carries an implicit
+            // `args string[]` parameter so user code may reference `args`
+            // and the emitted CLR signature matches the standard
+            // `static T Main(string[])` shape that the .NET runtime hosts.
+            var argsType = SliceTypeSymbol.Get(TypeSymbol.String);
+            var argsParameter = new ParameterSymbol("args", argsType);
+            var entryPointParameters = ImmutableArray.Create(argsParameter);
+
+            synthesizedEntryPoint = new FunctionSymbol(
+                name: "<Main>$",
+                parameters: entryPointParameters,
+                type: TypeSymbol.Void,
+                declaration: null,
+                package: synthesizedEntryPointPackage);
+            synthesizedEntryPoint.IsTopLevelEntryPoint = true;
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (synthesizedEntryPoint != null)
+        {
+            // Bind TLS through a function-scoped Binder. Its RootScope's
+            // parent is `binder.scope`, so all globally-declared imports /
+            // types / functions remain visible while the new binder's own
+            // RootScope owns the `args` parameter declaration.
+            var tlsBinder = new Binder(binder.scope, synthesizedEntryPoint);
+            foreach (var globalStatement in globalStatements)
+            {
+                var statement = tlsBinder.statements.BindStatement(globalStatement.Statement);
+                statements.Add(statement);
+            }
+
+            // Forward the per-function binder's diagnostics back into the
+            // global diagnostic bag so callers see them on
+            // BoundGlobalScope.Diagnostics.
+            binder.Diagnostics.AddRange(tlsBinder.Diagnostics);
+
+            // ADR-0066 D1: variables declared at the top of TLS are
+            // GlobalVariableSymbols (see BindVariableDeclaration's
+            // IsTopLevelEntryPoint fallback), but they were declared on the
+            // per-function tlsBinder root scope. Republish them onto the
+            // global binder scope so BoundGlobalScope.Variables sees them
+            // (the emitter and evaluator both consume globals from there).
+            foreach (var v in tlsBinder.scope.GetDeclaredVariables())
+            {
+                if (v is GlobalVariableSymbol)
+                {
+                    binder.scope.TryDeclareVariable(v);
+                }
+            }
         }
 
         var imports = binder.scope.GetDeclaredImports();
@@ -648,8 +705,9 @@ public sealed class Binder
         // both, the first declared package. This becomes Package — the
         // legacy single-package accessor — and the namespace that owns the
         // synthesized <Main>$ in emit.
-        var entryPointPackage = ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
-        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage);
+        var entryPointPackage = synthesizedEntryPointPackage
+            ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
+        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
@@ -2796,7 +2854,8 @@ public sealed class Binder
         ImmutableArray<FunctionSymbol> functions,
         GlobalStatementSyntax[] globalStatements,
         ImmutableArray<SyntaxTree> syntaxTrees,
-        PackageSymbol entryPointPackage)
+        PackageSymbol entryPointPackage,
+        FunctionSymbol synthesizedEntryPoint)
     {
         var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
         var hasTopLevel = globalStatements.Length > 0;
@@ -2833,22 +2892,14 @@ public sealed class Binder
                     explicitMain.Declaration.Identifier.Location);
             }
 
-            return SynthesizeTopLevelEntryPoint(entryPointPackage);
+            // ADR-0066 D1: the synthesized entry-point symbol (with its
+            // `args string[]` parameter) is constructed up front in
+            // BindGlobalScope so that TLS can be bound through a
+            // function-scoped Binder; here we just return that symbol.
+            return synthesizedEntryPoint;
         }
 
         return explicitMain;
-    }
-
-    private static FunctionSymbol SynthesizeTopLevelEntryPoint(PackageSymbol package)
-    {
-        // <Main>$ — Roslyn-style mangled name; not a legal user identifier so it
-        // cannot collide with a user-declared function.
-        return new FunctionSymbol(
-            name: "<Main>$",
-            parameters: ImmutableArray<ParameterSymbol>.Empty,
-            type: TypeSymbol.Void,
-            declaration: null,
-            package: package);
     }
 
     private static PackageSymbol ResolveEntryPointPackage(

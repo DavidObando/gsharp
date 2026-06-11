@@ -328,7 +328,7 @@ Console.WriteLine(doubleIt(in useA ? a : b))
             Console.SetOut(captured);
             try
             {
-                entry!.Invoke(null, parameters: null);
+                entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
             }
             finally
             {

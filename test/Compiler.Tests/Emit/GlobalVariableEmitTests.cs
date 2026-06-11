@@ -198,7 +198,7 @@ public class GlobalVariableEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(traceField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal("x,x,", (string)traceField!.GetValue(null)!);
     }
@@ -226,7 +226,7 @@ public class GlobalVariableEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(counterField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(7, (int)counterField!.GetValue(null)!);
     }

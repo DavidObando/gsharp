@@ -68,7 +68,50 @@ public class TopLevelStatementEmitTests
         Assert.Equal("first\nsecond\n", result.Stdout);
     }
 
+    [Fact]
+    public void SingleFile_TopLevel_Uses_Args_Length()
+    {
+        // ADR-0066 D1: TLS may reference the implicit `args` parameter; with
+        // no extra arguments forwarded on the command line, `args.Length`
+        // must be 0 at runtime.
+        var source = """
+            package TopLevelArgs
+            import System
+
+            Console.WriteLine(args.Length)
+            """;
+
+        var result = CompileAndRun(("Program.gs", source));
+
+        Assert.Equal("0\n", result.Stdout);
+    }
+
+    [Fact]
+    public void SingleFile_TopLevel_Receives_Forwarded_Args()
+    {
+        // ADR-0066 D1: extra CLI arguments propagate into the implicit `args`
+        // parameter — `dotnet exec test.dll alpha beta gamma` must yield
+        // args.Length == 3 inside the synthesized `<Main>$`.
+        var source = """
+            package TopLevelArgsForward
+            import System
+
+            Console.WriteLine(args.Length)
+            """;
+
+        var result = CompileAndRun(
+            new[] { ("Program.gs", source) },
+            extraRuntimeArgs: new[] { "alpha", "beta", "gamma" });
+
+        Assert.Equal("3\n", result.Stdout);
+    }
+
     private static CompileResult CompileAndRun(params (string FileName, string Source)[] files)
+        => CompileAndRun(files, extraRuntimeArgs: null);
+
+    private static CompileResult CompileAndRun(
+        IReadOnlyList<(string FileName, string Source)> files,
+        IReadOnlyList<string> extraRuntimeArgs)
     {
         Assert.NotEmpty(files);
 
@@ -127,6 +170,13 @@ public class TopLevelStatementEmitTests
             psi.ArgumentList.Add("--runtimeconfig");
             psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"));
             psi.ArgumentList.Add(outPath);
+            if (extraRuntimeArgs != null)
+            {
+                foreach (var extra in extraRuntimeArgs)
+                {
+                    psi.ArgumentList.Add(extra);
+                }
+            }
 
             using var proc = Process.Start(psi);
             var stdout = proc.StandardOutput.ReadToEnd();

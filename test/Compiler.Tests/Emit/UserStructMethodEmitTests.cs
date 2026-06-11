@@ -106,7 +106,7 @@ public class UserStructMethodEmitTests
         Assert.NotNull(entry);
         Assert.NotNull(resultField);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(25, (int)resultField!.GetValue(null)!);
     }
@@ -143,7 +143,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(42, (int)resultField!.GetValue(null)!);
     }
@@ -175,7 +175,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(99, (int)resultField!.GetValue(null)!);
     }
@@ -202,7 +202,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(3, (int)resultField!.GetValue(null)!);
     }
@@ -238,7 +238,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(11, (int)resultField!.GetValue(null)!);
     }
@@ -274,7 +274,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(21, (int)resultField!.GetValue(null)!);
     }
@@ -314,7 +314,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(15, (int)resultField!.GetValue(null)!);
     }
@@ -352,7 +352,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(14, (int)resultField!.GetValue(null)!);
     }
@@ -387,7 +387,7 @@ public class UserStructMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(7, (int)resultField!.GetValue(null)!);
     }

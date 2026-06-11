@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -28,7 +29,44 @@ public class BinderEntryPointTests
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
         Assert.Null(globalScope.EntryPoint.Declaration);
-        Assert.Empty(globalScope.EntryPoint.Parameters);
+
+        // ADR-0066 D1: the synthesized `<Main>$` declares a single implicit
+        // `args string[]` parameter (D1 = the `static T Main(string[])`
+        // shape that the .NET runtime hosts), regardless of whether the
+        // user references it from the TLS body.
+        Assert.Single(globalScope.EntryPoint.Parameters);
+        Assert.Equal("args", globalScope.EntryPoint.Parameters[0].Name);
+    }
+
+    [Fact]
+    public void Synthesizes_EntryPoint_With_Args_Parameter()
+    {
+        // ADR-0066 D1: the synthesized entry point's signature is always
+        // `<Main>$(string[] args)`. The parameter type is the
+        // SliceTypeSymbol over `string`, which the emitter projects to the
+        // CLR `string[]` (single-dimensional zero-based array).
+        var globalScope = BindSource("var n = 1\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Single(globalScope.EntryPoint.Parameters);
+        var args = globalScope.EntryPoint.Parameters[0];
+        Assert.Equal("args", args.Name);
+        Assert.IsType<SliceTypeSymbol>(args.Type);
+        Assert.Same(TypeSymbol.String, ((SliceTypeSymbol)args.Type).ElementType);
+        Assert.Equal(typeof(string[]), args.Type.ClrType);
+    }
+
+    [Fact]
+    public void Args_Identifier_Resolves_Inside_TLS_Body()
+    {
+        // ADR-0066 D1: `args` is in scope inside top-level statements; the
+        // binder must resolve `args.Length` without emitting an
+        // unresolved-symbol diagnostic for `args`.
+        var globalScope = BindSource("var n = args.Length\n");
+
+        Assert.DoesNotContain(
+            globalScope.Diagnostics,
+            d => d.Id == "GS0125" && d.Message != null && d.Message.Contains("'args'", System.StringComparison.Ordinal));
     }
 
     [Fact]

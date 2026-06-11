@@ -88,8 +88,8 @@ public class Issue664ClrArrayIndexerEmitTests
             package P
             import System
 
-            let args = Environment.GetCommandLineArgs()
-            let first = args[0]
+            let cmdArgs = Environment.GetCommandLineArgs()
+            let first = cmdArgs[0]
             Console.WriteLine(first != "")
             """;
 
