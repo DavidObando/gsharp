@@ -305,6 +305,26 @@ internal sealed partial class ExpressionBinder
             return value;
         }
 
+        // Issue #689 (follow-up to #655): when the receiver name resolves to an
+        // implicit field on `this` (e.g. `Tracker.Value = v` where Tracker is a
+        // field), the raw ImplicitFieldVariableSymbol has no local slot and the
+        // emitter throws GS9998 at EmitLoadVariable time. Synthesize an
+        // expression receiver (`this.Tracker`) so the resulting bound node
+        // carries a real BoundExpression receiver. The async/sync-iterator
+        // state-machine rewriters already recurse through BoundFieldAccess-
+        // Expression and substitute the `this` parameter with the hoisted
+        // `<>4__this` proxy field — routing through an expression receiver
+        // makes the write path symmetric with the read path fixed in #655.
+        BoundExpression implicitFieldReceiverExpr = null;
+        if (variable is ImplicitFieldVariableSymbol implicitField)
+        {
+            implicitFieldReceiverExpr = new BoundFieldAccessExpression(
+                null,
+                new BoundVariableExpression(null, implicitField.Receiver),
+                implicitField.StructType,
+                implicitField.Field);
+        }
+
         // Stream B: instance-CLR receiver → property/field write via reflection.
         if (variable.Type is not StructSymbol && variable.Type is not NullableTypeSymbol && variable.Type?.ClrType != null)
         {
@@ -331,7 +351,7 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
-            var instReceiver = new BoundVariableExpression(null, variable);
+            var instReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
             var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, instReceiver, instanceMember, instConverted, instTargetSymbol);
         }
@@ -354,7 +374,8 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
-                return new BoundPropertyAssignmentExpression(null, new BoundVariableExpression(null, variable), structSymbol, prop, propConverted);
+                var propReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
+                return new BoundPropertyAssignmentExpression(null, propReceiver, structSymbol, prop, propConverted);
             }
 
             // Issue #319: a GSharp class inheriting an imported CLR base exposes
@@ -381,7 +402,7 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
-                    var inhReceiver = new BoundVariableExpression(null, variable);
+                    var inhReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, inhReceiver, clrMember, inhConverted, inhTargetSymbol);
                 }
@@ -409,6 +430,11 @@ internal sealed partial class ExpressionBinder
             $"{structSymbol.Name}.{field.Name}");
 
         var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
+        if (implicitFieldReceiverExpr != null)
+        {
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, implicitFieldReceiverExpr, structSymbol, field, converted);
+        }
+
         return new BoundFieldAssignmentExpression(null, variable, structSymbol, field, converted);
     }
 
