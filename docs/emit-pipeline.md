@@ -149,7 +149,7 @@ To produce assemblies that match the requested TFM, the compiler routes referenc
 - `ReferenceResolver.GetCoreType("System.Object")` / `"System.String"` is the entry-point the emitter uses to seed primitive type references, rather than calling `typeof(object)` / `typeof(string)` which would bind to the gsc host's `System.Private.CoreLib`.
 - `ClrTypeUtilities.AreSame` and `ClrTypeUtilities.IsAssignableByName` compare `Type`s by `FullName` so the binder and emitter work even when types come from different reflection contexts. Reference-equality (`==`) and `Type.IsAssignableFrom` only work within a single context.
 
-The end-to-end correctness of this pipeline is gated by [`build/multitarget-e2e.sh`](../build/multitarget-e2e.sh), which builds and runs the HelloWorld sample for every TFM in `TARGET_FRAMEWORKS` and asserts the expected stdout.
+The end-to-end correctness of this pipeline is gated by [`e2etests/multitarget-e2e.sh`](../e2etests/multitarget-e2e.sh), which builds and runs the HelloWorld sample for every TFM in `TARGET_FRAMEWORKS` and asserts the expected stdout.
 
 ## Where Roslyn fits in
 

@@ -337,3 +337,5 @@ package-lock.json
 # The docs website pins dependencies and uses `npm ci`, so keep its lockfile.
 !website/package-lock.json
 .DS_Store
+
+*.lscache
