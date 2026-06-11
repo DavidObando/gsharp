@@ -78,6 +78,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | `while` and `do`-`while` | Supported | Supported | ADR-0070. `while cond { ... }` (pre-test) and `do { ... } while cond` (post-test). |
 | `break` and `continue` (with optional loop labels) | Supported | Supported | Invalid locations are diagnosed. Loop labels (`label: for ...`, `break label`, `continue label`) added in ADR-0070; diagnostics `GS0293`–`GS0295`. |
 | Multi-assignment and deconstruction | Supported | Supported | Target/value mismatches are diagnosed. |
+| Null-coalescing compound assignment (`??=`) | Supported | Supported | ADR-0072. `a ??= b` writes `b` only when `a` reads as `nil`; RHS short-circuits otherwise. Receiver and index expressions evaluated exactly once. Works on locals, fields, properties, and indexers. Non-nullable LHS reports `GS0298`; non-assignable LHS reports `GS0299`. |
 | `switch` statements | Supported | Supported | Cases do not fall through. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
 | Patterns | Supported | Supported | Constant, relational, type, property, list, and discard patterns are represented. |

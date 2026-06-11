@@ -31,7 +31,7 @@ The lexer produces identifiers, reserved keywords, literal tokens, punctuation a
 ```text
 +  +=  ++  -  -=  --  *  *=  /  /=  %  %=  (  )  [  ]  {  }
 :  :=  ;  ,  .  ...  ^  ^=  &  &&  &=  &^  &^=  |  |=  ||
-=  ==  !  !=  !!  ?  ?.  ?:  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
+=  ==  !  !=  !!  ?  ?.  ?:  ??=  <  <=  <-  ->  <<  <<=  >  >=  >>  >>=  @
 ```
 
 ### Identifiers
@@ -55,7 +55,7 @@ Several words are contextual rather than reserved. `record`, `data`, `inline`, `
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -442,7 +442,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -485,6 +485,45 @@ only when every clause is non-nil. The else-block of `guard let` MUST exit
 the enclosing scope (`return`, `throw`, `break`, `continue`, or a block whose
 last statement does); otherwise the binder reports `GS0297`. `guard` is a
 reserved keyword.
+
+### Null-coalescing compound assignment `??=` (ADR-0072)
+
+`??=` writes the right-hand side into the left-hand side **only when the
+current value of the left-hand side is `nil`**. The right-hand side is
+short-circuited (not evaluated) when the lvalue is already non-nil.
+
+```ebnf
+NullCoalescingAssignmentStmt = Expression "??=" Expression .
+```
+
+The left-hand side must be of a nullable type (`T?`, for either a nullable
+reference type or `Nullable<T>`); a non-nullable lvalue reports `GS0298`.
+The accepted lvalue shapes are the same as for the simple assignment
+statement: local / parameter / package-level variable, instance field on a
+struct or class, auto-property or computed property with a setter, CLR
+property or non-init-only CLR field, and indexer access (G#-native or CLR).
+A non-assignable target reports `GS0299`. The usual `GS0127` (read-only
+lvalue) and conversion diagnostics also apply.
+
+`??=` is a statement, not an expression — it never appears as the value of
+another expression. The semantics, including single evaluation of the
+receiver and any index expressions, are:
+
+```text
+a ??= b
+    is equivalent to
+{
+    let __recv = <receiver-of-a>     // only if a's receiver is non-trivial
+    let __idx  = <index-of-a>        // only for indexer targets
+    if __recv.member /* [__idx] */ == nil {
+        __recv.member /* [__idx] */ = b
+    }
+}
+```
+
+For nullable value types (`int32?`, `bool?`, …) the same shape applies; the
+nil-comparison reuses the existing `==` lowering for `Nullable<T>` so the
+write only fires when `HasValue == false`.
 
 ### Switch statements
 

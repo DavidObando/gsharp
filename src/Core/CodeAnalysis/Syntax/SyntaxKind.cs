@@ -63,6 +63,7 @@ public enum SyntaxKind
     QuestionToken,
     QuestionDotToken,
     QuestionColonToken,
+    QuestionQuestionEqualsToken,
     LessToken,
     LessOrEqualsToken,
     LeftArrowToken,
@@ -315,6 +316,12 @@ public enum SyntaxKind
     // `if cond { a } else { b }` → value.
     IfExpression,
     BlockExpression,
+
+    // ADR-0072 / issue #709: null-coalescing compound assignment
+    // `a ??= b` — assigns `b` to `a` only when `a` is nil. Statement-level
+    // only in G#; the binder validates LHS is nullable (GS0298) and
+    // produces a lowered `if a == nil { a = b }` shape.
+    NullCoalescingAssignmentStatement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

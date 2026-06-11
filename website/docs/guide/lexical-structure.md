@@ -52,6 +52,6 @@ Interpolation rationale: [ADR-0007](https://github.com/DavidObando/gsharp/blob/m
 
 ## Operators and punctuation
 
-G# includes Go-like operators plus CLR-oriented additions: null assertion `!!`, null-conditional access `?.`, null coalescing `?:`, channel receive and send `<-`, switch-expression arrows `->`, and annotations introduced by `@`. Compound assignment exists for arithmetic, bitwise, bit-clear, and shift operators.
+G# includes Go-like operators plus CLR-oriented additions: null assertion `!!`, null-conditional access `?.`, null coalescing `?:`, null-coalescing compound assignment `??=` (ADR-0072), channel receive and send `<-`, switch-expression arrows `->`, and annotations introduced by `@`. Compound assignment exists for arithmetic, bitwise, bit-clear, and shift operators.
 
 `while`, `null`, `nameof`, `typeof`, and `make` are not all keywords. `while` and `null` are not implemented language forms; use `for condition { ... }` and `nil`.

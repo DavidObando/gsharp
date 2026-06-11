@@ -213,6 +213,8 @@ internal sealed class StatementBinder
                 return BindTupleDeconstructionStatement((TupleDeconstructionStatementSyntax)syntax);
             case SyntaxKind.NamedDeconstructionStatement:
                 return BindNamedDeconstructionStatement((NamedDeconstructionStatementSyntax)syntax);
+            case SyntaxKind.NullCoalescingAssignmentStatement:
+                return BindNullCoalescingAssignmentStatement((NullCoalescingAssignmentStatementSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }
@@ -3137,5 +3139,228 @@ internal sealed class StatementBinder
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// ADR-0072 / issue #709: binds a null-coalescing compound assignment
+    /// statement <c>target ??= value</c>. The target must be an assignable
+    /// expression of nullable type; the result is desugared to
+    /// <c>if read(target) == nil { write(target) = value }</c>. Any
+    /// non-trivial receiver of the target is captured into a synthetic local
+    /// before the test so that <c>obj.field ??= …</c> does not evaluate
+    /// <c>obj</c> twice. The right-hand side is evaluated only when the
+    /// target reads as nil.
+    /// </summary>
+    private BoundStatement BindNullCoalescingAssignmentStatement(NullCoalescingAssignmentStatementSyntax syntax)
+    {
+        // Bind the LHS as a read-side expression. This decides the lvalue
+        // shape (variable / field / property / indexer) we need to mirror
+        // on the write side, and surfaces the type to validate nullability.
+        var boundRead = bindExpression(syntax.Target, false);
+        if (boundRead is BoundErrorExpression || boundRead.Type == TypeSymbol.Error)
+        {
+            _ = bindExpression(syntax.Value, false);
+            return new BoundExpressionStatement(syntax, boundRead);
+        }
+
+        if (boundRead.Type is not NullableTypeSymbol nullableType)
+        {
+            Diagnostics.ReportNullCoalescingAssignmentTargetNotNullable(syntax.OperatorToken.Location, boundRead.Type);
+            _ = bindExpression(syntax.Value, false);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        // Bind the RHS, converting it to the LHS's nullable type so the
+        // author can write either an underlying-typed value (which lifts
+        // via the implicit T -> T? conversion) or another nullable value.
+        var boundRhs = bindExpressionWithTargetType(syntax.Value, nullableType);
+        if (boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error)
+        {
+            return new BoundExpressionStatement(syntax, boundRhs);
+        }
+
+        var preStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var (read, write) = TryBuildNullCoalescingReadWrite(syntax, boundRead, boundRhs, preStatements);
+        if (read == null || write == null)
+        {
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        // Condition: read == nil. Routes through the existing nil-compare
+        // operator so any value-type Nullable<T> lowering is handled in the
+        // same code path as `x == nil` elsewhere.
+        var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
+        var eqOp = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, read.Type, TypeSymbol.Null);
+        BoundExpression condition = new BoundBinaryExpression(syntax, read, eqOp, nilLiteral);
+
+        var thenStmt = new BoundExpressionStatement(syntax, write);
+        BoundStatement ifStmt = new BoundIfStatement(syntax, condition, thenStmt, elseStatement: null);
+
+        if (preStatements.Count == 0)
+        {
+            return ifStmt;
+        }
+
+        preStatements.Add(ifStmt);
+        return new BoundBlockStatement(syntax, preStatements.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0072 / issue #709: builds the read+write pair for a
+    /// <c>??=</c> target by inspecting the bound read form. Non-trivial
+    /// receivers are spilled into synthetic locals (declared in the
+    /// current scope and prepended to <paramref name="preStatements"/>)
+    /// so the receiver is evaluated exactly once. Returns
+    /// <c>(null, null)</c> with a diagnostic when the target shape is
+    /// not assignable or the target is read-only.
+    /// </summary>
+    private (BoundExpression Read, BoundExpression Write) TryBuildNullCoalescingReadWrite(
+        NullCoalescingAssignmentStatementSyntax syntax,
+        BoundExpression boundRead,
+        BoundExpression boundRhs,
+        ImmutableArray<BoundStatement>.Builder preStatements)
+    {
+        switch (boundRead)
+        {
+            case BoundVariableExpression varExpr:
+            {
+                if (varExpr.Variable.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, varExpr.Variable.Name);
+                    return (null, null);
+                }
+
+                var write = new BoundAssignmentExpression(syntax, varExpr.Variable, boundRhs);
+                return (boundRead, write);
+            }
+
+            case BoundFieldAccessExpression fieldAccess:
+            {
+                if (fieldAccess.Field.IsReadOnly)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldAccess.Field.Name);
+                    return (null, null);
+                }
+
+                var receiver = CaptureReceiver(syntax, fieldAccess.Receiver, preStatements);
+                var read = new BoundFieldAccessExpression(syntax, receiver, fieldAccess.StructType, fieldAccess.Field);
+
+                // Use the VariableSymbol-based constructor: every receiver
+                // captured by CaptureReceiver is a BoundVariableExpression
+                // (either the original simple variable or a synthetic local
+                // that holds the spilled receiver). The interpreter and the
+                // existing rewriters all assume this shape for the simple
+                // receiver path; routing through ReceiverExpression bypasses
+                // the interpreter's class-field write logic (issue #709).
+                var write = new BoundFieldAssignmentExpression(syntax, receiver.Variable, fieldAccess.StructType, fieldAccess.Field, boundRhs);
+                return (read, write);
+            }
+
+            case BoundPropertyAccessExpression propAccess:
+            {
+                if (!propAccess.Property.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, propAccess.Property.Name);
+                    return (null, null);
+                }
+
+                var receiver = propAccess.Receiver == null
+                    ? null
+                    : CaptureReceiver(syntax, propAccess.Receiver, preStatements);
+                var read = new BoundPropertyAccessExpression(syntax, receiver, propAccess.StructType, propAccess.Property);
+                var write = new BoundPropertyAssignmentExpression(syntax, receiver, propAccess.StructType, propAccess.Property, boundRhs);
+                return (read, write);
+            }
+
+            case BoundClrPropertyAccessExpression clrPropAccess:
+            {
+                // For CLR properties, writability is enforced when the
+                // assignment is built — we mirror the assignment path here
+                // so the same diagnostic surfaces on `??=` targets.
+                if (clrPropAccess.Member is System.Reflection.PropertyInfo propInfo && !propInfo.CanWrite)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, propInfo.Name);
+                    return (null, null);
+                }
+
+                if (clrPropAccess.Member is System.Reflection.FieldInfo fieldInfo && (fieldInfo.IsInitOnly || fieldInfo.IsLiteral))
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldInfo.Name);
+                    return (null, null);
+                }
+
+                var receiver = clrPropAccess.Receiver == null
+                    ? null
+                    : CaptureReceiver(syntax, clrPropAccess.Receiver, preStatements);
+                var read = new BoundClrPropertyAccessExpression(syntax, receiver, clrPropAccess.Member, clrPropAccess.Type);
+                var write = new BoundClrPropertyAssignmentExpression(syntax, receiver, clrPropAccess.Member, boundRhs, clrPropAccess.Type);
+                return (read, write);
+            }
+
+            case BoundIndexExpression idx:
+            {
+                // Spill both the target collection and the index expression
+                // so neither is re-evaluated.
+                var target = CaptureReceiver(syntax, idx.Target, preStatements);
+                var index = CaptureReceiver(syntax, idx.Index, preStatements);
+                var read = new BoundIndexExpression(syntax, target, index, idx.Type);
+                var write = new BoundIndexAssignmentExpression(syntax, target.Variable, index, boundRhs, idx.Type);
+                return (read, write);
+            }
+
+            case BoundClrIndexExpression clrIdx:
+            {
+                if (!clrIdx.Indexer.CanWrite)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrIdx.Indexer.Name);
+                    return (null, null);
+                }
+
+                var target = CaptureReceiver(syntax, clrIdx.Target, preStatements);
+                var argsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(clrIdx.Arguments.Length);
+                foreach (var arg in clrIdx.Arguments)
+                {
+                    argsBuilder.Add(CaptureReceiver(syntax, arg, preStatements));
+                }
+
+                var args = argsBuilder.ToImmutable();
+                var read = new BoundClrIndexExpression(syntax, target, clrIdx.Indexer, args, clrIdx.Type);
+                var write = new BoundClrIndexAssignmentExpression(syntax, target.Variable, clrIdx.Indexer, args, boundRhs, clrIdx.Type);
+                return (read, write);
+            }
+
+            default:
+                Diagnostics.ReportNullCoalescingAssignmentInvalidTarget(syntax.OperatorToken.Location);
+                return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0072 / issue #709: captures a non-trivial receiver expression
+    /// into a synthetic read-only local declared in the current scope so
+    /// the receiver is evaluated exactly once across the read+test+write
+    /// triple. Simple variable references are returned unchanged because
+    /// they have no observable side effects. Always returns a
+    /// <see cref="BoundVariableExpression"/> so callers can use the
+    /// variable-receiver constructors on field / index assignments — the
+    /// expression-receiver overloads bypass interpreter write logic
+    /// (issue #709).
+    /// </summary>
+    private BoundVariableExpression CaptureReceiver(
+        NullCoalescingAssignmentStatementSyntax syntax,
+        BoundExpression receiver,
+        ImmutableArray<BoundStatement>.Builder preStatements)
+    {
+        if (receiver is BoundVariableExpression bve)
+        {
+            return bve;
+        }
+
+        var name = $"<ncaRecv{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var local = new LocalVariableSymbol(name, isReadOnly: true, receiver.Type);
+        scope.TryDeclareVariable(local);
+        var declaration = new BoundVariableDeclaration(syntax, local, receiver);
+        preStatements.Add(declaration);
+        return new BoundVariableExpression(syntax, local);
     }
 }

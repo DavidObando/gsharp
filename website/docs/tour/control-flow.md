@@ -65,6 +65,28 @@ nested block whose last statement does the same). Inside the body, reads of
 the binding compose with the rest of the smart-cast machinery from
 [ADR-0069](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0069-smart-cast-flow-narrowing.md).
 
+## `??=` — null-coalescing compound assignment (ADR-0072)
+
+`a ??= b` is the compound shorthand for *"if `a` is currently `nil`,
+evaluate `b` and write the result into `a`."* The right-hand side is
+**short-circuited** when the lvalue is already non-nil — it is evaluated
+only in the nil-case — and the receiver/index expressions on the left are
+evaluated exactly once across the read-test-write triple.
+
+```gsharp
+var greeting string? = nil
+greeting ??= "hello"   // greeting is now "hello"
+greeting ??= "ignored" // no-op — RHS not evaluated
+```
+
+The left-hand side may be any writable nullable lvalue: a local, a field on
+a struct or class, an auto-property or computed property with a setter, or
+an indexer access (G#-native or CLR). Non-nullable targets are rejected with
+`GS0298`; non-assignable targets with `GS0299`. The operator works
+identically for nullable reference types (`string?`, `Person?`) and
+nullable value types (`int32?`, `bool?`).
+
+
 ## For
 
 G# supports C-style `for init; condition; post`, condition-only `for`, infinite `for`, and range forms. The ellipsis form is convenient for integer ranges.
