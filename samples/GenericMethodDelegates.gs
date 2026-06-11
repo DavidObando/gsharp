@@ -13,7 +13,7 @@ import System
 // A generic class whose generic method takes a delegate parameterized by both
 // the class's type parameter (`TItem`) and the method's own (`TResult`).
 type Box[TItem] class {
-    Value TItem
+    var Value TItem
 
     func Map[TResult](f func(TItem) TResult) TResult {
         return f(this.Value)

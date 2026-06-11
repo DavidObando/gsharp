@@ -44,7 +44,7 @@ public class Issue687ColorColorTypeShadowingTests
             import System.IO
 
             type Entry class {
-                Path string = ""
+                var Path string = ""
 
                 func Build(suffix string) string {
                     return Path.Combine(this.Path, suffix)
@@ -65,7 +65,7 @@ public class Issue687ColorColorTypeShadowingTests
             package P
 
             type Holder class {
-                Type string = "System.Int32"
+                var Type string = "System.Int32"
 
                 func Resolve() bool {
                     return Type.GetType(this.Type) != nil
@@ -86,7 +86,7 @@ public class Issue687ColorColorTypeShadowingTests
             package P
 
             type Person class {
-                Name string = ""
+                var Name string = ""
 
                 func NameLength() int32 {
                     return Name.Length
@@ -109,7 +109,7 @@ public class Issue687ColorColorTypeShadowingTests
             import System.IO
 
             type Probe class {
-                Path string = ""
+                var Path string = ""
 
                 func PathLength() int32 {
                     return Path.Length
@@ -131,7 +131,7 @@ public class Issue687ColorColorTypeShadowingTests
             import System.IO
 
             type Probe class {
-                Path string = "/tmp"
+                var Path string = "/tmp"
 
                 func GetPath() string {
                     return Path
@@ -154,7 +154,7 @@ public class Issue687ColorColorTypeShadowingTests
             import System.IO
 
             type Probe class {
-                Path string = ""
+                var Path string = ""
 
                 func Combine(suffix string) string {
                     return System.IO.Path.Combine(this.Path, suffix)

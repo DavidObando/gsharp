@@ -29,8 +29,8 @@ public class ObjectInitializerBinderTests
     {
         var source = @"
 type Box class {
-    Width int32
-    Height int32
+    var Width int32
+    var Height int32
     init() { }
 }
 
@@ -65,7 +65,7 @@ b.Width + b.Height
     {
         var source = @"
 type Box class {
-    Width int32
+    var Width int32
     init() { }
 }
 
@@ -82,7 +82,7 @@ b.Width
     {
         var source = @"
 type Box class {
-    Width int32
+    var Width int32
     init() { }
 }
 
@@ -98,7 +98,7 @@ var b = Box() { Unknown = 1 }
     {
         var source = @"
 type Box class {
-    Width int32
+    var Width int32
     init() { }
 }
 

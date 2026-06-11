@@ -28,8 +28,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -53,8 +53,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -79,8 +79,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -105,8 +105,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -134,8 +134,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -157,8 +157,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Pair data struct {
-                Name string
-                Count int32
+                var Name string
+                var Count int32
             }
             """;
 
@@ -182,8 +182,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -213,8 +213,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -239,8 +239,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Pair data struct {
-                Name string
-                Count int32
+                var Name string
+                var Count int32
             }
             """;
 
@@ -269,15 +269,15 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Big data struct {
-                A int32
-                B int32
-                C int32
-                D int32
-                E int32
-                F int32
-                G int32
-                H int32
-                I int32
+                var A int32
+                var B int32
+                var C int32
+                var D int32
+                var E int32
+                var F int32
+                var G int32
+                var H int32
+                var I int32
             }
             """;
 
@@ -317,8 +317,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Pair data struct {
-                Name string
-                Count int32
+                var Name string
+                var Count int32
             }
             """;
 
@@ -359,8 +359,8 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -379,7 +379,7 @@ public class DataStructSynthesizedMembersTests
             import System
 
             type Box[T any] data struct {
-                Value T
+                var Value T
             }
             """;
 

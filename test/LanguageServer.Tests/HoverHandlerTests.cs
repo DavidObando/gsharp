@@ -18,7 +18,7 @@ public class HoverHandlerTests
     [InlineData("var count = 0\n", "count", "var count int32")]
     [InlineData("func add(a int32, b int32) int32 { return a + b }\n", "add", "func add(a int32, b int32) int32")]
     [InlineData("func greet(name string) { }\n", "name", "name string")]
-    [InlineData("type Point struct {\nX int32\nY int32\n}\n", "Point", "type Point struct { X int32; Y int32 }")]
+    [InlineData("type Point struct {\nvar X int32\nvar Y int32\n}\n", "Point", "type Point struct { var X int32; var Y int32 }")]
     [InlineData("type Color enum { Red, Green }\n", "Color", "enum Color { Red, Green }")]
     [InlineData("import System\nfunc main() {\nConsole.WriteLine(\"hi\")\n}\n", "Console", "type System.Console class")]
     public void ComputeHover_ReturnsMarkdownSignature(string source, string token, string expected)
@@ -90,7 +90,7 @@ public class HoverHandlerTests
     [Fact]
     public void ComputeHover_ResolvesFieldOnUserDefinedStruct()
     {
-        const string source = "package P\ntype Point struct {\n    /// X coordinate\n    X int32\n    Y int32\n}\nfunc Main() {\n    var p = Point{}\n    var x = p.X\n}\n";
+        const string source = "package P\ntype Point struct {\n    /// X coordinate\n    var X int32\n    var Y int32\n}\nfunc Main() {\n    var p = Point{}\n    var x = p.X\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "X", 1));
 

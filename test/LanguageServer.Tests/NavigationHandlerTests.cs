@@ -45,7 +45,7 @@ public class NavigationHandlerTests
     [Fact]
     public void Implementation_FindsStructImplementingInterface()
     {
-        const string source = "type Shape interface { area() float64 }\ntype Circle struct { radius float64 }\nfunc (c Circle) area() float64 { return c.radius }\n";
+        const string source = "type Shape interface { area() float64 }\ntype Circle struct { var radius float64 }\nfunc (c Circle) area() float64 { return c.radius }\n";
         var content = LanguageServerTestHelpers.Content(source);
         var compilation = new Compilation(content.SyntaxTree);
         var position = LanguageServerTestHelpers.PositionOf(source, "Shape");

@@ -126,7 +126,7 @@ public class SemanticLookupMemberAccessTests
     [Fact]
     public void FieldAssignment_FieldIdentifier_Resolves()
     {
-        const string source = "type Counter class {\n    Value int32\n}\nfunc Main() {\n    var c = Counter{}\n    c.Value = 1\n}\n";
+        const string source = "type Counter class {\n    var Value int32\n}\nfunc Main() {\n    var c = Counter{}\n    c.Value = 1\n}\n";
         var (compilation, tree) = Compile(source);
 
         var valueInAssignment = IdentifierAt(tree, "Value", occurrence: 2);

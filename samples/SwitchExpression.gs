@@ -8,9 +8,9 @@ package GSharp.Samples.SwitchExpression
 
 import System
 
-type Shape open class { Name string }
-type Circle class : Shape { Radius int32 }
-type Square class : Shape { Side int32 }
+type Shape open class { var Name string }
+type Circle class : Shape { var Radius int32 }
+type Square class : Shape { var Side int32 }
 
 let nums = []int32{-3, 0, 1, 5, 101}
 for n in nums {
@@ -41,7 +41,7 @@ let listLabel = switch xs {
 }
 Console.WriteLine(listLabel)
 
-type Pair data struct { A int32 B int32 }
+type Pair data struct { var A int32 var B int32 }
 let p = Pair{A: 7, B: 7}
 let pairLabel = switch p {
   case { A: 0, B: 0 } -> "origin"

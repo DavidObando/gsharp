@@ -69,8 +69,8 @@ public class AttributeEmitTests
 
             @Obsolete("legacy")
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -112,7 +112,7 @@ public class AttributeEmitTests
 
             @DebuggerTypeProxy(typeof(int32))
             type Box data struct {
-                Value int32
+                var Value int32
             }
             """;
 
@@ -148,7 +148,7 @@ public class AttributeEmitTests
 
             @DebuggerDisplay("{Value}", Target = typeof(string))
             type Holder data struct {
-                Value int32
+                var Value int32
             }
             """;
 
@@ -182,7 +182,7 @@ public class AttributeEmitTests
 
             @DefaultValue(42)
             type Counter data struct {
-                Value int32
+                var Value int32
             }
             """;
 
@@ -207,7 +207,7 @@ public class AttributeEmitTests
 
             @DefaultValue("hello")
             type Greeter data struct {
-                Value int32
+                var Value int32
             }
             """;
 
@@ -233,8 +233,8 @@ public class AttributeEmitTests
 
             @TupleElementNames([]string{"first", "second"})
             type Pair data struct {
-                A int32
-                B int32
+                var A int32
+                var B int32
             }
             """;
 
@@ -262,7 +262,7 @@ public class AttributeEmitTests
 
             @DefaultValue(typeof(int32))
             type Holder data struct {
-                Value int32
+                var Value int32
             }
             """;
 
@@ -363,8 +363,8 @@ public class AttributeEmitTests
 
             type Point data struct {
                 @Obsolete("use NewX")
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -396,7 +396,7 @@ public class AttributeEmitTests
 
             type Box class {
                 @Obsolete("retired")
-                Value int32
+                var Value int32
             }
             """;
 

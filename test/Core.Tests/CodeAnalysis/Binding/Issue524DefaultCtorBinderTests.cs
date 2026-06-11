@@ -31,7 +31,7 @@ public class Issue524DefaultCtorBinderTests
     {
         var source = @"
 type Holder class {
-    Value int32
+    var Value int32
 }
 
 var h = Holder()
@@ -48,7 +48,7 @@ var h = Holder()
         // missing function or a failing conversion.
         var source = @"
 type Holder class {
-    Value int32
+    var Value int32
 }
 
 var h = Holder(7)
@@ -83,8 +83,8 @@ var e = Empty()
         // must continue to bind against that constructor's parameter list.
         var source = @"
 type Point class {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 
     init(x int32, y int32) {
         X = x

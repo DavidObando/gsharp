@@ -210,7 +210,7 @@ public class NullableInstanceMemberEmitTests
             import System
 
             type Holder class {
-                Flag bool?
+                var Flag bool?
 
                 init() {
                     Flag = nil

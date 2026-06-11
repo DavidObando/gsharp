@@ -35,8 +35,8 @@ public class WalkerPrePassEmitTests
         const string Source = @"package P
 import System
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 func makeX() int32 {
     var p = Point{X: 11, Y: 22}
@@ -63,8 +63,8 @@ Console.WriteLine(t.Item2)
         const string Source = @"package P
 import System
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 var flag = true
 var p Point
@@ -87,8 +87,8 @@ Console.WriteLine(p.Y)
         const string Source = @"package P
 import System
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 var pts = []Point{Point{X: 1, Y: 2}, Point{X: 3, Y: 4}}
 Console.WriteLine(pts[0].X)
@@ -146,8 +146,8 @@ Console.WriteLine(xs[2])
         const string Source = @"package P
 import System
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 func makeZero() Point {
     var p Point
@@ -171,7 +171,7 @@ Console.WriteLine(t.Item2)
         const string Source = @"package P
 import System
 type Box data struct {
-    Value int32
+    var Value int32
 }
 var b Box
 var nums = [3]int32{0, 1, 2}
@@ -215,8 +215,8 @@ Console.WriteLine(nine())
         const string Source = @"package P
 import System
 type Pair data struct {
-    A int32
-    B int32
+    var A int32
+    var B int32
 }
 var make = func() Pair {
     var p Pair

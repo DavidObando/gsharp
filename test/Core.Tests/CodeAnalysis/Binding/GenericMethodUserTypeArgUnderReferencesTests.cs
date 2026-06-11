@@ -89,7 +89,7 @@ public class GenericMethodUserTypeArgUnderReferencesTests
             import System
 
             type Clock class {
-                Ticks int32
+                var Ticks int32
                 func Read() int32 {
                     return Ticks
                 }

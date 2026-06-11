@@ -42,7 +42,7 @@ Additionally, `FindMatchingFieldForGetterOnlyProperty` enables a public field on
 
 ```
 type Impl class : IHasName {
-    Name string
+    var Name string
 }
 ```
 

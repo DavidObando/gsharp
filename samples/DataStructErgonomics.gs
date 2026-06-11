@@ -6,8 +6,8 @@ package GSharp.Example.DataStructErgonomics
 import System
 
 type Point data struct {
-    x int32
-    y int32
+    var x int32
+    var y int32
 }
 
 let p = Point{x: 3, y: 4}

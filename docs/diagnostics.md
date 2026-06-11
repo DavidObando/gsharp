@@ -221,8 +221,8 @@ G# can also **declare** its own by-ref-like value types with a `ref` modifier on
 
 ```gsharp
 type Window ref struct {
-    Items ReadOnlySpan[int32]   // a ref struct may hold by-ref-like fields
-    Label string
+    var Items ReadOnlySpan[int32]   // a ref struct may hold by-ref-like fields
+    var Label string
 }
 ```
 

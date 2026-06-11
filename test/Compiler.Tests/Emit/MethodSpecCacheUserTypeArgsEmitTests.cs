@@ -30,7 +30,7 @@ public class MethodSpecCacheUserTypeArgsEmitTests
             import System
 
             type Clock class {
-                Ticks int32
+                var Ticks int32
             }
 
             var a = Array.Empty[Clock]()
@@ -59,11 +59,11 @@ public class MethodSpecCacheUserTypeArgsEmitTests
             import System
 
             type ClockA class {
-                Ticks int32
+                var Ticks int32
             }
 
             type ClockB class {
-                Ticks int32
+                var Ticks int32
             }
 
             var a = Array.Empty[ClockA]()

@@ -67,7 +67,7 @@ public class Issue693DictionaryConstructionBindingTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let d = Dictionary[string, MyGs]()
@@ -86,11 +86,11 @@ public class Issue693DictionaryConstructionBindingTests
             import System.Collections.Generic
 
             type K class {
-                N int32 = 0
+                var N int32 = 0
             }
 
             type V class {
-                N int32 = 0
+                var N int32 = 0
             }
 
             let d = Dictionary[K, V]()

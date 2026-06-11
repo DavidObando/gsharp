@@ -24,8 +24,8 @@ public class GenericTypeTests
     {
         var source = @"
 type Result[T any, E any] data struct {
-    Ok T
-    Err E
+    var Ok T
+    var Err E
 }
 let r = Result[int32, string]{Ok: 5, Err: ""oops""}
 r.Ok
@@ -40,7 +40,7 @@ r.Ok
     {
         var source = @"
 type Box[T any] data struct {
-    Value T
+    var Value T
 }
 let b = Box{Value: 42}
 b.Value
@@ -55,8 +55,8 @@ b.Value
     {
         var source = @"
 type Pair[A any, B any] data struct {
-    First A
-    Second B
+    var First A
+    var Second B
 }
 let p1 = Pair[int32, string]{First: 1, Second: ""x""}
 let p2 = Pair[int32, string]{First: 1, Second: ""x""}
@@ -72,8 +72,8 @@ p1 == p2
     {
         var source = @"
 type Result[T any, E any] data struct {
-    Ok T
-    Err E
+    var Ok T
+    var Err E
 }
 let r = Result[int32]{Ok: 5, Err: ""oops""}
 ";

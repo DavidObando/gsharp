@@ -44,9 +44,9 @@ func Main() {}
     public void MultipleRefStructs_ProduceSingleIsByRefLikeAndObsoleteAttributeCtorMemberRef()
     {
         const string source = @"package RefStructCache
-type A ref struct { x int32 }
-type B ref struct { y int32 }
-type C ref struct { z int32 }
+type A ref struct { var x int32 }
+type B ref struct { var y int32 }
+type C ref struct { var z int32 }
 func Main() {}
 ";
         using var pe = Compile(source);

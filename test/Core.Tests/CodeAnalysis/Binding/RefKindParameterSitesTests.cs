@@ -29,7 +29,7 @@ public class RefKindParameterSitesTests
         // type body are class-only as of ADR-0017.
         var source = @"
 type Counter struct {
-    Value int32
+    var Value int32
 }
 
 func (c Counter) Add(ref delta int32) {
@@ -78,7 +78,7 @@ type IParser interface {
     {
         var source = @"
 type Box class {
-    Value int32
+    var Value int32
 
     init(seed int32, ref delta int32) {
         delta = delta + 1

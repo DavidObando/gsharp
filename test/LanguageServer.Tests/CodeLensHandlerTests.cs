@@ -79,7 +79,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_StructFields()
     {
-        const string source = "type Point struct {\n    X int32\n    Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";
+        const string source = "type Point struct {\n    var X int32\n    var Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -121,7 +121,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_ClassBodyMethods()
     {
-        const string source = "type Counter class {\n    Value int32\n    func Increment() {\n        Value = Value + 1\n    }\n}\nvar c = Counter{Value: 0}\nc.Increment()\nc.Increment()\n";
+        const string source = "type Counter class {\n    var Value int32\n    func Increment() {\n        Value = Value + 1\n    }\n}\nvar c = Counter{Value: 0}\nc.Increment()\nc.Increment()\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);
@@ -171,7 +171,7 @@ public class CodeLensHandlerTests
     [Fact]
     public void ComputeLenses_SharedBlockMembers()
     {
-        const string source = "type Config class {\n    Name string\n    shared {\n        Default string\n    }\n}\n";
+        const string source = "type Config class {\n    var Name string\n    shared {\n        var Default string\n    }\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var lenses = CodeLensComputer.ComputeLenses(content);

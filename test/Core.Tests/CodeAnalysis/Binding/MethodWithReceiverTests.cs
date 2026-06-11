@@ -23,8 +23,8 @@ public class MethodWithReceiverTests
     {
         var source = @"
 type Point struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) Distance() int32 {
@@ -44,8 +44,8 @@ p.Distance()
     {
         var source = @"
 type Point class {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) Distance() int32 {
@@ -65,8 +65,8 @@ p.Distance()
     {
         var source = @"
 type Point struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) Sum() int32 { return p.X + p.Y }
@@ -86,7 +86,7 @@ p.DoubleSum()
         var definingTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
 public type Point struct {
-    X int32
+    var X int32
 }
 "));
         var extensionTree = SyntaxTree.Parse(SourceText.From(@"
@@ -150,7 +150,7 @@ func (c Count) G() int32 { return c + 1 }
     {
         var source = @"
 type Counter struct {
-    Value int32
+    var Value int32
 }
 
 func (c Counter) Inc() int32 {

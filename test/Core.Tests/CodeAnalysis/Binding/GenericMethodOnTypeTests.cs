@@ -162,7 +162,7 @@ Util.Identity(3)
     {
         var source = @"
 type Container[T] class {
-    Value T
+    var Value T
     func GetOr[U](other U) U { return other }
 }
 var c = Container[int32]{Value: 1}
@@ -178,7 +178,7 @@ c.GetOr(""x"")
     {
         var source = @"
 type Container[T] class {
-    Value T
+    var Value T
     func Echo(x T) T { return x }
 }
 var c = Container[int32]{Value: 1}

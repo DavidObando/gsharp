@@ -37,14 +37,14 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
             type Probe class {
-                Src Source
-                Cnt Counter
+                var Src Source
+                var Cnt Counter
                 init() {
                     Src = Source()
                     Cnt = Counter()
@@ -87,14 +87,14 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
             type Probe class {
-                Src Source
-                Cnt Counter
+                var Src Source
+                var Cnt Counter
                 init() {
                     Src = Source()
                     Cnt = Counter()
@@ -136,14 +136,14 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
             type Probe class {
-                Src Source
-                Cnt Counter
+                var Src Source
+                var Cnt Counter
                 init() {
                     Src = Source()
                     Cnt = Counter()
@@ -180,8 +180,8 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Probe class {
-                Src Source
-                Hits int32
+                var Src Source
+                var Hits int32
                 init() {
                     Src = Source()
                     Hits = 0
@@ -213,7 +213,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Add(n int32) { Value = Value + n }
             }
@@ -224,9 +224,9 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Probe class {
-                Src Source
-                A Counter
-                B Counter
+                var Src Source
+                var A Counter
+                var B Counter
                 init() {
                     Src = Source()
                     A = Counter()
@@ -269,7 +269,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -298,7 +298,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -335,7 +335,7 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -365,7 +365,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -376,9 +376,9 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Probe class {
-                Src Source
-                Original Counter
-                Replacement Counter
+                var Src Source
+                var Original Counter
+                var Replacement Counter
                 init() {
                     Src = Source()
                     var c = Counter()
@@ -431,13 +431,13 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
 
             type Probe class {
-                Cnt Counter
+                var Cnt Counter
                 init() {
                     Cnt = Counter()
                     var counter = Cnt
@@ -469,7 +469,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -480,8 +480,8 @@ public class Issue503ClosureCaptureRegressionTests
             }
 
             type Probe class {
-                Src Source
-                Cnt Counter
+                var Src Source
+                var Cnt Counter
                 init() {
                     Src = Source()
                     Cnt = Counter()
@@ -743,7 +743,7 @@ public class Issue503ClosureCaptureRegressionTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }

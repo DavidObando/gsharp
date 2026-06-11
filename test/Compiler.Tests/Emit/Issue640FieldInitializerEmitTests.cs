@@ -28,7 +28,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                n int32 = 42
+                var n int32 = 42
                 func Get() int32 { return n }
             }
 
@@ -48,7 +48,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                n int64 = 100
+                var n int64 = 100
                 func Get() int64 { return n }
             }
 
@@ -68,7 +68,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                flag bool = true
+                var flag bool = true
                 func Get() bool { return flag }
             }
 
@@ -88,7 +88,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                s string = "hello"
+                var s string = "hello"
                 func Get() string { return s }
             }
 
@@ -108,7 +108,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                c int32 = 1 + 2 * 3
+                var c int32 = 1 + 2 * 3
                 func Get() int32 { return c }
             }
 
@@ -128,9 +128,9 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Multi class {
-                a int32 = 10
-                b int32 = 20
-                c string = "abc"
+                var a int32 = 10
+                var b int32 = 20
+                var c string = "abc"
                 func Show() string {
                     return a.ToString() + "," + b.ToString() + "," + c
                 }
@@ -153,8 +153,8 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Widget class {
-                baseValue int32 = 100
-                extra int32
+                var baseValue int32 = 100
+                var extra int32
 
                 init(e int32) {
                     extra = e
@@ -179,7 +179,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Thing class(name string) {
-                prefix string = "Item:"
+                var prefix string = "Item:"
                 func Label() string { return prefix + name }
             }
 
@@ -200,8 +200,8 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Dual class {
-                tag string = "default"
-                n int32
+                var tag string = "default"
+                var n int32
 
                 init(x int32) {
                     n = x
@@ -226,12 +226,12 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Base open class {
-                baseVal int32 = 1
+                var baseVal int32 = 1
                 func GetBase() int32 { return baseVal }
             }
 
             type Derived class : Base {
-                derivedVal int32 = 2
+                var derivedVal int32 = 2
                 func GetDerived() int32 { return derivedVal }
             }
 
@@ -253,8 +253,8 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Mixed class {
-                initialized int32 = 42
-                uninitialized int32
+                var initialized int32 = 42
+                var uninitialized int32
                 func Show() string {
                     return initialized.ToString() + "," + uninitialized.ToString()
                 }
@@ -276,7 +276,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Holder class {
-                d float64 = 3.14
+                var d float64 = 3.14
                 func Get() float64 { return d }
             }
 
@@ -298,7 +298,7 @@ public class Issue640FieldInitializerEmitTests
             import System
 
             type Override class {
-                n int32 = 10
+                var n int32 = 10
 
                 init(value int32) {
                     n = value

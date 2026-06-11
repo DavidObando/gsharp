@@ -34,7 +34,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Bag class {
-                items List[int32] = List[int32]()
+                var items List[int32] = List[int32]()
 
                 func Add(v int32) {
                     items.Add(v)
@@ -75,7 +75,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Cache class {
-                data Dictionary[string, int32] = Dictionary[string, int32]()
+                var data Dictionary[string, int32] = Dictionary[string, int32]()
 
                 func Set(key string, value int32) {
                     data[key] = value
@@ -106,7 +106,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System
 
             type Container class {
-                arr []int32 = []int32{0, 0, 0, 0, 0}
+                var arr []int32 = []int32{0, 0, 0, 0, 0}
 
                 func Set(i int32, v int32) {
                     arr[i] = v
@@ -138,7 +138,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder class {
-                items List[int32] = List[int32]()
+                var items List[int32] = List[int32]()
 
                 init() {
                     items.Add(0)
@@ -171,8 +171,8 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Multi class {
-                names List[string] = List[string]()
-                scores List[int32] = List[int32]()
+                var names List[string] = List[string]()
+                var scores List[int32] = List[int32]()
 
                 init() {
                     names.Add("a")
@@ -216,7 +216,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Acc class {
-                vals List[int32] = List[int32]()
+                var vals List[int32] = List[int32]()
 
                 init() {
                     vals.Add(10)
@@ -253,7 +253,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             import System.Collections.Generic
 
             type Counter class {
-                counts List[int32] = List[int32]()
+                var counts List[int32] = List[int32]()
 
                 init() {
                     counts.Add(0)

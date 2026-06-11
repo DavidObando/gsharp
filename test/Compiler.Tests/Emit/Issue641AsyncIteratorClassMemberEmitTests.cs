@@ -108,7 +108,7 @@ public class Issue641AsyncIteratorClassMemberEmitTests
             import System.Threading.Tasks
 
             type CapturingExecutor class {
-                Calls int32
+                var Calls int32
                 init() {}
 
                 async func ProduceAsync() async sequence[int32] {

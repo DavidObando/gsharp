@@ -41,7 +41,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             func MakeHolder() Holder {
@@ -72,11 +72,11 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Inner struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             type Outer struct {
-                InnerObj Inner
+                var InnerObj Inner
             }
 
             func MakeOuter() Outer {
@@ -131,7 +131,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System
 
             type Holder struct {
-                Value int32
+                var Value int32
             }
 
             func (h Holder) Pick[T](v T) int32 {
@@ -157,7 +157,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             let h = Holder{Map: Dictionary[string, int32]()}
@@ -205,7 +205,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             let h = Holder{Map: Dictionary[string, int32]()}
@@ -229,7 +229,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             let h = Holder{Map: Dictionary[string, int32]()}
@@ -252,7 +252,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Holder struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             let h = Holder{Map: Dictionary[string, int32]()}
@@ -300,11 +300,11 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Inner struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             type Outer struct {
-                InnerObj Inner
+                var InnerObj Inner
             }
 
             let o = Outer{InnerObj: Inner{Map: Dictionary[string, int32]()}}
@@ -331,7 +331,7 @@ public class Issue507MemberIndexAssignmentEmitTests
             import System.Collections.Generic
 
             type Bag struct {
-                Map Dictionary[string, int32]
+                var Map Dictionary[string, int32]
             }
 
             public var calls = 0

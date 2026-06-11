@@ -70,7 +70,7 @@ tweak()
     {
         var output = RunSubmission(@"
 type Counter struct {
-    Value int32
+    var Value int32
 }
 
 func tweak() {

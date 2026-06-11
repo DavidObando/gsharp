@@ -8,7 +8,7 @@ package GSharp.Refactoring.GenericMethodSpec
 import System
 
 type Tag class {
-    Name string
+    var Name string
 }
 
 var empties = Array.Empty[Tag]()

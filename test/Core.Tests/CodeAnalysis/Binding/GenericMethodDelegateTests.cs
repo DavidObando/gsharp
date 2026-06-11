@@ -27,7 +27,7 @@ public class GenericMethodDelegateTests
     {
         var source = @"
 type Box[TItem] class {
-    Value TItem
+    var Value TItem
     func Map[TResult](f func(TItem) TResult) TResult {
         return f(this.Value)
     }
@@ -42,7 +42,7 @@ type Box[TItem] class {
     {
         var source = @"
 type Box[TItem] class {
-    Value TItem
+    var Value TItem
     func Map[TResult](f func(TItem) TResult) TResult {
         return f(this.Value)
     }
@@ -60,7 +60,7 @@ b.Map[int32](func(x int32) int32 { return x + x })
     {
         var source = @"
 type Box[TItem] class {
-    Value TItem
+    var Value TItem
     func Map[TResult](f func(TItem) TResult) TResult {
         return f(this.Value)
     }
@@ -78,7 +78,7 @@ b.Map[string](func(x int32) string { return ""mapped"" })
     {
         var source = @"
 type Box[TItem] class {
-    Value TItem
+    var Value TItem
     func Fold[TAcc](seed TAcc, f func(TAcc, TItem) TAcc) TAcc {
         return f(seed, this.Value)
     }

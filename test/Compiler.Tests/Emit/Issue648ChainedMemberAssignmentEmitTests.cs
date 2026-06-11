@@ -34,12 +34,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Inner class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
@@ -65,7 +65,7 @@ public class Issue648ChainedMemberAssignmentEmitTests
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
@@ -86,17 +86,17 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Leaf class {
-                Val int32
+                var Val int32
                 init() {}
             }
 
             type Mid class {
-                Leaf Leaf
+                var Leaf Leaf
                 init() { Leaf = Leaf() }
             }
 
             type Root class {
-                Mid Mid
+                var Mid Mid
                 init() { Mid = Mid() }
             }
 
@@ -117,12 +117,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Inner class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
             type Outer class {
-                _inner Inner
+                var _inner Inner
                 init() { _inner = Inner() }
                 func GetInner() Inner { return _inner }
             }
@@ -144,12 +144,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Inner class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
@@ -171,12 +171,12 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Inner class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
@@ -198,7 +198,7 @@ public class Issue648ChainedMemberAssignmentEmitTests
             import System
 
             type Box class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
@@ -232,7 +232,7 @@ public class Issue648ChainedMemberAssignmentEmitTests
             }
 
             type Outer class {
-                _inner Inner
+                var _inner Inner
                 prop Inner Inner {
                     get { return _inner }
                     set { _inner = value }

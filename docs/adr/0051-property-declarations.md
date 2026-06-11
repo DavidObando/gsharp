@@ -59,8 +59,8 @@ type Person class {
     prop FullName string {
         get { return this.first + " " + this.last }
     }
-    private first string
-    private last string
+    private var first string
+    private var last string
 }
 ```
 
@@ -78,7 +78,7 @@ type Clamped class {
             else { this._value = v }
         }
     }
-    private _value int32
+    private var _value int32
 }
 ```
 
@@ -134,7 +134,7 @@ type Derived class : Base {
         get { return "custom: " + this._label }
         set(v) { this._label = v }
     }
-    private _label string
+    private var _label string
 }
 ```
 
@@ -157,8 +157,8 @@ Data struct fields remain fields:
 
 ```gs
 type Point data struct {
-    X int32    // field — unchanged
-    Y int32    // field — unchanged
+    var X int32    // field — unchanged
+    var Y int32    // field — unchanged
 }
 ```
 
@@ -166,10 +166,10 @@ A `data struct` may additionally declare `prop` members for computed values:
 
 ```gs
 type Rect data struct {
-    X int32
-    Y int32
-    Width int32
-    Height int32
+    var X int32
+    var Y int32
+    var Width int32
+    var Height int32
     prop Area int32 { get { return this.Width * this.Height } }
 }
 ```

@@ -157,8 +157,8 @@ let d = Dictionary[string, Dictionary[string, int32]]()
         const string source = @"
 package P
 type Pair[A, B any] struct {
-    First A
-    Second B
+    var First A
+    var Second B
 }
 let p = Pair[int32, string]{First: 1, Second: ""x""}
 ";

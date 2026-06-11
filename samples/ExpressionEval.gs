@@ -16,17 +16,17 @@ type Expr sealed interface {
 }
 
 type Lit class : Expr {
-    Value int32
+    var Value int32
 }
 
 type Add class : Expr {
-    Left Expr
-    Right Expr
+    var Left Expr
+    var Right Expr
 }
 
 type Mul class : Expr {
-    Left Expr
-    Right Expr
+    var Left Expr
+    var Right Expr
 }
 
 func eval(e Expr) int32 {

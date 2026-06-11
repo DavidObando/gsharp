@@ -335,6 +335,8 @@ public static class SymbolDisplay
                     builder.Space();
                 }
 
+                builder.Keyword(aggregate.Fields[i].IsReadOnly ? "let" : "var");
+                builder.Space();
                 builder.Add(SymbolDisplayPartKind.FieldName, aggregate.Fields[i].Name);
                 builder.Space();
                 builder.Type(FormatType(aggregate.Fields[i].Type));

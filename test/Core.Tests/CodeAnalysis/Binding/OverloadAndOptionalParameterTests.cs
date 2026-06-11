@@ -201,7 +201,7 @@ p.Y
         // ADR-0063 §9: multiple init(...) overloads, overload-resolved at call site.
         var source = @"
 type Box class {
-    X int32
+    var X int32
     init(a int32) { X = a }
     init(a int32, b int32) { X = a * b }
 }
@@ -218,7 +218,7 @@ b.X
     {
         var source = @"
 type Box class {
-    X int32
+    var X int32
     init(a int32) { X = a }
     init(a int32) { X = a + 1 }
 }

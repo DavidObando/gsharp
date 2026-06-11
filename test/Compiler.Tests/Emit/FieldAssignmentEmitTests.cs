@@ -33,8 +33,8 @@ public class FieldAssignmentEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             var p = Point{X: 1, Y: 2}
@@ -54,8 +54,8 @@ public class FieldAssignmentEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             var p = Point{X: 1, Y: 2}
@@ -76,7 +76,7 @@ public class FieldAssignmentEmitTests
             import System
 
             type Box class {
-                Value int32
+                var Value int32
             }
 
             var b = Box{Value: 1}
@@ -94,7 +94,7 @@ public class FieldAssignmentEmitTests
             import System
 
             type Box class {
-                Value int32
+                var Value int32
             }
 
             var b = Box{Value: 1}
@@ -117,8 +117,8 @@ public class FieldAssignmentEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             var p = Point{X: 10, Y: 0}

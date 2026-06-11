@@ -135,7 +135,7 @@ var r = describe(5)
     {
         var source = @"
 type Holder class {
-    Flag bool?
+    var Flag bool?
 
     init() {
         Flag = nil

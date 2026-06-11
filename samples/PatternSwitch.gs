@@ -8,9 +8,9 @@ package GSharp.Samples.PatternSwitch
 
 import System
 
-type Animal open class { Name string }
-type Dog class : Animal { Bark int32 }
-type Cat class : Animal { Purr int32 }
+type Animal open class { var Name string }
+type Dog class : Animal { var Bark int32 }
+type Cat class : Animal { var Purr int32 }
 
 func describe(n int32) {
   switch n {
@@ -37,7 +37,7 @@ func shape(xs []int32) {
   }
 }
 
-type Point data struct { X int32 Y int32 }
+type Point data struct { var X int32 var Y int32 }
 
 func origin(p Point) {
   switch p {

@@ -26,8 +26,8 @@ public class DataStructTests
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 1, Y: 2}
@@ -44,8 +44,8 @@ p == q
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 1, Y: 2}
@@ -62,8 +62,8 @@ p != q
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 5, Y: 7}
@@ -81,8 +81,8 @@ p == q
     {
         var source = @"
 type Point struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 1, Y: 2}
@@ -98,10 +98,10 @@ p == q
     {
         var source = @"
 type A data struct {
-    V int32
+    var V int32
 }
 type B data struct {
-    V int32
+    var V int32
 }
 
 var a = A{V: 1}
@@ -129,8 +129,8 @@ type Empty data struct {
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 3, Y: 4}
@@ -167,8 +167,8 @@ p
         // predictable.
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) Equals(other any) bool {
@@ -185,8 +185,8 @@ func (p Point) Equals(other any) bool {
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) GetHashCode() int32 {
@@ -203,8 +203,8 @@ func (p Point) GetHashCode() int32 {
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func (p Point) Deconstruct() {
@@ -219,8 +219,8 @@ func (p Point) Deconstruct() {
     {
         var source = @"
 type Point data struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 0
 ";

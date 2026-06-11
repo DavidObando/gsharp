@@ -49,7 +49,7 @@ a
     [Theory]
     [InlineData("type Bad inline struct(a string, b string) {}")]
     [InlineData("type Bad inline struct {}")]
-    [InlineData("type Bad inline struct(a string) { b string }")]
+    [InlineData("type Bad inline struct(a string) { var b string }")]
     [InlineData("type Bad data inline struct(value string) {}")]
     [InlineData("type Bad inline data struct(value string) {}")]
     [InlineData("type Bad open inline struct(value string) {}")]

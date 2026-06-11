@@ -908,6 +908,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0067: reports that a field declaration inside a <c>struct</c>,
+    /// <c>class</c>, or <c>shared</c> block was written without a leading
+    /// <c>var</c> or <c>let</c> keyword. Field declarations now require
+    /// one of these binding keywords to distinguish mutable (<c>var</c>)
+    /// from read-only (<c>let</c>) storage and to keep type bodies
+    /// visually consistent with property, event, and method members.
+    /// </summary>
+    /// <param name="location">The location of the offending token.</param>
+    public void ReportFieldDeclarationRequiresVarOrLet(TextLocation location)
+    {
+        var message = "Field declarations require a 'var' (mutable) or 'let' (read-only) keyword.";
+        Report(location, "GS0288", message);
+    }
+
+    /// <summary>
     /// Reports that top-level statements within a single source file are not
     /// contiguous — they are split into two or more blocks separated by a
     /// type or function declaration (ADR-0066 deferred decision D5). Emitted

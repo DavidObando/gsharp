@@ -49,7 +49,7 @@ public class Issue608InterpreterCLRDispatchTests
             import GSharp.Interpreter.Tests.ProbeRef
             import System
             type Impl1 class : IHasName {
-                Name string
+                var Name string
             }
             var impl = Impl1{Name: "hello"}
             var iface IHasName = impl
@@ -72,7 +72,7 @@ public class Issue608InterpreterCLRDispatchTests
             import GSharp.Interpreter.Tests.ProbeRef
             import System
             type RWImpl class : IReadWrite {
-                Value string
+                var Value string
             }
             var impl = RWImpl{Value: "initial"}
             var iface IReadWrite = impl

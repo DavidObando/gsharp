@@ -71,8 +71,8 @@ q == r
     {
         var result = Evaluate(@"
 type Point struct {
-    x int32
-    y int32
+    var x int32
+    var y int32
 }
 let p = Point{x: 1, y: 2}
 p with { x = 10 }
@@ -85,8 +85,8 @@ p with { x = 10 }
     {
         var result = Evaluate(@"
 type Point struct {
-    x int32
-    y int32
+    var x int32
+    var y int32
 }
 let p = Point{x: 1, y: 2}
 p.copy(x = 10)
@@ -200,8 +200,8 @@ hits
 
     private const string PointPrelude = @"
 type Point data struct {
-    x int32
-    y int32
+    var x int32
+    var y int32
 }
 ";
 

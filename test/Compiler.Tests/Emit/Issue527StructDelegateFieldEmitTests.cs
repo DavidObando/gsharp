@@ -236,7 +236,7 @@ public class Issue527StructDelegateFieldEmitTests
             import System
 
             type CallbackBag struct {
-                OnAsk func() string
+                var OnAsk func() string
             }
 
             var bag = CallbackBag{ OnAsk: func() string { return "hi" } }
