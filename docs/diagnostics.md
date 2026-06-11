@@ -472,6 +472,17 @@ See [ADR-0068](adr/0068-deinit-destructor-support.md). The Swift-style `deinit {
 | GS0291 | Error | `deinit` may not declare parameters. | `deinit(x int32) { … }` — a CLR finalizer is parameter-less. |
 | GS0292 | Error | `deinit` may not declare a return type. | `deinit int32 { … }` — a CLR finalizer is `void`. |
 
+## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
+
+See ADR-0072. `??=` (`a ??= b`) writes `b` into `a` only when the current value of `a` is `nil`. The diagnostics below guard the two binder rejection paths for misuse of the operator.
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0298 | Error | The left-hand side of `??=` must be of nullable type. | `var s = "hi"; s ??= "x"` — `s` has type `string` (non-nullable), so the operator can never fire. Either declare `s string?` or use a plain `=`. |
+| GS0299 | Error | The left-hand side of `??=` must be assignable: a variable, parameter, field, property, or indexer. | `compute() ??= "v"` — the result of a method call is not an lvalue. Store the value first and `??=` into the variable. |
+
+A read-only lvalue (`let x string? = nil; x ??= "v"`) reports the existing `GS0127` for parity with the simple assignment path.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

@@ -320,6 +320,15 @@ public sealed class Lexer
                     kind = SyntaxKind.QuestionColonToken;
                     position++;
                 }
+                else if (Current == '?' && Peek(1) == '=')
+                {
+                    // ADR-0072 / issue #709: `??=` null-coalescing compound
+                    // assignment. We do NOT tokenize bare `??` — G# uses
+                    // `?:` for null-coalescing. The doubled-`?` sequence is
+                    // recognised here only as the prefix of `??=`.
+                    kind = SyntaxKind.QuestionQuestionEqualsToken;
+                    position += 2;
+                }
                 else
                 {
                     kind = SyntaxKind.QuestionToken;

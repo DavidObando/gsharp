@@ -3766,9 +3766,20 @@ public class Parser
             sendBody);
     }
 
-    private ExpressionStatementSyntax ParseExpressionStatement()
+    private StatementSyntax ParseExpressionStatement()
     {
         var expression = ParseExpression();
+
+        if (Current.Kind == SyntaxKind.QuestionQuestionEqualsToken)
+        {
+            // ADR-0072 / issue #709: `target ??= value` is also valid as a
+            // simple statement inside for-headers and other simple-statement
+            // contexts.
+            var opToken = NextToken();
+            var rhs = ParseExpression();
+            return new NullCoalescingAssignmentStatementSyntax(syntaxTree, expression, opToken, rhs);
+        }
+
         return new ExpressionStatementSyntax(syntaxTree, expression);
     }
 
@@ -3781,6 +3792,16 @@ public class Parser
             var arrow = NextToken();
             var value = ParseExpression();
             return new ChannelSendStatementSyntax(syntaxTree, expression, arrow, value);
+        }
+
+        if (Current.Kind == SyntaxKind.QuestionQuestionEqualsToken)
+        {
+            // ADR-0072 / issue #709: `target ??= value`. The target must be a
+            // nullable lvalue. We don't desugar here — the binder validates
+            // assignability + nullability and emits a lowered if/assign form.
+            var opToken = NextToken();
+            var rhs = ParseExpression();
+            return new NullCoalescingAssignmentStatementSyntax(syntaxTree, expression, opToken, rhs);
         }
 
         return new ExpressionStatementSyntax(syntaxTree, expression);

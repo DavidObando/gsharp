@@ -2490,6 +2490,33 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0297", "The else block of 'guard let' must unconditionally exit the enclosing scope (return, throw, break, or continue).");
     }
 
+    /// <summary>
+    /// ADR-0072 / issue #709: GS0298 — the left-hand side of a
+    /// null-coalescing compound assignment <c>??=</c> must be of nullable
+    /// type. The operator only fills the slot when it currently reads as
+    /// nil, so a non-nullable target is necessarily a no-op (and almost
+    /// always a programmer error).
+    /// </summary>
+    /// <param name="location">The source location of the offending operator.</param>
+    /// <param name="actualType">The actual (non-nullable) left-hand-side type.</param>
+    public void ReportNullCoalescingAssignmentTargetNotNullable(TextLocation location, TypeSymbol actualType)
+    {
+        Report(location, "GS0298", $"The left-hand side of '??=' must be of nullable type, but its type is '{actualType}'. Either declare the target as '{actualType}?' or use a plain assignment.");
+    }
+
+    /// <summary>
+    /// ADR-0072 / issue #709: GS0299 — the left-hand side of a
+    /// null-coalescing compound assignment <c>??=</c> is not a supported
+    /// assignable form. Accepted shapes are a local or parameter, an
+    /// implicit field/property on <c>this</c>, a member field/property
+    /// access (<c>obj.member</c>), or an indexer access (<c>obj[i]</c>).
+    /// </summary>
+    /// <param name="location">The source location of the offending operator.</param>
+    public void ReportNullCoalescingAssignmentInvalidTarget(TextLocation location)
+    {
+        Report(location, "GS0299", "The left-hand side of '??=' must be assignable: a variable, parameter, field, property, or indexer.");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

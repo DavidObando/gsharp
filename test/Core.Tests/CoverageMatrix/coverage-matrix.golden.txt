@@ -146,6 +146,7 @@ NamedArgumentExpression
 NamedDeconstructionField
 NamedDeconstructionStatement
 NilKeyword
+NullCoalescingAssignmentStatement
 NumberToken
 ObjectCreationExpression
 OpenBraceToken
@@ -175,6 +176,7 @@ PropertyPatternField
 PublicKeyword
 QuestionColonToken
 QuestionDotToken
+QuestionQuestionEqualsToken
 QuestionToken
 RangeKeyword
 RefArgumentExpression

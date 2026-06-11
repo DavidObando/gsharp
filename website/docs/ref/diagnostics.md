@@ -451,3 +451,19 @@ Cause/fix examples:
 
 - **GS0296** — `let s = "hi"; if let v = s { ... }`. Fix: either use a plain `let v = s` (no narrowing) or pass a nullable value. The binding only makes sense when the RHS has type `T?`.
 - **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.
+
+## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
+
+ADR-0072 introduces the `??=` null-coalescing compound assignment statement. The diagnostics below cover the two shapes the binder rejects up front.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0298 | Error | The left-hand side of `??=` must be of nullable type. The operator only fills the slot when the current value reads as `nil`, so a non-nullable target is a no-op (and almost always a programmer error). |
+| GS0299 | Error | The left-hand side of `??=` must be assignable: a variable, parameter, field, property, or indexer. Method-call results, parenthesized expressions, and literals are not accepted. |
+
+Cause/fix examples:
+
+- **GS0298** — `var s = "hi"; s ??= "x"`. Fix: declare the variable as `string?` if you intend to default a possibly-missing value; otherwise use a plain `=`. The compiler will not silently insert a no-op on a non-nullable target.
+- **GS0299** — `compute() ??= "v"`. Fix: store the call result in a variable first and `??=` into the variable, or write the conditional store by hand. `??=` requires an lvalue.
+- A read-only lvalue (`let x string? = nil; x ??= "v"`) reports the existing **GS0127** for parity with the simple-assignment path.
+

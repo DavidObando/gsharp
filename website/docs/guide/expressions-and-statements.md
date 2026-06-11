@@ -40,12 +40,16 @@ Console.WriteLine("padded=[${label,5}]")
 
 ## Declarations, assignment, and deconstruction
 
-Use declaration statements for new bindings and assignment for existing variables. Multi-target assignment is implemented for identifier lists. Tuple and named deconstruction use `let` forms.
+Use declaration statements for new bindings and assignment for existing variables. Multi-target assignment is implemented for identifier lists. Tuple and named deconstruction use `let` forms. The null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a` currently reads as `nil` — the right-hand side is short-circuited otherwise (ADR-0072).
 
 ```gsharp
 let (x, y) = pair
 left, right = right, left
 count += 1
+
+var greeting string? = nil
+greeting ??= "hello"   // greeting is now "hello"
+greeting ??= "ignored" // no-op — RHS not evaluated
 ```
 
 ## If and switch
