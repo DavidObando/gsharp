@@ -71,7 +71,7 @@ test/                 # xUnit projects covering Core, Compiler, Interpreter, LSP
 Here's a few introductory samples of G#.
 
 A unit test:
-```gsharp
+```swift
 package GsharpLibrary.Tests
 
 import Xunit
@@ -97,7 +97,7 @@ type GreeterTests class {
 ```
 
 Scoped goroutines:
-```gsharp
+```swift
 package GSharp.Samples.GoScope
 
 import System
@@ -121,7 +121,7 @@ Console.WriteLine(a + b + c)
 ```
 
 Patterns:
-```gsharp
+```swift
 package GSharp.Samples.Patterns
 
 import System
@@ -143,7 +143,7 @@ Console.WriteLine("$numericLabel / $listLabel")
 ```
 
 Generic methods:
-```gsharp
+```swift
 package GSharp.Example.GenericMethods
 
 import System
