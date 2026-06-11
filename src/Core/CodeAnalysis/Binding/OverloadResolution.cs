@@ -1700,6 +1700,29 @@ internal static class OverloadResolution
         Type paramB,
         Type source)
     {
+        // Issue #377 sub-item 4: when one candidate offers a Tier-4
+        // interpolated-string→FormattableString/IFormattable conversion and
+        // the other offers a plain reference upcast to System.Object, prefer
+        // the formattable conversion. This matches C# §11.18.1's "more
+        // specific target" rule for interpolated-string arguments where
+        // string > FormattableString > IFormattable > object. Without this
+        // tiebreak the lower-ranked ImplicitConversionKind.Reference (3)
+        // would beat InterpolatedStringToFormattable (8) and silently route
+        // the interpolation through M(object).
+        if (ka == ImplicitConversionKind.InterpolatedStringToFormattable
+            && kb == ImplicitConversionKind.Reference
+            && IsSystemObject(paramB))
+        {
+            return -1;
+        }
+
+        if (kb == ImplicitConversionKind.InterpolatedStringToFormattable
+            && ka == ImplicitConversionKind.Reference
+            && IsSystemObject(paramA))
+        {
+            return 1;
+        }
+
         if (ka != kb)
         {
             return ((int)ka).CompareTo((int)kb);
@@ -1713,7 +1736,35 @@ internal static class OverloadResolution
             return CompareNumericTargets(paramA, paramB, source);
         }
 
+        // Issue #377 sub-item 4: FormattableString is more specific than
+        // IFormattable for an interpolated-string argument.
+        if (ka == ImplicitConversionKind.InterpolatedStringToFormattable)
+        {
+            var aIsFs = string.Equals(PeelByRef(paramA)?.FullName, "System.FormattableString", StringComparison.Ordinal);
+            var bIsFs = string.Equals(PeelByRef(paramB)?.FullName, "System.FormattableString", StringComparison.Ordinal);
+            if (aIsFs && !bIsFs)
+            {
+                return -1;
+            }
+
+            if (bIsFs && !aIsFs)
+            {
+                return 1;
+            }
+        }
+
         return 0;
+    }
+
+    private static bool IsSystemObject(Type type)
+    {
+        type = PeelByRef(type);
+        return type != null && string.Equals(type.FullName, "System.Object", StringComparison.Ordinal);
+    }
+
+    private static Type PeelByRef(Type type)
+    {
+        return type is { IsByRef: true } ? type.GetElementType() : type;
     }
 
     private static bool IsAtLeastAsSpecific(MethodBase a, MethodBase b)

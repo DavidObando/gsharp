@@ -660,7 +660,7 @@ internal sealed partial class ExpressionBinder
         // therefore consume an identity mapping.
         var ctorDownstreamMapping = ctorIsExpanded ? default : ctorMapping;
         var ctorRebound = RebindFormattableInterpolationArguments(ctorExpandedArgs, syntax.Arguments, ctorParameters, ctorDownstreamMapping);
-        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorDownstreamMapping);
+        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorDownstreamMapping, out var ctorHandlerPrelude, out _);
 
         // Issue #506 follow-up: fixed-arity CLR ctor overloads expecting an
         // `object` parameter from a value-type argument require a boxing
@@ -689,13 +689,14 @@ internal sealed partial class ExpressionBinder
             resultType = TypeSymbol.FromClrType(clrType);
         }
 
-        result = new BoundClrConstructorCallExpression(
+        BoundExpression ctorCall = new BoundClrConstructorCallExpression(
             syntax,
             clrType,
             bestCtor,
             ctorArgs,
             resultType,
             ctorRefKinds);
+        result = WrapWithHandlerPrelude(ctorCall, ctorHandlerPrelude, syntax);
         return true;
     }
 
@@ -924,7 +925,7 @@ internal sealed partial class ExpressionBinder
                     : arguments;
                 var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
                 var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticDownstreamMapping);
-                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping);
+                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping, out var staticHandlerPrelude, out _);
 
                 // Issue #506 follow-up: ensure value-type → object boxing fires
                 // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
@@ -933,7 +934,8 @@ internal sealed partial class ExpressionBinder
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
-                return new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
+                BoundExpression staticCall = new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, typeArgSymbols);
+                return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
 
             if (staticAmbiguous)
@@ -1171,13 +1173,14 @@ internal sealed partial class ExpressionBinder
                                 : arguments;
                             var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
                             var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
-                            var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping);
+                            var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
                             var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping);
                             var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping);
                             var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                             var instRefKinds = ComputeArgumentRefKinds(instParameters);
                             overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                            return ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
+                            BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, typeArgSymbols));
+                            return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
                         case OverloadResolution.ResolutionOutcome.Ambiguous:
                             Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
                             return new BoundErrorExpression(null);
@@ -1493,13 +1496,14 @@ internal sealed partial class ExpressionBinder
                     ? overloads.ExpandParamsArguments(arguments, inheritedParameters, ce, parameterMapping: inheritedMapping)
                     : arguments;
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
-                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping);
+                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping, out var inheritedHandlerPrelude, out var inheritedUpdatedReceiver);
                 var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping);
                 var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
-                result = new BoundImportedInstanceCallExpression(null, receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
+                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, typeArgSymbols);
+                result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case OverloadResolution.ResolutionOutcome.Ambiguous:
                 Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));

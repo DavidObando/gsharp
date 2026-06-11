@@ -130,6 +130,85 @@ public static class InterpolationHarness
 }
 
 /// <summary>
+/// Issue #377 sub-item 1 fixture: a method that accepts the handler by `ref`.
+/// Mirrors the BCL pattern used by APIs like
+/// <c>StringBuilder.Append(ref AppendInterpolatedStringHandler)</c> where the
+/// handler is a `ref struct` and must be passed by-ref.
+/// </summary>
+public static class ByRefHandlerHarness
+{
+    public static string AppendRef(string prefix, [InterpolatedStringHandlerArgument("prefix")] ref PrefixedInterpolatedStringHandler handler)
+        => handler.ToString();
+
+    public static string AppendIn(string prefix, [InterpolatedStringHandlerArgument("prefix")] in PrefixedInterpolatedStringHandler handler)
+        => handler.ToString();
+}
+
+/// <summary>
+/// Issue #377 sub-item 2 fixture: a counter exposed to handler-forwarded
+/// arguments so a hosting test can observe how many times the source
+/// expression was evaluated. C# §11.18.1 mandates exactly-once evaluation;
+/// G# pre-#377 re-evaluated forwarded args inside the handler constructor.
+/// </summary>
+public static class ForwardCounter
+{
+    public static int InvocationCount;
+
+    public static string IncrementAndReturn(string value)
+    {
+        System.Threading.Interlocked.Increment(ref InvocationCount);
+        return value;
+    }
+
+    public static void Reset() => InvocationCount = 0;
+}
+
+/// <summary>
+/// Issue #377 sub-item 4 fixture: two static overloads — one taking
+/// <see cref="object"/>, one taking <see cref="System.FormattableString"/>.
+/// Tests pass an interpolated string and verify the
+/// <c>FormattableString</c> overload wins (matching C# §11.18.1's "more
+/// specific target" rule).
+/// </summary>
+public static class FormattableOverloadHarness
+{
+    public static string LastChosen = string.Empty;
+
+    public static string ChooseObject(object value)
+    {
+        LastChosen = "object:" + (value?.ToString() ?? "<null>");
+        return LastChosen;
+    }
+
+    public static string ChooseObject(System.FormattableString value)
+    {
+        LastChosen = "formattable:" + value.Format;
+        return LastChosen;
+    }
+
+    public static void Reset() => LastChosen = string.Empty;
+}
+
+/// <summary>
+/// Issue #377 sub-item 5 fixture: a single overload taking
+/// <see cref="System.FormattableString"/>. Tests pass an interpolated string
+/// through a named argument (e.g. <c>M(f: $"…")</c>) and verify target
+/// typing flows through the named-argument reorder.
+/// </summary>
+public static class FormattableNamedArgHarness
+{
+    public static string LastFormat = string.Empty;
+
+    public static string AcceptNamed(System.FormattableString f)
+    {
+        LastFormat = f.Format;
+        return f.ToString();
+    }
+
+    public static void Reset() => LastFormat = string.Empty;
+}
+
+/// <summary>
 /// Issue #418 (P1-10) fixture: a handler whose <c>AppendFormatted</c> overloads
 /// are deliberately type-discriminated so the lowerer's overload resolution can
 /// be observed. Each overload tags its appended text so a test can assert which

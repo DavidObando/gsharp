@@ -295,7 +295,12 @@ public sealed class ImportedClassSymbol : Symbol
         var limit = Math.Min(count, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
         {
-            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax)
+            // Issue #377 sub-item 5: an interpolated string passed as a named
+            // argument (`M(arg: $"…")`) is wrapped by NamedArgumentExpressionSyntax.
+            // Unwrap before classifying so Tier-4 target typing flows through
+            // named arguments as well as positional ones.
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i]);
+            if (argSyntax is InterpolatedStringExpressionSyntax)
             {
                 flags ??= new bool[count];
                 flags[i] = true;

@@ -38,13 +38,17 @@ public sealed class InterpolatedStringHandlerInfo
         TypeSymbol handlerType,
         ConstructorInfo constructor,
         ImmutableArray<BoundExpression> forwardedArguments,
-        bool hasTrailingOutBool)
+        bool hasTrailingOutBool,
+        ImmutableArray<int> forwardedSourceIndices,
+        RefKind handlerRefKind)
     {
         HandlerClrType = handlerClrType;
         HandlerType = handlerType;
         Constructor = constructor;
         ForwardedArguments = forwardedArguments;
         HasTrailingOutBool = hasTrailingOutBool;
+        ForwardedSourceIndices = forwardedSourceIndices;
+        HandlerRefKind = handlerRefKind;
     }
 
     /// <summary>Gets the reflection type of the handler.</summary>
@@ -65,11 +69,30 @@ public sealed class InterpolatedStringHandlerInfo
     /// <summary>Gets a value indicating whether the constructor ends with an <c>out bool</c> short-circuit parameter.</summary>
     public bool HasTrailingOutBool { get; }
 
+    /// <summary>
+    /// Gets, for each entry in <see cref="ForwardedArguments"/>, the index of
+    /// the originating sibling parameter (<c>-1</c> denotes the instance
+    /// receiver). Issue #377 sub-item 2: used by the call binder to capture
+    /// each forwarded source into a single temp shared by the parent
+    /// argument slot and the handler constructor so the source expression
+    /// is evaluated exactly once.
+    /// </summary>
+    public ImmutableArray<int> ForwardedSourceIndices { get; }
+
+    /// <summary>
+    /// Gets the <see cref="RefKind"/> of the handler-typed parameter
+    /// (<see cref="RefKind.None"/>, <see cref="RefKind.Ref"/>,
+    /// <see cref="RefKind.In"/>, or <see cref="RefKind.Out"/>). Issue #377
+    /// sub-item 1: the lowerer uses this to feed the constructed handler
+    /// local by-ref/in/out to the consuming method.
+    /// </summary>
+    public RefKind HandlerRefKind { get; }
+
     /// <summary>Returns a copy of this info with rewritten forwarded arguments (used by tree rewriters).</summary>
     /// <param name="forwardedArguments">The replacement forwarded arguments.</param>
     /// <returns>The updated info.</returns>
     public InterpolatedStringHandlerInfo WithForwardedArguments(ImmutableArray<BoundExpression> forwardedArguments)
-        => new(HandlerClrType, HandlerType, Constructor, forwardedArguments, HasTrailingOutBool);
+        => new(HandlerClrType, HandlerType, Constructor, forwardedArguments, HasTrailingOutBool, ForwardedSourceIndices, HandlerRefKind);
 
     /// <summary>
     /// Determines whether <paramref name="type"/> is attributed
@@ -182,8 +205,17 @@ public sealed class InterpolatedStringHandlerInfo
     {
         failure = null;
 
+        // Issue #377 sub-item 1: a `[InterpolatedStringHandler]` parameter
+        // may be byref (typical for `ref struct` handlers such as
+        // DefaultInterpolatedStringHandler). Peel the byref before walking
+        // attributes / constructors, and capture the RefKind so the call
+        // emitter feeds the constructed handler local by-ref/in/out.
+        var paramType = parameter.ParameterType;
+        var peeled = paramType.IsByRef ? paramType.GetElementType() : (handlerClrType ?? paramType);
+
         var names = ReadForwardedNames(parameter);
         var forwarded = ImmutableArray.CreateBuilder<BoundExpression>(names.Length);
+        var sources = ImmutableArray.CreateBuilder<int>(names.Length);
         foreach (var name in names)
         {
             if (string.IsNullOrEmpty(name))
@@ -195,6 +227,7 @@ public sealed class InterpolatedStringHandlerInfo
                 }
 
                 forwarded.Add(receiver);
+                sources.Add(-1);
                 continue;
             }
 
@@ -206,22 +239,44 @@ public sealed class InterpolatedStringHandlerInfo
             }
 
             forwarded.Add(arguments[index]);
+            sources.Add(index);
         }
 
         var forwardedArgs = forwarded.ToImmutable();
-        var constructor = SelectConstructor(handlerClrType, forwardedArgs, out var hasOutBool);
+        var constructor = SelectConstructor(peeled, forwardedArgs, out var hasOutBool);
         if (constructor == null)
         {
-            failure = $"'{handlerClrType.Name}' has no interpolated-string-handler constructor matching the forwarded arguments";
+            failure = $"'{peeled.Name}' has no interpolated-string-handler constructor matching the forwarded arguments";
             return null;
         }
 
+        // Issue #377 sub-item 1: capture the parameter's RefKind so the call
+        // binder/lowerer can feed the constructed handler local by-ref.
+        var handlerRefKind = RefKind.None;
+        if (paramType.IsByRef)
+        {
+            if (parameter.IsOut)
+            {
+                handlerRefKind = RefKind.Out;
+            }
+            else if (parameter.IsIn)
+            {
+                handlerRefKind = RefKind.In;
+            }
+            else
+            {
+                handlerRefKind = RefKind.Ref;
+            }
+        }
+
         return new InterpolatedStringHandlerInfo(
-            handlerClrType,
-            TypeSymbol.FromClrType(handlerClrType),
+            peeled,
+            TypeSymbol.FromClrType(peeled),
             constructor,
             forwardedArgs,
-            hasOutBool);
+            hasOutBool,
+            sources.ToImmutable(),
+            handlerRefKind);
     }
 
     private static ConstructorInfo SelectConstructor(
