@@ -1068,8 +1068,15 @@ internal sealed class OverloadResolver
                 // ADR-0061: BoundConditionalAddressExpression is also a valid
                 // byref-producing argument (selects one of two addresses at
                 // runtime).
+                // Issue #377 sub-item 1: a BoundInterpolatedStringExpression
+                // whose Handler.HandlerRefKind matches the call's by-ref slot
+                // is lowered to a BoundBlockExpression whose trailing
+                // expression is a BoundAddressOfExpression of the constructed
+                // handler local — the address of that local is what the
+                // by-ref slot consumes.
                 if (arguments[i] is not BoundAddressOfExpression
-                    && arguments[i] is not BoundConditionalAddressExpression)
+                    && arguments[i] is not BoundConditionalAddressExpression
+                    && !IsByRefInterpolatedHandlerArgument(arguments[i], rk))
                 {
                     Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
                 }
@@ -1079,6 +1086,13 @@ internal sealed class OverloadResolver
         }
 
         return builder.ToImmutable();
+    }
+
+    private static bool IsByRefInterpolatedHandlerArgument(BoundExpression argument, RefKind expected)
+    {
+        return argument is BoundInterpolatedStringExpression interp
+            && interp.Handler != null
+            && interp.Handler.HandlerRefKind == expected;
     }
 
     public BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)

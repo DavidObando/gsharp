@@ -214,7 +214,12 @@ internal sealed partial class ExpressionBinder
         var limit = Math.Min(count, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
         {
-            if (argumentSyntax[i] is InterpolatedStringExpressionSyntax)
+            // Issue #377 sub-item 5: an interpolated string passed as a named
+            // argument (`M(arg: $"…")`) is wrapped by NamedArgumentExpressionSyntax.
+            // Unwrap before classifying so target typing to
+            // IFormattable/FormattableString flows through named arguments too.
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i]);
+            if (argSyntax is InterpolatedStringExpressionSyntax)
             {
                 flags ??= new bool[count];
                 flags[i] = true;
@@ -560,12 +565,41 @@ internal sealed partial class ExpressionBinder
         TextLocation location,
         ImmutableArray<int> parameterMapping = default)
     {
+        return ApplyInterpolatedStringHandlers(parameters, arguments, receiver, location, parameterMapping, out _, out _);
+    }
+
+    /// <summary>
+    /// Issue #377 sub-items 1 + 2: extended overload that, in addition to
+    /// rewriting handler-targeted interpolations, captures forwarded sibling
+    /// arguments and the receiver into local temps so they are evaluated
+    /// exactly once (matches C# §11.18.1). Returns the captured prelude
+    /// statements through <paramref name="preludeStatements"/> and the
+    /// (possibly substituted) receiver through <paramref name="updatedReceiver"/>.
+    /// Callers wrap the produced call expression in a
+    /// <see cref="BoundBlockExpression"/> when the prelude is non-empty.
+    /// </summary>
+    private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
+        System.Reflection.ParameterInfo[] parameters,
+        ImmutableArray<BoundExpression> arguments,
+        BoundExpression receiver,
+        TextLocation location,
+        ImmutableArray<int> parameterMapping,
+        out ImmutableArray<BoundStatement> preludeStatements,
+        out BoundExpression updatedReceiver)
+    {
+        preludeStatements = ImmutableArray<BoundStatement>.Empty;
+        updatedReceiver = receiver;
+
         if (parameters == null || arguments.IsDefaultOrEmpty)
         {
             return arguments;
         }
 
-        ImmutableArray<BoundExpression>.Builder builder = null;
+        ImmutableArray<BoundExpression>.Builder argBuilder = null;
+
+        // Pass 1: build the handler info for each interpolated-string
+        // argument that targets a [InterpolatedStringHandler] parameter.
+        var handlerSlots = new System.Collections.Generic.List<(int ArgIndex, BoundInterpolatedStringExpression Interp, InterpolatedStringHandlerInfo Handler)>();
         for (var i = 0; i < arguments.Length; i++)
         {
             if (arguments[i] is not BoundInterpolatedStringExpression interp || interp.Handler != null)
@@ -581,17 +615,19 @@ internal sealed partial class ExpressionBinder
 
             var parameterType = parameters[paramIndex].ParameterType;
 
-            // V1 supports by-value handler parameters only; a by-ref handler
-            // parameter (e.g. StringBuilder.Append(ref AppendInterpolatedStringHandler))
-            // would require passing the handler local by address, which the call
-            // sites here do not arrange.
-            if (parameterType.IsByRef || !InterpolatedStringHandlerInfo.IsHandlerType(parameterType))
+            // Issue #377 sub-item 1: accept a by-ref handler-typed parameter
+            // (e.g. `ref DefaultInterpolatedStringHandler`). Peel before
+            // testing the attribute and let InterpolatedStringHandlerInfo
+            // remember the RefKind so the lowerer can feed the constructed
+            // handler local by-ref/in/out.
+            var peeled = parameterType.IsByRef ? parameterType.GetElementType() : parameterType;
+            if (!InterpolatedStringHandlerInfo.IsHandlerType(peeled))
             {
                 continue;
             }
 
             var handler = InterpolatedStringHandlerInfo.TryCreate(
-                parameterType,
+                peeled,
                 parameters[paramIndex],
                 parameters,
                 arguments,
@@ -603,11 +639,143 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            builder ??= arguments.ToBuilder();
-            builder[i] = interp.Update(interp.Parts, handler);
+            handlerSlots.Add((i, interp, handler));
         }
 
-        return builder?.ToImmutable() ?? arguments;
+        if (handlerSlots.Count == 0)
+        {
+            return arguments;
+        }
+
+        // Pass 2 (issue #377 sub-item 2): capture each forwarded source into
+        // a shared local so the parent argument slot AND the handler
+        // constructor reuse the same value. Side-effect-free expressions
+        // (literals, locals, parameters) are not captured.
+        argBuilder = arguments.ToBuilder();
+        var preludeBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
+        var capturedReceiver = receiver;
+        var receiverCaptured = false;
+
+        // sourceIndex -> captured BoundVariableExpression. -1 represents the receiver.
+        var captures = new System.Collections.Generic.Dictionary<int, BoundExpression>();
+
+        foreach (var (_, _, handler) in handlerSlots)
+        {
+            for (var k = 0; k < handler.ForwardedSourceIndices.Length; k++)
+            {
+                var srcIndex = handler.ForwardedSourceIndices[k];
+                if (srcIndex < 0)
+                {
+                    if (receiverCaptured)
+                    {
+                        continue;
+                    }
+
+                    if (receiver == null || IsSideEffectFreeForHandlerCapture(receiver))
+                    {
+                        receiverCaptured = true;
+                        continue;
+                    }
+
+                    var (recvLocal, recvDecl) = CreateHandlerForwardCapture(receiver, "$handlerRecv", location);
+                    preludeBuilder.Add(recvDecl);
+                    capturedReceiver = recvLocal;
+                    captures[-1] = recvLocal;
+                    receiverCaptured = true;
+                }
+                else
+                {
+                    if (captures.ContainsKey(srcIndex))
+                    {
+                        continue;
+                    }
+
+                    var srcArg = argBuilder[srcIndex];
+                    if (IsSideEffectFreeForHandlerCapture(srcArg))
+                    {
+                        continue;
+                    }
+
+                    var (local, decl) = CreateHandlerForwardCapture(srcArg, "$handlerArg" + srcIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), location);
+                    preludeBuilder.Add(decl);
+                    argBuilder[srcIndex] = local;
+                    captures[srcIndex] = local;
+                }
+            }
+        }
+
+        // Pass 3: rewrite each handler's forwarded args + parent arg slot
+        // using either the captured locals (if any) or the originals.
+        foreach (var slot in handlerSlots)
+        {
+            var (argIndex, interp, handler) = slot;
+            var rewritten = ImmutableArray.CreateBuilder<BoundExpression>(handler.ForwardedArguments.Length);
+            for (var k = 0; k < handler.ForwardedArguments.Length; k++)
+            {
+                var srcIndex = handler.ForwardedSourceIndices[k];
+                if (captures.TryGetValue(srcIndex, out var captured))
+                {
+                    rewritten.Add(captured);
+                }
+                else
+                {
+                    rewritten.Add(handler.ForwardedArguments[k]);
+                }
+            }
+
+            var newHandler = handler.WithForwardedArguments(rewritten.ToImmutable());
+            argBuilder[argIndex] = interp.Update(interp.Parts, newHandler);
+        }
+
+        updatedReceiver = capturedReceiver;
+        preludeStatements = preludeBuilder.ToImmutable();
+        return argBuilder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #377 sub-item 2: returns true for argument expressions that are
+    /// safe to evaluate more than once (no observable side effect, no temp
+    /// needed).
+    /// </summary>
+    private static bool IsSideEffectFreeForHandlerCapture(BoundExpression expression)
+    {
+        return expression switch
+        {
+            BoundLiteralExpression => true,
+            BoundVariableExpression => true,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// Issue #377 sub-item 2: creates a synthetic readonly local that
+    /// captures <paramref name="value"/> and returns a load of that local.
+    /// </summary>
+    private (BoundExpression Load, BoundStatement Declaration) CreateHandlerForwardCapture(BoundExpression value, string namePrefix, TextLocation location)
+    {
+        var counter = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var name = namePrefix + "_" + counter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var local = new LocalVariableSymbol(name, isReadOnly: true, value.Type);
+        scope.TryDeclareVariable(local);
+        var decl = new BoundVariableDeclaration(value.Syntax, local, value);
+        var load = new BoundVariableExpression(value.Syntax, local);
+        return (load, decl);
+    }
+
+    /// <summary>
+    /// Issue #377 sub-item 2: wraps a call expression with a
+    /// <see cref="BoundBlockExpression"/> that evaluates the prelude
+    /// statements (forwarded-arg temp captures) before the call. Returns
+    /// <paramref name="call"/> unchanged when the prelude is empty.
+    /// </summary>
+    private static BoundExpression WrapWithHandlerPrelude(BoundExpression call, ImmutableArray<BoundStatement> prelude, SyntaxNode syntax)
+    {
+        if (prelude.IsDefaultOrEmpty)
+        {
+            return call;
+        }
+
+        return new BoundBlockExpression(syntax, prelude, call);
     }
 
     internal BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)

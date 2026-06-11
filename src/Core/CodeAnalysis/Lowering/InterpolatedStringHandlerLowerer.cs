@@ -433,7 +433,20 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
         }
 
         var resultValue = new BoundVariableExpression(null, handlerLocal);
-        return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), resultValue);
+
+        // Issue #377 sub-item 1: a byref handler-typed parameter consumes
+        // the address of the constructed handler local. Wrap the trailing
+        // value with an address-of so EmitBlockExpression emits `ldloca` for
+        // the by-ref / in / out slot. (The emitter falls back to the block
+        // expression itself for byref slots and re-emits its trailing
+        // expression directly.)
+        BoundExpression trailing = resultValue;
+        if (info.HandlerRefKind != RefKind.None)
+        {
+            trailing = new BoundAddressOfExpression(node.Syntax, resultValue);
+        }
+
+        return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), trailing);
     }
 
     /// <summary>
