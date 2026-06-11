@@ -703,7 +703,16 @@ internal sealed partial class MethodBodyEmitter
                 var getter = property.GetGetMethod(nonPublic: false)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
-                var getterRef = this.outer.GetMethodReference(getter);
+                // Issue #671: when the receiver is a symbolic constructed
+                // generic (e.g. List[MyGs] with a user-defined type arg),
+                // route the getter through the receiver-aware overload so
+                // the MemberRef parent is the constructed type with the
+                // real user-type tokens instead of the type-erased
+                // List<object>. Static getters and CLR receivers fall back
+                // to the plain MemberRef path inside the overload.
+                var getterRef = isStatic
+                    ? (EntityHandle)this.outer.GetMethodReference(getter)
+                    : this.outer.GetMethodEntityHandle(getter, access.Receiver.Type);
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                 this.il.Token(getterRef);
                 this.EmitErasedObjectReturnWidening(
@@ -755,7 +764,12 @@ internal sealed partial class MethodBodyEmitter
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public setter.");
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-                this.il.Token(this.outer.GetMethodReference(setter));
+                // Issue #671: route through the receiver-aware overload so the
+                // setter MemberRef parent is the constructed symbolic type when
+                // applicable. Falls back to the plain MemberRef path otherwise.
+                this.il.Token(isStatic
+                    ? (EntityHandle)this.outer.GetMethodReference(setter)
+                    : this.outer.GetMethodEntityHandle(setter, assn.Receiver.Type));
                 break;
             case FieldInfo field:
                 this.il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
@@ -836,7 +850,10 @@ internal sealed partial class MethodBodyEmitter
                 $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
         var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Target.Type);
         this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getter));
+        // Issue #671: route through the receiver-aware overload so the indexer
+        // getter MemberRef parent is the constructed symbolic type when the
+        // target is a generic with G# user-defined type arguments.
+        this.il.Token(this.outer.GetMethodEntityHandle(getter, idx.Target.Type));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(getter.ReturnType), idx.Type);
     }
 
@@ -866,7 +883,8 @@ internal sealed partial class MethodBodyEmitter
             }
 
             this.il.OpCode(ILOpCode.Call);
-            this.il.Token(this.outer.GetMethodReference(refGetter));
+            // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
+            this.il.Token(this.outer.GetMethodEntityHandle(refGetter, receiver.Type));
             this.EmitExpression(ixa.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(tmp);
@@ -900,7 +918,8 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(slot);
         this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(setter));
+        // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
+        this.il.Token(this.outer.GetMethodEntityHandle(setter, targetType));
         this.il.LoadLocal(slot);
     }
 

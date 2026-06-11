@@ -345,6 +345,8 @@ internal sealed partial class ExpressionBinder
         var name = syntax.Identifier.Text;
 
         System.Type clrType = null;
+        System.Type openGenericDefinition = null;
+        ImmutableArray<TypeSymbol> symbolicTypeArgs = default;
         if (syntax.TypeArgumentList != null)
         {
             // `List[int]()`, `Dictionary[string, int]()`, etc. Resolve the open
@@ -355,20 +357,9 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            var clrArgs = new System.Type[syntax.TypeArgumentList.Arguments.Count];
-            for (var i = 0; i < syntax.TypeArgumentList.Arguments.Count; i++)
+            if (!TryResolveClrConstructionTypeArgs(syntax.TypeArgumentList, out var clrArgs, out symbolicTypeArgs, out var hasSymbolicArg))
             {
-                var ta = bindTypeClause(syntax.TypeArgumentList.Arguments[i]);
-                if (ta?.ClrType == null)
-                {
-                    return false;
-                }
-
-                // Project host CLR type arguments onto the resolver's reference
-                // set so they share openType's load context (its
-                // MetadataLoadContext when references are supplied via /r:),
-                // which MakeGenericType requires.
-                clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+                return false;
             }
 
             try
@@ -378,6 +369,21 @@ internal sealed partial class ExpressionBinder
             catch (System.ArgumentException)
             {
                 return false;
+            }
+
+            // Issue #671: when one or more type arguments is a G# user-defined
+            // type (its ClrType is null because the TypeDef is only produced
+            // during emit), the closed CLR shape was type-erased to
+            // `Open<object,...>`. Keep the openGenericDefinition + the real
+            // symbolic args so the emitter can later re-emit the parent
+            // TypeSpec using the user-defined TypeDef tokens.
+            if (!hasSymbolicArg)
+            {
+                symbolicTypeArgs = default;
+            }
+            else
+            {
+                openGenericDefinition = openType;
             }
         }
         else
@@ -396,7 +402,88 @@ internal sealed partial class ExpressionBinder
             clrType = importedClass.ClassType;
         }
 
-        return TryBindClrConstructorFromType(clrType, syntax, out result);
+        return TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs);
+    }
+
+    /// <summary>
+    /// Issue #671: resolves the type arguments on a CLR generic construction
+    /// call (<c>List[MyGs]()</c>, <c>Dictionary[string, MyGs]()</c>) into
+    /// MakeGenericType-ready CLR types alongside their original symbolic
+    /// TypeSymbol forms. A G# user-defined type argument has no
+    /// reference-context CLR type (its TypeDef is produced at emit), so it is
+    /// closed with a <see cref="object"/> placeholder; the symbolic argument
+    /// is preserved so the emitter can re-emit it as its own TypeDef token in
+    /// the parent TypeSpec of the resulting MemberRef. Mirrors the
+    /// construction-side handling in <see cref="Binder.ConstructIfGeneric"/>
+    /// and the generic-method side in
+    /// <see cref="TryResolveExplicitMethodTypeArgs"/>.
+    /// </summary>
+    /// <param name="typeArgumentList">The call's <c>[T1, T2]</c> list.</param>
+    /// <param name="clrArgs">On success, the resolved (mapped) CLR type arguments ready for MakeGenericType.</param>
+    /// <param name="symbolicArgs">On success, the symbolic type arguments in source order.</param>
+    /// <param name="hasSymbolicArg">On success, whether any argument is a G# user-defined type or in-scope type parameter.</param>
+    /// <returns>Whether all type arguments resolved.</returns>
+    private bool TryResolveClrConstructionTypeArgs(
+        TypeArgumentListSyntax typeArgumentList,
+        out System.Type[] clrArgs,
+        out ImmutableArray<TypeSymbol> symbolicArgs,
+        out bool hasSymbolicArg)
+    {
+        clrArgs = new System.Type[typeArgumentList.Arguments.Count];
+        var symbolic = ImmutableArray.CreateBuilder<TypeSymbol>(typeArgumentList.Arguments.Count);
+        hasSymbolicArg = false;
+        for (var i = 0; i < typeArgumentList.Arguments.Count; i++)
+        {
+            var ta = bindTypeClause(typeArgumentList.Arguments[i]);
+            if (ta == null)
+            {
+                symbolicArgs = default;
+                return false;
+            }
+
+            symbolic.Add(ta);
+
+            if (ta.ClrType == null)
+            {
+                // Issue #313: in-scope type parameter, or issue #671: G#
+                // user-defined type whose ClrType is null at bind time.
+                // Both project onto System.Object under the type-erased
+                // model; the real symbolic argument is preserved separately.
+                hasSymbolicArg = true;
+                clrArgs[i] = scope.References.GetCoreType("System.Object");
+                continue;
+            }
+
+            // Issue #671: a nested constructed generic that itself carries
+            // symbolic user-defined arguments (e.g. `List[MyGs]` used as an
+            // argument to `List[...]`) has a (type-erased) ClrType, but the
+            // outer construction must still preserve the symbolic shape so
+            // the emitter can recover the user-defined TypeDef tokens at the
+            // inner position. Flag the outer as symbolic so the symbolic args
+            // are retained, but keep the placeholder CLR type for
+            // MakeGenericType (the closed CLR shape erases to
+            // `Open<...,object,...>` at the outer level, and the emitter
+            // descends through the symbolic args to encode the real shape).
+            if (ta is ImportedTypeSymbol nested
+                && nested.OpenDefinition != null
+                && !nested.TypeArguments.IsDefaultOrEmpty
+                && nested.TypeArguments.Any(static a => a.ClrType == null
+                    || (a is ImportedTypeSymbol n && n.OpenDefinition != null && !n.TypeArguments.IsDefaultOrEmpty)))
+            {
+                hasSymbolicArg = true;
+            }
+
+            // Project host CLR type arguments onto the resolver's reference
+            // set so they share openType's load context (its
+            // MetadataLoadContext when references are supplied via /r:),
+            // which MakeGenericType requires.
+            // Issue #530: use ResolveClrTypeForGenericArg so that `int32?`
+            // resolves to `Nullable<int>` (not bare `int`).
+            clrArgs[i] = resolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+        }
+
+        symbolicArgs = symbolic.MoveToImmutable();
+        return true;
     }
 
     /// <summary>
@@ -410,8 +497,27 @@ internal sealed partial class ExpressionBinder
     /// <param name="clrType">The closed CLR type to construct.</param>
     /// <param name="syntax">The call syntax carrying the arguments and location.</param>
     /// <param name="result">The bound constructor call on success.</param>
+    /// <param name="openGenericDefinition">
+    /// Issue #671: when <paramref name="clrType"/> was closed with a
+    /// <see cref="object"/> placeholder for one or more G# user-defined type
+    /// arguments, the open generic definition (e.g. <c>List&lt;&gt;</c>) used to
+    /// build the closed shape. Combined with <paramref name="symbolicTypeArgs"/>
+    /// it lets the emitter re-emit the parent TypeSpec using the user-defined
+    /// TypeDef tokens. <see langword="null"/> when no symbolic substitution is
+    /// in effect.
+    /// </param>
+    /// <param name="symbolicTypeArgs">
+    /// Issue #671: the original symbolic type arguments in source order, used
+    /// alongside <paramref name="openGenericDefinition"/>. Default when no
+    /// symbolic substitution is in effect.
+    /// </param>
     /// <returns>Whether a constructor was resolved and bound.</returns>
-    private bool TryBindClrConstructorFromType(System.Type clrType, CallExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindClrConstructorFromType(
+        System.Type clrType,
+        CallExpressionSyntax syntax,
+        out BoundExpression result,
+        System.Type openGenericDefinition = null,
+        ImmutableArray<TypeSymbol> symbolicTypeArgs = default)
     {
         result = null;
 
@@ -567,12 +673,28 @@ internal sealed partial class ExpressionBinder
             overloads.ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location);
         }
 
+        // Issue #671: when the closed CLR shape was type-erased to fit a G#
+        // user-defined type argument, surface the result type as a constructed
+        // ImportedTypeSymbol carrying the real symbolic arguments. The emitter
+        // uses this to re-emit the parent TypeSpec of the ctor MemberRef with
+        // the user-defined TypeDef tokens (so the NEWOBJ targets, e.g.,
+        // `List<MyGs>` rather than the erased `List<object>`).
+        TypeSymbol resultType;
+        if (openGenericDefinition != null && !symbolicTypeArgs.IsDefaultOrEmpty)
+        {
+            resultType = ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs);
+        }
+        else
+        {
+            resultType = TypeSymbol.FromClrType(clrType);
+        }
+
         result = new BoundClrConstructorCallExpression(
             syntax,
             clrType,
             bestCtor,
             ctorArgs,
-            TypeSymbol.FromClrType(clrType),
+            resultType,
             ctorRefKinds);
         return true;
     }

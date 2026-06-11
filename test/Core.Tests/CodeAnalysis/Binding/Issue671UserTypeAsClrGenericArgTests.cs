@@ -366,4 +366,186 @@ public class Issue671UserTypeAsClrGenericArgTests
 
         Assert.Empty(BindWithReferences(source));
     }
+
+    // ─── Construction-call position (issue #671 reopen) ──────────────────
+    //
+    // The original fix made user types legal in *type-clause* position. The
+    // call-site path `Type[args](...)` was a separate code path that still
+    // rejected the same shape; these tests guard that the construction call
+    // also binds and preserves the symbolic type arguments end-to-end.
+
+    [Fact]
+    public void Construct_ListOfUserClass_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let xs = List[MyType]()
+                xs.Add(MyType())
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_ListOfUserInterface_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type IMyType interface {
+                func GetName() string
+            }
+
+            func main() {
+                let xs = List[IMyType]()
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_ListOfUserEnum_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type Color enum {
+                Red, Green, Blue
+            }
+
+            func main() {
+                let xs = List[Color]()
+                xs.Add(Color.Red)
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_QualifiedListOfUserClass_Binds()
+    {
+        var source = """
+            package App
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let xs = System.Collections.Generic.List[MyType]()
+                xs.Add(MyType())
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_NestedListOfListOfUserClass_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let outer = List[List[MyType]]()
+                let inner = List[MyType]()
+                outer.Add(inner)
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_KeyValuePairWithUserClass_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let kvp = KeyValuePair[string, MyType]("k", MyType())
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void Construct_ListOfClrType_StillBinds_Regression()
+    {
+        // Pure-CLR regression: a non-user type argument must still bind cleanly.
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            func main() {
+                let xs = List[int32]()
+                xs.Add(1)
+                let ys = List[string]()
+                ys.Add("a")
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void MLC_Construct_ListOfUserClass_Binds()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let xs = List[MyType]()
+                xs.Add(MyType())
+            }
+            """;
+
+        Assert.Empty(BindWithReferences(source));
+    }
+
+    [Fact]
+    public void MLC_Construct_QualifiedListOfUserClass_Binds()
+    {
+        var source = """
+            package App
+
+            type MyType class {
+                Name string = ""
+            }
+
+            func main() {
+                let xs = System.Collections.Generic.List[MyType]()
+            }
+            """;
+
+        Assert.Empty(BindWithReferences(source));
+    }
 }
