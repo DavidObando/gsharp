@@ -47,9 +47,9 @@ func Add(a int32, b int32) int32 {
 /// Represents a 2D point.
 type Point data struct {
     /// The X coordinate.
-    X float64
+    var X float64
     /// The Y coordinate.
-    Y float64
+    var Y float64
 }
 ";
         var xml = EmitDocXml(source, "Shapes");

@@ -74,7 +74,7 @@ public class CompletionHandlerTests
     [Fact]
     public void ComputeCompletions_IncludesStructTypes()
     {
-        const string source = "type Point struct {\nX int32\nY int32\n}\n";
+        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var items = CompletionComputer.ComputeCompletions(content, new GSharp.LanguageServer.Protocol.Position(0, 0));
@@ -114,7 +114,7 @@ public class CompletionHandlerTests
     [Fact]
     public void ComputeCompletions_AfterDotOnStructValue_OffersInstanceFields()
     {
-        const string source = "type Point struct {\nX int32\nY int32\n}\nfunc use(p Point) {\np.\n}\n";
+        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\nfunc use(p Point) {\np.\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var items = CompletionComputer.ComputeCompletions(content, After(source, "p."));
@@ -190,7 +190,7 @@ public class CompletionHandlerTests
     [Fact]
     public void ComputeCompletions_AfterChainedMemberAccess_OffersMembers()
     {
-        const string source = "type Point struct {\nX int32\nY int32\n}\nfunc use(p Point) {\np.X.\n}\n";
+        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\nfunc use(p Point) {\np.X.\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var items = CompletionComputer.ComputeCompletions(content, After(source, "p.X."));

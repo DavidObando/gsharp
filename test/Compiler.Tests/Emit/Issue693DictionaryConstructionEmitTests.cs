@@ -70,7 +70,7 @@ public class Issue693DictionaryConstructionEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let d = Dictionary[string, MyGs]()
@@ -95,11 +95,11 @@ public class Issue693DictionaryConstructionEmitTests
             import System.Collections.Generic
 
             type K class {
-                N int32 = 0
+                var N int32 = 0
             }
 
             type V class {
-                N int32 = 0
+                var N int32 = 0
             }
 
             let d = Dictionary[K, V]()
@@ -124,11 +124,11 @@ public class Issue693DictionaryConstructionEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             type Holder class {
-                Map Dictionary[string, MyGs] = Dictionary[string, MyGs]()
+                var Map Dictionary[string, MyGs] = Dictionary[string, MyGs]()
             }
 
             let h = Holder()
@@ -314,7 +314,7 @@ public class Issue693DictionaryConstructionEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let kvp = KeyValuePair[string, MyGs]("k", MyGs())

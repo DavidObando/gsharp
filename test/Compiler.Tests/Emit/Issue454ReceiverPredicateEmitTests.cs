@@ -48,7 +48,7 @@ public class Issue454ReceiverPredicateEmitTests
             import System.Text
 
             type Box struct {
-                sb StringBuilder
+                var sb StringBuilder
             }
 
             let b = Box{sb: StringBuilder("hello")}
@@ -151,8 +151,8 @@ public class Issue454ReceiverPredicateEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop Sum int32 {
                     get { return this.X + this.Y }
                 }

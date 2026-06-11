@@ -8,7 +8,7 @@ package GSharp.Refactoring.ClosureCaptureRefTypeField
 import System
 
 type Holder class {
-    Value int32
+    var Value int32
     init() {}
 }
 

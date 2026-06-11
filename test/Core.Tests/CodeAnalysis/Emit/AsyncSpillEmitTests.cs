@@ -256,7 +256,7 @@ import System
 import System.Threading.Tasks
 
 type Box struct {
-    Value int32
+    var Value int32
 }
 
 async func compute() int32 { return await Task.FromResult(99) }

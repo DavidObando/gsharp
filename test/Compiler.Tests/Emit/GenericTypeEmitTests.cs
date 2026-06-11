@@ -30,7 +30,7 @@ public class GenericTypeEmitTests
             import System
 
             type Box[T any] data struct {
-                Value T
+                var Value T
             }
 
             let b = Box[int32]{Value: 42}
@@ -49,7 +49,7 @@ public class GenericTypeEmitTests
             import System
 
             type Box[T any] data struct {
-                Value T
+                var Value T
             }
 
             let b = Box[string]{Value: "hi"}
@@ -104,8 +104,8 @@ public class GenericTypeEmitTests
             import System
 
             type Pair[A any, B any] data struct {
-                First A
-                Second B
+                var First A
+                var Second B
             }
 
             let p = Pair[int32, string]{First: 3, Second: "x"}
@@ -127,7 +127,7 @@ public class GenericTypeEmitTests
             import System
 
             type Box[T any] data struct {
-                Value T
+                var Value T
             }
 
             let b = Box[int32]{Value: 20}

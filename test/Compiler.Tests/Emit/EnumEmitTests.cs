@@ -167,16 +167,16 @@ public class EnumEmitTests
             import System
 
             type S1 data struct {
-                A int32
-                B int32
+                var A int32
+                var B int32
             }
             type S2 data struct {
-                X int32
-                Y int32
-                Z int32
+                var X int32
+                var Y int32
+                var Z int32
             }
             type S3 data struct {
-                N int32
+                var N int32
             }
 
             type Color enum { Red, Green, Blue }

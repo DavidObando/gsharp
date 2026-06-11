@@ -465,7 +465,7 @@ internal sealed class DeclarationBinder
             }
 
             var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
-            var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline);
+            var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline || fieldSyntax.IsReadOnly);
             Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
 
             // Issue #186 / ADR-0047 §3: bind any `@Foo` annotations attached
@@ -1330,7 +1330,7 @@ internal sealed class DeclarationBinder
                 }
 
                 var fieldAccessibility = resolveAccessibility(fieldSyntax.AccessibilityModifier);
-                var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: false, isStatic: true);
+                var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true);
 
                 if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
                 {

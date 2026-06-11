@@ -9,8 +9,8 @@ package GSharp.Example.Class
 import System
 
 type Point class {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 var p = Point{X: 3, Y: 4}
@@ -61,7 +61,7 @@ Console.WriteLine(pt.Sum())
 // primary ctors to base ctors; the sample uses composite literals to
 // initialize inherited fields directly.
 type Animal open class {
-    Kind string
+    var Kind string
     open func Speak() string {
         return "..."
     }

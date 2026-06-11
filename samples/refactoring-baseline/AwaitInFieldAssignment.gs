@@ -8,7 +8,7 @@ import System
 import System.Threading.Tasks
 
 type Holder class {
-    Value int32
+    var Value int32
 }
 
 async func one() int32 {

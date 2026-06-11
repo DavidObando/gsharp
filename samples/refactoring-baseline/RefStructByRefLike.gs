@@ -7,7 +7,7 @@ package GSharp.Refactoring.RefStructByRefLike
 import System
 
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 
 func bump(a Acc, n int32) Acc {

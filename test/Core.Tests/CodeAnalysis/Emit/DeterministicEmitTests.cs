@@ -50,7 +50,7 @@ type Color enum {
 }
 
 type Counter data struct {
-    N int32
+    var N int32
 }
 
 func add(a int32, b int32) int32 {

@@ -26,7 +26,7 @@ public class Issue656InitAsPrimaryCtorBinderTests
     {
         var source = @"
 type Counter class {
-    Value int32
+    var Value int32
     init() {
         Value = 0
     }
@@ -48,7 +48,7 @@ var c = Counter()
         // `func init()` should be treated identically to bare `init()`
         var source = @"
 type Counter class {
-    Value int32
+    var Value int32
     func init() {
         Value = 0
     }
@@ -69,7 +69,7 @@ var c = Counter()
     {
         var source = @"
 type Greeting class {
-    Message string
+    var Message string
     func init(name string) {
         Message = name
     }
@@ -91,9 +91,9 @@ var g = Greeting(""hi"")
     {
         var source = @"
 type Color class {
-    R int32
-    G int32
-    B int32
+    var R int32
+    var G int32
+    var B int32
     init(r int32, g int32, b int32) {
         R = r
         G = g
@@ -123,8 +123,8 @@ var c = Color(1, 2, 3)
     {
         var source = @"
 type Config class {
-    Name string = ""default""
-    Count int32
+    var Name string = ""default""
+    var Count int32
     func init() {
         Count = 7
     }
@@ -147,7 +147,7 @@ var cfg = Config()
         // distinct signatures coexist; both are designated initializers.
         var source = @"
 type Dual class(Name string) {
-    Age int32
+    var Age int32
     func init(age int32) {
         Age = age
     }
@@ -170,7 +170,7 @@ var d = Dual(""x"")
     {
         var source = @"
 type Plain class {
-    Value int32
+    var Value int32
 }
 
 var p = Plain()

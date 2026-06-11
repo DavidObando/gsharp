@@ -36,7 +36,7 @@ public class SharedBlockTests
         var source = @"
 type Counter class {
     shared {
-        count int32
+        var count int32
     }
 }
 ";
@@ -50,7 +50,7 @@ type Counter class {
         var source = @"
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 ";
@@ -80,10 +80,10 @@ type Factory struct {
         var source = @"
 type Counter struct {
     shared {
-        x int32
+        var x int32
     }
     shared {
-        y int32
+        var y int32
     }
 }
 ";
@@ -102,7 +102,7 @@ type Counter struct {
         var source = @"
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 
@@ -136,7 +136,7 @@ var x = Factory.create()
         var source = @"
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 
@@ -156,7 +156,7 @@ Counter.count = 5
         var source = @"
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 
@@ -193,7 +193,7 @@ var result = Factory.create()
         var source = @"
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 
@@ -218,7 +218,7 @@ import System
 
 type Counter struct {
     shared {
-        count int32
+        var count int32
     }
 }
 
@@ -259,7 +259,7 @@ Console.WriteLine(Factory.create())
         var source = @"
 type Counter struct {
     shared {
-        count int32 = 42
+        var count int32 = 42
     }
 }
 ";
@@ -275,7 +275,7 @@ import System
 
 type Counter struct {
     shared {
-        count int32 = 42
+        var count int32 = 42
     }
 }
 
@@ -293,9 +293,9 @@ import System
 
 type Config struct {
     shared {
-        x int32 = 10
-        y int32 = 20
-        name string = ""hello""
+        var x int32 = 10
+        var y int32 = 20
+        var name string = ""hello""
     }
 }
 
@@ -318,8 +318,8 @@ import System
 
 type Counter struct {
     shared {
-        count int32 = 0
-        active int32 = 5
+        var count int32 = 0
+        var active int32 = 5
     }
 }
 
@@ -339,7 +339,7 @@ import System
 
 type Service class {
     shared {
-        instanceCount int32 = 100
+        var instanceCount int32 = 100
     }
 }
 
@@ -417,7 +417,7 @@ Console.WriteLine(Service.instanceCount)
         var source = @"
 type Foo class {
     shared {
-        x int32
+        var x int32
         func bar() int32 {
             return x
         }
@@ -438,7 +438,7 @@ var result = Foo.bar()
         var source = @"
 type Foo class {
     shared {
-        x int32
+        var x int32
         func setX(val int32) {
             x = val
         }
@@ -459,7 +459,7 @@ var result = Foo.x
         var source = @"
 type Counter class {
     shared {
-        count int32
+        var count int32
         func increment() int32 {
             count = count + 1
             return count
@@ -481,7 +481,7 @@ var result = Counter.increment()
         var source = @"
 type Holder class {
     shared {
-        name string
+        var name string
         func getLen() int32 {
             return len(name)
         }
@@ -502,7 +502,7 @@ var result = Holder.getLen()
         var source = @"
 type Foo class {
     shared {
-        x int32
+        var x int32
         func bar(x int32) int32 {
             return x
         }
@@ -545,7 +545,7 @@ var result = Config.name
         var source = @"
 type Counter class {
     shared {
-        count int32
+        var count int32
         prop doubled int32 {
             get { return count * 2 }
         }
@@ -566,7 +566,7 @@ var result = Counter.doubled
         var source = @"
 type Config class {
     shared {
-        _value int32
+        var _value int32
         prop value int32 {
             get { return _value }
             set(v) { _value = v }
@@ -609,7 +609,7 @@ import System
 
 type Counter class {
     shared {
-        count int32
+        var count int32
         prop doubled int32 {
             get { return count * 2 }
         }
@@ -631,7 +631,7 @@ import System
 
 type Config class {
     shared {
-        _value int32
+        var _value int32
         prop value int32 {
             get { return _value }
             set(v) { _value = v }
@@ -783,7 +783,7 @@ type Mixed class {
     {
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
     func get() int32 { return count }
 }
 
@@ -801,7 +801,7 @@ var r = c.get()
     {
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
     func set(v int32) { count = v }
 }
 
@@ -819,7 +819,7 @@ var r = Counter.count
     {
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
     func bump() int32 {
         count += 1
         return count
@@ -939,7 +939,7 @@ var r = Counter.bump()
         var source = @"
 type Counter class {
     shared {
-        count int32
+        var count int32
         func bump() int32 {
             count += 2
             return count
@@ -960,7 +960,7 @@ var r = Counter.bump()
     {
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
 }
 
 Counter.count = 4
@@ -994,7 +994,7 @@ var r = Counter.count
     {
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
 }
 
 Counter.count = 20
@@ -1014,7 +1014,7 @@ var r = Counter.count
         // instance-method seeding must do the same.
         var source = @"
 type Foo class {
-    shared { count int32 }
+    shared { var count int32 }
     func echo(count int32) int32 { return count }
 }
 
@@ -1034,7 +1034,7 @@ var r = f.echo(99)
         // after refactor that splits static-event vs static-field branches).
         var source = @"
 type Counter class {
-    shared { count int32 }
+    shared { var count int32 }
     func get() int32 { return Counter.count }
 }
 
@@ -1062,7 +1062,7 @@ import System
 type Bus class {
     shared {
         event Tick Action
-        count int32
+        var count int32
     }
 }
 
@@ -1086,7 +1086,7 @@ Console.WriteLine(Bus.count)
         var source = @"
 type Foo class {
     shared {
-        _v int32
+        var _v int32
         prop value int32 { get { return _v } }
         func bump() { value += 1 }
     }
@@ -1105,7 +1105,7 @@ type Foo class {
         var source = @"
 type Foo class {
     shared {
-        _v int32
+        var _v int32
         prop value int32 { set(v) { _v = v } }
         func bump() { value += 1 }
     }
@@ -1121,7 +1121,7 @@ type Foo class {
         var source = @"
 type Foo class {
     shared {
-        _v int32
+        var _v int32
         prop value int32 { get { return _v } }
     }
 }
@@ -1143,8 +1143,8 @@ Foo.value += 1
         // must still resolve.
         var source = @"
 type Container[T] class {
-    shared { count int32 }
-    Value T
+    shared { var count int32 }
+    var Value T
     func bump() int32 {
         count += 1
         return count
@@ -1170,7 +1170,7 @@ r
 import System
 
 type Bus class {
-    shared { count int32 }
+    shared { var count int32 }
     func bump() int32 {
         count += 1
         return count

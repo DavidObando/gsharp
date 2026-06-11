@@ -112,7 +112,7 @@ func test() {
         var source = @"
 package P
 type S struct {
-    Ptr *int32
+    var Ptr *int32
 }
 ";
         var diagnostics = Bind(source);
@@ -138,7 +138,7 @@ type C class {
         var source = @"
 package P
 type S struct {
-    Value int32
+    var Value int32
 }
 ";
         var diagnostics = Bind(source);
@@ -285,7 +285,7 @@ func f(scoped x int32) int32 {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func bad(scoped a Acc) Acc {
     return a
@@ -301,7 +301,7 @@ func bad(scoped a Acc) Acc {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func passThrough(a Acc) Acc {
     return a
@@ -429,7 +429,7 @@ func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
         var source = @"
 package P
 type MySpan ref struct {
-    Value int32
+    var Value int32
 }
 func (s MySpan) getSelf() MySpan {
     return s
@@ -446,7 +446,7 @@ func (s MySpan) getSelf() MySpan {
         var source = @"
 package P
 type MySpan ref struct {
-    Value int32
+    var Value int32
 }
 func (s MySpan) getValue() int32 {
     return Value
@@ -463,7 +463,7 @@ func (s MySpan) getValue() int32 {
         var source = @"
 package P
 type MySpan ref struct {
-    Value int32
+    var Value int32
 }
 @UnscopedRef
 func (s MySpan) getSelf() MySpan {
@@ -481,7 +481,7 @@ func (s MySpan) getSelf() MySpan {
         var source = @"
 package P
 type Builder struct {
-    Count int32
+    var Count int32
 }
 func (b Builder) copy() Builder {
     return b

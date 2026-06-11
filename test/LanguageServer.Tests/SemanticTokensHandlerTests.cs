@@ -105,7 +105,7 @@ public class SemanticTokensHandlerTests
     [Fact]
     public void Tokenize_ClassifiesStructDeclaration()
     {
-        const string source = "type Point struct {\n    X int32\n    Y int32\n}\n";
+        const string source = "type Point struct {\n    var X int32\n    var Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
         var tokens = GetTokens(content);
 

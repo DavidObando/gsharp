@@ -47,7 +47,7 @@ public class SemanticLookupImplicitThisTests
     public void BareField_InsideMethodBody_ResolvesToField()
     {
         var sym = ResolveBareName(
-            "type Counter class {\n    Value int32\n    func Read() int32 { return Value }\n}\n",
+            "type Counter class {\n    var Value int32\n    func Read() int32 { return Value }\n}\n",
             tokenText: "Value",
             useOffsetOfNthOccurrence: 2);
 

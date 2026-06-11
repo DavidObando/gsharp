@@ -30,7 +30,7 @@ public class Issue687ColorColorEmitTests
             import System.IO
 
             type Entry class {
-                Path string = ""
+                var Path string = ""
 
                 func Build(suffix string) string {
                     return Path.Combine(this.Path, suffix)
@@ -74,7 +74,7 @@ public class Issue687ColorColorEmitTests
             import System.IO
 
             type Probe class {
-                Path string = ""
+                var Path string = ""
 
                 func Len() int32 {
                     return Path.Length

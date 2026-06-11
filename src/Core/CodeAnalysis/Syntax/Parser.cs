@@ -1613,6 +1613,21 @@ public class Parser
             fieldAccessibility = NextToken();
         }
 
+        // ADR-0067: field declarations must be introduced with `var` (mutable)
+        // or `let` (read-only). The keyword is captured on the syntax node so
+        // the binder can set FieldSymbol.IsReadOnly accordingly. If the user
+        // omits the keyword, surface a precise diagnostic and try to recover
+        // by treating the next identifier as the field name.
+        SyntaxToken varOrLetKeyword = null;
+        if (Current.Kind == SyntaxKind.VarKeyword || Current.Kind == SyntaxKind.LetKeyword)
+        {
+            varOrLetKeyword = NextToken();
+        }
+        else
+        {
+            Diagnostics.ReportFieldDeclarationRequiresVarOrLet(Current.Location);
+        }
+
         var fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var fieldType = ParseTypeClause();
 
@@ -1625,7 +1640,7 @@ public class Parser
             initializer = ParseExpression();
         }
 
-        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, fieldIdentifier, fieldType, equalsToken, initializer);
+        return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, varOrLetKeyword, fieldIdentifier, fieldType, equalsToken, initializer);
     }
 
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
@@ -2303,7 +2318,27 @@ public class Parser
             return null;
         }
 
+        // ADR-0067 / issue #694: when an identifier in return-type position is a
+        // contextual member-position keyword (`event`, `prop`, `init`,
+        // `convenience`, `shared`), it actually starts the NEXT member of the
+        // enclosing type body — not a return type for the current `func(...)`
+        // clause. Bail out so the enclosing struct/class parser can dispatch on
+        // the contextual keyword.
+        if (Current.Kind == SyntaxKind.IdentifierToken && IsContextualMemberKeyword(Current.Text))
+        {
+            return null;
+        }
+
         return ParseTypeClause();
+    }
+
+    private static bool IsContextualMemberKeyword(string text)
+    {
+        return text == "event"
+            || text == "prop"
+            || text == "init"
+            || text == "convenience"
+            || text == "shared";
     }
 
     private BlockStatementSyntax ParseBlockStatement()

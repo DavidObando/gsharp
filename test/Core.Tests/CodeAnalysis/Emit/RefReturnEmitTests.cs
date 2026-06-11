@@ -74,7 +74,7 @@ func pick(ref a int32) ref int32 {
 import System
 
 type Box class {
-    Value int32
+    var Value int32
     func GetRef(ref x int32) ref int32 {
         return ref x
     }
@@ -100,8 +100,8 @@ Console.WriteLine(b.Value)
 import System
 
 type Pair struct {
-    A int32
-    B int32
+    var A int32
+    var B int32
 }
 
 func (p Pair) PickA(ref x int32) ref int32 {

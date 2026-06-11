@@ -43,8 +43,8 @@ package SlotComboTest
 import System
 
 type Point struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 
 func makePoint() Point {

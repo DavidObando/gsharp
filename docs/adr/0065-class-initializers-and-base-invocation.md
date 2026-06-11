@@ -36,9 +36,9 @@ Syntax — an `init` member without a `convenience` modifier:
 
 ```gsharp
 type Rect class {
-    Width int32
-    Height int32
-    Area int32
+    var Width int32
+    var Height int32
+    var Area int32
 
     init(w int32, h int32) {
         Width = w
@@ -58,9 +58,9 @@ Syntax — the contextual modifier `convenience` precedes `init`:
 
 ```gsharp
 type Rect class {
-    Width int32
-    Height int32
-    Area int32
+    var Width int32
+    var Height int32
+    var Area int32
 
     init(w int32, h int32) {
         Width = w
@@ -86,7 +86,7 @@ type Animal open class(Name string) {
 }
 
 type Dog class : Animal {
-    Tricks int32
+    var Tricks int32
 
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
@@ -162,7 +162,7 @@ import Probe.CSharp
 import System.Collections.Generic
 
 type FakeJobService class : IJobService {
-    Active List[JobSnapshot]
+    var Active List[JobSnapshot]
 
     init() {
         Active = List[JobSnapshot]()
@@ -180,7 +180,7 @@ type FakeJobService class : IJobService {
 
 ```gsharp
 type LifecycleTab class(Title string, Key string) {
-    Active bool = false
+    var Active bool = false
 
     convenience init(key string) {
         init(key, key)   // delegates to synthesised designated init(Title, Key)
@@ -197,9 +197,9 @@ The primary ctor synthesises `init(Title string, Key string)` as designated. The
 
 ```gsharp
 type Color class {
-    R float64
-    G float64
-    B float64
+    var R float64
+    var G float64
+    var B float64
 
     init(r float64, g float64, b float64) {
         R = r
@@ -227,7 +227,7 @@ var black = Color()
 
 ```gsharp
 type Vehicle open class {
-    Wheels int32
+    var Wheels int32
 
     init(wheels int32) {
         Wheels = wheels
@@ -235,7 +235,7 @@ type Vehicle open class {
 }
 
 type Car class : Vehicle {
-    Brand string
+    var Brand string
 
     init(brand string, wheels int32) : base(wheels) {
         // Phase 1: assign own stored properties BEFORE base runs
@@ -257,8 +257,8 @@ If the programmer tried to read `Wheels` **before** assigning `Brand`, the compi
 
 ```gsharp
 type HttpClient open class {
-    BaseUrl string
-    Timeout int32
+    var BaseUrl string
+    var Timeout int32
 
     init(baseUrl string, timeout int32) {
         BaseUrl = baseUrl

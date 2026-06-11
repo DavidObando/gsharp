@@ -20,9 +20,9 @@ import System
 // A class whose explicit constructor runs arbitrary statements: it assigns the
 // `Width`/`Height` fields and computes the derived `Area` field.
 type Rect class {
-    Width int32
-    Height int32
-    Area int32
+    var Width int32
+    var Height int32
+    var Area int32
 
     init(w int32, h int32) {
         Width = w
@@ -38,7 +38,7 @@ Console.WriteLine(r.Area)
 
 // The constructor body may contain control flow.
 type Clamped class {
-    Value int32
+    var Value int32
 
     init(v int32) {
         if v < 0 {
@@ -61,7 +61,7 @@ type Animal open class(Name string) {
 }
 
 type Dog class : Animal {
-    Tricks int32
+    var Tricks int32
 
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
@@ -76,7 +76,7 @@ Console.WriteLine(d.Tricks)
 // An `init` constructor can chain to a CLR base (System.Exception) whose
 // constructors all require arguments, then run its own body.
 type MyError class : Exception {
-    Code int32
+    var Code int32
 
     init(message string, code int32) : base(message) {
         Code = code

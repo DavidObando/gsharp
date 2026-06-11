@@ -112,7 +112,7 @@ func box(arr []int32) object {
         var source = @"
 import System
 type Holder class {
-    s ReadOnlySpan[int32]
+    var s ReadOnlySpan[int32]
 }
 ";
         var result = Evaluate(source);
@@ -196,7 +196,7 @@ func f() {
         var source = @"
 package P
 type Window ref struct {
-    Total int32
+    var Total int32
 }
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -212,7 +212,7 @@ type Window ref struct {
         var source = @"
 package P
 type Plain struct {
-    Total int32
+    var Total int32
 }
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -228,7 +228,7 @@ type Plain struct {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func use() int32 {
     var a Acc = Acc{Total: 5}
@@ -245,7 +245,7 @@ func use() int32 {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func box() object {
     var a Acc = Acc{Total: 5}
@@ -263,10 +263,10 @@ func box() object {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 type Holder struct {
-    a Acc
+    var a Acc
 }
 ";
         var diagnostics = Bind(source);
@@ -279,10 +279,10 @@ type Holder struct {
         var source = @"
 package P
 type Inner ref struct {
-    V int32
+    var V int32
 }
 type Outer ref struct {
-    Slot Inner
+    var Slot Inner
 }
 ";
         var diagnostics = Bind(source);
@@ -295,7 +295,7 @@ type Outer ref struct {
         var source = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func f() {
     var a Acc = Acc{Total: 5}
@@ -314,7 +314,7 @@ func f() {
 package P
 import System.Collections.Generic
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 func f() {
     var l List[Acc]
@@ -339,7 +339,7 @@ var s ReadOnlySpan[int32] = []int32{1, 2, 3}
         var user = @"
 package P
 type Acc ref struct {
-    Total int32
+    var Total int32
 }
 var a Acc = Acc{Total: 1}
 ";

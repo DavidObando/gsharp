@@ -32,7 +32,7 @@ public class Issue319ClrBaseInterpreterTests
         var source = @"
 import System
 type MyErr class : Exception {
-    Code int32
+    var Code int32
     init(message string, code int32) : base(message) {
         Code = code
     }
@@ -54,7 +54,7 @@ e.Message
         var source = @"
 import System
 type MyErr class : Exception {
-    Code int32
+    var Code int32
     init(message string, code int32) : base(message) {
         Code = code
     }

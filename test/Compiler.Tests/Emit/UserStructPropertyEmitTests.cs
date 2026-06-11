@@ -32,8 +32,8 @@ public class UserStructPropertyEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop Sum int32 {
                     get { return this.X + this.Y }
                 }
@@ -57,8 +57,8 @@ public class UserStructPropertyEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop Sum int32 {
                     get { return this.X + this.Y }
                 }
@@ -84,14 +84,14 @@ public class UserStructPropertyEmitTests
             import System
 
             type Inner struct {
-                V int32
+                var V int32
                 prop Triple int32 {
                     get { return this.V * 3 }
                 }
             }
 
             type Outer struct {
-                Inner Inner
+                var Inner Inner
             }
 
             func makeOuter(v int32) Outer {
@@ -113,8 +113,8 @@ public class UserStructPropertyEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop Sum int32 {
                     get { return this.X + this.Y }
                 }
@@ -138,16 +138,16 @@ public class UserStructPropertyEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop Sum int32 {
                     get { return this.X + this.Y }
                 }
             }
 
             type Pair struct {
-                A int32
-                B int32
+                var A int32
+                var B int32
             }
 
             func makePoint(x int32, y int32) Point {

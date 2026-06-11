@@ -69,7 +69,7 @@ public class Issue502AsyncUserClassReturnTypeTests
             import System.Threading.Tasks
 
             type AsyncCC class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
             }
 

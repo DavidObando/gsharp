@@ -33,7 +33,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type ClockHolder class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
@@ -68,7 +68,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type ClockHolder class {
-                Value int32
+                var Value int32
                 init() {}
             }
 
@@ -164,7 +164,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type Counter class {
-                N int32
+                var N int32
                 init() {}
             }
 
@@ -201,7 +201,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type Holder class {
-                Val int32
+                var Val int32
                 init() {}
             }
 
@@ -240,7 +240,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type Box class {
-                X int32
+                var X int32
                 init() {}
             }
 
@@ -271,7 +271,7 @@ public class Issue567ClockHolderRegressionTests
             import System
 
             type State class {
-                Running bool
+                var Running bool
                 init() {}
             }
 

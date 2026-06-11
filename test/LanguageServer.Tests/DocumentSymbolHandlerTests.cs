@@ -28,7 +28,7 @@ public class DocumentSymbolHandlerTests
     [Fact]
     public void ComputeDocumentSymbols_ReturnsStructWithFields()
     {
-        const string source = "type Point struct {\nX int32\nY int32\n}\n";
+        const string source = "type Point struct {\nvar X int32\nvar Y int32\n}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
         var symbols = DocumentSymbolComputer.ComputeDocumentSymbols(content);

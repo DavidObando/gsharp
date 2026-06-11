@@ -24,7 +24,7 @@ type Box class {
 // A generic method declared on a generic class: `Echo` uses the class's `T`
 // while `GetOr` introduces its own method-level type parameter `U`.
 type Container[T] class {
-    Value T
+    var Value T
 
     func Echo(x T) T {
         return x

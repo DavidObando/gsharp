@@ -53,8 +53,8 @@ func (s string) Shout() string {
 package Geometry
 
 type Point struct {
-    X int
-    Y int
+    var X int
+    var Y int
 }
 
 // Same syntax, but the receiver is declared in this package, so this

@@ -38,7 +38,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import ProbeRef
 
             type Impl1 class : IHasName {
-                Name string
+                var Name string
             }
 
             var impl = Impl1{Name: "hello"}
@@ -69,7 +69,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import ProbeRef
 
             type Impl1 class : IHasName {
-                Name string
+                var Name string
             }
 
             var impl = Impl1{Name: "hello"}
@@ -133,7 +133,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             import ProbeRef
 
             type RWImpl class : IReadWrite {
-                Value string
+                var Value string
             }
 
             var impl = RWImpl{Value: "initial"}

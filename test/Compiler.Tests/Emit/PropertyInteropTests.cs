@@ -340,8 +340,8 @@ public class PropertyInteropTests
             import System
 
             type Vec2 data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
                 prop LengthSquared int32 {
                     get { return this.X * this.X + this.Y * this.Y }
                 }

@@ -33,7 +33,7 @@ public class UserStructMethodEmitTests
             package P
 
             type Point struct {
-                X int32
+                var X int32
             }
 
             func (p Point) Foo() int32 {
@@ -86,8 +86,8 @@ public class UserStructMethodEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func (p Point) Distance() int32 {
@@ -121,8 +121,8 @@ public class UserStructMethodEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func (p Point) Sum() int32 {
@@ -156,7 +156,7 @@ public class UserStructMethodEmitTests
             import System
 
             type Wrap ref struct {
-                V int32
+                var V int32
             }
 
             func (w Wrap) Show() int32 {
@@ -218,8 +218,8 @@ public class UserStructMethodEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func (p Point) Sum() int32 {
@@ -254,11 +254,11 @@ public class UserStructMethodEmitTests
             import System
 
             type Inner struct {
-                V int32
+                var V int32
             }
 
             type Outer struct {
-                I Inner
+                var I Inner
             }
 
             func (i Inner) Triple() int32 {
@@ -291,11 +291,11 @@ public class UserStructMethodEmitTests
             import System
 
             type Inner struct {
-                V int32
+                var V int32
             }
 
             type Outer struct {
-                I Inner
+                var I Inner
             }
 
             func (i Inner) Triple() int32 {
@@ -331,8 +331,8 @@ public class UserStructMethodEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func (p Point) Sum() int32 {
@@ -370,8 +370,8 @@ public class UserStructMethodEmitTests
             import System
 
             type Point struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func (p Point) Sum() int32 {

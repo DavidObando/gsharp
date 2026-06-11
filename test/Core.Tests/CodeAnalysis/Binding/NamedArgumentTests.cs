@@ -112,7 +112,7 @@ let r = sub(1, x: 2)
     {
         var source = @"
 type Calc data struct {
-    Bias int32
+    var Bias int32
 }
 
 func (c Calc) Combine(a int32, b int32) int32 {
@@ -159,7 +159,7 @@ let p = Point(1, X: 9)
     public void UserExtensionFunction_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-type Box data struct { N int32 }
+type Box data struct { var N int32 }
 
 func (b Box) Mix(low int32, high int32) int32 {
     return b.N + low * 100 + high

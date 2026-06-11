@@ -17,7 +17,7 @@ import System
 
 // A by-ref-like accumulator with a plain field, used as a stack-confined value.
 type Accumulator ref struct {
-    Total int32
+    var Total int32
 }
 
 func add(acc Accumulator, n int32) Accumulator {
@@ -34,8 +34,8 @@ func runningTotal() int32 {
 // A by-ref-like aggregate that legally embeds another `ref struct` as a field —
 // only permitted because the containing type is itself a `ref struct`.
 type LabeledAccumulator ref struct {
-    Inner Accumulator
-    Label string
+    var Inner Accumulator
+    var Label string
 }
 
 func describe(item LabeledAccumulator) string {

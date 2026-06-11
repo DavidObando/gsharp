@@ -103,8 +103,8 @@ public class AttributeBinderTests
         var source = @"
 @Obsolete
 type Point struct {
-    X int32
-    Y int32
+    var X int32
+    var Y int32
 }
 ";
         var globalScope = BindSource(source);
@@ -120,7 +120,7 @@ type Point struct {
         var source = @"
 @method:Obsolete
 type Point struct {
-    X int32
+    var X int32
 }
 ";
         var globalScope = BindSource(source);
@@ -339,8 +339,8 @@ type Point struct {
         var source = """
             @Obsolete
             type Point data struct {
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func Main() {
@@ -365,7 +365,7 @@ type Point struct {
         var source = """
             @Obsolete("legacy")
             type Old data struct {
-                Value int32
+                var Value int32
             }
 
             func Consume(o Old) {
@@ -650,8 +650,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("retired")
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -676,8 +676,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("use NewX")
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func Main() {
@@ -701,7 +701,7 @@ type Point struct {
         var source = """
             type Point struct {
                 @Obsolete("use NewX")
-                X int32
+                var X int32
             }
 
             func Main() {
@@ -724,8 +724,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @Obsolete("gone", true)
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
 
             func Main() {
@@ -746,8 +746,8 @@ type Point struct {
         var source = """
             type Point data struct {
                 @method:Obsolete
-                X int32
-                Y int32
+                var X int32
+                var Y int32
             }
             """;
 
@@ -763,7 +763,7 @@ type Point struct {
         var source = """
             type Box class {
                 @Obsolete("use NewValue")
-                Value int32
+                var Value int32
 
                 public func Get() int32 {
                     return Value
@@ -945,7 +945,7 @@ type Point struct {
 
             type Box class {
                 @MethodOnly
-                Value int32
+                var Value int32
             }
             """;
 

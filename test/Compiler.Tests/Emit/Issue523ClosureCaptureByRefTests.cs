@@ -215,8 +215,8 @@ public class Issue523ClosureCaptureByRefTests
             import System
 
             type Holder class {
-                public First func() int32
-                public Second func() int32
+                public var First func() int32
+                public var Second func() int32
                 init() {}
             }
 

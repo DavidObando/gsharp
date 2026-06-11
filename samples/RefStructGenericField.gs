@@ -18,7 +18,7 @@ package GSharp.Samples.RefStructGenericField
 import System
 
 type Window ref struct {
-    data ReadOnlySpan[int32]
+    var data ReadOnlySpan[int32]
 }
 
 func firstLen(w Window) int32 {

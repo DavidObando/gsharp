@@ -26,8 +26,8 @@ public class Adr0065ConvenienceInitEmitTests
             import System
 
             type Rect class {
-                Width int32
-                Height int32
+                var Width int32
+                var Height int32
                 init(w int32, h int32) {
                     Width = w
                     Height = h
@@ -60,8 +60,8 @@ public class Adr0065ConvenienceInitEmitTests
             import System
 
             type HttpClient class {
-                BaseUrl string
-                Timeout int32
+                var BaseUrl string
+                var Timeout int32
                 init(baseUrl string, timeout int32) {
                     BaseUrl = baseUrl
                     Timeout = timeout
@@ -100,7 +100,7 @@ public class Adr0065ConvenienceInitEmitTests
             import System
 
             type LifecycleTab class(Title string, Key string) {
-                Active bool = false
+                var Active bool = false
                 convenience init(key string) {
                     init(key, key)
                 }
@@ -130,7 +130,7 @@ public class Adr0065ConvenienceInitEmitTests
             import System
 
             type Person class(Name string) {
-                Age int32
+                var Age int32
                 init(age int32) {
                     Age = age
                 }
@@ -155,7 +155,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
 
             type Bad class {
-                X int32
+                var X int32
                 init(x int32) {
                     X = x
                 }
@@ -180,7 +180,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
 
             type Bad class {
-                X int32
+                var X int32
                 init(x int32) {
                     X = x
                 }
@@ -204,7 +204,7 @@ public class Adr0065ConvenienceInitEmitTests
             package Probe
 
             type Animal open class {
-                Name string
+                var Name string
                 init(name string) {
                     Name = name
                 }
@@ -262,9 +262,9 @@ public class Adr0065ConvenienceInitEmitTests
             import System
 
             type Color class {
-                R int32
-                G int32
-                B int32
+                var R int32
+                var G int32
+                var B int32
                 init(r int32, g int32, b int32) {
                     R = r
                     G = g

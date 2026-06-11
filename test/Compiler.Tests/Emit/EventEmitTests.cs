@@ -351,7 +351,7 @@ public class EventEmitTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Increment() { Value = Value + 1 }
             }
@@ -362,8 +362,8 @@ public class EventEmitTests
             }
 
             type Probe class {
-                Counter Counter
-                Src Source
+                var Counter Counter
+                var Src Source
                 init() {
                     Counter = Counter()
                     Src = Source()
@@ -413,7 +413,7 @@ public class EventEmitTests
             }
 
             type Probe class {
-                N Notifier
+                var N Notifier
                 init() {
                     N = Notifier()
                     N.Fired += func(sender object, e EventArgs) {
@@ -449,7 +449,7 @@ public class EventEmitTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
@@ -460,8 +460,8 @@ public class EventEmitTests
             }
 
             type Probe class {
-                Counter Counter
-                Src Source
+                var Counter Counter
+                var Src Source
                 init() {
                     Counter = Counter()
                     Src = Source()
@@ -534,7 +534,7 @@ public class EventEmitTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
@@ -545,13 +545,13 @@ public class EventEmitTests
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
             type Probe class {
-                Counter Counter
-                O Outer
+                var Counter Counter
+                var O Outer
                 init() {
                     Counter = Counter()
                     O = Outer()
@@ -596,12 +596,12 @@ public class EventEmitTests
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
             type Probe class {
-                O Outer
+                var O Outer
                 init() {
                     O = Outer()
                     O.Inner.Fired += func(s object, e EventArgs) {
@@ -637,7 +637,7 @@ public class EventEmitTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 init() { Value = 0 }
                 func Bump() { Value = Value + 1 }
             }
@@ -648,14 +648,14 @@ public class EventEmitTests
             }
 
             type Outer class {
-                Inner Inner
+                var Inner Inner
                 init() { Inner = Inner() }
             }
 
             type Probe class {
-                Counter Counter
-                O Outer
-                Handler EventHandler
+                var Counter Counter
+                var O Outer
+                var Handler EventHandler
                 init() {
                     Counter = Counter()
                     O = Outer()
@@ -713,8 +713,8 @@ public class EventEmitTests
             }
 
             type Probe class {
-                Src Source
-                Hits int32
+                var Src Source
+                var Hits int32
                 init() {
                     Src = Source()
                     Hits = 0
@@ -762,8 +762,8 @@ public class EventEmitTests
             }
 
             type Probe class {
-                Src Source
-                Hits int32
+                var Src Source
+                var Hits int32
                 init() {
                     Src = Source()
                     Hits = 0
@@ -808,8 +808,8 @@ public class EventEmitTests
             }
 
             type Probe class {
-                Src Source
-                Hits int32
+                var Src Source
+                var Hits int32
                 init() {
                     Src = Source()
                     Hits = 0

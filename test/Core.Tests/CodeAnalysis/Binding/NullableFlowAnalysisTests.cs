@@ -367,7 +367,7 @@ if !dict.TryGetValue(""key"", &value) {
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     func EnsureInit() {
         _name = ""default""
@@ -401,7 +401,7 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     @MemberNotNull(""_name"")
     func EnsureInit() {
@@ -429,7 +429,7 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     @MemberNotNull(""_name"")
     func EnsureInit() {
@@ -459,7 +459,7 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
     func TryGet() bool {
@@ -492,7 +492,7 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
     func TryGet() bool {
@@ -524,7 +524,7 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Box class {
-    _name string?
+    var _name string?
 
     @MemberNotNullWhen(true, ""_name"")
     func TryGet() bool {
@@ -557,8 +557,8 @@ b.Run()
 import System.Diagnostics.CodeAnalysis
 
 type Pair class {
-    _a string?
-    _b string?
+    var _a string?
+    var _b string?
 
     @MemberNotNull(""_a"", ""_b"")
     func Init() {

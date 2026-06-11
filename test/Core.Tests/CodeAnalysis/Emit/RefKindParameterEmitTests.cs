@@ -231,7 +231,7 @@ Console.WriteLine(cOut)
 import System
 
 type Counter struct {
-    Value int32
+    var Value int32
 }
 
 func (c Counter) Bump(ref delta int32) {
@@ -328,7 +328,7 @@ Console.WriteLine(Helper.DoubleIt(in n))
 import System
 
 type Box class {
-    Value int32
+    var Value int32
 
     init(ref delta int32) {
         delta = delta + 1

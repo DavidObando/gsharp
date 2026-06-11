@@ -16,6 +16,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <param name="varOrLetKeyword">The required <c>var</c> or <c>let</c> binding keyword (ADR-0067). May be <c>null</c> only for parser error-recovery sites where the keyword was omitted; the parser also emits a diagnostic in that case.</param>
     /// <param name="identifier">The field identifier.</param>
     /// <param name="type">The field type clause.</param>
     /// <param name="equalsToken">The optional <c>=</c> token preceding the initializer.</param>
@@ -23,6 +24,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     public FieldDeclarationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken accessibilityModifier,
+        SyntaxToken varOrLetKeyword,
         SyntaxToken identifier,
         TypeClauseSyntax type,
         SyntaxToken equalsToken = null,
@@ -31,6 +33,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
         AccessibilityModifier = accessibilityModifier;
+        VarOrLetKeyword = varOrLetKeyword;
         Identifier = identifier;
         Type = type;
         EqualsToken = equalsToken;
@@ -53,6 +56,21 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
     public SyntaxToken AccessibilityModifier { get; }
+
+    /// <summary>
+    /// Gets the required <c>var</c> or <c>let</c> binding keyword (ADR-0067).
+    /// A <c>let</c> keyword marks the field as read-only (CLR <c>initonly</c>); a
+    /// <c>var</c> keyword marks it as mutable. May be <c>null</c> only when the
+    /// parser is recovering from a missing keyword and has already reported a
+    /// diagnostic at the field's position.
+    /// </summary>
+    public SyntaxToken VarOrLetKeyword { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this field was declared with the
+    /// <c>let</c> keyword and is therefore read-only (ADR-0067).
+    /// </summary>
+    public bool IsReadOnly => VarOrLetKeyword != null && VarOrLetKeyword.Kind == SyntaxKind.LetKeyword;
 
     /// <summary>Gets the field identifier.</summary>
     public SyntaxToken Identifier { get; }

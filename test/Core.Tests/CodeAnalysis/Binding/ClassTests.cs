@@ -26,8 +26,8 @@ public class ClassTests
     {
         var source = @"
 type Box class {
-    Width int32
-    Height int32
+    var Width int32
+    var Height int32
 }
 
 var b = Box{Width: 3, Height: 4}
@@ -43,7 +43,7 @@ b.Width + b.Height
     {
         var source = @"
 type Box class {
-    Width int32
+    var Width int32
 }
 
 var b = Box{Width: 1}
@@ -61,7 +61,7 @@ b.Width
     {
         var source = @"
 type Box class {
-    Width int32
+    var Width int32
 }
 
 var b = Box{Width: 5}
@@ -79,7 +79,7 @@ b.Width
         // Regression: 3.B.3's IsClass dispatch must not regress struct value-copy.
         var source = @"
 type Point struct {
-    X int32
+    var X int32
 }
 
 var p = Point{X: 1}
@@ -97,8 +97,8 @@ p.X
     {
         var source = @"
 type Box class {
-    Width int32
-    Height int32
+    var Width int32
+    var Height int32
 }
 
 var b = Box{}
@@ -116,7 +116,7 @@ b.Width + b.Height
         // `data` to `struct`); diagnose at parse time.
         var source = @"
 type Foo data class {
-    X int32
+    var X int32
 }
 0
 ";
@@ -148,7 +148,7 @@ p.X + p.Y
         // Body fields not listed in the primary ctor are zero-initialized.
         var source = @"
 type Counter class(initial int32) {
-    Count int32
+    var Count int32
 }
 
 var c = Counter(10)
@@ -192,7 +192,7 @@ var p = Point(3, true)
     {
         var source = @"
 type Point class(X int32, Y int32) {
-    X int32
+    var X int32
 }
 0
 ";
@@ -311,7 +311,7 @@ type Pt class(X int32) {
         // Methods are class-only in 3.B.3 sub-step 2b.
         var source = @"
 type Pt struct {
-    X int32
+    var X int32
 
     func Sum() int32 {
         return X
@@ -329,8 +329,8 @@ type Pt struct {
     public void Inheritance_BaseMustBeOpen_Diagnoses()
     {
         var source = @"
-type A class { X int32 }
-type B class : A { Y int32 }
+type A class { var X int32 }
+type B class : A { var Y int32 }
 0
 ";
         var result = Evaluate(source);
@@ -341,8 +341,8 @@ type B class : A { Y int32 }
     public void Inheritance_OpenClass_Subclass_Works()
     {
         var source = @"
-type A open class { X int32 }
-type B class : A { Y int32 }
+type A open class { var X int32 }
+type B class : A { var Y int32 }
 var b = B{X: 1, Y: 2}
 b.X + b.Y
 ";
@@ -436,7 +436,7 @@ type B class : A {
     {
         var source = @"
 type A open class {
-    X int32
+    var X int32
     func GetX() int32 { return X }
 }
 type B class : A {}
@@ -518,9 +518,9 @@ type Square class(Side int32) : IShape(Side) {
         // with `this`, its parameters, and the class fields in scope.
         var source = @"
 type Rect class {
-    Width int32
-    Height int32
-    Area int32
+    var Width int32
+    var Height int32
+    var Area int32
     init(w int32, h int32) {
         Width = w
         Height = h
@@ -541,7 +541,7 @@ r.Area
         // The constructor body may contain control flow.
         var source = @"
 type Clamped class {
-    Value int32
+    var Value int32
     init(v int32) {
         if v < 0 {
             Value = 0
@@ -567,7 +567,7 @@ type Animal open class(Name string) {
     func Speak() string { return Name }
 }
 type Dog class : Animal {
-    Tricks int32
+    var Tricks int32
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
     }
@@ -588,7 +588,7 @@ type Animal open class(Name string) {
     func Speak() string { return Name }
 }
 type Dog class : Animal {
-    Tricks int32
+    var Tricks int32
     init(name string, tricks int32) : base(name) {
         Tricks = tricks
     }
@@ -606,7 +606,7 @@ d.Tricks
     {
         var source = @"
 type Rect class {
-    Width int32
+    var Width int32
     init(w int32, h int32) {
         Width = w
     }
@@ -623,7 +623,7 @@ var r = Rect(3)
     {
         var source = @"
 type Rect class {
-    Width int32
+    var Width int32
     init(w int32) {
         Width = w
     }
@@ -661,7 +661,7 @@ type Bad class(X int32) {
         // signatures, both kinds coexist as designated initializers.
         var source = @"
 type Both class(Name string) {
-    Age int32
+    var Age int32
     init(age int32) {
         Age = age
     }
@@ -681,7 +681,7 @@ byName.Name
         // call site selects the best match by argument arity/type.
         var source = @"
 type Bag class {
-    X int32
+    var X int32
     init(a int32) {
         X = a
     }
@@ -704,8 +704,8 @@ b.X
         // delegates to the designated init in the same class.
         var source = @"
 type Rect class {
-    Width int32
-    Height int32
+    var Width int32
+    var Height int32
     init(w int32, h int32) {
         Width = w
         Height = h
@@ -728,7 +728,7 @@ r.Width + r.Height
         // ADR-0065 §2 Rule 3 / GS0278.
         var source = @"
 type Bad class {
-    X int32
+    var X int32
     init(x int32) {
         X = x
     }
@@ -748,7 +748,7 @@ type Bad class {
         // ADR-0065 §2 / GS0281: only convenience init may use init(args).
         var source = @"
 type Bad class {
-    X int32
+    var X int32
     init(x int32) {
         X = x
     }

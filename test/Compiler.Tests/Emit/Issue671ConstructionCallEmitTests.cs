@@ -27,7 +27,7 @@ public class Issue671ConstructionCallEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let xs = List[MyGs]()
@@ -75,7 +75,7 @@ public class Issue671ConstructionCallEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let kvp = KeyValuePair[string, MyGs]("k", MyGs())
@@ -95,7 +95,7 @@ public class Issue671ConstructionCallEmitTests
             import System.Collections.Generic
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let outer = List[List[MyGs]]()
@@ -117,7 +117,7 @@ public class Issue671ConstructionCallEmitTests
             import System
 
             type MyGs class {
-                Name string = ""
+                var Name string = ""
             }
 
             let xs = System.Collections.Generic.List[MyGs]()

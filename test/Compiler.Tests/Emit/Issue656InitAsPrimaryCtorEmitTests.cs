@@ -54,7 +54,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type FakeJobService class : IJobService {
-                Active List[JobSnapshot]
+                var Active List[JobSnapshot]
                 func init() {
                     Active = List[JobSnapshot]()
                 }
@@ -98,7 +98,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type FakeJobService class : IJobService {
-                Active List[JobSnapshot]
+                var Active List[JobSnapshot]
                 init() {
                     Active = List[JobSnapshot]()
                 }
@@ -129,9 +129,9 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type LifecycleTab class {
-                Title string
-                Key string
-                Active bool = false
+                var Title string
+                var Key string
+                var Active bool = false
                 func init(title string, key string) {
                     Title = title
                     Key = key
@@ -160,7 +160,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type Counter class {
-                Value int32
+                var Value int32
                 func init() {
                     Value = 42
                 }
@@ -186,7 +186,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type Greeting class {
-                Message string
+                var Message string
                 func init(name string) {
                     Message = "Hello, " + name + "!"
                 }
@@ -212,8 +212,8 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type Config class {
-                Name string = "default"
-                Count int32
+                var Name string = "default"
+                var Count int32
                 func init() {
                     Count = 7
                 }
@@ -245,7 +245,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type Dual class(Name string) {
-                Age int32
+                var Age int32
                 func init(age int32) {
                     Age = age
                 }
@@ -295,9 +295,9 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type Color class {
-                R int32
-                G int32
-                B int32
+                var R int32
+                var G int32
+                var B int32
                 init(r int32, g int32, b int32) {
                     R = r
                     G = g
@@ -344,8 +344,8 @@ public class Issue656InitAsPrimaryCtorEmitTests
             import System
 
             type TextRenderer class : IRenderer {
-                Prefix string
-                Suffix string
+                var Prefix string
+                var Suffix string
                 func init() {
                     Prefix = "["
                     Suffix = "]"
