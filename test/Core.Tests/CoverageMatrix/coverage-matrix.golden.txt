@@ -101,11 +101,15 @@ GoStatement
 GotoKeyword
 GreaterOrEqualsToken
 GreaterToken
+GuardKeyword
+GuardLetStatement
 HatEqualsToken
 HatToken
 IdentifierToken
 IfExpression
 IfKeyword
+IfLetBindingClause
+IfLetStatement
 IfStatement
 ImportDeclaration
 ImportKeyword

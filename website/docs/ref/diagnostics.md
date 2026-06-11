@@ -437,3 +437,17 @@ Cause/fix examples:
 - **GS0265** — a default-value expression that is not constant, a parameter whose default depends on another parameter, an optional parameter preceding a required one without all trailing parameters also optional, or an optional ref/out parameter. Fix: use a compile-time-constant default, place optional parameters at the end of the list, and avoid combining `ref`/`out` with defaults.
 - **GS0266** — `Greet("ada")` when both `Greet(string)` and `Greet(name string)` are visible via different paths. Fix: rename one, change one signature, or use a named argument that only one overload accepts.
 - **GS0267** — `Greet(42)` when only `Greet(string)` is declared. Fix: pass a value of the expected type, or add an overload covering the new argument shape.
+
+## `if let` and `guard let` binding diagnostics (GS0296–GS0297)
+
+ADR-0071 introduces the `if let` and `guard let` binding forms. The diagnostics below cover the two misuse paths that the binder rejects up front.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0296 | Error | The right-hand side of an `if let` / `guard let` binding must be of nullable type; non-nullable initializers have nothing to strip. |
+| GS0297 | Error | The else block of `guard let` must unconditionally exit the enclosing scope (`return`, `throw`, `break`, or `continue`). |
+
+Cause/fix examples:
+
+- **GS0296** — `let s = "hi"; if let v = s { ... }`. Fix: either use a plain `let v = s` (no narrowing) or pass a nullable value. The binding only makes sense when the RHS has type `T?`.
+- **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.

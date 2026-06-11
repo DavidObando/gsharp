@@ -2521,7 +2521,14 @@ public class Parser
 
                 return declaration;
             case SyntaxKind.IfKeyword:
+                if (Peek(1).Kind == SyntaxKind.LetKeyword)
+                {
+                    return ParseIfLetStatement();
+                }
+
                 return ParseIfStatement();
+            case SyntaxKind.GuardKeyword:
+                return ParseGuardLetStatement();
             case SyntaxKind.ForKeyword:
                 return ParseForStatement();
             case SyntaxKind.WhileKeyword:
@@ -2947,6 +2954,92 @@ public class Parser
         var keyword = NextToken();
         var statement = ParseStatement();
         return new ElseClauseSyntax(syntaxTree, keyword, statement);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  ADR-0071 / issue #708: `if let` and `guard let` binding statements.
+    // ──────────────────────────────────────────────────────────────────────
+    private IfLetStatementSyntax ParseIfLetStatement()
+    {
+        var ifKeyword = MatchToken(SyntaxKind.IfKeyword);
+        var bindings = ParseIfLetBindingList();
+        var thenStatement = ParseStatement();
+        var elseClause = ParseElseClause();
+        return new IfLetStatementSyntax(syntaxTree, ifKeyword, bindings, thenStatement, elseClause);
+    }
+
+    private GuardLetStatementSyntax ParseGuardLetStatement()
+    {
+        var guardKeyword = MatchToken(SyntaxKind.GuardKeyword);
+        var bindings = ParseIfLetBindingList();
+        var elseKeyword = MatchToken(SyntaxKind.ElseKeyword);
+        var elseStatement = ParseStatement();
+        return new GuardLetStatementSyntax(syntaxTree, guardKeyword, bindings, elseKeyword, elseStatement);
+    }
+
+    private SeparatedSyntaxList<IfLetBindingClauseSyntax> ParseIfLetBindingList()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (true)
+        {
+            nodesAndSeparators.Add(ParseIfLetBindingClause());
+            if (Current.Kind != SyntaxKind.CommaToken)
+            {
+                break;
+            }
+
+            // Only treat a comma as a binding separator if it is followed by
+            // another `let` keyword. Anything else (a trailing comma, a list
+            // expression) is left to the outer parser to flag.
+            if (Peek(1).Kind != SyntaxKind.LetKeyword)
+            {
+                break;
+            }
+
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+        }
+
+        return new SeparatedSyntaxList<IfLetBindingClauseSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private IfLetBindingClauseSyntax ParseIfLetBindingClause()
+    {
+        var letKeyword = MatchToken(SyntaxKind.LetKeyword);
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeClause = ParseOptionalTypeClauseBeforeEquals();
+        var equalsToken = MatchToken(SyntaxKind.EqualsToken);
+
+        // Suppress both trailing object initializers (`Foo() { X = 1 }`) AND
+        // bare struct literals (`Ident { }`) so the enclosing `{` is the body
+        // of the `if let` / `guard let`, not the initializer's shape.
+        suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
+        ExpressionSyntax initializer;
+        try
+        {
+            initializer = ParseExpression();
+        }
+        finally
+        {
+            suppressStructLiteral--;
+            suppressTrailingObjectInitializer--;
+        }
+
+        return new IfLetBindingClauseSyntax(syntaxTree, letKeyword, identifier, typeClause, equalsToken, initializer);
+    }
+
+    private TypeClauseSyntax ParseOptionalTypeClauseBeforeEquals()
+    {
+        // A binding clause is always followed by `=`; if we see `=` directly
+        // there is no type annotation. Otherwise reuse the regular optional
+        // type-clause parser (which already handles `[]T`, `map[K]V`, `T?`,
+        // `chan T`, etc.).
+        if (Current.Kind == SyntaxKind.EqualsToken)
+        {
+            return null;
+        }
+
+        return ParseOptionalTypeClause();
     }
 
     private StatementSyntax ParseForStatement()

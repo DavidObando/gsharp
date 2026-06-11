@@ -70,7 +70,8 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 
 | Feature | Emit (`gsc`) | Interpreter | Notes |
 | --- | --- | --- | --- |
-| `if` | Supported | Supported | Includes simple-statement form. |
+| `if` | Supported | Supported | Includes simple-statement form. The `if let name = expr { ... } [else { ... }]` binding form (ADR-0071) strips a nullable layer and narrows `name` to the underlying type inside the then-branch. |
+| `guard let` | Supported | Supported | ADR-0071. `guard let name = expr else { ... }` binds `name` for the remainder of the enclosing block and requires the else clause to unconditionally exit (`GS0297`). |
 | `for` condition, clause, infinite loops | Supported | Supported | Companion `while` and `do`-`while` forms shipped in ADR-0070. |
 | `for x in collection` and `for x := range collection` | Supported | Supported | Canonical `in` form plus Go-style range form. |
 | Ellipsis loops | Supported | Supported | `for i := start ... end`. |

@@ -2462,6 +2462,34 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0295", $"Label '{labelName}' shadows an enclosing loop label of the same name; the inner label wins for nested 'break'/'continue'.", DiagnosticSeverity.Warning);
     }
 
+    /// <summary>
+    /// ADR-0071 / issue #708: GS0296 — the right-hand side of an
+    /// <c>if let</c> / <c>guard let</c> binding is not of nullable type.
+    /// The binding form is intended to strip a single layer of nullability;
+    /// applying it to a non-nullable value would do nothing useful and is
+    /// almost certainly a programmer error.
+    /// </summary>
+    /// <param name="location">The source location of the offending initializer.</param>
+    /// <param name="bindingName">The name introduced by the binding.</param>
+    /// <param name="actualType">The actual (non-nullable) initializer type.</param>
+    public void ReportIfLetInitializerMustBeNullable(TextLocation location, string bindingName, TypeSymbol actualType)
+    {
+        Report(location, "GS0296", $"The right-hand side of 'if let'/'guard let' binding '{bindingName}' must be of nullable type, but its type is '{actualType}'. Use a plain 'let {bindingName} = …' if no nullability strip is needed.");
+    }
+
+    /// <summary>
+    /// ADR-0071 / issue #708: GS0297 — the else block of a <c>guard let</c>
+    /// statement must unconditionally exit the enclosing scope. Accepted
+    /// terminators are <c>return</c>, <c>throw</c>, <c>break</c>,
+    /// <c>continue</c>, and any block whose last statement does so. An
+    /// <c>if</c>/<c>else</c> qualifies only when both arms exit.
+    /// </summary>
+    /// <param name="location">The source location of the offending else clause.</param>
+    public void ReportGuardLetElseMustExit(TextLocation location)
+    {
+        Report(location, "GS0297", "The else block of 'guard let' must unconditionally exit the enclosing scope (return, throw, break, or continue).");
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

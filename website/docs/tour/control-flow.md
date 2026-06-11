@@ -25,6 +25,46 @@ if n > 0 {
 }
 ```
 
+## `if let` and `guard let` — nullable bindings (ADR-0071)
+
+`if let name = expr { ... }` strips the nullable layer from a value and binds
+the underlying non-null view to `name` inside the then-branch. The companion
+`guard let name = expr else { exit }` form binds `name` for the **remainder
+of the enclosing block**; the else clause must unconditionally exit.
+
+```gsharp
+func Greet(name string?) {
+    if let n = name {
+        Console.WriteLine("hi $n")
+    } else {
+        Console.WriteLine("hi stranger")
+    }
+}
+
+func Length(s string?) int32 {
+    guard let v = s else {
+        return -1
+    }
+
+    // `v` is `string` (not `string?`) here, for the rest of the block.
+    return v.Length
+}
+```
+
+Multiple comma-separated bindings are supported and narrow all-or-nothing:
+
+```gsharp
+if let a = left, let b = right {
+    Console.WriteLine("$a + $b")
+}
+```
+
+The binding's initializer must have a nullable type (`T?`). The else-block of
+`guard let` must end in `return`, `throw`, `break`, or `continue` (or be a
+nested block whose last statement does the same). Inside the body, reads of
+the binding compose with the rest of the smart-cast machinery from
+[ADR-0069](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0069-smart-cast-flow-narrowing.md).
+
 ## For
 
 G# supports C-style `for init; condition; post`, condition-only `for`, infinite `for`, and range forms. The ellipsis form is convenient for integer ranges.

@@ -155,6 +155,10 @@ internal sealed class StatementBinder
                 return BindVariableDeclaration((VariableDeclarationSyntax)syntax);
             case SyntaxKind.IfStatement:
                 return BindIfStatement((IfStatementSyntax)syntax);
+            case SyntaxKind.IfLetStatement:
+                return BindIfLetStatement((IfLetStatementSyntax)syntax);
+            case SyntaxKind.GuardLetStatement:
+                return BindGuardLetStatement((GuardLetStatementSyntax)syntax);
             case SyntaxKind.ForInfiniteStatement:
                 return BindForInfiniteStatement((ForInfiniteStatementSyntax)syntax);
             case SyntaxKind.ForEllipsisStatement:
@@ -300,6 +304,19 @@ internal sealed class StatementBinder
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), awaitUsingLowering.Cleanup));
                     return;
+                }
+
+                // ADR-0071 / issue #708: `guard let` extends the enclosing block's
+                // scope with the new bindings. Inline the per-binding decl + nil-
+                // check pairs directly into the enclosing statement list so that
+                // (a) the synthesized variables live for the rest of the block and
+                // (b) `ApplyEarlyExitNarrowings` lifts each binding's non-nil
+                // narrowing into the persistent block frame for subsequent reads.
+                if (statementSyntax is GuardLetStatementSyntax guardLetSyntax)
+                {
+                    BindGuardLetStatementInBlock(guardLetSyntax, statements, memberNotNullFrame);
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                    continue;
                 }
 
                 var statement = BindStatement(statementSyntax);
@@ -966,6 +983,308 @@ internal sealed class StatementBinder
         }
 
         return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(initStatement, inner));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  ADR-0071 / issue #708: `if let` and `guard let` binding statements.
+    //
+    //  Both forms strip one layer of nullability from the right-hand-side
+    //  expression and introduce a fresh local for it. The lowering is
+    //  expressed entirely in terms of existing bound-node kinds so the
+    //  rewriter / walker / printer / spiller / emitter / interpreter
+    //  surface needs no updates.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ADR-0071 / issue #708: bind <c>if let</c> as a self-contained block
+    /// containing the synthesized let-declarations and a nested if whose
+    /// condition is the nil-guard. Multi-binding forms with an else-arm use
+    /// a synthesized <c>bool</c> flag so the else-block appears in the
+    /// bound tree exactly once.
+    /// </summary>
+    private BoundStatement BindIfLetStatement(IfLetStatementSyntax syntax)
+    {
+        var bindings = syntax.Bindings.ToImmutableArray();
+
+        // Push a new scope to contain the synthesized locals. The locals
+        // declared from the bindings only need to be visible inside the
+        // then-branch, so a single block-scoped lifetime is correct.
+        scope = new BoundScope(scope);
+
+        var localsForFrame = new List<(VariableSymbol Variable, TypeSymbol Underlying)>(bindings.Length);
+        var declStatements = ImmutableArray.CreateBuilder<BoundStatement>(bindings.Length);
+        var anyValid = false;
+        foreach (var binding in bindings)
+        {
+            var (variable, underlying, decl) = BindIfLetBindingClause(binding);
+            declStatements.Add(decl);
+            if (variable != null && underlying != null)
+            {
+                localsForFrame.Add((variable, underlying));
+                anyValid = true;
+            }
+        }
+
+        // Build the nil-test condition: `_b0 != nil && _b1 != nil && …`.
+        // Each variable expression carries its underlying narrowing type so
+        // that read sites inside the then-branch see the non-null type.
+        BoundExpression nilCheck = BuildNilCheckChain(syntax, localsForFrame);
+
+        // Build the narrowing frame so the then-block sees each binding at
+        // its non-null underlying type. The else-block does NOT see the
+        // narrowing — the bindings are not even in scope there.
+        Dictionary<VariableSymbol, TypeSymbol> thenFrame = null;
+        if (localsForFrame.Count > 0)
+        {
+            thenFrame = new Dictionary<VariableSymbol, TypeSymbol>(localsForFrame.Count);
+            foreach (var (variable, underlying) in localsForFrame)
+            {
+                thenFrame[variable] = underlying;
+            }
+        }
+
+        var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenFrame);
+
+        // Pop the scope BEFORE binding the else clause so the bindings are
+        // not visible inside it (ADR-0071: bindings are then-only).
+        scope = scope.Parent;
+        var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
+
+        // If no binding survived (every initializer was an error), just
+        // return the synthesized block so the user still sees diagnostics
+        // but no synthetic if-shape leaks.
+        if (!anyValid)
+        {
+            return new BoundBlockStatement(syntax, declStatements.ToImmutable());
+        }
+
+        BoundStatement core;
+        if (syntax.ElseClause == null || localsForFrame.Count <= 1)
+        {
+            // No else, or a single binding (which fits the natural shape
+            // without needing a matched-flag): build a simple if/else.
+            core = new BoundIfStatement(syntax, nilCheck, thenStatement, elseStatement);
+        }
+        else
+        {
+            // Multi-binding with an else: route through a synthesized
+            // `bool _matched` flag so the else block runs exactly once and
+            // is duplicated zero times in the bound tree.
+            //
+            // var __ifLet_matched_<pos> = false
+            // let a = e0; if a != nil { let b = e1; if b != nil { ... if zN != nil { __matched = true; <then> } } }
+            // if !__matched { <else> }
+            var flagName = $"<ifLetMatched{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var flagVar = new LocalVariableSymbol(flagName, isReadOnly: false, TypeSymbol.Bool);
+            scope.TryDeclareVariable(flagVar);
+
+            var flagDecl = new BoundVariableDeclaration(syntax, flagVar, new BoundLiteralExpression(syntax, false, TypeSymbol.Bool));
+            var setFlag = new BoundExpressionStatement(
+                syntax,
+                new BoundAssignmentExpression(syntax, flagVar, new BoundLiteralExpression(syntax, true, TypeSymbol.Bool)));
+            var combinedThen = new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(setFlag, thenStatement));
+            var matchIf = new BoundIfStatement(syntax, nilCheck, combinedThen, elseStatement: null);
+
+            var notFlag = new BoundUnaryExpression(syntax, BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool), new BoundVariableExpression(syntax, flagVar));
+            var elseIf = new BoundIfStatement(syntax, notFlag, elseStatement, elseStatement: null);
+
+            var sequenced = ImmutableArray.CreateBuilder<BoundStatement>(declStatements.Count + 3);
+            sequenced.Add(flagDecl);
+            sequenced.AddRange(declStatements);
+            sequenced.Add(matchIf);
+            sequenced.Add(elseIf);
+            return new BoundBlockStatement(syntax, sequenced.ToImmutable());
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>(declStatements.Count + 1);
+        statements.AddRange(declStatements);
+        statements.Add(core);
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0071 / issue #708: bind a single <c>let name [T] = expr</c>
+    /// binding clause inside an <c>if let</c> or <c>guard let</c> header.
+    /// Returns the synthesized variable (or <c>null</c> when the clause is
+    /// erroneous), its underlying non-null type, and the resulting decl.
+    /// The variable is declared in the binder's current scope; callers
+    /// control that scope to scope the binding to a then-block or to the
+    /// enclosing block as appropriate.
+    /// </summary>
+    private (VariableSymbol Variable, TypeSymbol Underlying, BoundStatement Declaration) BindIfLetBindingClause(IfLetBindingClauseSyntax binding)
+    {
+        TypeSymbol declaredUnderlying = null;
+        if (binding.TypeClause != null)
+        {
+            declaredUnderlying = bindTypeClause(binding.TypeClause);
+
+            // The author wrote `if let s string = …`: they declared the
+            // underlying (non-null) type. A nullable spelling would be
+            // self-defeating — reject it through the standard
+            // initializer-type diagnostic by widening to the nullable.
+            if (declaredUnderlying is NullableTypeSymbol declaredNullable)
+            {
+                declaredUnderlying = declaredNullable.UnderlyingType;
+            }
+        }
+
+        var initializerExpr = bindExpression(binding.Initializer);
+        var initializerType = initializerExpr.Type;
+
+        if (initializerType == TypeSymbol.Error)
+        {
+            var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, declaredUnderlying ?? TypeSymbol.Error);
+            return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
+        }
+
+        // ADR-0071: the right-hand side must be of nullable type so the
+        // binding has something to strip. A non-nullable RHS is GS0296.
+        TypeSymbol underlying;
+        TypeSymbol nullableStorageType;
+        if (initializerType is NullableTypeSymbol nullable)
+        {
+            underlying = nullable.UnderlyingType;
+            nullableStorageType = nullable;
+        }
+        else if (initializerType == TypeSymbol.Null)
+        {
+            // A bare `nil` literal — there's no narrowing to do; bind to
+            // the declared underlying type if available, otherwise error.
+            if (declaredUnderlying == null)
+            {
+                Diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
+                var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, TypeSymbol.Error);
+                return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
+            }
+
+            underlying = declaredUnderlying;
+            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying);
+        }
+        else
+        {
+            Diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
+            var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, declaredUnderlying ?? initializerType);
+            return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
+        }
+
+        // If the user gave an explicit type clause, the underlying type
+        // they wrote must match (or be a conversion-target of) the RHS's
+        // underlying. We route through the existing conversion classifier
+        // for an apples-to-apples diagnostic.
+        if (declaredUnderlying != null)
+        {
+            var conv = conversions.BindConversion(binding.Initializer.Location, initializerExpr, NullableTypeSymbol.Get(declaredUnderlying));
+            initializerExpr = conv;
+            underlying = declaredUnderlying;
+            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying);
+        }
+
+        // The synthesized binding is `let name <nullable> = expr`. The
+        // user observes it at the underlying type via the existing
+        // narrowing path (NarrowedType on each read site).
+        var variable = bindLocalVariable(binding.Identifier, isReadOnly: true, nullableStorageType);
+        var declaration = new BoundVariableDeclaration(binding, variable, initializerExpr);
+        return (variable, underlying, declaration);
+    }
+
+    /// <summary>
+    /// ADR-0071 / issue #708: build a left-folded `&amp;&amp;` chain of
+    /// <c>variable != nil</c> tests for the given bindings. With a single
+    /// binding this is just <c>variable != nil</c>.
+    /// </summary>
+    private static BoundExpression BuildNilCheckChain(SyntaxNode syntax, List<(VariableSymbol Variable, TypeSymbol Underlying)> bindings)
+    {
+        BoundExpression result = null;
+        foreach (var (variable, _) in bindings)
+        {
+            var read = new BoundVariableExpression(syntax, variable);
+            var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
+            var neqOp = BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null);
+            BoundExpression test = new BoundBinaryExpression(syntax, read, neqOp, nilLiteral);
+            if (result == null)
+            {
+                result = test;
+            }
+            else
+            {
+                var andOp = BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool);
+                result = new BoundBinaryExpression(syntax, result, andOp, test);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// ADR-0071 / issue #708: standalone fallback for binding
+    /// <c>guard let</c> when it appears outside a block (for example as a
+    /// stray statement at the top of a function body when the outer
+    /// dispatch routes through <see cref="BindStatement"/>). The normal
+    /// path goes through <see cref="BindGuardLetStatementInBlock"/>, which
+    /// integrates with the enclosing block's narrowing frame.
+    /// </summary>
+    private BoundStatement BindGuardLetStatement(GuardLetStatementSyntax syntax)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var pseudoFrame = new Dictionary<VariableSymbol, TypeSymbol>();
+        BindGuardLetStatementInBlock(syntax, statements, pseudoFrame);
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0071 / issue #708: bind <c>guard let</c> into the enclosing
+    /// statement builder so the synthesized locals and the narrowings
+    /// extend the enclosing block. Each binding becomes a let-decl
+    /// followed by an `if x == nil { else }` whose else-block is the
+    /// user's exit clause; the existing
+    /// <see cref="ApplyEarlyExitNarrowings"/> path lifts each binding's
+    /// non-nil narrowing into <paramref name="persistentFrame"/>.
+    /// </summary>
+    private void BindGuardLetStatementInBlock(
+        GuardLetStatementSyntax syntax,
+        ImmutableArray<BoundStatement>.Builder statements,
+        Dictionary<VariableSymbol, TypeSymbol> persistentFrame)
+    {
+        // Bind the else block once up-front strictly to validate that it
+        // unconditionally exits the enclosing scope (GS0297). We then
+        // re-bind it for each binding arm because the ControlFlowGraph
+        // builder demands that each BoundStatement appear at most once
+        // in the tree (it keys block lookup by statement identity).
+        var probeElse = BindStatement(syntax.ElseStatement);
+        if (!EndsInUnconditionalExit(probeElse))
+        {
+            Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
+        }
+
+        foreach (var binding in syntax.Bindings)
+        {
+            var (variable, underlying, decl) = BindIfLetBindingClause(binding);
+            statements.Add(decl);
+            if (variable == null || underlying == null)
+            {
+                continue;
+            }
+
+            // Bind a fresh copy of the else block for this arm so that the
+            // ControlFlowGraph builder sees a unique BoundStatement
+            // instance per arm.
+            var armElse = BindStatement(syntax.ElseStatement);
+
+            // Build `if <var> == nil { else }`.
+            var read = new BoundVariableExpression(binding, variable);
+            var nilLiteral = new BoundLiteralExpression(binding, null, TypeSymbol.Null);
+            var eqOp = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null);
+            var condition = new BoundBinaryExpression(binding, read, eqOp, nilLiteral);
+            var ifStmt = new BoundIfStatement(binding, condition, armElse, elseStatement: null);
+
+            // Manually thread the persistent-frame narrowing for this
+            // binding. We *cannot* round-trip through
+            // ApplyEarlyExitNarrowings because that helper consumes
+            // entries from PendingEarlyExitFrames keyed by the if node;
+            // we have the data inline here, so just promote directly.
+            persistentFrame[variable] = underlying;
+            statements.Add(ifStmt);
+        }
     }
 
     private static Dictionary<VariableSymbol, TypeSymbol> MergeNarrowingFrames(
