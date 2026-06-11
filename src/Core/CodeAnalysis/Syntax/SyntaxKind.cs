@@ -98,6 +98,7 @@ public enum SyntaxKind
     ContinueKeyword,
     DefaultKeyword,
     DeferKeyword,
+    DoKeyword,
     ElseKeyword,
     EnumKeyword,
     FalseKeyword,
@@ -134,6 +135,7 @@ public enum SyntaxKind
     TypeKeyword,
     UsingKeyword,
     VarKeyword,
+    WhileKeyword,
 
     // compilation
     CompilationUnit,
@@ -176,6 +178,9 @@ public enum SyntaxKind
     ForConditionStatement,
     ForClauseStatement,
     ForRangeStatement,
+    WhileStatement,
+    DoWhileStatement,
+    LabeledStatement,
     BreakStatement,
     ContinueStatement,
     ReturnStatement,

@@ -97,11 +97,14 @@ internal sealed class BinderContext
     public BoundScope RootScope { get; set; }
 
     /// <summary>
-    /// Gets the stack of (break-label, continue-label) pairs maintained for
-    /// loop and switch bodies during binding.
+    /// Gets the stack of (label-name, break-label, continue-label) tuples
+    /// maintained for loop bodies during binding. The <c>LabelName</c>
+    /// element is <see langword="null"/> for unlabeled loops; ADR-0070
+    /// labeled <c>break</c> / <c>continue</c> resolve their target by
+    /// scanning this stack for a matching label name.
     /// </summary>
-    public Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
-        = new Stack<(BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
+    public Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
+        = new Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
 
     /// <summary>
     /// Gets the stack of per-scope variable-narrowing tables used by pattern

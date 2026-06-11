@@ -6,7 +6,7 @@ draft: false
 
 # Tour: Control flow
 
-G# uses `if`, `switch`, and `for` for ordinary control flow. There is no `while` keyword; use `for condition` for while-style loops.
+G# uses `if`, `switch`, `for`, `while`, and `do`-`while` for ordinary control flow.
 
 ## If
 
@@ -82,6 +82,71 @@ two
 ```
 
 The older `for x := range values` spelling is still accepted and appears in some samples.
+
+## While and do-while (ADR-0070)
+
+`while cond { ... }` evaluates `cond` first and runs the body while it is true.
+`do { ... } while cond` is the post-test variant: the body always runs at least
+once. Both forms support `break` and `continue` exactly like `for`.
+
+```gsharp title="WhileDo.gs"
+import System
+
+var i = 0
+while i < 3 {
+    Console.WriteLine(i)
+    i = i + 1
+}
+
+var j = 5
+do {
+    Console.WriteLine(j)
+    j = j + 1
+} while j < 5
+```
+
+```text
+0
+1
+2
+5
+```
+
+## Labeled break and continue (ADR-0070)
+
+Loops can be prefixed with a `label:` declaration. `break label` and
+`continue label` then jump out of (or to the next iteration of) the named
+enclosing loop instead of the innermost one. Labels work uniformly on `for`,
+`while`, and `do`-`while`.
+
+```gsharp title="LabeledBreak.gs"
+import System
+
+outer: for i in 1...3 {
+    for j in 1...3 {
+        if i == 2 && j == 2 {
+            break outer
+        }
+        Console.WriteLine(i)
+        Console.WriteLine(j)
+    }
+}
+```
+
+```text
+1
+1
+1
+2
+1
+3
+2
+1
+```
+
+Misplaced labels (`label:` on something that is not a loop) and unknown labels
+on `break`/`continue` are diagnosed with **GS0294** and **GS0293** respectively.
+Shadowing an enclosing loop's label produces the warning **GS0295**.
 
 ## Switch statements
 

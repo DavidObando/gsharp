@@ -165,6 +165,12 @@ internal sealed class StatementBinder
                 return BindForClauseStatement((ForClauseStatementSyntax)syntax);
             case SyntaxKind.ForRangeStatement:
                 return BindForRangeStatement((ForRangeStatementSyntax)syntax);
+            case SyntaxKind.WhileStatement:
+                return BindWhileStatement((WhileStatementSyntax)syntax);
+            case SyntaxKind.DoWhileStatement:
+                return BindDoWhileStatement((DoWhileStatementSyntax)syntax);
+            case SyntaxKind.LabeledStatement:
+                return BindLabeledStatement((LabeledStatementSyntax)syntax);
             case SyntaxKind.BreakStatement:
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
@@ -1974,9 +1980,21 @@ internal sealed class StatementBinder
 
     private BoundStatement BindForInfiniteStatement(ForInfiniteStatementSyntax syntax)
     {
+        return BindForInfiniteStatementCore(syntax, syntax.Body, labelName: null);
+    }
+
+    /// <summary>
+    /// Binds a <c>for { body }</c> infinite loop, with optional ADR-0070 label.
+    /// </summary>
+    /// <param name="originatingSyntax">Originating syntax for diagnostics.</param>
+    /// <param name="bodySyntax">The loop body.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <returns>The bound for-infinite statement.</returns>
+    private BoundStatement BindForInfiniteStatementCore(SyntaxNode originatingSyntax, StatementSyntax bodySyntax, string labelName)
+    {
         scope = new BoundScope(scope);
 
-        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+        var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
 
@@ -1985,13 +2003,18 @@ internal sealed class StatementBinder
 
     private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)
     {
+        return BindForEllipsisStatementCore(syntax, syntax, labelName: null);
+    }
+
+    private BoundStatement BindForEllipsisStatementCore(ForEllipsisStatementSyntax syntax, SyntaxNode originatingSyntax, string labelName)
+    {
         var lowerBound = bindExpressionWithTargetType(syntax.LowerBound, TypeSymbol.Int32);
         var upperBound = bindExpressionWithTargetType(syntax.UpperBound, TypeSymbol.Int32);
 
         scope = new BoundScope(scope);
 
         var variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int32);
-        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
 
@@ -1999,6 +2022,20 @@ internal sealed class StatementBinder
     }
 
     private BoundStatement BindForRangeStatement(ForRangeStatementSyntax syntax)
+    {
+        return BindForRangeStatementCore(syntax, labelName: null, originatingSyntax: syntax);
+    }
+
+    /// <summary>
+    /// Core for-range binder; accepts an optional ADR-0070 label name that is
+    /// pushed onto the loop stack so a nested <c>break label</c> / <c>continue
+    /// label</c> resolves to this loop's targets.
+    /// </summary>
+    /// <param name="syntax">The for-range syntax.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <param name="originatingSyntax">Syntax node used for the resulting bound node.</param>
+    /// <returns>The bound for-range statement.</returns>
+    private BoundStatement BindForRangeStatementCore(ForRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
     {
         var collection = bindExpression(syntax.Collection);
 
@@ -2145,14 +2182,31 @@ internal sealed class StatementBinder
             valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: valueType);
         }
 
-        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
 
-        return new BoundForRangeStatement(syntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
+        return new BoundForRangeStatement(originatingSyntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindForConditionStatement(ForConditionStatementSyntax syntax)
+    {
+        return BindForConditionStatementCore(syntax, syntax.Condition, syntax.Body, labelName: null);
+    }
+
+    /// <summary>
+    /// Core <c>for cond { body }</c> binder; accepts an optional ADR-0070 label.
+    /// </summary>
+    /// <param name="originatingSyntax">Originating syntax for diagnostics.</param>
+    /// <param name="conditionSyntax">Loop condition.</param>
+    /// <param name="bodySyntax">Loop body.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <returns>The lowered bound block.</returns>
+    private BoundStatement BindForConditionStatementCore(
+        SyntaxNode originatingSyntax,
+        ExpressionSyntax conditionSyntax,
+        StatementSyntax bodySyntax,
+        string labelName)
     {
         // Lowers to:
         //   {
@@ -2166,8 +2220,8 @@ internal sealed class StatementBinder
         //   }
         scope = new BoundScope(scope);
 
-        var condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
-        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+        var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+        var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
 
@@ -2175,18 +2229,31 @@ internal sealed class StatementBinder
         var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        statements.Add(new BoundGotoStatement(syntax, checkLabel));
-        statements.Add(new BoundLabelStatement(syntax, bodyLabel));
+        statements.Add(new BoundGotoStatement(originatingSyntax, checkLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(syntax, continueLabel));
-        statements.Add(new BoundLabelStatement(syntax, checkLabel));
-        statements.Add(new BoundConditionalGotoStatement(syntax, bodyLabel, condition, jumpIfTrue: true));
-        statements.Add(new BoundLabelStatement(syntax, breakLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, checkLabel));
+        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
 
-        return new BoundBlockStatement(syntax, statements.ToImmutable());
+        return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
     }
 
     private BoundStatement BindForClauseStatement(ForClauseStatementSyntax syntax)
+    {
+        return BindForClauseStatementCore(syntax, syntax, labelName: null);
+    }
+
+    /// <summary>
+    /// Core C-style <c>for init; cond; post { body }</c> binder; accepts an
+    /// optional ADR-0070 label.
+    /// </summary>
+    /// <param name="syntax">The for-clause syntax.</param>
+    /// <param name="originatingSyntax">Syntax used for bound-node diagnostics.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <returns>The lowered bound block.</returns>
+    private BoundStatement BindForClauseStatementCore(ForClauseStatementSyntax syntax, SyntaxNode originatingSyntax, string labelName)
     {
         // Lowers to:
         //   {
@@ -2205,7 +2272,7 @@ internal sealed class StatementBinder
         var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
         var condition = syntax.Condition == null ? null : bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
         var post = syntax.Post == null ? null : BindStatement(syntax.Post);
-        var body = BindLoopBody(syntax.Body, out var breakLabel, out var continueLabel);
+        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
 
         scope = scope.Parent;
 
@@ -2218,37 +2285,169 @@ internal sealed class StatementBinder
             statements.Add(init);
         }
 
-        statements.Add(new BoundGotoStatement(syntax, checkLabel));
-        statements.Add(new BoundLabelStatement(syntax, bodyLabel));
+        statements.Add(new BoundGotoStatement(originatingSyntax, checkLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, bodyLabel));
         statements.Add(body);
-        statements.Add(new BoundLabelStatement(syntax, continueLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
         if (post != null)
         {
             statements.Add(post);
         }
 
-        statements.Add(new BoundLabelStatement(syntax, checkLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, checkLabel));
         if (condition == null)
         {
-            statements.Add(new BoundGotoStatement(syntax, bodyLabel));
+            statements.Add(new BoundGotoStatement(originatingSyntax, bodyLabel));
         }
         else
         {
-            statements.Add(new BoundConditionalGotoStatement(syntax, bodyLabel, condition, jumpIfTrue: true));
+            statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
         }
 
-        statements.Add(new BoundLabelStatement(syntax, breakLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
 
-        return new BoundBlockStatement(syntax, statements.ToImmutable());
+        return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
     }
 
-    private BoundStatement BindLoopBody(StatementSyntax body, out BoundLabel breakLabel, out BoundLabel continueLabel)
+    private BoundStatement BindWhileStatement(WhileStatementSyntax syntax)
+    {
+        // ADR-0070: `while cond { body }` shares the lowering of `for cond { body }`.
+        return BindForConditionStatementCore(syntax, syntax.Condition, syntax.Body, labelName: null);
+    }
+
+    private BoundStatement BindDoWhileStatement(DoWhileStatementSyntax syntax)
+    {
+        return BindDoWhileStatementCore(syntax, syntax.Body, syntax.Condition, labelName: null);
+    }
+
+    /// <summary>
+    /// Lowers a <c>do { body } while cond</c> (or labeled equivalent) to the
+    /// canonical post-test goto/label block (ADR-0070). The body runs once
+    /// unconditionally before the first condition test.
+    /// </summary>
+    /// <param name="originatingSyntax">The originating syntax node (used for diagnostics).</param>
+    /// <param name="bodySyntax">The loop body statement.</param>
+    /// <param name="conditionSyntax">The loop condition expression.</param>
+    /// <param name="labelName">The ADR-0070 loop label, or <see langword="null"/>.</param>
+    /// <returns>The bound block statement representing the lowered loop.</returns>
+    private BoundStatement BindDoWhileStatementCore(
+        SyntaxNode originatingSyntax,
+        StatementSyntax bodySyntax,
+        ExpressionSyntax conditionSyntax,
+        string labelName)
+    {
+        // Lowers to:
+        //   {
+        //     bodyLabel:
+        //     <body>
+        //     continueLabel:
+        //     if cond goto bodyLabel
+        //     breakLabel:
+        //   }
+        scope = new BoundScope(scope);
+
+        var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+        var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
+
+        scope = scope.Parent;
+
+        var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundLabelStatement(originatingSyntax, bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
+        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
+
+        return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
+    }
+
+    private BoundStatement BindLabeledStatement(LabeledStatementSyntax syntax)
+    {
+        var labelName = syntax.LabelIdentifier.Text;
+        var inner = syntax.Statement;
+
+        // ADR-0070: only loops may carry a label.
+        if (!IsLabelableLoop(inner))
+        {
+            Diagnostics.ReportLabelOnNonLoopStatement(syntax.LabelIdentifier.Location, labelName);
+
+            // Drop the label and bind the inner statement on its own so
+            // downstream diagnostics surface naturally.
+            return BindStatement(inner);
+        }
+
+        // ADR-0070: a label that shadows an enclosing live loop's label is a
+        // warning — the inner label wins for break/continue resolution.
+        foreach (var frame in binderCtx.LoopStack)
+        {
+            if (frame.LabelName == labelName)
+            {
+                Diagnostics.ReportLabelShadowsEnclosingLoop(syntax.LabelIdentifier.Location, labelName);
+                break;
+            }
+        }
+
+        return inner.Kind switch
+        {
+            SyntaxKind.WhileStatement =>
+                BindForConditionStatementCore(syntax, ((WhileStatementSyntax)inner).Condition, ((WhileStatementSyntax)inner).Body, labelName),
+            SyntaxKind.DoWhileStatement =>
+                BindDoWhileStatementCore(syntax, ((DoWhileStatementSyntax)inner).Body, ((DoWhileStatementSyntax)inner).Condition, labelName),
+            SyntaxKind.ForInfiniteStatement =>
+                BindForInfiniteStatementCore(syntax, ((ForInfiniteStatementSyntax)inner).Body, labelName),
+            SyntaxKind.ForEllipsisStatement =>
+                BindForEllipsisStatementCore((ForEllipsisStatementSyntax)inner, syntax, labelName),
+            SyntaxKind.ForConditionStatement =>
+                BindForConditionStatementCore(syntax, ((ForConditionStatementSyntax)inner).Condition, ((ForConditionStatementSyntax)inner).Body, labelName),
+            SyntaxKind.ForClauseStatement =>
+                BindForClauseStatementCore((ForClauseStatementSyntax)inner, syntax, labelName),
+            SyntaxKind.ForRangeStatement =>
+                BindForRangeStatementCore((ForRangeStatementSyntax)inner, labelName, syntax),
+            _ => BindStatement(inner),
+        };
+    }
+
+    private static bool IsLabelableLoop(StatementSyntax stmt)
+    {
+        return stmt.Kind switch
+        {
+            SyntaxKind.WhileStatement => true,
+            SyntaxKind.DoWhileStatement => true,
+            SyntaxKind.ForInfiniteStatement => true,
+            SyntaxKind.ForEllipsisStatement => true,
+            SyntaxKind.ForConditionStatement => true,
+            SyntaxKind.ForClauseStatement => true,
+            SyntaxKind.ForRangeStatement => true,
+            _ => false,
+        };
+    }
+
+    private BoundStatement BindLabeledForRange(LabeledStatementSyntax labelSyntax, ForRangeStatementSyntax inner, string labelName)
+    {
+        return BindForRangeStatementCore(inner, labelName, labelSyntax);
+    }
+
+    /// <summary>
+    /// Binds a loop body while pushing the loop's break/continue labels (and
+    /// optional ADR-0070 label name) onto <see cref="BinderContext.LoopStack"/>.
+    /// </summary>
+    /// <param name="body">The loop body statement.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <param name="breakLabel">The synthesized break label.</param>
+    /// <param name="continueLabel">The synthesized continue label.</param>
+    private BoundStatement BindLoopBody(
+        StatementSyntax body,
+        string labelName,
+        out BoundLabel breakLabel,
+        out BoundLabel continueLabel)
     {
         binderCtx.LabelCounter++;
         breakLabel = new BoundLabel($"break{binderCtx.LabelCounter}");
         continueLabel = new BoundLabel($"continue{binderCtx.LabelCounter}");
 
-        binderCtx.LoopStack.Push((breakLabel, continueLabel));
+        binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel));
         var boundBody = BindStatement(body);
         binderCtx.LoopStack.Pop();
 
@@ -2263,6 +2462,21 @@ internal sealed class StatementBinder
             return BindErrorStatement();
         }
 
+        if (syntax.LabelIdentifier != null)
+        {
+            var name = syntax.LabelIdentifier.Text;
+            foreach (var frame in binderCtx.LoopStack)
+            {
+                if (frame.LabelName == name)
+                {
+                    return new BoundGotoStatement(syntax, frame.BreakLabel);
+                }
+            }
+
+            Diagnostics.ReportUnknownLoopLabel(syntax.LabelIdentifier.Location, syntax.Keyword.Text, name);
+            return BindErrorStatement();
+        }
+
         var breakLabel = binderCtx.LoopStack.Peek().BreakLabel;
         return new BoundGotoStatement(syntax, breakLabel);
     }
@@ -2272,6 +2486,21 @@ internal sealed class StatementBinder
         if (binderCtx.LoopStack.Count == 0)
         {
             Diagnostics.ReportInvalidBreakOrContinue(syntax.Keyword.Location, syntax.Keyword.Text);
+            return BindErrorStatement();
+        }
+
+        if (syntax.LabelIdentifier != null)
+        {
+            var name = syntax.LabelIdentifier.Text;
+            foreach (var frame in binderCtx.LoopStack)
+            {
+                if (frame.LabelName == name)
+                {
+                    return new BoundGotoStatement(syntax, frame.ContinueLabel);
+                }
+            }
+
+            Diagnostics.ReportUnknownLoopLabel(syntax.LabelIdentifier.Location, syntax.Keyword.Text, name);
             return BindErrorStatement();
         }
 

@@ -2426,6 +2426,42 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0284", $"'init({signature})' on class '{className}' duplicates the synthesized primary-constructor overload; remove either the primary-constructor parameter list or this 'init' declaration.");
     }
 
+    /// <summary>
+    /// ADR-0070 / issue #707: GS0293 — a labeled <c>break</c> or <c>continue</c>
+    /// names a loop that is not in scope.
+    /// </summary>
+    /// <param name="location">The source location of the offending label identifier.</param>
+    /// <param name="keyword">The originating keyword (<c>break</c> or <c>continue</c>).</param>
+    /// <param name="labelName">The unresolved label name.</param>
+    public void ReportUnknownLoopLabel(TextLocation location, string keyword, string labelName)
+    {
+        Report(location, "GS0293", $"No enclosing loop is labeled '{labelName}' (in '{keyword} {labelName}').");
+    }
+
+    /// <summary>
+    /// ADR-0070 / issue #707: GS0294 — a label prefix (<c>name:</c>) was
+    /// applied to a statement that is not a loop. Only loops may carry a
+    /// loop label.
+    /// </summary>
+    /// <param name="location">The source location of the offending label identifier.</param>
+    /// <param name="labelName">The label name.</param>
+    public void ReportLabelOnNonLoopStatement(TextLocation location, string labelName)
+    {
+        Report(location, "GS0294", $"Label '{labelName}' can only be applied to a loop statement (for / while / do-while).");
+    }
+
+    /// <summary>
+    /// ADR-0070 / issue #707: GS0295 (warning) — a loop label shadows an
+    /// enclosing live loop label of the same name. The inner label wins for
+    /// nested <c>break</c> / <c>continue</c> resolution.
+    /// </summary>
+    /// <param name="location">The source location of the offending label identifier.</param>
+    /// <param name="labelName">The shadowed label name.</param>
+    public void ReportLabelShadowsEnclosingLoop(TextLocation location, string labelName)
+    {
+        Report(location, "GS0295", $"Label '{labelName}' shadows an enclosing loop label of the same name; the inner label wins for nested 'break'/'continue'.", DiagnosticSeverity.Warning);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

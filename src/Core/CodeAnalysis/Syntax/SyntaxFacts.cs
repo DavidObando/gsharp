@@ -145,6 +145,8 @@ public static class SyntaxFacts
                 return SyntaxKind.DefaultKeyword;
             case "defer":
                 return SyntaxKind.DeferKeyword;
+            case "do":
+                return SyntaxKind.DoKeyword;
             case "else":
                 return SyntaxKind.ElseKeyword;
             case "enum":
@@ -219,6 +221,8 @@ public static class SyntaxFacts
                 return SyntaxKind.UsingKeyword;
             case "var":
                 return SyntaxKind.VarKeyword;
+            case "while":
+                return SyntaxKind.WhileKeyword;
             default:
                 return SyntaxKind.IdentifierToken;
         }
@@ -397,6 +401,8 @@ public static class SyntaxFacts
                 return "default";
             case SyntaxKind.DeferKeyword:
                 return "defer";
+            case SyntaxKind.DoKeyword:
+                return "do";
             case SyntaxKind.ElseKeyword:
                 return "else";
             case SyntaxKind.EnumKeyword:
@@ -471,6 +477,8 @@ public static class SyntaxFacts
                 return "using";
             case SyntaxKind.VarKeyword:
                 return "var";
+            case SyntaxKind.WhileKeyword:
+                return "while";
             default:
                 return null;
         }
