@@ -165,6 +165,8 @@ public static class SyntaxFacts
                 return SyntaxKind.GoKeyword;
             case "goto":
                 return SyntaxKind.GotoKeyword;
+            case "guard":
+                return SyntaxKind.GuardKeyword;
             case "if":
                 return SyntaxKind.IfKeyword;
             case "import":
@@ -421,6 +423,8 @@ public static class SyntaxFacts
                 return "go";
             case SyntaxKind.GotoKeyword:
                 return "goto";
+            case SyntaxKind.GuardKeyword:
+                return "guard";
             case SyntaxKind.IfKeyword:
                 return "if";
             case SyntaxKind.ImportKeyword:

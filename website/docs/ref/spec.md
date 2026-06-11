@@ -48,7 +48,7 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var while
+as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
 Several words are contextual rather than reserved. `record`, `data`, `inline`, `prop`, `event`, `shared`, `init`, `get`, `set`, `add`, `remove`, `raise`, `in`, `out`, `yield`, `with`, `typeof`, `nameof`, and `make` retain identifier status except in the grammar contexts described below.
@@ -442,7 +442,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -462,6 +462,29 @@ RefLocalDecl = ( "let" | "var" ) "ref" identifier "=" Expression .
 ```ebnf
 IfStmt = "if" ( SimpleStmt ";" )? Expression Statement ( "else" Statement )? .
 ```
+
+### `if let` and `guard let` binding statements (ADR-0071)
+
+`if let` and `guard let` strip the nullable layer from a value and bind a fresh
+identifier to the underlying non-null view:
+
+```ebnf
+IfLetStmt        = "if" LetBindingList Statement ( "else" Statement )? .
+GuardLetStmt     = "guard" LetBindingList "else" Block .
+LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
+LetBindingClause = "let" identifier TypeClause? "=" Expression .
+```
+
+The initializer expression of each `let` clause must have a nullable type
+(`T?`); otherwise the binder reports `GS0296`. Inside the then-block of
+`if let` (or in the remainder of the enclosing block after `guard let`), the
+binding is observable at the underlying non-null type `T` via the smart-cast
+machinery of [ADR-0069](../../../docs/adr/0069-smart-cast-flow-narrowing.md).
+Multiple comma-separated bindings narrow all-or-nothing — the then-block runs
+only when every clause is non-nil. The else-block of `guard let` MUST exit
+the enclosing scope (`return`, `throw`, `break`, `continue`, or a block whose
+last statement does); otherwise the binder reports `GS0297`. `guard` is a
+reserved keyword.
 
 ### Switch statements
 
@@ -678,7 +701,7 @@ TypeClauseList    ::= TypeClause (',' TypeClause)*
 Block             ::= '{' Statement* '}'
 Statement         ::= Block
                     | Annotation* VariableDecl
-                    | IfStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
+                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
                     | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | ShortVarDecl
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
@@ -691,6 +714,10 @@ MultiAssignment   ::= identifier (',' identifier)+ ('=' | ':=') Expression (',' 
 IncDecStmt        ::= identifier ('++' | '--')
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
+IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?
+GuardLetStmt      ::= 'guard' LetBindingList 'else' Block
+LetBindingList    ::= LetBindingClause (',' LetBindingClause)*
+LetBindingClause  ::= 'let' identifier TypeClause? '=' Expression
 ForStmt           ::= 'for' Statement
                     | 'for' Expression Statement
                     | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Statement
