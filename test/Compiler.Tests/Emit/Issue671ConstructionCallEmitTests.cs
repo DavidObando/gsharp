@@ -63,9 +63,12 @@ public class Issue671ConstructionCallEmitTests
     [Fact]
     public void Construct_KeyValuePairOfStringToUserClass_Compiles_And_Runs()
     {
-        // Dictionary[K, V]() at top level is currently shadowed by the map-literal
-        // parser; KeyValuePair exercises the same "CLR generic with multiple type
-        // args, at least one of which is a G# user-defined class" construction call.
+        // Multi-type-arg CLR generic ctor where one type argument is a G#
+        // user-defined class. The direct Dictionary[K, V]() coverage for
+        // this same shape lives in Issue693DictionaryConstructionEmitTests
+        // (the follow-up to this PR); KeyValuePair is kept here as a
+        // narrowly-typed sibling regression for the multi-arg construction
+        // path itself.
         var source = """
             package App
             import System
