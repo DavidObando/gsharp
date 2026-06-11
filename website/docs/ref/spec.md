@@ -479,7 +479,7 @@ The initializer expression of each `let` clause must have a nullable type
 (`T?`); otherwise the binder reports `GS0296`. Inside the then-block of
 `if let` (or in the remainder of the enclosing block after `guard let`), the
 binding is observable at the underlying non-null type `T` via the smart-cast
-machinery of [ADR-0069](../../../docs/adr/0069-smart-cast-flow-narrowing.md).
+machinery of ADR-0069.
 Multiple comma-separated bindings narrow all-or-nothing — the then-block runs
 only when every clause is non-nil. The else-block of `guard let` MUST exit
 the enclosing scope (`return`, `throw`, `break`, `continue`, or a block whose
