@@ -385,6 +385,85 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// ADR-0069 / issue #700: when binding an <c>&amp;&amp;</c> expression,
+    /// derive the narrowing frame the right operand should bind under from
+    /// the (already-bound) left operand. Recognises <c>x is T</c>,
+    /// <c>!(x is T)</c>, and nested <c>&amp;&amp;</c> chains; returns
+    /// <c>null</c> when no narrowing can be safely inferred.
+    /// </summary>
+    private Dictionary<VariableSymbol, TypeSymbol> TryClassifyTypeTestNarrowingForAnd(BoundExpression boundLeft)
+    {
+        var (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft);
+        return (thenFrame != null && thenFrame.Count > 0) ? thenFrame : null;
+    }
+
+    private static (Dictionary<VariableSymbol, TypeSymbol> Then, Dictionary<VariableSymbol, TypeSymbol> Else) ClassifyTypeTestNarrowing(BoundExpression condition)
+    {
+        switch (condition)
+        {
+            case BoundIsExpression isExpr:
+                {
+                    if (isExpr.Expression is not BoundVariableExpression bve)
+                    {
+                        return (null, null);
+                    }
+
+                    if (bve.Variable is not (LocalVariableSymbol or ParameterSymbol))
+                    {
+                        return (null, null);
+                    }
+
+                    var targetType = isExpr.TargetType;
+                    if (targetType == null || targetType == TypeSymbol.Error)
+                    {
+                        return (null, null);
+                    }
+
+                    if (targetType is NullableTypeSymbol nts)
+                    {
+                        targetType = nts.UnderlyingType;
+                    }
+
+                    if (targetType == null || targetType == bve.Variable.Type)
+                    {
+                        return (null, null);
+                    }
+
+                    return (new Dictionary<VariableSymbol, TypeSymbol> { [bve.Variable] = targetType }, null);
+                }
+
+            case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
+                {
+                    var (inThen, inElse) = ClassifyTypeTestNarrowing(unary.Operand);
+                    return (inElse, inThen);
+                }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd:
+                {
+                    var (leftThen, _) = ClassifyTypeTestNarrowing(binary.Left);
+                    var (rightThen, _) = ClassifyTypeTestNarrowing(binary.Right);
+                    if ((leftThen == null || leftThen.Count == 0) && (rightThen == null || rightThen.Count == 0))
+                    {
+                        return (null, null);
+                    }
+
+                    var combined = leftThen == null ? new Dictionary<VariableSymbol, TypeSymbol>() : new Dictionary<VariableSymbol, TypeSymbol>(leftThen);
+                    if (rightThen != null)
+                    {
+                        foreach (var kv in rightThen)
+                        {
+                            combined[kv.Key] = kv.Value;
+                        }
+                    }
+
+                    return (combined, null);
+                }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>
     /// Binds a name expression to produce its bound form without side effects
     /// (used by compound assignment fallback to read the current value).
     /// </summary>

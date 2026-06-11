@@ -51,6 +51,7 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundVariableExpression v:
                 this.EmitLoadVariable(v.Variable);
+                this.EmitNarrowingCastIfNeeded(v);
                 break;
             case BoundAssignmentExpression a:
                 if (a.Variable is ParameterSymbol assignParam && assignParam.RefKind != RefKind.None)
@@ -1136,6 +1137,71 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Operand);
         var pointeeType = ((ByRefTypeSymbol)node.Operand.Type).PointeeType;
         this.EmitLoadIndirect(pointeeType);
+    }
+
+    /// <summary>
+    /// ADR-0069 / issue #700: when a variable read carries a narrowed type
+    /// distinct from the variable's declared type, emit a single
+    /// conversion opcode so the IL stack matches the narrower type:
+    /// <list type="bullet">
+    ///   <item><description><c>unbox.any T</c> when the narrowed type is a
+    ///     value type — the load left a boxed reference on the stack and we
+    ///     need the native value-type representation back.</description></item>
+    ///   <item><description><c>castclass T</c> when the narrowed type is a
+    ///     reference type — the load left a base-class or interface
+    ///     reference on the stack and we need the derived reference.
+    ///     The CLR-level cast is guaranteed to succeed because the binder
+    ///     placed it inside a region where an <c>is</c> test already
+    ///     verified the runtime type at the same site.</description></item>
+    /// </list>
+    /// <para>
+    /// The cast is suppressed when the narrowing is a pure nullable strip
+    /// (e.g. <c>string? → string</c>) — the underlying CLR representation
+    /// is identical, and emitting <c>castclass</c> would still be sound
+    /// but pointlessly grows the body.
+    /// </para>
+    /// </summary>
+    private void EmitNarrowingCastIfNeeded(BoundVariableExpression v)
+    {
+        var narrowed = v.NarrowedType;
+        if (narrowed == null)
+        {
+            return;
+        }
+
+        var declared = v.Variable.Type;
+        if (declared == narrowed)
+        {
+            return;
+        }
+
+        // Pure nullable strip (`T? → T`) needs no IL change: the CLR
+        // representation is identical for reference-type nullables, and
+        // value-type nullables route through the existing
+        // <c>EmitConversion</c> path before reaching here.
+        if (declared is NullableTypeSymbol nts && nts.UnderlyingType == narrowed)
+        {
+            return;
+        }
+
+        // Skip when both sides are non-null CLR types that resolve to the
+        // same runtime type (e.g. an imported alias).
+        if (declared?.ClrType != null && narrowed.ClrType != null
+            && declared.ClrType == narrowed.ClrType)
+        {
+            return;
+        }
+
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(narrowed)
+            || (narrowed.ClrType != null && narrowed.ClrType.IsValueType))
+        {
+            this.il.OpCode(ILOpCode.Unbox_any);
+            this.il.Token(this.outer.GetElementTypeToken(narrowed));
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Castclass);
+        this.il.Token(this.outer.GetElementTypeToken(narrowed));
     }
 
     // ──────────────────────────────────────────────────────────────────────
