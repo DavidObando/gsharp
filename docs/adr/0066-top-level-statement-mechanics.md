@@ -2,6 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-06-10
+- **Implemented**: 2026-06-10 (PR [#688](https://github.com/DavidObando/gsharp/pull/688))
 - **Phase**: Phase 9 — language depth / entry-point clarity
 - **Related**: ADR-0028 (multi-package emit), design doc [`design/Gsharp-design-v0.1.md`](../../design/Gsharp-design-v0.1.md) §"Entry-point synthesis rules", issue [#644](https://github.com/DavidObando/gsharp/issues/644)
 
@@ -25,35 +26,29 @@ C# 9's top-level statement feature is the obvious starting point because (a) the
 
 1. **Single-package TLS rule.** Within a single compilation, at most one `package` may contribute top-level statements. Several `.gs` files inside that one package may each carry TLS; their statements are concatenated in deterministic order to form the synthesized entry-point body. Any other package in the same compilation may declare types, functions, and members but **must not** contain TLS. Supersedes the "exactly one source file" wording in `design/Gsharp-design-v0.1.md` §"Entry-point synthesis rules".
 
-2. **Statement ordering across files.** When TLS span multiple `.gs` files in the entry-point package, the binder concatenates them in the order the compilation receives the syntax trees: for the SDK build that is the order of MSBuild's `@(Compile)` items; for `gsc.dll` it is the order of source-file arguments on the command line; for tests it is the order passed to `Compilation`'s constructor. Within each file, statements are bound in lexical source order. This is the behavior shipped today; tightening it to a binder-canonical sort (e.g., ordinal source-path comparison) is captured as deferred decision D7 below.
+2. **Statement ordering across files (D7 — Accepted, implemented in commit `92b4163`).** When TLS span multiple `.gs` files in the entry-point package, the binder sorts contributing files by `SourceText.FileName` using `StringComparer.Ordinal` and concatenates statements from the sorted sequence; within each file, statements are bound in lexical source order. The sort makes cross-file TLS ordering identical regardless of how the build tool populates `@(Compile)`, how the command-line driver orders source-file arguments, or how a test permutes the input. In-memory `SyntaxTree.Parse(text)` calls (no `fileName`) sort stably among themselves by `SelectMany`'s iteration order.
 
 3. **Entry-point synthesis.** When any TLS exist, the binder creates a hidden `FunctionSymbol` named `<Main>$` owned by the TLS-bearing package (the "entry-point package"). The emitter places it on that package's `<Program>` static type and marks it as the assembly's entry point. `<Main>$` is lexically not a legal user identifier and therefore cannot collide with anything a user writes.
 
-4. **Conflict with an explicit `func Main`.** A compilation that contains both top-level statements and an explicit `func Main()` (or `func Main(args string[])`) anywhere — same file, different file in the same package, or even a different package — is rejected with diagnostic **GS0166** ("Top-level statements cannot be used together with an explicit Main function."). The synthesized `<Main>$` still becomes the entry point so the rest of binding can proceed, but the diagnostic is fatal at compile time.
+4. **Conflict with an explicit `func Main` (D6 — Accepted as warning, implemented in commit `1620a6b`).** A compilation that contains both top-level statements and an explicit `func Main()` (or `func Main(args string[])`) anywhere — same file, different file in the same package, or even a different package — emits diagnostic **GS0166** as a **warning** ("Top-level statements cannot be used together with an explicit Main function."). The synthesized `<Main>$` becomes the entry point and shadows the explicit `Main`, matching C# CS7022's "warn-and-prefer-TLS" semantics. Compilation succeeds; the warning surfaces the conflict so the developer can either remove the TLS or remove the explicit `Main`.
 
 5. **TLS spanning multiple packages.** A compilation in which two or more distinct packages each contribute top-level statements is rejected with diagnostic **GS0165**. As part of this ADR, GS0165's message text is corrected from "Only one source file in a compilation may contain top-level statements." to **"Top-level statements may appear in at most one package per compilation."** so the message matches what the binder actually checks. The diagnostic id and severity are unchanged.
 
 6. **Explicit `func Main` shape.** When there are no TLS, the entry point is the user's `func Main`; existing rules in the binder govern its accepted arities and return type. Those rules are not changed by this ADR.
 
-### Deferred decisions (recorded; implementation tracked separately)
+7. **Implicit `args` parameter (D1 — Accepted, implemented in commit `5fa184e`).** The synthesized `<Main>$` declares an implicit `string[] args` parameter. TLS may reference `args` as if it were a regular local; identifier resolution finds the parameter via the function-scoped binder that owns the synthesized entry point. The emitted CLR signature matches the standard `static T Main(string[])` shape the .NET runtime hosts.
 
-The following C#-faithful rules are **intentionally not implemented** by the change that lands this ADR. They are listed so future contributors do not have to re-derive the analysis, and so any later PR that implements one of them can cite this ADR as the source of the design.
+8. **`int` return inference (D2 — Accepted, implemented in commit `209531c`).** The binder pre-scans TLS for `return` statements before binding. If any `return <expr>;` is present, the synthesized entry point's return type is inferred as `int` (so the CLR can surface the value as `Process.ExitCode`). If only bare `return;` (or no return) is present, the entry point stays `void`. If TLS mixes both shapes, diagnostic **GS0287** is reported at the first offender ("Top-level statements mix bare `return;` and `return <expr>;`. Choose one return shape so the synthesized entry point has a single return type."), and the first-seen shape wins for recovery.
 
-- **D1 — Implicit `args` parameter in TLS scope.** C# makes a `string[] args` parameter implicitly available to top-level statements. G# today synthesizes `<Main>$()` with zero parameters, so referring to `args` from TLS is an unresolved-identifier error. The intended target shape is `<Main>$(string[] args)` with `args` in scope inside the synthesized body.
+9. **`async` entry point from `await` in TLS (D3 — Accepted, implemented in commit `386144c`).** The pre-scan from rule §8 also looks for `await` expressions. If any are found, the synthesized `<Main>$` is marked `IsAsync = true`. The existing async-state-machine lowering (ADR-0023) takes over from there and wraps the kickoff method's return type as `Task` (when §8 chose `void`) or `Task<int>` (when §8 chose `int`). *Known limitation:* the CLR's image loader rejects entry points returning `Task`/`Task<int>` directly ("Entry point must have a return type of void, integer, or unsigned integer"); C# emits a synthetic sync wrapper to satisfy the loader. The G# emitter does not synthesize that wrapper yet — this affects both `async TLS` and user-authored `async func Main()`. Tracked as a separate follow-up; the binder/lowering side of D3 is complete and exercised by the dedicated tests.
 
-- **D2 — `int`-returning top-level entry point.** C# infers `int` vs `void` for the synthesized entry point based on whether `return <int-expr>;` appears in the TLS. G# today always synthesizes a `void` entry point and silently rejects `return <int>` in TLS context. The intended target is to widen the synthesized signature to `int <Main>$(string[] args)` when an integer `return` is observed (matching C#'s inference), and to expose the process exit code through the same channel.
+10. **TLS in a library compilation (D4 — Accepted, implemented in commit `865cc2c`).** A compilation whose `Compilation.IsLibrary` flag is set and that contains any TLS is rejected with diagnostic **GS0285** ("Top-level statements are not allowed in a library project. Set <OutputType>Exe</OutputType> on the project, or move the statements into an explicit `func Main()`."). The diagnostic is reported once at the first global statement; binding continues so downstream consumers see a complete bound tree. The compiler driver (`src/Compiler/Program.cs`) sets `compilation.IsLibrary = true` whenever `/target:library` is passed; the MSBuild SDK forwards `OutputType` to `/target` transparently.
 
-- **D3 — `async` top-level entry point.** C# allows `await` inside TLS and rewrites the synthesized entry point as `async Task` or `async Task<int>` accordingly. G#'s `async` lowering and Task-returning entry-point machinery already exist (ADR-0023); the missing piece is the binder rule that promotes the synthesized signature when `await` is observed in TLS.
+11. **Interleaved TLS and declarations within one file (D5 — Accepted as warning, implemented in commit `2a8d0a5`).** Within a single `.gs` file, TLS must form a single contiguous block. Both the C# style (TLS at the top, then declarations) and the Go style (declarations at the top, then trailing TLS) are accepted without diagnostic — the Go style is the prevailing G# idiom across ~488 sources in `samples/` and test fixtures. Layouts that interleave a declaration *between* two TLS blocks emit diagnostic **GS0286** ("Top-level statements should form a single contiguous block within a file — interleaving them with type or function declarations is hard to read.") as a **warning**, surfacing the unusual layout without breaking compilation. This is the relaxed, G#-flavored variant of C#'s strict "TLS must precede type declarations" rule; the strict version is incompatible with G#'s established culture.
 
-- **D4 — Diagnostic for TLS in a library (`OutputType=Library`) compilation.** C# reports CS8805 when TLS appear in a project that produces a library. G# today emits a dead entry point inside the `.dll`, which the runtime ignores. The intended target is a binder-level error (or, if surfaced from the SDK, an MSBuild-level error) that asks the developer to either switch to `OutputType=Exe` or remove the TLS.
+### Deferred decisions (none remaining)
 
-- **D5 — TLS must precede type declarations within the same file.** C# requires TLS to appear before any `namespace` or type declaration in the same file. G#'s parser currently allows free interleaving. The intended target is a parser-level diagnostic enforcing TLS-then-declarations ordering, which makes file structure self-documenting and matches the C# mental model.
-
-- **D6 — Demote GS0166 from error to warning that prefers TLS.** C# reports CS7022 as a warning when both TLS and explicit `Main` are present and silently prefers TLS as the entry point. G# today rejects this combination outright (GS0166 = error). The intended target is to mirror C# (warning, TLS wins) once the rest of the GS0166-Deferred items above are in place, so that "prefer TLS" is unambiguous.
-
-- **D7 — Canonical, caller-independent statement ordering across files.** Today the binder concatenates per-file TLS in caller-supplied order (rule §2 above). A future change could sort contributing files by ordinal source path (or another stable canonical key) so cross-file TLS ordering is identical regardless of how the build tool populates `@(Compile)`. That would make side-effect order, debugger stepping order, and emitter golden output reproducible across rebuilds, filesystems, and tools.
-
-These seven items are recorded as ADR consequences, not as TODO comments in code. Anyone implementing one of them should follow up with a PR that updates this ADR's §Status of each item from "Deferred" to "Accepted" with a citation to the implementing commit.
+All seven decisions originally recorded as Deferred (D1 implicit `args`, D2 `int` return, D3 `async Task[<int>]`, D4 library guard, D5 contiguous-TLS rule, D6 warn-prefer-TLS, D7 canonical ordering) have been promoted into the Authoritative rules above and implemented in PR [#688](https://github.com/DavidObando/gsharp/pull/688). The only known remaining gap vs C# is the **async entry-point sync wrapper** noted in rule §9: the G# emitter does not yet emit the synthetic sync wrapper that the CLR loader needs for `Task`-returning entry points, so runtime execution of async TLS requires a future emitter change. That gap also affects user-authored `async func Main()` and so is tracked outside this ADR's scope.
 
 ## Consequences
 
@@ -61,31 +56,32 @@ These seven items are recorded as ADR consequences, not as TODO comments in code
 
 - One authoritative document answers "what does TLS do when I add a second `.gs` file?" — replacing today's three partially-overlapping sources.
 - The GS0165 message text becomes truthful, reducing developer confusion when the diagnostic fires.
-- Deterministic cross-file ordering is pinned down, making same-package multi-file TLS programs reproducible.
-- Future TLS work has a single reference point for "what does C# do?" with explicit Accepted/Deferred markers.
+- Deterministic cross-file ordering is pinned down via path-sort (rule §2), making same-package multi-file TLS programs reproducible across rebuilds, filesystems, and tools.
+- All seven originally-deferred decisions are now Accepted and implemented, closing the gap with C# 9's TLS feature (except for the async-entry-point sync wrapper noted in rule §9).
+- `args` is now a first-class implicit local in TLS; `int` and `Task[<int>]` returns are inferred from TLS shape; library compilations that contain TLS fail with a clear actionable diagnostic.
 
 **Negative:**
 
-- Six known gaps vs C# remain (D1–D6), plus an internal-consistency gap (D7). Developers migrating from C# may stumble on missing `args`, missing `int` return, and the error-vs-warning behavior when both TLS and `Main` exist. The gap is now visible rather than hidden, but the gap itself is still there.
+- The async-entry-point sync wrapper is still missing from the emitter (rule §9 caveat), so TLS that uses `await` builds cleanly but the produced assembly will not load — the same gap affects user-authored `async func Main()`. A follow-up emit-side PR is needed.
 
 **Neutral:**
 
-- No behavioral change to the binder, parser, or emitter beyond the one-line GS0165 message-text edit. Existing programs continue to compile and run exactly as before.
+- The GS0165 message-text edit was the only behavioral change in the original ADR PR; subsequent commits introduced GS0285 (TLS in library), GS0286 (interleaved TLS warning), GS0287 (mixed return shapes), and demoted GS0166 to a warning.
 - ADR-0028's narrowing of the TLS rule to "one package" is preserved unchanged; this ADR reaffirms it and elevates it to the canonical phrasing.
 
 ### Gap matrix vs C# 9 top-level statements
 
 | Area | C# behavior | G# today | This ADR |
 | --- | --- | --- | --- |
-| TLS across files in same package | Statements concatenate in file order | Allowed; binder concatenates in caller-supplied order | Accepted; canonical sort recorded as D7 |
-| TLS spanning multiple packages | N/A (C# has no "package") | Error GS0165 | Accepted; message text corrected |
-| TLS + explicit `Main` | Warning CS7022, TLS wins | Error GS0166 | Accepted as-is; revisit recorded as D6 |
-| Implicit `args` | `string[] args` in scope | No `args` available | D1 — Deferred |
-| `int` return from TLS | Inferred → `int <Main>$` | `return <int>` rejected | D2 — Deferred |
-| `await` in TLS | Lifted to `async Task[<int>]` | Not specified | D3 — Deferred |
-| TLS in `OutputType=Library` | Error CS8805 | Silently emits dead entry point | D4 — Deferred |
-| TLS ordering inside one file | TLS must precede type decls | Parser allows interleaving | D5 — Deferred |
-| Synthesized entry-point name | `<Main>$` reserved | `<Main>$` reserved | Accepted (matches C#) |
+| TLS across files in same package | Statements concatenate in file order | Sorted by source path then bound in lexical order | Accepted (rule §2 / D7) |
+| TLS spanning multiple packages | N/A (C# has no "package") | Error GS0165 | Accepted (rule §5); message text corrected |
+| TLS + explicit `Main` | Warning CS7022, TLS wins | Warning GS0166, TLS wins | Accepted (rule §4 / D6) |
+| Implicit `args` | `string[] args` in scope | `string[] args` in scope | Accepted (rule §7 / D1) |
+| `int` return from TLS | Inferred → `int <Main>$` | Inferred → `int <Main>$` (GS0287 on mixed shapes) | Accepted (rule §8 / D2) |
+| `await` in TLS | Lifted to `async Task[<int>]` | Lifted to `async Task[<int>]` *(emit-side sync wrapper still missing)* | Accepted (rule §9 / D3); known emit gap |
+| TLS in `OutputType=Library` | Error CS8805 | Error GS0285 | Accepted (rule §10 / D4) |
+| TLS ordering inside one file | TLS must precede type decls | TLS must form a contiguous block (Warning GS0286 on interleave; both Go and C# styles accepted) | Accepted (rule §11 / D5) — relaxed from C# to fit G#'s established idiom |
+| Synthesized entry-point name | `<Main>$` reserved | `<Main>$` reserved | Accepted (rule §3) |
 | TLS-declared locals visibility | Method-scoped, not exported | Method-scoped, not exported | Accepted (matches C#) |
 
 ## Alternatives considered
@@ -94,9 +90,11 @@ These seven items are recorded as ADR consequences, not as TODO comments in code
 
 - **Forbid multi-file TLS entirely and require all TLS to live in one file.** Considered for simplicity. Rejected: ADR-0028's multi-package model already allows the entry-point package to span multiple files for non-TLS members, and arbitrarily forbidding multi-file TLS would force developers to merge files for unrelated reasons. Deterministic ordering (rule §2) gives us reproducibility without that ergonomic cost.
 
-- **Implement all six C#-faithful rules (D1–D6) in the same PR that lands the ADR.** Rejected by the request author: each of D1–D6 is a non-trivial behavior change with its own test surface; bundling them with the ADR would obscure the design decision under implementation noise. They are deferred and can land independently, each citing this ADR.
+- **Implement all six C#-faithful rules (D1–D6) in the same PR that lands the ADR.** Initially rejected by the request author so the ADR could land first as a standalone design artifact. In a follow-up round (the back half of PR #688), all seven deferred decisions were dispatched to three parallel Opus sub-agents working in isolated `git worktree`s — Agent A took the entry-point feature stack (D1+D2+D3+D6), Agent B took the library guard (D4), Agent C took the parser ordering (D5), and the integrator did D7 inline. D5 was relaxed from the C#-strict "TLS must precede declarations" rule to the G#-flavored "TLS must be contiguous" warning to honor G#'s established Go-style trailing-TLS idiom (488+ sources).
 
-- **Make GS0166 a warning today (matching C#'s CS7022) without implementing D1–D5 first.** Rejected: prefer-TLS-silently is only ergonomic if TLS can actually express everything `Main` can (args, int return, async). Until D1/D2/D3 land, demoting GS0166 would silently swallow user intent and produce a less-functional program than the explicit `Main` they wrote. The hard error is the more developer-friendly behavior in the interim.
+- **Make GS0166 a warning today (matching C#'s CS7022) without implementing D1–D5 first.** Initially rejected because prefer-TLS-silently is only ergonomic if TLS can actually express everything `Main` can (args, int return, async). With D1/D2/D3 now landed (rules §7–§9), the precondition is met and D6 was implemented in the same PR.
+
+- **Adopt C#'s strict "TLS must precede type declarations" rule for D5.** Rejected mid-implementation: the strict rule produced 471 failing tests against G#'s prevailing decls-first / trailing-TLS idiom (~488 source files across `samples/` and test fixtures use this layout). The relaxed "TLS must be contiguous" warning catches the genuinely confusing interleaved case without forcing a coordinated rewrite of the existing corpus. Recorded as the variant in rule §11.
 
 ## Acceptance
 
