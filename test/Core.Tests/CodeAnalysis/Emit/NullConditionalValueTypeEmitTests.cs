@@ -81,7 +81,7 @@ var n int32? = s?.Length
             Assert.Equal(typeof(int?), field!.FieldType);
 
             var entry = programType.GetMethod("<Main>$", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-            entry!.Invoke(null, parameters: null);
+            entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
             // GetValue on a Nullable<T> field unboxes to T or returns null.
             var boxed = field.GetValue(null);
@@ -136,7 +136,7 @@ var n int32? = s?.Length
                 "<Main>$",
                 BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             Assert.NotNull(entry);
-            entry!.Invoke(null, parameters: null);
+            entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
             var field = programType.GetField(fieldName, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             Assert.NotNull(field);

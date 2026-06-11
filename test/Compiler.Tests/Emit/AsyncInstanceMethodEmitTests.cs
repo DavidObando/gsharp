@@ -53,7 +53,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal("ok", (string)resultField!.GetValue(null)!);
     }
 
@@ -89,7 +89,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal(42, (int)resultField!.GetValue(null)!);
     }
 
@@ -126,7 +126,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal(42, (int)resultField!.GetValue(null)!);
     }
 
@@ -165,7 +165,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal(142, (int)resultField!.GetValue(null)!);
     }
 
@@ -197,7 +197,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal(42, (int)resultField!.GetValue(null)!);
     }
 
@@ -234,7 +234,7 @@ public class AsyncInstanceMethodEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
 
-        entry!.Invoke(null, null);
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
         Assert.Equal(42, (int)resultField!.GetValue(null)!);
     }
 
@@ -518,7 +518,7 @@ public class AsyncInstanceMethodEmitTests
         {
             try
             {
-                entry.Invoke(null, null);
+                entry.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
             }
             catch (Exception ex)
             {

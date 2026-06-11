@@ -2894,7 +2894,14 @@ internal sealed class DeclarationBinder
     {
         var name = identifier.Text ?? "?";
         var declare = !identifier.IsMissing;
-        var variable = function == null
+
+        // ADR-0066 D1: variables declared inside top-level statements live on
+        // `BoundGlobalScope.Variables` as `GlobalVariableSymbol`s even though
+        // the enclosing synthesized `<Main>$` is a non-null function (so that
+        // `return` / `await` validation works). Treat the synthesized entry
+        // point as a top-level context for variable-creation purposes only.
+        var inTopLevelContext = function == null || function.IsTopLevelEntryPoint;
+        var variable = inTopLevelContext
                             ? (VariableSymbol)new GlobalVariableSymbol(name, isReadOnly, type, accessibility, declaringSyntax: identifier)
                             : new LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier);
 

@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -28,7 +29,44 @@ public class BinderEntryPointTests
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
         Assert.Null(globalScope.EntryPoint.Declaration);
-        Assert.Empty(globalScope.EntryPoint.Parameters);
+
+        // ADR-0066 D1: the synthesized `<Main>$` declares a single implicit
+        // `args string[]` parameter (D1 = the `static T Main(string[])`
+        // shape that the .NET runtime hosts), regardless of whether the
+        // user references it from the TLS body.
+        Assert.Single(globalScope.EntryPoint.Parameters);
+        Assert.Equal("args", globalScope.EntryPoint.Parameters[0].Name);
+    }
+
+    [Fact]
+    public void Synthesizes_EntryPoint_With_Args_Parameter()
+    {
+        // ADR-0066 D1: the synthesized entry point's signature is always
+        // `<Main>$(string[] args)`. The parameter type is the
+        // SliceTypeSymbol over `string`, which the emitter projects to the
+        // CLR `string[]` (single-dimensional zero-based array).
+        var globalScope = BindSource("var n = 1\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Single(globalScope.EntryPoint.Parameters);
+        var args = globalScope.EntryPoint.Parameters[0];
+        Assert.Equal("args", args.Name);
+        Assert.IsType<SliceTypeSymbol>(args.Type);
+        Assert.Same(TypeSymbol.String, ((SliceTypeSymbol)args.Type).ElementType);
+        Assert.Equal(typeof(string[]), args.Type.ClrType);
+    }
+
+    [Fact]
+    public void Args_Identifier_Resolves_Inside_TLS_Body()
+    {
+        // ADR-0066 D1: `args` is in scope inside top-level statements; the
+        // binder must resolve `args.Length` without emitting an
+        // unresolved-symbol diagnostic for `args`.
+        var globalScope = BindSource("var n = args.Length\n");
+
+        Assert.DoesNotContain(
+            globalScope.Diagnostics,
+            d => d.Id == "GS0125" && d.Message != null && d.Message.Contains("'args'", System.StringComparison.Ordinal));
     }
 
     [Fact]
@@ -56,7 +94,9 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        // ADR-0066 D6: GS0166 is a warning, not an error — the synthesized
+        // TLS entry point wins and the explicit Main is shadowed.
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
@@ -209,7 +249,7 @@ public class BinderEntryPointTests
     {
         // ADR-0066 §4: the conflict between TLS and `func Main()` fires
         // regardless of whether they are co-located. Same package, two
-        // files: still GS0166.
+        // files: still GS0166 (now a warning per D6).
         var tls = SyntaxTree.Parse(SourceText.From("package P\nvar marker = 1\n"));
         var explicitMain = SyntaxTree.Parse(SourceText.From("package P\nfunc Main() {\n}\n"));
 
@@ -217,15 +257,15 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
     public void Reports_Conflict_When_TopLevel_And_Explicit_Main_Live_In_Different_Packages()
     {
-        // ADR-0066 §4: GS0166 is global to the compilation. TLS in one
+        // ADR-0066 §4 / D6: GS0166 is global to the compilation. TLS in one
         // package + `func Main()` in another still conflicts; the synthesized
-        // <Main>$ wins as the entry point but the diagnostic is still fatal.
+        // <Main>$ wins as the entry point and the diagnostic is a warning.
         var tls = SyntaxTree.Parse(SourceText.From("package P1\nvar marker = 1\n"));
         var explicitMain = SyntaxTree.Parse(SourceText.From("package P2\nfunc Main() {\n}\n"));
 
@@ -233,7 +273,7 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
@@ -291,6 +331,86 @@ public class BinderEntryPointTests
         Assert.DoesNotContain(globalScope.Diagnostics, IsTopLevelInLibrary);
     }
 
+    [Fact]
+    public void Synthesizes_Int_EntryPoint_When_Return_Has_Expression()
+    {
+        // ADR-0066 D2: any value-returning return in TLS infers `int` as the
+        // synthesized entry point's return type (so the CLR can surface the
+        // value as Process.ExitCode).
+        var globalScope = BindSource("return 0\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Synthesizes_Void_EntryPoint_When_Only_Bare_Return()
+    {
+        // ADR-0066 D2: bare `return;` keeps the synthesized entry point as
+        // `void`-returning.
+        var globalScope = BindSource("return\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Synthesizes_Void_EntryPoint_When_No_Return()
+    {
+        // ADR-0066 D2: the absence of any return keeps the synthesized
+        // entry point as `void` (the default).
+        var globalScope = BindSource("var n = 1\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+        Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0287");
+    }
+
+    [Fact]
+    public void Reports_GS0287_When_TLS_Mixes_Bare_And_Value_Returns()
+    {
+        // ADR-0066 D2: mixing bare `return;` and value-returning `return X`
+        // in TLS reports GS0287 at the first offender. The first-seen shape
+        // wins recovery. Here the first return is value-returning, so the
+        // bare return is the offender and the synthesized entry point keeps
+        // `int`.
+        var globalScope = BindSource("if (true) { return 0 }\nreturn\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+        Assert.Single(globalScope.Diagnostics.Where(d => d.Id == "GS0287"));
+    }
+
+    [Fact]
+    public void Synthesizes_Async_Task_EntryPoint_When_TLS_Awaits()
+    {
+        // ADR-0066 D3: a TLS source that contains `await` flips the
+        // synthesized entry point's IsAsync flag. Per the async-state-machine
+        // contract (ADR-0023), `Type` stays as the *element* type (Void here)
+        // and `IsAsync == true` directs the lowerer to wrap the kickoff to
+        // `Task` at emit time.
+        var globalScope = BindSource("import System.Threading.Tasks\nawait Task.Delay(1)\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.True(globalScope.EntryPoint.IsAsync);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+    }
+
+    [Fact]
+    public void Synthesizes_Async_Task_Of_Int_EntryPoint_When_TLS_Awaits_And_Returns_Int()
+    {
+        // ADR-0066 D3: TLS that both awaits and value-returns produces an
+        // async entry point whose element type is `int` — the async-state
+        // machine lowerer maps that to `Task<int>` at emit.
+        var globalScope = BindSource("import System.Threading.Tasks\nawait Task.Delay(1)\nreturn 0\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.True(globalScope.EntryPoint.IsAsync);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -314,4 +434,7 @@ public class BinderEntryPointTests
     private static bool IsTopLevelMainConflict(Diagnostic d) => d.Id == "GS0166";
 
     private static bool IsTopLevelInLibrary(Diagnostic d) => d.Id == "GS0285";
+
+    private static bool IsTopLevelMainConflictWarning(Diagnostic d) =>
+        d.Id == "GS0166" && d.Severity == DiagnosticSeverity.Warning;
 }

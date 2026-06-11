@@ -535,7 +535,7 @@ internal sealed class StatementBinder
         // contexts.
         if (TypeSymbol.IsByRefLike(variableType))
         {
-            if (function == null)
+            if (function == null || function.IsTopLevelEntryPoint)
             {
                 Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, "be declared as a top-level variable (it would be emitted as a heap-rooted static field)");
             }
@@ -650,7 +650,7 @@ internal sealed class StatementBinder
         // function frame. The CLR cannot encode a managed pointer as a static
         // field (top-level / `customize` partial) or as a hoisted state-machine
         // field (`async`/iterator functions).
-        if (function == null)
+        if (function == null || function.IsTopLevelEntryPoint)
         {
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, "a top-level variable (it would be emitted as a heap-rooted static field)");
             rhsValid = false;
