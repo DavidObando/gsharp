@@ -123,20 +123,23 @@ public class BinderEntryPointTests
     }
 
     [Fact]
-    public void TopLevel_Statements_From_Multiple_Files_Concatenate_In_Caller_Order()
+    public void TopLevel_Statements_From_Multiple_Files_Concatenate_In_Path_Sorted_Order()
     {
-        // ADR-0066 §2: when TLS span multiple files in the entry-point
-        // package, the binder concatenates statements in the order the
-        // compilation supplies the syntax trees. Within each file, statements
-        // are bound in lexical source order.
+        // ADR-0066 §2 (D7 accepted): when TLS span multiple files in the
+        // entry-point package, the binder sorts contributing files by
+        // SourceText.FileName (case-sensitive ordinal) before iterating, so
+        // cross-file TLS ordering is identical regardless of how the
+        // compilation receives the syntax trees. Within each file,
+        // statements are bound in lexical source order.
         //
-        // The variable names below let us recover ordering from the bound
-        // statement list without depending on a specific bound-tree shape
-        // for expression statements.
-        var first = SyntaxTree.Parse(SourceText.From("package P\nvar a1 = 1\nvar a2 = 2\n"));
-        var second = SyntaxTree.Parse(SourceText.From("package P\nvar b1 = 3\nvar b2 = 4\n"));
+        // Construct the trees with explicit file names so the sort key is
+        // observable, and pass them to BindGlobalScope in REVERSED order
+        // to prove the binder's sort — not the caller's — chooses the
+        // concatenation order.
+        var a = SyntaxTree.Parse(SourceText.From("package P\nvar a1 = 1\nvar a2 = 2\n", fileName: "A.gs"));
+        var b = SyntaxTree.Parse(SourceText.From("package P\nvar b1 = 3\nvar b2 = 4\n", fileName: "B.gs"));
 
-        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(first, second));
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(b, a));
 
         var names = globalScope.Statements
             .OfType<BoundVariableDeclaration>()
@@ -145,6 +148,29 @@ public class BinderEntryPointTests
 
         Assert.Equal(new[] { "a1", "a2", "b1", "b2" }, names);
         Assert.DoesNotContain(globalScope.Diagnostics, IsMultiPackageTopLevel);
+    }
+
+    [Fact]
+    public void TopLevel_Statements_Sort_Is_Deterministic_Across_Caller_Permutations()
+    {
+        // Regression guard for ADR-0066 §2 / D7: passing the same trees
+        // in two different orders must produce identical bound-statement
+        // ordering. Without the path-sort, the test would fail because
+        // SelectMany respects input order.
+        var a = SyntaxTree.Parse(SourceText.From("package P\nvar a = 1\n", fileName: "A.gs"));
+        var b = SyntaxTree.Parse(SourceText.From("package P\nvar b = 2\n", fileName: "B.gs"));
+        var c = SyntaxTree.Parse(SourceText.From("package P\nvar c = 3\n", fileName: "C.gs"));
+
+        var ordering1 = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(a, b, c))
+            .Statements.OfType<BoundVariableDeclaration>().Select(s => s.Variable.Name).ToArray();
+        var ordering2 = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(c, a, b))
+            .Statements.OfType<BoundVariableDeclaration>().Select(s => s.Variable.Name).ToArray();
+        var ordering3 = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(b, c, a))
+            .Statements.OfType<BoundVariableDeclaration>().Select(s => s.Variable.Name).ToArray();
+
+        Assert.Equal(new[] { "a", "b", "c" }, ordering1);
+        Assert.Equal(ordering1, ordering2);
+        Assert.Equal(ordering1, ordering3);
     }
 
     [Fact]

@@ -42,13 +42,15 @@ public class TopLevelStatementEmitTests
     }
 
     [Fact]
-    public void TwoFiles_SamePackage_TopLevel_Statements_Concatenate_In_Caller_Order()
+    public void TwoFiles_SamePackage_TopLevel_Statements_Concatenate_In_Path_Sorted_Order()
     {
         // ADR-0066 §1: multiple .gs files in the same package may each
-        // contribute TLS. ADR-0066 §2: the binder concatenates statements
-        // in the order the compilation receives the syntax trees, which
-        // for the command-line driver is the order of source-file
-        // arguments. We expect "first" then "second" on stdout.
+        // contribute TLS. ADR-0066 §2 / D7: the binder sorts contributing
+        // files by source path (ordinal) before concatenating, so cross-
+        // file TLS ordering is identical regardless of how the build tool
+        // populated @(Compile) or how callers permute the input order.
+        // Pass files in REVERSED name order to prove the sort is what
+        // chooses the output, not the caller's argument order.
         var fileA = """
             package TopLevelMulti
             import System
@@ -63,7 +65,7 @@ public class TopLevelStatementEmitTests
             Console.WriteLine("second")
             """;
 
-        var result = CompileAndRun(("A.gs", fileA), ("B.gs", fileB));
+        var result = CompileAndRun(("B.gs", fileB), ("A.gs", fileA));
 
         Assert.Equal("first\nsecond\n", result.Stdout);
     }

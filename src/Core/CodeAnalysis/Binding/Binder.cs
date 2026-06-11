@@ -637,9 +637,19 @@ public sealed class Binder
         binder.declarations.VerifyInterfaceImplementations();
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var globalStatements = syntaxTrees.SelectMany(st => st.Root.Members)
-                                          .OfType<GlobalStatementSyntax>()
-                                          .ToArray();
+
+        // ADR-0066 §2 (deferred decision D7): sort the contributing syntax
+        // trees by source path before concatenating top-level statements
+        // across files, so cross-file TLS ordering is identical regardless
+        // of how the build tool populates @(Compile) or how a test
+        // permutes the input order. Trees without a file path (in-memory
+        // SyntaxTree.Parse calls) sort stably among themselves by
+        // SelectMany's iteration order.
+        var globalStatements = syntaxTrees
+            .OrderBy(st => st.Text?.FileName ?? string.Empty, StringComparer.Ordinal)
+            .SelectMany(st => st.Root.Members)
+            .OfType<GlobalStatementSyntax>()
+            .ToArray();
 
         // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
         // statements are not allowed in a library compilation. Report once
