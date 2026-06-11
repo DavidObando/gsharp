@@ -94,7 +94,9 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        // ADR-0066 D6: GS0166 is a warning, not an error — the synthesized
+        // TLS entry point wins and the explicit Main is shadowed.
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
@@ -221,7 +223,7 @@ public class BinderEntryPointTests
     {
         // ADR-0066 §4: the conflict between TLS and `func Main()` fires
         // regardless of whether they are co-located. Same package, two
-        // files: still GS0166.
+        // files: still GS0166 (now a warning per D6).
         var tls = SyntaxTree.Parse(SourceText.From("package P\nvar marker = 1\n"));
         var explicitMain = SyntaxTree.Parse(SourceText.From("package P\nfunc Main() {\n}\n"));
 
@@ -229,15 +231,15 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
     public void Reports_Conflict_When_TopLevel_And_Explicit_Main_Live_In_Different_Packages()
     {
-        // ADR-0066 §4: GS0166 is global to the compilation. TLS in one
+        // ADR-0066 §4 / D6: GS0166 is global to the compilation. TLS in one
         // package + `func Main()` in another still conflicts; the synthesized
-        // <Main>$ wins as the entry point but the diagnostic is still fatal.
+        // <Main>$ wins as the entry point and the diagnostic is a warning.
         var tls = SyntaxTree.Parse(SourceText.From("package P1\nvar marker = 1\n"));
         var explicitMain = SyntaxTree.Parse(SourceText.From("package P2\nfunc Main() {\n}\n"));
 
@@ -245,7 +247,7 @@ public class BinderEntryPointTests
 
         Assert.NotNull(globalScope.EntryPoint);
         Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
-        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflict);
+        Assert.Contains(globalScope.Diagnostics, IsTopLevelMainConflictWarning);
     }
 
     [Fact]
@@ -354,4 +356,7 @@ public class BinderEntryPointTests
     private static bool IsMultiPackageTopLevel(Diagnostic d) => d.Id == "GS0165";
 
     private static bool IsTopLevelMainConflict(Diagnostic d) => d.Id == "GS0166";
+
+    private static bool IsTopLevelMainConflictWarning(Diagnostic d) =>
+        d.Id == "GS0166" && d.Severity == DiagnosticSeverity.Warning;
 }

@@ -882,13 +882,16 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
 
     /// <summary>
     /// Reports that the compilation contains both top-level statements and an
-    /// explicit Main function, which is ambiguous.
+    /// explicit Main function, which is ambiguous. ADR-0066 D6: this is a
+    /// warning rather than an error — when both shapes coexist, the
+    /// synthesized top-level entry point wins and the explicit Main is
+    /// shadowed. C# behaves the same way (CS7022 is a warning).
     /// </summary>
     /// <param name="location">The location of the explicit Main function declaration.</param>
     public void ReportTopLevelStatementsConflictWithMain(TextLocation location)
     {
-        var message = "Top-level statements cannot be used together with an explicit Main function.";
-        Report(location, "GS0166", message);
+        var message = "The entry point of the program is global statements; ignoring the explicit Main function entry point.";
+        Report(location, "GS0166", message, DiagnosticSeverity.Warning);
     }
 
     /// <summary>

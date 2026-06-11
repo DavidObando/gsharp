@@ -127,6 +127,33 @@ public class TopLevelStatementEmitTests
     }
 
     [Fact]
+    public void Coexisting_Main_And_TLS_Compiles_Successfully_And_TLS_Wins()
+    {
+        // ADR-0066 D6: when TLS coexists with an explicit `func Main()`,
+        // GS0166 is a warning (not an error). The synthesized TLS entry
+        // point wins, so the explicit Main is shadowed and never invoked.
+        // The compile is successful (gsc exits 0) and the runtime prints
+        // only the TLS sentinel.
+        var source = """
+            package CoexistMainAndTls
+            import System
+
+            Console.WriteLine("tls-wins")
+
+            func Main() {
+                Console.WriteLine("explicit-main-should-be-shadowed")
+            }
+            """;
+
+        var result = CompileAndRun(("Program.gs", source));
+
+        Assert.Equal("tls-wins\n", result.Stdout);
+        Assert.Contains("<Main>$", result.MethodNames);
+        Assert.Contains("GS0166", result.CompileOutput);
+        Assert.Contains("warning GS0166", result.CompileOutput);
+    }
+
+    [Fact]
     public void Async_TLS_With_Task_Delay_Runs_To_Completion()
     {
         // ADR-0066 D3: TLS containing `await` synthesizes an async
