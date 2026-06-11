@@ -643,14 +643,17 @@ public sealed class Binder
             var argsParameter = new ParameterSymbol("args", argsType);
             var entryPointParameters = ImmutableArray.Create(argsParameter);
 
-            // ADR-0066 D2: pre-scan TLS for `return` shapes (bare vs
+            // ADR-0066 D2/D3: pre-scan TLS for `return` shapes (bare vs
             // value-returning) so the synthesized entry point's return type
             // is inferred BEFORE binding. Any value-returning return → `int`;
             // any mix → GS0287 at the first offending site, with the first
-            // shape seen winning recovery.
+            // shape seen winning recovery. D3: also detect any `await` so
+            // the entry point is flagged async (its kickoff signature is
+            // wrapped to Task / Task<int> by the async lowerer).
             var entryPointReturnType = InferTopLevelEntryPointReturnType(
                 globalStatements,
-                binder.Diagnostics);
+                binder.Diagnostics,
+                out var awaitFound);
 
             synthesizedEntryPoint = new FunctionSymbol(
                 name: "<Main>$",
@@ -659,6 +662,16 @@ public sealed class Binder
                 declaration: null,
                 package: synthesizedEntryPointPackage);
             synthesizedEntryPoint.IsTopLevelEntryPoint = true;
+            if (awaitFound)
+            {
+                // ADR-0066 D3: any TLS `await` makes the synthesized
+                // entry point async. The state-machine lowering pass
+                // (ADR-0023) already keys off `FunctionSymbol.IsAsync`,
+                // and the emitter wraps the kickoff method's return type
+                // through `AsyncStateMachineTypeBuilder.ResolveAsyncReturnClrType`
+                // (Void → Task, T → Task<T>). The raw `Type` stays Void/Int32.
+                synthesizedEntryPoint.IsAsync = true;
+            }
         }
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -1129,20 +1142,25 @@ public sealed class Binder
     /// <c>return</c> carries an expression, the entry point returns
     /// <c>int</c>; otherwise it returns <c>void</c>. Mixed bare and
     /// value-returning shapes report GS0287 at the first offending site,
-    /// and recovery picks whichever shape appeared first. Returns and
-    /// awaits inside nested function literals are deliberately ignored:
-    /// they belong to the lambda, not the entry point.
+    /// and recovery picks whichever shape appeared first. Awaits in TLS are
+    /// reported via <paramref name="awaitFound"/> for D3 async wiring.
+    /// Returns and awaits inside nested function literals are deliberately
+    /// ignored: they belong to the lambda, not the entry point.
     /// </summary>
     private static TypeSymbol InferTopLevelEntryPointReturnType(
         IReadOnlyList<GlobalStatementSyntax> globalStatements,
-        DiagnosticBag diagnostics)
+        DiagnosticBag diagnostics,
+        out bool awaitFound)
     {
         ReturnStatementSyntax firstBare = null;
         ReturnStatementSyntax firstValue = null;
+        bool localAwaitFound = false;
         foreach (var gs in globalStatements)
         {
-            CollectTopLevelReturns(gs.Statement, ref firstBare, ref firstValue);
+            CollectTopLevelReturnsAndAwaits(gs.Statement, ref firstBare, ref firstValue, ref localAwaitFound);
         }
+
+        awaitFound = localAwaitFound;
 
         if (firstBare != null && firstValue != null)
         {
@@ -1169,15 +1187,17 @@ public sealed class Binder
     /// <summary>
     /// Recursively walks <paramref name="node"/>, classifying every
     /// <see cref="ReturnStatementSyntax"/> as either bare or value-returning,
-    /// and recording the first instance of each. Descent stops at
+    /// recording the first instance of each, and noting whether any
+    /// <see cref="AwaitExpressionSyntax"/> was encountered. Descent stops at
     /// <see cref="FunctionLiteralExpressionSyntax"/> boundaries: returns
-    /// inside lambdas belong to the lambda's own function body, not to the
-    /// surrounding TLS entry point.
+    /// and awaits inside lambdas belong to the lambda's own function body,
+    /// not to the surrounding TLS entry point.
     /// </summary>
-    private static void CollectTopLevelReturns(
+    private static void CollectTopLevelReturnsAndAwaits(
         SyntaxNode node,
         ref ReturnStatementSyntax firstBare,
-        ref ReturnStatementSyntax firstValue)
+        ref ReturnStatementSyntax firstValue,
+        ref bool awaitFound)
     {
         if (node == null)
         {
@@ -1186,8 +1206,17 @@ public sealed class Binder
 
         if (node is FunctionLiteralExpressionSyntax)
         {
-            // ADR-0066 D2: lambda bodies host their own `return`s; skip them.
+            // ADR-0066 D2/D3: lambda bodies host their own `return`s and
+            // `await`s; skip them when inferring the TLS entry point shape.
             return;
+        }
+
+        if (node is AwaitExpressionSyntax)
+        {
+            awaitFound = true;
+
+            // Await operands may themselves contain returns/awaits that
+            // belong to the entry point — fall through to recurse.
         }
 
         if (node is ReturnStatementSyntax ret)
@@ -1207,13 +1236,19 @@ public sealed class Binder
                 }
             }
 
-            // Returns have no children that could host nested returns.
+            // The return expression itself may contain an `await` (e.g.
+            // `return await Task.FromResult(0)`) — recurse so D3 sees it.
+            if (ret.Expression != null)
+            {
+                CollectTopLevelReturnsAndAwaits(ret.Expression, ref firstBare, ref firstValue, ref awaitFound);
+            }
+
             return;
         }
 
         foreach (var child in node.GetChildren())
         {
-            CollectTopLevelReturns(child, ref firstBare, ref firstValue);
+            CollectTopLevelReturnsAndAwaits(child, ref firstBare, ref firstValue, ref awaitFound);
         }
     }
 

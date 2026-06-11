@@ -317,6 +317,34 @@ public class BinderEntryPointTests
         Assert.Single(globalScope.Diagnostics.Where(d => d.Id == "GS0287"));
     }
 
+    [Fact]
+    public void Synthesizes_Async_Task_EntryPoint_When_TLS_Awaits()
+    {
+        // ADR-0066 D3: a TLS source that contains `await` flips the
+        // synthesized entry point's IsAsync flag. Per the async-state-machine
+        // contract (ADR-0023), `Type` stays as the *element* type (Void here)
+        // and `IsAsync == true` directs the lowerer to wrap the kickoff to
+        // `Task` at emit time.
+        var globalScope = BindSource("import System.Threading.Tasks\nawait Task.Delay(1)\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.True(globalScope.EntryPoint.IsAsync);
+        Assert.Same(TypeSymbol.Void, globalScope.EntryPoint.Type);
+    }
+
+    [Fact]
+    public void Synthesizes_Async_Task_Of_Int_EntryPoint_When_TLS_Awaits_And_Returns_Int()
+    {
+        // ADR-0066 D3: TLS that both awaits and value-returns produces an
+        // async entry point whose element type is `int` — the async-state
+        // machine lowerer maps that to `Task<int>` at emit.
+        var globalScope = BindSource("import System.Threading.Tasks\nawait Task.Delay(1)\nreturn 0\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.True(globalScope.EntryPoint.IsAsync);
+        Assert.Same(TypeSymbol.Int32, globalScope.EntryPoint.Type);
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
