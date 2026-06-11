@@ -3744,7 +3744,7 @@ internal sealed class ReflectionMetadataEmitter
         if (element is ImportedTypeSymbol symbolicImported
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
             && !symbolicImported.HasTypeParameterArgument
-            && symbolicImported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+            && symbolicImported.TypeArguments.Any(ArgIsSymbolicUserDefined))
         {
             var sigBlob = new BlobBuilder();
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), symbolicImported);
@@ -4112,7 +4112,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 if (!typeArgSymbols.IsDefaultOrEmpty
                     && i < typeArgSymbols.Length
-                    && typeArgSymbols[i] is StructSymbol or InterfaceSymbol or EnumSymbol)
+                    && ArgIsSymbolicUserDefined(typeArgSymbols[i]))
                 {
                     this.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), typeArgSymbols[i]);
                 }
@@ -4137,7 +4137,7 @@ internal sealed class ReflectionMetadataEmitter
         // the same generic method was referenced multiple times with the same
         // user-type generic args.
         var hasSymbolArgs = !typeArgSymbols.IsDefaultOrEmpty
-            && typeArgSymbols.Any(s => s is StructSymbol or InterfaceSymbol or EnumSymbol);
+            && typeArgSymbols.Any(ArgIsSymbolicUserDefined);
         if (!hasSymbolArgs)
         {
             if (this.cache.MethodSpecs.TryGetValue(method, out var existing))
@@ -4164,9 +4164,12 @@ internal sealed class ReflectionMetadataEmitter
         {
             // Issue #320: encode a user-defined type argument via its symbol so it
             // resolves to the emitted TypeDef; BCL arguments use the closed CLR type.
+            // Issue #671: also recurse through nested constructed generics so a
+            // `MyGeneric<List<MyGs>>` argument is encoded symbolically rather than
+            // collapsing to System.Object at the placeholder.
             if (!typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && typeArgSymbols[i] is StructSymbol or InterfaceSymbol or EnumSymbol)
+                && ArgIsSymbolicUserDefined(typeArgSymbols[i]))
             {
                 this.EncodeTypeSymbol(argsEncoder.AddArgument(), typeArgSymbols[i]);
             }
@@ -4200,7 +4203,7 @@ internal sealed class ReflectionMetadataEmitter
             || imported.OpenDefinition == null
             || imported.TypeArguments.IsDefaultOrEmpty
             || imported.HasTypeParameterArgument
-            || !imported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+            || !imported.TypeArguments.Any(ArgIsSymbolicUserDefined))
         {
             return false;
         }
@@ -4278,7 +4281,32 @@ internal sealed class ReflectionMetadataEmitter
     /// generic types (<c>List&lt;int&gt;()</c>, <c>Dictionary&lt;string, int&gt;()</c>).
     /// </summary>
     internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
+        => this.GetCtorReference(ctor, containingTypeSymbol: null);
+
+    /// <summary>
+    /// Phase 4 emit parity: get a MemberRef for a CLR instance constructor on a
+    /// possibly type-erased generic declaring type. When
+    /// <paramref name="containingTypeSymbol"/> is an
+    /// <see cref="ImportedTypeSymbol"/> whose <see cref="ImportedTypeSymbol.TypeArguments"/>
+    /// contain one or more G# user-defined types (issue #671), the parent
+    /// TypeSpec is encoded against those symbolic arguments (resolving to the
+    /// real user-defined TypeDef tokens) instead of the type-erased
+    /// <c>Open&lt;object,…&gt;</c> shape carried by <paramref name="ctor"/>.
+    /// </summary>
+    /// <param name="ctor">The (possibly type-erased) constructor selected by overload resolution.</param>
+    /// <param name="containingTypeSymbol">The bound result type of the construction expression. May be <see langword="null"/>.</param>
+    /// <returns>A MemberRef handle for the constructor on the correctly-typed parent.</returns>
+    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor, TypeSymbol containingTypeSymbol)
     {
+        // Issue #671: when the containing type carries symbolic user-type
+        // arguments, the cache key needs to discriminate per symbol set
+        // (multiple distinct user-type closures share a single type-erased
+        // ConstructorInfo).
+        if (TryCreateCtorMemberReferenceForConstructedSymbolicContainer(ctor, containingTypeSymbol, out var symbolicHandle))
+        {
+            return symbolicHandle;
+        }
+
         if (this.cache.CtorRefs.TryGetValue(ctor, out var existing))
         {
             return existing;
@@ -4319,6 +4347,100 @@ internal sealed class ReflectionMetadataEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.cache.CtorRefs[ctor] = handle;
         return handle;
+    }
+
+    /// <summary>
+    /// Issue #671: builds a constructor MemberRef whose parent TypeSpec is
+    /// encoded from the original symbolic type arguments (resolving to G#
+    /// user-defined TypeDef tokens) rather than the type-erased
+    /// <c>Open&lt;object,…&gt;</c> shape baked into the constructor's
+    /// <see cref="MemberInfo.DeclaringType"/>. Mirrors the method
+    /// counterpart in <see cref="TryCreateMemberReferenceForConstructedSymbolicContainer"/>.
+    /// </summary>
+    /// <param name="ctor">The (type-erased) constructor.</param>
+    /// <param name="containingTypeSymbol">The bound type of the call's result; expected to be an <see cref="ImportedTypeSymbol"/> carrying user-defined type args.</param>
+    /// <param name="handle">On success, the new MemberRef handle.</param>
+    /// <returns>Whether a symbolic-container MemberRef was produced.</returns>
+    private bool TryCreateCtorMemberReferenceForConstructedSymbolicContainer(
+        ConstructorInfo ctor,
+        TypeSymbol containingTypeSymbol,
+        out MemberReferenceHandle handle)
+    {
+        handle = default;
+        if (ctor == null
+            || containingTypeSymbol is not ImportedTypeSymbol imported
+            || imported.OpenDefinition == null
+            || imported.TypeArguments.IsDefaultOrEmpty
+            || imported.HasTypeParameterArgument
+            || !imported.TypeArguments.Any(ArgIsSymbolicUserDefined))
+        {
+            return false;
+        }
+
+        var cacheKey = new MetadataTokenCache.CtorRefSymbolKey(ctor, imported.TypeArguments);
+        if (this.cache.CtorRefsWithSymbolArgs.TryGetValue(cacheKey, out var cached))
+        {
+            handle = cached;
+            return true;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), imported);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+        var openCtor = ResolveCtorOnOpenDefinition(imported.OpenDefinition, ctor);
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                openCtor.GetParameters().Length,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    foreach (var p in openCtor.GetParameters())
+                    {
+                        var paramType = p.ParameterType;
+                        if (paramType.IsByRef)
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
+                        }
+                        else
+                        {
+                            this.EncodeClrType(ps.AddParameter().Type(), paramType);
+                        }
+                    }
+                });
+
+        handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.CtorRefsWithSymbolArgs[cacheKey] = handle;
+        return true;
+    }
+
+    private static ConstructorInfo ResolveCtorOnOpenDefinition(Type openDefinition, ConstructorInfo ctor)
+    {
+        if (openDefinition == null)
+        {
+            return ctor;
+        }
+
+        if (ctor.DeclaringType == openDefinition)
+        {
+            return ctor;
+        }
+
+        foreach (var candidate in openDefinition.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.MetadataToken == ctor.MetadataToken && candidate.Module == ctor.Module)
+            {
+                return candidate;
+            }
+        }
+
+        var fallback = openDefinition.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(candidate => candidate.GetParameters().Length == ctor.GetParameters().Length);
+        return fallback ?? ctor;
     }
 
     /// <summary>
@@ -4675,7 +4797,7 @@ internal sealed class ReflectionMetadataEmitter
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
             && !symbolicImported.HasTypeParameterArgument
             && symbolicImported.OpenDefinition != null
-            && symbolicImported.TypeArguments.Any(static a => a is StructSymbol or InterfaceSymbol or EnumSymbol))
+            && symbolicImported.TypeArguments.Any(ArgIsSymbolicUserDefined))
         {
             var genericInst = encoder.GenericInstantiation(
                 this.GetTypeReference(symbolicImported.OpenDefinition),
@@ -4875,6 +4997,48 @@ internal sealed class ReflectionMetadataEmitter
         if (type?.ClrType != null && type.ClrType.IsValueType)
         {
             return true;
+        }
+
+        return false;
+    }
+
+    // Issue #671 (construction-call follow-up): a generic type-argument
+    // position carries a "user-defined" symbol when it is itself a
+    // user-declared type (Struct/Class/Interface/Enum/Delegate) — its
+    // ClrType is only produced during emit — or when it is a nested
+    // constructed generic whose own arguments transitively carry one.
+    // This predicate gates the symbolic-container emit paths so a
+    // <c>List[List[MyGs]]</c> receiver is recognised even though its
+    // outer argument is an <see cref="ImportedTypeSymbol"/> rather than a
+    // direct user-defined symbol.
+    private static bool ArgIsSymbolicUserDefined(TypeSymbol arg)
+    {
+        if (arg is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol)
+        {
+            return true;
+        }
+
+        if (arg is ImportedTypeSymbol nested
+            && nested.OpenDefinition != null
+            && !nested.TypeArguments.IsDefaultOrEmpty
+            && nested.TypeArguments.Any(ArgIsSymbolicUserDefined))
+        {
+            return true;
+        }
+
+        if (arg is ArrayTypeSymbol arr)
+        {
+            return ArgIsSymbolicUserDefined(arr.ElementType);
+        }
+
+        if (arg is SliceTypeSymbol slice)
+        {
+            return ArgIsSymbolicUserDefined(slice.ElementType);
+        }
+
+        if (arg is NullableTypeSymbol nullable && nullable.UnderlyingType != null)
+        {
+            return ArgIsSymbolicUserDefined(nullable.UnderlyingType);
         }
 
         return false;

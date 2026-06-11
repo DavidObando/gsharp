@@ -131,12 +131,12 @@ internal sealed partial class ExpressionBinder
         var typeSimpleName = terminalCall.Identifier.Text;
         var namespacePrefix = string.Join(".", segments);
 
-        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall, out var clrType))
+        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall, out var clrType, out var openGenericDef, out var symbolicArgs))
         {
             return false;
         }
 
-        return TryBindClrConstructorFromType(clrType, terminalCall, out result);
+        return TryBindClrConstructorFromType(clrType, terminalCall, out result, openGenericDef, symbolicArgs);
     }
 
     /// <summary>
@@ -150,10 +150,29 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeSimpleName">The simple type name (the constructor call identifier).</param>
     /// <param name="terminalCall">The terminal call, used for generic arity/arguments.</param>
     /// <param name="clrType">The resolved closed CLR type on success.</param>
+    /// <param name="openGenericDefinition">
+    /// Issue #671: when one or more type arguments are G# user-defined types
+    /// (no CLR type at bind time), the closed CLR shape is type-erased to
+    /// <see cref="object"/> placeholders and this is set to the open generic
+    /// definition so the emitter can recover the symbolic form.
+    /// <see langword="null"/> otherwise.
+    /// </param>
+    /// <param name="symbolicTypeArgs">
+    /// Issue #671: the original symbolic type arguments in source order when
+    /// any user-defined type substitution is in effect; default otherwise.
+    /// </param>
     /// <returns>Whether a type was resolved.</returns>
-    private bool TryResolveQualifiedClrType(string namespacePrefix, string typeSimpleName, CallExpressionSyntax terminalCall, out System.Type clrType)
+    private bool TryResolveQualifiedClrType(
+        string namespacePrefix,
+        string typeSimpleName,
+        CallExpressionSyntax terminalCall,
+        out System.Type clrType,
+        out System.Type openGenericDefinition,
+        out ImmutableArray<TypeSymbol> symbolicTypeArgs)
     {
         clrType = null;
+        openGenericDefinition = null;
+        symbolicTypeArgs = default;
 
         var arity = terminalCall.TypeArgumentList?.Arguments.Count ?? 0;
 
@@ -195,14 +214,29 @@ internal sealed partial class ExpressionBinder
                 if (scope.References.TryResolveType(mangled, out var openType))
                 {
                     var clrArgs = new System.Type[arity];
+                    var symbolic = ImmutableArray.CreateBuilder<TypeSymbol>(arity);
                     var argsResolved = true;
+                    var hasSymbolicArg = false;
                     for (var i = 0; i < arity; i++)
                     {
                         var ta = bindTypeClause(terminalCall.TypeArgumentList.Arguments[i]);
-                        if (ta?.ClrType == null)
+                        if (ta == null)
                         {
                             argsResolved = false;
                             break;
+                        }
+
+                        symbolic.Add(ta);
+
+                        if (ta.ClrType == null)
+                        {
+                            // Issue #313 / #671: in-scope type parameter or
+                            // user-defined G# type argument — close with a
+                            // System.Object placeholder and preserve the
+                            // symbolic argument for the emitter to recover.
+                            hasSymbolicArg = true;
+                            clrArgs[i] = scope.References.GetCoreType("System.Object");
+                            continue;
                         }
 
                         // Type arguments resolve to gsc-host CLR types (e.g.
@@ -222,6 +256,12 @@ internal sealed partial class ExpressionBinder
                     try
                     {
                         clrType = openType.MakeGenericType(clrArgs);
+                        if (hasSymbolicArg)
+                        {
+                            openGenericDefinition = openType;
+                            symbolicTypeArgs = symbolic.MoveToImmutable();
+                        }
+
                         return true;
                     }
                     catch (System.ArgumentException)
@@ -1559,9 +1599,22 @@ internal sealed partial class ExpressionBinder
 
     private static TypeSymbol MapErasedIndexerElementType(ImportedTypeSymbol target, PropertyInfo closedIndexer)
     {
-        if (target.HasTypeParameterArgument
-            && target.OpenDefinition is System.Type openDefinition
-            && !target.TypeArguments.IsDefaultOrEmpty)
+        // Issue #313 (HasTypeParameterArgument): substitute the open indexer's
+        // generic-parameter result back through the target's symbolic type
+        // arguments so `list[i]` on `List[T]` is typed as `T`.
+        // Issue #671: also substitute when the target is a constructed
+        // generic with G# user-defined or nested-symbolic type arguments
+        // (e.g. `outer[0]` on `List[List[MyGs]]` -> `List[MyGs]`); without
+        // this the element would type-erase to `List<object>` and downstream
+        // member access on the result would emit against the wrong parent.
+        var hasSubstitutableArgs = !target.TypeArguments.IsDefaultOrEmpty
+            && (target.HasTypeParameterArgument
+                || target.TypeArguments.Any(static a => a.ClrType == null
+                    || (a is ImportedTypeSymbol nested
+                        && nested.OpenDefinition != null
+                        && !nested.TypeArguments.IsDefaultOrEmpty)));
+        if (hasSubstitutableArgs
+            && target.OpenDefinition is System.Type openDefinition)
         {
             try
             {

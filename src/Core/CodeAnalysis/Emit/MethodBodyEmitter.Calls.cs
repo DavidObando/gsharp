@@ -178,7 +178,14 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        var ctorRef = this.outer.GetCtorReference(ctorCall.Constructor);
+        // Issue #671: when the ctor target's containing type carries G#
+        // user-defined symbolic type arguments (closed with System.Object at
+        // the CLR layer because the user type's TypeDef is only produced
+        // during emit), build the MemberRef against a parent TypeSpec encoded
+        // with the symbolic args. Without this the `newobj` would target the
+        // type-erased `Open<object,…>::.ctor`, which fails IL verification
+        // against the locally-typed `Open<MyGs,…>` slot.
+        var ctorRef = this.outer.GetCtorReference(ctorCall.Constructor, ctorCall.Type);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(ctorRef);
     }

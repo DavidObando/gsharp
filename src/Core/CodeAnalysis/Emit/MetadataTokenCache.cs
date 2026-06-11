@@ -126,6 +126,17 @@ internal sealed class MetadataTokenCache
         = new Dictionary<ConstructorInfo, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache for ctor MemberRef rows whose parent TypeSpec is
+    /// encoded against G# user-defined symbolic type arguments (issue #671).
+    /// The placeholder-closed <see cref="ConstructorInfo"/> is identical
+    /// across distinct user-type closures (all closed to <c>object</c> at the
+    /// CLR level), so the key must include the symbol argument list with
+    /// structural equality, mirroring <see cref="MethodSpecsWithSymbolArgs"/>.
+    /// </summary>
+    public Dictionary<CtorRefSymbolKey, MemberReferenceHandle> CtorRefsWithSymbolArgs { get; }
+        = new Dictionary<CtorRefSymbolKey, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>
@@ -338,6 +349,59 @@ internal sealed class MetadataTokenCache
         public override int GetHashCode()
         {
             var hash = RuntimeHelpers.GetHashCode(this.method);
+            for (var i = 0; i < this.typeArgs.Length; i++)
+            {
+                hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
+            }
+
+            return hash;
+        }
+    }
+
+    /// <summary>
+    /// Issue #671: structural cache key for ctor MemberRef rows whose parent
+    /// TypeSpec carries G# user-defined symbolic type arguments. Counterpart
+    /// to <see cref="MethodSpecSymbolKey"/>.
+    /// </summary>
+    internal readonly struct CtorRefSymbolKey : IEquatable<CtorRefSymbolKey>
+    {
+        private readonly ConstructorInfo ctor;
+        private readonly ImmutableArray<TypeSymbol> typeArgs;
+
+        public CtorRefSymbolKey(ConstructorInfo ctor, ImmutableArray<TypeSymbol> typeArgs)
+        {
+            this.ctor = ctor;
+            this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
+        }
+
+        public bool Equals(CtorRefSymbolKey other)
+        {
+            if (!ReferenceEquals(this.ctor, other.ctor))
+            {
+                return false;
+            }
+
+            if (this.typeArgs.Length != other.typeArgs.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < this.typeArgs.Length; i++)
+            {
+                if (!ReferenceEquals(this.typeArgs[i], other.typeArgs[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public override bool Equals(object obj) => obj is CtorRefSymbolKey other && this.Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = RuntimeHelpers.GetHashCode(this.ctor);
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
                 hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
