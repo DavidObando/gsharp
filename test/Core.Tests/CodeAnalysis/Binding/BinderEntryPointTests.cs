@@ -227,13 +227,65 @@ public class BinderEntryPointTests
         Assert.DoesNotContain(globalScope.Diagnostics, IsMultiPackageTopLevel);
     }
 
+    [Fact]
+    public void Reports_GS0285_When_TLS_Used_In_Library_Compilation()
+    {
+        // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
+        // statements in a library compilation are an error. The diagnostic
+        // is reported at the first global statement and the rest of the
+        // flow continues — so the synthesized <Main>$ is still produced
+        // and downstream consumers see a complete bound tree.
+        var globalScope = BindLibrary("Console.WriteLine(\"hi\")\n");
+
+        var libraryTlsDiagnostics = globalScope.Diagnostics
+            .Where(IsTopLevelInLibrary)
+            .ToArray();
+        Assert.Single(libraryTlsDiagnostics);
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Equal("<Main>$", globalScope.EntryPoint.Name);
+    }
+
+    [Fact]
+    public void Does_Not_Report_GS0285_For_Library_Without_TLS()
+    {
+        // A function-only library compilation has no global statements, so
+        // the D4 guard must stay silent.
+        var globalScope = BindLibrary("func Helper() {\n}\n");
+
+        Assert.DoesNotContain(globalScope.Diagnostics, IsTopLevelInLibrary);
+    }
+
+    [Fact]
+    public void Does_Not_Report_GS0285_For_Exe_With_TLS()
+    {
+        // The default code path (isLibrary: false via BindSource) must stay
+        // clean — TLS in an executable is the normal case.
+        var globalScope = BindSource("Console.WriteLine(\"hi\")\n");
+
+        Assert.DoesNotContain(globalScope.Diagnostics, IsTopLevelInLibrary);
+    }
+
     private static BoundGlobalScope BindSource(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         return Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
     }
 
+    private static BoundGlobalScope BindLibrary(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        return Binder.BindGlobalScope(
+            previous: null,
+            ImmutableArray.Create(tree),
+            references: null,
+            implicitSystemImport: true,
+            preprocessorSymbols: null,
+            isLibrary: true);
+    }
+
     private static bool IsMultiPackageTopLevel(Diagnostic d) => d.Id == "GS0165";
 
     private static bool IsTopLevelMainConflict(Diagnostic d) => d.Id == "GS0166";
+
+    private static bool IsTopLevelInLibrary(Diagnostic d) => d.Id == "GS0285";
 }

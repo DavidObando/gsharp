@@ -68,66 +68,51 @@ public class TopLevelStatementEmitTests
         Assert.Equal("first\nsecond\n", result.Stdout);
     }
 
+    [Fact]
+    public void Library_With_TLS_Fails_Compilation_With_GS0285()
+    {
+        // ADR-0066 deferred decision D4 (mirrors C# CS8805): top-level
+        // statements in a library compilation are a hard error. The driver
+        // must surface GS0285 on stderr and exit non-zero so the SDK build
+        // fails rather than silently emitting a never-invoked <Main>$ into
+        // the .dll.
+        var source = """
+            package TopLevelLibrary
+            import System
+
+            Console.WriteLine("should-never-run")
+            """;
+
+        var result = CompileForLibrary(("Program.gs", source));
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("GS0285", result.Stderr + result.Stdout);
+    }
+
     private static CompileResult CompileAndRun(params (string FileName, string Source)[] files)
     {
-        Assert.NotEmpty(files);
+        var compile = Compile(target: "exe", files);
+        Assert.True(
+            compile.ExitCode == 0,
+            $"gsc failed:\nstdout:\n{compile.Stdout}\nstderr:\n{compile.Stderr}");
+        IlVerifier.Verify(compile.OutPath);
 
-        var tempDir = Directory.CreateTempSubdirectory("gs_tls_emit_").FullName;
+        var methodNames = ReadMethodNames(compile.OutPath);
+
+        var psi = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = compile.TempDir,
+        };
+        psi.ArgumentList.Add("exec");
+        psi.ArgumentList.Add("--runtimeconfig");
+        psi.ArgumentList.Add(Path.ChangeExtension(compile.OutPath, ".runtimeconfig.json"));
+        psi.ArgumentList.Add(compile.OutPath);
+
         try
         {
-            var outPath = Path.Combine(tempDir, "test.dll");
-            var args = new List<string>
-            {
-                "/out:" + outPath,
-                "/target:exe",
-                "/targetframework:net10.0",
-            };
-
-            foreach (var (fileName, source) in files)
-            {
-                var srcPath = Path.Combine(tempDir, fileName);
-                File.WriteAllText(srcPath, source);
-                args.Add(srcPath);
-            }
-
-            using var compileOut = new StringWriter();
-            using var compileErr = new StringWriter();
-            var prevOut = Console.Out;
-            var prevErr = Console.Error;
-            Console.SetOut(compileOut);
-            Console.SetError(compileErr);
-            int compileExit;
-            try
-            {
-                compileExit = Program.Main(args.ToArray());
-            }
-            finally
-            {
-                Console.SetOut(prevOut);
-                Console.SetError(prevErr);
-            }
-
-            Assert.True(
-                compileExit == 0,
-                $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-            IlVerifier.Verify(outPath);
-
-            // Snapshot method names while the assembly file still exists;
-            // the temp dir is deleted in the finally block below.
-            var methodNames = ReadMethodNames(outPath);
-
-            var psi = new ProcessStartInfo("dotnet")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = tempDir,
-            };
-            psi.ArgumentList.Add("exec");
-            psi.ArgumentList.Add("--runtimeconfig");
-            psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"));
-            psi.ArgumentList.Add(outPath);
-
             using var proc = Process.Start(psi);
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
@@ -140,8 +125,61 @@ public class TopLevelStatementEmitTests
         }
         finally
         {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { Directory.Delete(compile.TempDir, recursive: true); } catch { }
         }
+    }
+
+    private static CompileExecutionResult CompileForLibrary(params (string FileName, string Source)[] files)
+    {
+        var compile = Compile(target: "library", files);
+        try
+        {
+            return new CompileExecutionResult(compile.ExitCode, compile.Stdout, compile.Stderr);
+        }
+        finally
+        {
+            try { Directory.Delete(compile.TempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static CompileInvocation Compile(string target, (string FileName, string Source)[] files)
+    {
+        Assert.NotEmpty(files);
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_tls_emit_").FullName;
+        var outPath = Path.Combine(tempDir, "test.dll");
+        var args = new List<string>
+        {
+            "/out:" + outPath,
+            "/target:" + target,
+            "/targetframework:net10.0",
+        };
+
+        foreach (var (fileName, source) in files)
+        {
+            var srcPath = Path.Combine(tempDir, fileName);
+            File.WriteAllText(srcPath, source);
+            args.Add(srcPath);
+        }
+
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(args.ToArray());
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        return new CompileInvocation(tempDir, outPath, compileExit, compileOut.ToString(), compileErr.ToString());
     }
 
     private static List<string> ReadMethodNames(string assemblyPath)
@@ -160,4 +198,8 @@ public class TopLevelStatementEmitTests
     }
 
     private sealed record CompileResult(string Stdout, IReadOnlyList<string> MethodNames);
+
+    private sealed record CompileExecutionResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed record CompileInvocation(string TempDir, string OutPath, int ExitCode, string Stdout, string Stderr);
 }

@@ -892,6 +892,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0066 deferred decision D4: reports that top-level statements appear
+    /// in a compilation that produces a library, not an executable. Mirrors
+    /// C#'s CS8805. Without this guard the binder would silently synthesize
+    /// a <c>&lt;Main&gt;$</c> inside the emitted <c>.dll</c> that the runtime
+    /// will never invoke.
+    /// </summary>
+    /// <param name="location">The location of the first offending top-level statement.</param>
+    public void ReportTopLevelStatementsInLibrary(TextLocation location)
+    {
+        var message = "Top-level statements are not allowed in a library project. Set <OutputType>Exe</OutputType> on the project, or move the statements into an explicit `func Main()`.";
+        Report(location, "GS0285", message);
+    }
+
+    /// <summary>
     /// Reports that a multi-target assignment or short variable declaration has
     /// a different number of targets and values.
     /// </summary>
