@@ -1,6 +1,6 @@
-# GSharp for Visual Studio Code
+# G# for Visual Studio Code
 
-Rich language support for the [GSharp programming language](https://github.com/DavidObando/gsharp) in Visual Studio Code.
+Rich language support for the [G# programming language](https://github.com/DavidObando/gsharp) in Visual Studio Code.
 
 ## Features
 
