@@ -131,8 +131,8 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Function literal to delegate | Supported | Partial | Some marshalling scenarios are emit-path only. |
 | Method group to delegate | Supported | Supported in covered scenarios | Includes imported CLR method groups. |
 | Imported operator overloads and conversions | Supported | Supported where evaluator invokes paths | Bound as CLR operator/conversion calls. |
-| Attributes | Supported | Semantically recognized | Includes `@Attribute` sugar and `@Obsolete`; `[DllImport]` reports `GS0211`. |
-| P/Invoke/`extern` | Not supported | Not supported | Recognized unsupported surface only. |
+| Attributes | Supported | Semantically recognized | Includes `@Attribute` sugar and `@Obsolete`; `@DllImport` opts into P/Invoke (ADR-0086). |
+| P/Invoke/`extern` | Supported | Supported (emit-only) | Attribute-driven via `@DllImport("lib")` on a `;`-body `func` (ADR-0086 / issue #727). v1 marshals primitives, `string`, `*T` (byref), and slices of primitives. |
 
 ## Gsharp.Extensions helper namespaces
 

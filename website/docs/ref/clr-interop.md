@@ -6,7 +6,7 @@ draft: false
 
 # CLR interop reference
 
-G# targets the CLR directly. Imported .NET types are first-class in binding, evaluation, and emit: constructors, methods, fields, properties, indexers, events, delegates, operators, conversions, attributes, and generic metadata are all represented in the bound model. This page describes the implemented surface; P/Invoke and `extern` bodies are explicitly not supported today.
+G# targets the CLR directly. Imported .NET types are first-class in binding, evaluation, and emit: constructors, methods, fields, properties, indexers, events, delegates, operators, conversions, attributes, and generic metadata are all represented in the bound model. P/Invoke is supported through the `@DllImport` attribute on a `;`-body `func` declaration (ADR-0086); see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below.
 
 ## Imports and type names
 
@@ -142,7 +142,7 @@ class Trace {
 
 Annotation names resolve either to the exact type name or to the conventional `Attribute` suffix form. Use-site targets include `field`, `param`, `return`, `type`, `method`, `property`, `event`, `module`, `assembly`, and `genericparam`. Arguments must be compile-time constants supported by CLR attribute metadata. `@Attribute` is declaration sugar for attribute classes and implies a `System.Attribute` base class.
 
-Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `[DllImport]` is recognized but unsupported for v1.0; using it reports `GS0211`.
+Compiler-synthesized attributes such as `CompilerGenerated`, `Extension`, `AsyncStateMachine`, `Nullable`, and `NullableContext` are reserved. `@DllImport` opts a function into P/Invoke (see [Unmanaged interop (P/Invoke)](#unmanaged-interop-pinvoke) below); the historical blanket-rejection at `GS0211` no longer fires.
 
 ## By-ref pointers (`&` / `*` / `*T`)
 
@@ -294,6 +294,48 @@ Console.WriteLine(fs.ToString(CultureInfo.GetCultureInfo("de-DE")))
 
 Alignment (`,4`) and format (`:N2`) clauses are preserved in the synthesized composite format string, so the same `FormattableString` renders differently under different cultures. The grammar and diagnostics for holes are documented in the [language specification](./spec.md#string-literals).
 
+## Unmanaged interop (P/Invoke)
+
+ADR-0086 / issue #727 adds attribute-driven P/Invoke. A `;` at the place of the body marks a function as having no managed body; when the function carries an `@DllImport("libname", ...)` annotation, the binder treats it as a P/Invoke stub and the emitter produces a CLR `PinvokeImpl` MethodDef row, an `ImplMap` row pointing at the deduplicated `ModuleRef` for `libname`, and (when requested) the `SetLastError` / `ExactSpelling` / charset / calling-convention bits.
+
+```gsharp
+package P
+import System
+import System.Runtime.InteropServices
+
+@DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+func NativeStrLen(text string) nint;
+
+@DllImport("libc", EntryPoint: "open", SetLastError: true)
+func NativeOpen(path string, flags int32) int32;
+
+Console.WriteLine(NativeStrLen("Hello, world!"))     // prints 13
+var fd = NativeOpen("/no/such/file", 0)
+Console.WriteLine(Marshal.GetLastWin32Error())      // POSIX errno propagated through the CLR
+```
+
+### Attribute knobs
+
+| Name | Type | Default | Notes |
+| --- | --- | --- | --- |
+| Library name (positional) | `string` | required | The unmanaged library to resolve (passed to `dlopen` / `LoadLibrary`). |
+| `EntryPoint` | `string` | function name | Native symbol to resolve. |
+| `CharSet` | `System.Runtime.InteropServices.CharSet` | `Ansi` | Governs how `string` parameters and return values are marshalled. |
+| `SetLastError` | `bool` | `false` | When `true`, the CLR captures `GetLastError` / `errno` and exposes it via `Marshal.GetLastWin32Error`. |
+| `CallingConvention` | `CallingConvention` | `Winapi` | Maps to `MethodImportAttributes.CallingConvention*`. |
+| `ExactSpelling` | `bool` | `CharSet == Auto` | When `false`, the CLR may probe for an `A`/`W` suffix. |
+| `PreserveSig` | `bool` | `true` | When `false`, an HRESULT return becomes a thrown exception (COM-style). |
+| `BestFitMapping` | `bool?` | unspecified | Tri-state best-fit mapping override. |
+| `ThrowOnUnmappableChar` | `bool?` | unspecified | Tri-state unmappable-character behavior override. |
+
+### Supported v1 marshalling types
+
+Every primitive integer (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/`nuint`, `float32`/`float64`, `bool`, `char`, `string` (governed by `CharSet`), single-element `*T` byref-style pointers (where `T` is primitive), and slices of primitives. Anything outside this set is rejected at bind time with `GS0323`.
+
+### Diagnostics
+
+`GS0322`–`GS0329` cover every malformed P/Invoke shape — missing library name, body present, unsupported marshalling type, unsupported function shape (async / generic / extension / `shared` / ref-returning), bad `CharSet` / `CallingConvention` / `EntryPoint` values, and `;` body without `@DllImport`. The historical `GS0211` blanket-rejection is retired. See the [Diagnostics reference](./diagnostics) for the full table.
+
 ## Unsupported interop surface
 
-The following are not implemented as source features today: P/Invoke/`extern` methods, user-authored `[DllImport]` bodies, default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values and import .NET APIs for library functionality.
+The following are not yet implemented as source features: the modern `@LibraryImport` source-generator form (deferred per ADR-0086 §4 to a follow-up), struct / class marshalling across the P/Invoke boundary, function-pointer marshalling, user-supplied custom marshallers, default parameter values in G# declarations, and C#-style `null` literals. Use `nil` for nullable values, import .NET APIs for library functionality, and wrap unsupported marshalling shapes behind a thin C# shim for now.

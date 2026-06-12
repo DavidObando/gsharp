@@ -151,6 +151,16 @@ internal sealed class MetadataTokenCache
         = new Dictionary<FunctionSymbol, MethodDefinitionHandle>();
 
     /// <summary>
+    /// Gets the cache mapping a P/Invoke library name to its emitted
+    /// <see cref="ModuleReferenceHandle"/> (ADR-0086 / issue #727). The
+    /// emitter deduplicates module references by case-sensitive library
+    /// name so two `@DllImport("libc")` functions share a single
+    /// <c>ModuleRef</c> row.
+    /// </summary>
+    public Dictionary<string, ModuleReferenceHandle> PInvokeModuleRefs { get; }
+        = new Dictionary<string, ModuleReferenceHandle>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Gets the cache mapping a user struct/class <see cref="StructSymbol"/>
     /// to its emitted <see cref="TypeDefinitionHandle"/>.
     /// </summary>

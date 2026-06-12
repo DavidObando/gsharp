@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#pragma warning disable SA1202 // 'public' members should come before 'private' members — the new ADR-0086 P/Invoke helpers (FindDllImport, TryConvertAttributeEnum) appear after the existing private helpers so the diff stays minimal; they form their own visually-grouped block.
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -678,6 +680,76 @@ internal static class KnownAttributes
         {
             value = b;
             return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds the first <c>@DllImport(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// Recognition is type-identity based (ADR-0086 / issue #727).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a function symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute FindDllImport(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsDllImport(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the resolved CLR enum value for a named argument whose
+    /// declared property type is <typeparamref name="TEnum"/>. The binder
+    /// stores enum constants as their underlying primitive value, so we
+    /// must convert by name lookup (when the source text is a member name)
+    /// or by integer round-trip (when the value is a primitive constant).
+    /// </summary>
+    /// <typeparam name="TEnum">The CLR enum type to convert to.</typeparam>
+    /// <param name="value">The bound constant value carried by the attribute argument.</param>
+    /// <param name="result">Receives the resolved enum value on success.</param>
+    /// <returns><c>true</c> when conversion succeeded; <c>false</c> otherwise.</returns>
+    public static bool TryConvertAttributeEnum<TEnum>(object value, out TEnum result)
+        where TEnum : struct, Enum
+    {
+        result = default;
+        if (value == null)
+        {
+            return false;
+        }
+
+        if (value is TEnum already)
+        {
+            result = already;
+            return true;
+        }
+
+        if (value is string name && Enum.TryParse(name, ignoreCase: false, out TEnum parsed))
+        {
+            result = parsed;
+            return true;
+        }
+
+        if (TryConvertToInt32(value, out var asInt))
+        {
+            var underlying = (TEnum)Enum.ToObject(typeof(TEnum), asInt);
+            if (Enum.IsDefined(typeof(TEnum), underlying))
+            {
+                result = underlying;
+                return true;
+            }
         }
 
         return false;

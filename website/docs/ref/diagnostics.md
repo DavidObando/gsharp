@@ -185,7 +185,7 @@ ADR-0047 introduces Kotlin-style attribute syntax (`@Foo(...)`) and the `@Attrib
 | GS0208 | Error | Parameter `{name}` is annotated `@EnumeratorCancellation` but its enclosing function is not an async sequence (does not return `IAsyncEnumerable[T]`). | `@EnumeratorCancellation` on a sync function or a non-sequence async function. |
 | GS0209 | Error | Attribute `{name}` is not valid on this position; its `[AttributeUsage]` permits only: `{targets}`. | Applying a `@field`-targeted attribute to a method. |
 | GS0210 | Error | Duplicate attribute `{name}`; this attribute type does not allow multiple applications (`AllowMultiple = false`). | Two `@Trace(...)` annotations on the same declaration. |
-| GS0211 | Error | Attribute `[DllImport]` is recognised but not supported in v1.0; P/Invoke (extern function bodies) is a post-v1.0 feature. | `@DllImport("user32.dll") func MessageBox() {}` — emit support and the `extern` body marker arrive after v1.0. |
+| GS0211 | Error | _(repurposed in ADR-0086)_ Attribute `[DllImport]` was historically rejected wholesale; well-formed `@DllImport`-annotated P/Invoke declarations are now accepted (see GS0322–GS0329 for shape-specific diagnostics). The slot is reserved for any future blanket-rejection use. | n/a — no longer fired. |
 | GS0212 | Error | Function `{name}` is marked `@Conditional` but does not return `void`; conditional methods must return `void` because calls may be elided at the call site. | `@Conditional("DEBUG") func Probe() int32 { return 0 }`. |
 
 ### Class / constructor diagnostics (GS0213–GS0217)
@@ -816,3 +816,54 @@ Cause/fix:
   members, private helper methods, and `sealed override` are
   deferred follow-ups; instance-virtual default-interface
   methods are the only DIM shape supported in this release.
+
+
+## P/Invoke diagnostics (GS0322–GS0329)
+
+See ADR-0086 (issue #727). G# accepts a function whose body is a
+single `;` token as a P/Invoke declaration when the function is
+annotated with `@DllImport("libname", ...)`. The compiler emits CLR
+`PinvokeImpl` metadata (ImplMap + ModuleRef) for these declarations;
+the runtime resolves the call at first invocation. The historical
+blanket-rejection at GS0211 has been retired.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0322 | Error | `@DllImport` requires a non-empty library name as its first positional argument. |
+| GS0323 | Error | P/Invoke parameter or return type `<type>` is not in the supported marshalling table (ADR-0086 §2). |
+| GS0324 | Error | Function `<name>` is annotated `@DllImport` but has a managed body; P/Invoke declarations must use a `;` body. |
+| GS0325 | Error | Function `<name>` has no body; only `@DllImport`-annotated functions may use a `;` body marker. |
+| GS0326 | Error | `@DllImport` is not supported on this function shape (`<reason>`). |
+| GS0327 | Error | `@DllImport` `CharSet` value `<value>` is not recognised. |
+| GS0328 | Error | `@DllImport` `CallingConvention` value `<value>` is not recognised. |
+| GS0329 | Error | `@DllImport` `EntryPoint` must be a non-empty string. |
+
+The supported v1 marshalling table is: every primitive integer
+(`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/`nuint`,
+`float32`/`float64`, `bool`, `char`, `string` (governed by
+`CharSet`), single-element-typed `*T` byref-style pointers
+(`*T` where `T` is primitive), and slices of primitives. Anything
+else surfaces as GS0323.
+
+Cause/fix:
+
+- **GS0322** — supply the library name: `@DllImport("libc")`.
+- **GS0323** — change the parameter or return to a supported
+  marshalling type; struct marshalling, function-pointer
+  marshalling, and custom marshallers are deferred follow-ups.
+- **GS0324** — drop the function body and replace it with `;`,
+  or remove the `@DllImport` annotation.
+- **GS0325** — add `@DllImport("libname")` above the declaration,
+  or replace the `;` with a managed body `{ ... }`.
+- **GS0326** — make the function a plain top-level `func`: not
+  `async`, not generic, no receiver, no `ref` return, no `shared`
+  block. These are deferred follow-ups.
+- **GS0327** / **GS0328** — use one of the documented enum members
+  (e.g. `CharSet.Ansi`, `CallingConvention.Cdecl`).
+- **GS0329** — `EntryPoint` must be a non-empty literal string;
+  omit the argument to default to the G# function's identifier.
+
+See ADR-0086 for the worked example, the attribute-knob table
+(`EntryPoint`, `CharSet`, `SetLastError`, `CallingConvention`,
+`ExactSpelling`, `PreserveSig`, `BestFitMapping`,
+`ThrowOnUnmappableChar`), and the deferred-features list.

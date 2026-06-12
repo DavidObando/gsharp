@@ -367,8 +367,9 @@ Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "("
 Functions use `func`. Receiver clauses declare extension functions on types this package does not own (BCL primitives, imported CLR types, types from referenced packages); methods on owned classes are declared inside the class body. Per [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md), a receiver-clause method whose receiver type is owned by the current package emits the soft `GS0314` warning. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream (operators continue to use the receiver-clause form and are exempt from `GS0314`). Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`, ADR-0060) and may declare a compile-time-constant default value to become optional (ADR-0063). User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`.
 
 ```ebnf
-FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? Block .
+FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
 AsyncFunctionDecl = "async" FunctionDecl .
+FunctionBody      = Block | ";" .
 ReceiverClause    = "(" Parameter ")" .
 OperatorName      = "operator" OperatorToken .
 TypeParamList     = "[" TypeParameter { "," TypeParameter } "]" .
@@ -380,6 +381,8 @@ RefReturnClause   = "ref"? TypeClause .
 ```
 
 A function declared `func f(...) ref T` returns a managed pointer and pairs with the `return ref <lvalue>` statement form (diagnostics `GS0248`–`GS0255`). The `scoped` modifier on a `ref struct` / managed-pointer parameter constrains the value from escaping the call (enforced by the by-ref-like rules in `GS9004` / `GS9006`).
+
+A `;` in place of the `Block` body marks the declaration as "no managed body". Per ADR-0086, the body-less form is reserved for functions annotated with `@DllImport("libname", ...)` — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
 
 ### Type declarations
 
@@ -802,7 +805,30 @@ Iterator functions return `sequence[T]` and contain `yield`. Async sequences use
 
 G# imports can resolve CLR namespaces and metadata references. CLR primitive types map to G# built-ins when possible; other CLR types are represented as imported types. The binder and evaluator support imported constructors, static and instance methods, fields, properties, indexers, events, delegates, method groups, operator overloads, and conversion operators. G# function values can convert to compatible CLR delegates such as `Action`, `Func`, named delegates, and `Predicate`, and can widen to `System.Delegate` or `System.MulticastDelegate`.
 
-Attributes use `@Name(...)` and optional use-site targets such as `@field:`, `@param:`, and `@return:`. The current implementation recognizes attributes, but user P/Invoke or extern declarations are not supported.
+Attributes use `@Name(...)` and optional use-site targets such as `@field:`, `@param:`, and `@return:`. The implementation recognises attributes and emits user attributes through CLR `CustomAttribute` rows. Per ADR-0086, a `func` declaration annotated with `@DllImport("libname", ...)` whose body is the single token `;` is accepted as a P/Invoke declaration and emitted as a CLR `PinvokeImpl` method with the matching `ImplMap` / `ModuleRef` rows (see [Native interop](#native-interop-pinvoke) below).
+
+## Native interop (P/Invoke)
+
+ADR-0086 / issue #727 adds attribute-driven P/Invoke. A top-level `func` declaration whose body is a single `;` token and which carries an `@DllImport("libname", ...)` annotation is bound as a P/Invoke stub: there is no managed body, and the compiler emits a CLR `PinvokeImpl` method with an `ImplMap` row pointing at the deduplicated `ModuleRef` for `libname`.
+
+```gs
+package P
+import System
+import System.Runtime.InteropServices
+
+@DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+func NativeStrLen(text string) nint;
+
+Console.WriteLine(NativeStrLen("Hello, world!"))
+```
+
+Supported attribute knobs (each maps directly to the corresponding ECMA-335 `ImplMap` bit or `MethodImportAttributes` enum value): `EntryPoint`, `CharSet`, `SetLastError`, `CallingConvention`, `ExactSpelling`, `PreserveSig`, `BestFitMapping`, `ThrowOnUnmappableChar`. Defaults match the CLR's `[DllImport]` defaults: ANSI charset, WinAPI calling convention, `SetLastError=false`, `PreserveSig=true`, and `ExactSpelling` defaulting to `(CharSet == Auto)`.
+
+Supported v1 marshalling types: every primitive integer (`int8`/`16`/`32`/`64`, `uint8`/`16`/`32`/`64`), `nint`/`nuint`, `float32`/`float64`, `bool`, `char`, `string` (governed by `CharSet`), single-element `*T` byref-style pointers (where `T` is primitive), and slices of primitives. Anything outside this set surfaces as GS0323. Struct marshalling, function-pointer marshalling, and custom marshallers are deferred follow-ups.
+
+A P/Invoke declaration may not be `async`, generic, an extension method, an instance method, a member of a `shared` block, or ref-returning; each violation is reported as GS0326. A function with a `;` body but no `@DllImport` is rejected as GS0325. A function with both `@DllImport` and a managed body is rejected as GS0324. The full diagnostic catalogue (GS0322–GS0329) is listed in the [Diagnostics reference](./diagnostics).
+
+The modern source-generator `@LibraryImport` form is intentionally out of scope for v1; see ADR-0086 §4 for the deferral rationale.
 
 Interpolated strings interoperate with the CLR formatting types. By default they lower to `System.Runtime.CompilerServices.DefaultInterpolatedStringHandler` (value-type holes are not boxed); a string targeted at `IFormattable` or `FormattableString` lowers to `FormattableStringFactory.Create` for deferred, culture-aware formatting; and a parameter annotated with `[InterpolatedStringHandler]` receives the handler directly, including `[InterpolatedStringHandlerArgument]` forwarding.
 

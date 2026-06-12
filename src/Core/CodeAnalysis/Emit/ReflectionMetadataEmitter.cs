@@ -3380,6 +3380,13 @@ internal sealed class ReflectionMetadataEmitter
 
     private MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
     {
+        // ADR-0086 / issue #727: P/Invoke functions skip body emission and
+        // route through the ImplMap / ModuleRef path instead.
+        if (function.IsPInvoke)
+        {
+            return this.EmitPInvokeFunction(function);
+        }
+
         if (this.stateMachines.IteratorKickoffBodies.TryGetValue(function, out var iteratorKickoffBody))
         {
             body = iteratorKickoffBody;
@@ -3794,6 +3801,162 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return handle;
+    }
+
+    /// <summary>
+    /// Emits a P/Invoke (`@DllImport`) function as a PinvokeImpl MethodDef
+    /// with an associated ImplMap row pointing at a ModuleRef
+    /// (ADR-0086 / issue #727). The function carries no managed body —
+    /// <c>bodyOffset</c> is -1 and <see cref="MethodImplAttributes.PreserveSig"/>
+    /// is set so the runtime knows to leave the return value untouched.
+    /// </summary>
+    /// <param name="function">The P/Invoke function symbol.</param>
+    /// <returns>The handle of the emitted MethodDef.</returns>
+    private MethodDefinitionHandle EmitPInvokeFunction(FunctionSymbol function)
+    {
+        var pInvoke = function.PInvokeMetadata;
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
+            .Parameters(
+                function.Parameters.Length,
+                r => EncodeReturnSymbol(r, function.Type, function.ReturnRefKind),
+                ps =>
+                {
+                    foreach (var p in function.Parameters)
+                    {
+                        EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                    }
+                });
+
+        // ADR-0086 §6: PinvokeImpl + Static + visibility. PreserveSig
+        // mirrors the ImplMap; we set MethodImplAttributes.PreserveSig when
+        // the metadata says so (default true) so the CLR does not synthesise
+        // an HRESULT-to-exception translation.
+        var visibility = AccessibilityMap.ToMethodVisibility(function.Accessibility);
+        var methodAttrs = visibility | MethodAttributes.HideBySig | MethodAttributes.Static | MethodAttributes.PinvokeImpl;
+        var implAttrs = MethodImplAttributes.IL | MethodImplAttributes.Managed;
+        if (pInvoke.PreserveSig)
+        {
+            implAttrs |= MethodImplAttributes.PreserveSig;
+        }
+
+        // Allocate Parameter rows so each source parameter shows up in
+        // metadata. Matches the regular EmitFunction path.
+        var firstParamHandle = this.customAttrEncoder.NextParameterHandle();
+        var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle)>();
+        var sequenceNumber = 1;
+        foreach (var p in function.Parameters)
+        {
+            var paramHandle = this.emitCtx.Metadata.AddParameter(
+                attributes: ParameterAttributes.None,
+                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
+                sequenceNumber: sequenceNumber++);
+            paramHandles.Add((p, paramHandle));
+        }
+
+        var methodHandle = this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: methodAttrs,
+            implAttributes: implAttrs,
+            name: this.emitCtx.Metadata.GetOrAddString(function.Name),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: -1,
+            parameterList: firstParamHandle);
+
+        // ModuleRef (deduplicated by library name).
+        if (!this.cache.PInvokeModuleRefs.TryGetValue(pInvoke.LibraryName, out var moduleRef))
+        {
+            moduleRef = this.emitCtx.Metadata.AddModuleReference(this.emitCtx.Metadata.GetOrAddString(pInvoke.LibraryName));
+            this.cache.PInvokeModuleRefs[pInvoke.LibraryName] = moduleRef;
+        }
+
+        var importAttrs = MapPInvokeImportAttributes(pInvoke);
+        this.emitCtx.Metadata.AddMethodImport(
+            methodHandle,
+            importAttrs,
+            this.emitCtx.Metadata.GetOrAddString(pInvoke.EntryPoint ?? function.Name),
+            moduleRef);
+
+        // Attach user-written method-target attributes (other than the
+        // @DllImport itself, which is fully consumed by the ImplMap row —
+        // duplicating it as a CustomAttribute would create a misleading
+        // reflection view; this mirrors C#'s behavior).
+        this.customAttrEncoder.EmitUserAttributesExcept(methodHandle, function, AttributeTargetKind.Method, KnownAttributes.IsDllImport);
+
+        foreach (var (paramSym, paramHandle) in paramHandles)
+        {
+            this.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
+        }
+
+        return methodHandle;
+    }
+
+    private static MethodImportAttributes MapPInvokeImportAttributes(PInvokeMetadata pInvoke)
+    {
+        var attrs = MethodImportAttributes.None;
+
+        switch (pInvoke.CallingConvention)
+        {
+            case System.Runtime.InteropServices.CallingConvention.Cdecl:
+                attrs |= MethodImportAttributes.CallingConventionCDecl;
+                break;
+            case System.Runtime.InteropServices.CallingConvention.StdCall:
+                attrs |= MethodImportAttributes.CallingConventionStdCall;
+                break;
+            case System.Runtime.InteropServices.CallingConvention.ThisCall:
+                attrs |= MethodImportAttributes.CallingConventionThisCall;
+                break;
+            case System.Runtime.InteropServices.CallingConvention.FastCall:
+                attrs |= MethodImportAttributes.CallingConventionFastCall;
+                break;
+            case System.Runtime.InteropServices.CallingConvention.Winapi:
+            default:
+                attrs |= MethodImportAttributes.CallingConventionWinApi;
+                break;
+        }
+
+        switch (pInvoke.CharSet)
+        {
+            case System.Runtime.InteropServices.CharSet.Ansi:
+                attrs |= MethodImportAttributes.CharSetAnsi;
+                break;
+            case System.Runtime.InteropServices.CharSet.Unicode:
+                attrs |= MethodImportAttributes.CharSetUnicode;
+                break;
+            case System.Runtime.InteropServices.CharSet.Auto:
+                attrs |= MethodImportAttributes.CharSetAuto;
+                break;
+            case System.Runtime.InteropServices.CharSet.None:
+            default:
+                // CLR default — leave bits clear.
+                break;
+        }
+
+        if (pInvoke.SetLastError)
+        {
+            attrs |= MethodImportAttributes.SetLastError;
+        }
+
+        if (pInvoke.ExactSpelling)
+        {
+            attrs |= MethodImportAttributes.ExactSpelling;
+        }
+
+        if (pInvoke.BestFitMapping is bool bfm)
+        {
+            attrs |= bfm
+                ? MethodImportAttributes.BestFitMappingEnable
+                : MethodImportAttributes.BestFitMappingDisable;
+        }
+
+        if (pInvoke.ThrowOnUnmappableChar is bool tum)
+        {
+            attrs |= tum
+                ? MethodImportAttributes.ThrowOnUnmappableCharEnable
+                : MethodImportAttributes.ThrowOnUnmappableCharDisable;
+        }
+
+        return attrs;
     }
 
     private bool NeedsRvalueReceiverSpill(

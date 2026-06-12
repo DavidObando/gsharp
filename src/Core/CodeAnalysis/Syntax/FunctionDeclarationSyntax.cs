@@ -212,6 +212,20 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         Body = body;
     }
 
+    /// <summary>
+    /// Gets or sets the optional <c>;</c> token that takes the place of the
+    /// function body for a <c>@DllImport</c>-annotated P/Invoke declaration
+    /// (ADR-0086 / issue #727). When non-null, <see cref="Body"/> is <c>null</c>
+    /// and the declaration is a P/Invoke stub whose implementation lives in an
+    /// unmanaged library. Assigned by the parser; <c>null</c> for ordinary
+    /// function declarations.
+    /// </summary>
+    public SyntaxToken SemicolonBodyToken { get; set; }
+
+    /// <summary>Gets a value indicating whether this declaration uses a
+    /// <c>;</c> body marker instead of a block body (ADR-0086).</summary>
+    public bool HasSemicolonBody => SemicolonBodyToken != null;
+
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken ReceiverOpenParenthesisToken { get; }
 

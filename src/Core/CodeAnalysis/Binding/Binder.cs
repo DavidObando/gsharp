@@ -809,6 +809,18 @@ public sealed class Binder
         {
             foreach (var function in scope.Functions)
             {
+                // ADR-0086 / issue #727: P/Invoke functions have no managed
+                // body — the binder skips body binding and the emitter writes
+                // a PinvokeImpl method with an ImplMap row instead. We still
+                // register the function in functionBodies (with an empty
+                // synthetic block) so the emitter's per-package method-row
+                // planner produces a MethodDef handle for it.
+                if (function.IsPInvoke)
+                {
+                    functionBodies.Add(function, new BoundBlockStatement(function.Declaration, ImmutableArray<BoundStatement>.Empty));
+                    continue;
+                }
+
                 var binder = new Binder(parentScope, function);
                 var body = binder.statements.BindStatement(function.Declaration.Body);
                 var loweredBody = Lowerer.Lower(body);

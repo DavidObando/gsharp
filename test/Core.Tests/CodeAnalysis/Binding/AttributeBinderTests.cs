@@ -273,11 +273,12 @@ struct Point {
     }
 
     [Fact]
-    public void DllImport_Attribute_Is_Rejected_In_V1()
+    public void DllImport_With_ManagedBody_Is_Rejected_By_ADR0086()
     {
-        // Issue #179 / ADR-0047 §6: v1.0 recognises [DllImport] (suffix rule
-        // resolves @DllImport to System.Runtime.InteropServices.DllImportAttribute)
-        // but rejects it because P/Invoke + extern function bodies are post-v1.0.
+        // Issue #727 / ADR-0086: `@DllImport` is now accepted as the P/Invoke
+        // opt-in attribute. A managed body on a P/Invoke declaration is
+        // rejected with GS0324 — the historical GS0211 blanket rejection has
+        // been retired.
         var source = """
             import System.Runtime.InteropServices
 
@@ -287,18 +288,20 @@ struct Point {
             """;
 
         var globalScope = BindSource(source);
-        var diag = Assert.Single(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
-        Assert.Contains("DllImport", diag.Message);
+        var diag = Assert.Single(GetBinderDiagnostics(globalScope), d => d.Id == "GS0324");
+        Assert.Contains("MessageBox", diag.Message);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
 
         var fn = globalScope.Functions.Single(f => f.Name == "MessageBox");
-        Assert.Empty(fn.Attributes);
+        Assert.Single(fn.Attributes);
     }
 
     [Fact]
-    public void DllImport_Attribute_Is_Rejected_Even_With_Attribute_Suffix()
+    public void DllImport_With_Attribute_Suffix_And_ManagedBody_Is_Rejected()
     {
         // Type-identity check must catch the explicit `DllImportAttribute` name
-        // as well, not just the suffix-resolved short form.
+        // as well, not just the suffix-resolved short form. Post-ADR-0086 the
+        // shape error is GS0324 (managed body), not GS0211.
         var source = """
             import System.Runtime.InteropServices
 
@@ -308,7 +311,8 @@ struct Point {
             """;
 
         var globalScope = BindSource(source);
-        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0324");
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0211");
     }
 
     [Fact]
